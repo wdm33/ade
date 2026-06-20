@@ -254,6 +254,9 @@ fn forge_refused_not_caught_up() {
         ForgeRefused::ParticipantFenceViolation { .. } => {
             panic!("expected NotCaughtUp, got ParticipantFenceViolation")
         }
+        ForgeRefused::ParticipantForgeBaseChangedBeforeSign { .. } => {
+            panic!("expected NotCaughtUp, got ParticipantForgeBaseChangedBeforeSign")
+        }
     }
 }
 

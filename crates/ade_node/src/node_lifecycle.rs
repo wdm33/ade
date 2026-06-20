@@ -122,7 +122,8 @@ use crate::node_sync::{
     admit_forged_block_durably, classify_receive, durable_tip_matches,
     forge_followed_tip_admission, forge_mode_after_admit, forge_mode_on_caughtup,
     forge_one_from_recovered, participant_forge_decision, participant_forge_mode_after_admit,
-    participant_forge_mode_on_caughtup, pending_reselection_forge_refusal, resolve_disposition,
+    participant_forge_mode_on_caughtup, participant_sign_time_base_consistent,
+    pending_reselection_forge_refusal, resolve_disposition,
     run_node_sync, single_producer_forge_decision, venue_policy, CandidateSummary,
     ForgeFollowedTipAdmission, ForgeMode, ForgeRefused, NodeBlockSource, NodeForgeOutcome,
     NodeSyncError, NodeSyncItem, ParticipantForgeDecision, ReceiveDisposition,
@@ -1838,6 +1839,10 @@ pub async fn run_relay_loop_with_sched(
                     // path -- it is evidence-only (DC-NODE-21). A feed-EOF continuation in
                     // the extend state no longer requires a cert (DC-NODE-19 continue-past-
                     // EOF core preserved; its cert-fence clause superseded by DC-NODE-20).
+                    // CN-FOLLOW-01: the Participant extend derives its forge base from the
+                    // CURRENT durable servable tip; capture it so the sign-time re-check can
+                    // confirm the durable head did not race ahead between decision and sign.
+                    let mut participant_forge_base: Option<TipPoint> = None;
                     let proceed_to_forge: bool = if act.venue_role == VenueRole::SingleProducer {
                         match single_producer_forge_decision(
                             &act.forge_mode,
@@ -1902,13 +1907,18 @@ pub async fn run_relay_loop_with_sched(
                             act.pending_fork_switch.is_some(),
                             act.pending_missing_bridge.is_some(),
                         ) {
-                            // ExtendOnSelectedHead forges on the AO-selected durable head.
-                            // The GREEN fence already required durable_servable_tip ==
-                            // current_tip (the forge_base it returns), and the forge below
-                            // builds on `selected_tip` (ChainDb::tip) — the SAME durable
-                            // head — so the forge base stays BLUE-sourced and byte-equals
-                            // forge_base (DC-CONS-24).
-                            ParticipantForgeDecision::ExtendOnSelectedHead { .. } => true,
+                            // ExtendOnSelectedHead forges on the AO-selected durable head
+                            // read at this decision boundary (`forge_base` == the durable
+                            // ChainDb::tip). Capture it for the sign-time base-consistency
+                            // re-check: the forge below builds on `selected_tip`
+                            // (ChainDb::tip read in the same tick), and a participant admit /
+                            // fork-selection could advance the durable head before the sign,
+                            // so the re-check refuses rather than sign a stale block
+                            // (DC-CONS-24).
+                            ParticipantForgeDecision::ExtendOnSelectedHead { forge_base } => {
+                                participant_forge_base = Some(forge_base);
+                                true
+                            }
                             ParticipantForgeDecision::Refuse(refused) => {
                                 act.last_forge_refused = Some(refused);
                                 false
@@ -1954,7 +1964,42 @@ pub async fn run_relay_loop_with_sched(
                             None => true,
                         }
                     };
-                    if proceed_to_forge && (cold_start_permitted || selected_tip.is_some()) {
+                    // CN-FOLLOW-01 (DC-FOLLOW-FORGE-01) sign-time base-consistency
+                    // re-check. The Participant decision derived the forge base from the
+                    // durable servable tip read at the decision boundary; re-read it now,
+                    // immediately before signing/admit, and refuse deterministically if a
+                    // participant admit / fork-selection advanced the durable head in
+                    // between — so a stale block is never signed on the superseded base.
+                    // The next ForgeTick re-evaluates from the new durable tip. A no-op for
+                    // SingleProducer / cold-start (participant_forge_base is None there), so
+                    // the single-producer path is byte-for-byte unchanged.
+                    let sign_time_ok: bool = match &participant_forge_base {
+                        Some(decision_base) => {
+                            let sign_time_tip: Option<TipPoint> =
+                                ChainDbServedSource::new(chaindb).tip().map(
+                                    |(slot, hash, block_no)| TipPoint {
+                                        slot,
+                                        hash,
+                                        block_no,
+                                    },
+                                );
+                            match participant_sign_time_base_consistent(
+                                decision_base,
+                                sign_time_tip.as_ref(),
+                            ) {
+                                Some(refused) => {
+                                    act.last_forge_refused = Some(refused);
+                                    false
+                                }
+                                None => true,
+                            }
+                        }
+                        None => true,
+                    };
+                    if proceed_to_forge
+                        && sign_time_ok
+                        && (cold_start_permitted || selected_tip.is_some())
+                    {
                         // DC-NODE-20 / CN-FOLLOW-01 forge-base evidence (RED, emit-only):
                         // in a single-producer OR Participant venue the forge base is the
                         // local selected durable tip (`selected_tip` == ChainDb::tip, the

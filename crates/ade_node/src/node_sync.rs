@@ -780,6 +780,15 @@ pub enum ForgeRefused {
         followed_peer_tip: Option<TipPoint>,
         venue_role: VenueRole,
     },
+    /// CN-FOLLOW-01 (DC-FOLLOW-FORGE-01): the durable servable tip CHANGED between the
+    /// forge decision and the sign/admit boundary — a participant admit / fork-selection
+    /// raced in after the decision chose `decision_base`. Refuse deterministically so no
+    /// block is signed on a stale base; the next ForgeTick re-evaluates from the new
+    /// durable tip. No state transition was attempted; the durable tip is unchanged.
+    ParticipantForgeBaseChangedBeforeSign {
+        decision_base: Option<TipPoint>,
+        sign_time_tip: Option<TipPoint>,
+    },
 }
 
 /// PHASE4-N-AI AI-S4b-ii (DC-NODE-28): the forge gate's refusal when a
@@ -1012,12 +1021,22 @@ pub enum ForgeMode {
         current_tip: TipPoint,
     },
     /// CN-FOLLOW-01: Participant steady state — extend the AO-selected durable head.
-    /// The Participant analog of `SingleProducerExtendOwnDurableSpine`: the forge base
-    /// is `ChainDb::tip` (the head the AO/`select_best_chain` law selected, kept correct
-    /// by the participant follow), fenced by DC-NODE-28 (no pending fork-choice /
-    /// reselection) rather than the single-producer observed-feed fence. `adopted_root`
-    /// is the first caught-up head the extend latched on; `current_tip` advances with
-    /// each admitted forge.
+    /// The Participant analog of `SingleProducerExtendOwnDurableSpine`, but with one
+    /// load-bearing difference: the forge base is NOT this variant's stored tip. The
+    /// base is the LIVE AO-selected `ChainDb::tip` read at the decision boundary (the
+    /// head the AO/`select_best_chain` law selected, kept correct by the participant
+    /// follow), fenced by DC-NODE-28 (no pending fork-choice / reselection) rather than
+    /// the single-producer observed-feed fence.
+    ///
+    /// Both fields are DERIVED OBSERVATIONS for the transcript / mode discriminant, never
+    /// the forge authority: `adopted_root` is the first caught-up head the extend latched
+    /// on; `current_tip` is the last observed durable head. The original CN-FOLLOW-01
+    /// landing gated the decision on `current_tip` byte-equality, but `current_tip`
+    /// advances ONLY on Ade's own forge+admit while the durable head also advances on
+    /// every FOLLOWED peer admit — so the moment a peer block was admitted the latch went
+    /// stale and the decision refused forever (the live proof-#1 deadlock). The decision
+    /// now reads neither field; it derives the forge base from the current durable
+    /// servable tip, so the latch can never deadlock the forge.
     ParticipantExtendOnSelectedHead {
         adopted_root: TipPoint,
         current_tip: TipPoint,
@@ -1259,10 +1278,6 @@ pub enum ParticipantForgeFenceReason {
     /// No durable servable tip is available to forge on (the AO-selected head is
     /// absent / the store read-errored / is undecodable).
     NoDurableServableTip,
-    /// The durable servable tip does not byte-equal the extend state's `current_tip`
-    /// (slot/hash/block_no) — the head diverged from the latched extend head; fail
-    /// closed rather than forge on an unexpected base.
-    DurableTipDivergedFromExtendHead,
 }
 
 /// CN-FOLLOW-01 / DC-FOLLOW-FORGE-01: the per-ForgeTick decision for the Participant
@@ -1337,9 +1352,14 @@ pub fn participant_forge_mode_after_admit(
 /// flight), `pending_fork_switch` (a provisional fork-choice win awaiting apply), or
 /// `pending_missing_bridge` (an un-bridged winner descendant) — ANY of which refuses
 /// the forge (typed). With no decision pending, the forge base is the AO-selected
-/// durable head: it must be present AND byte-equal the latched `current_tip`; a
-/// missing/diverged durable tip fails closed. The decision NEVER consults a competing
-/// observed peer tip (the AO already resolved it) and NEVER reaches a chain selector.
+/// durable head READ AT THE DECISION BOUNDARY (`durable_servable_tip`): it must be
+/// present (a missing durable tip fails closed), and the forge builds on exactly that
+/// tip. The decision does NOT gate on the extend mode's latched `current_tip`: that
+/// latch advances only on Ade's OWN forge+admit while the durable head also advances on
+/// every FOLLOWED peer admit, so a byte-equality re-check against the latch deadlocks
+/// the forge the moment a peer block is admitted (the live proof-#1 finding). The
+/// decision NEVER consults a competing observed peer tip (the AO already resolved it),
+/// NEVER reaches a chain selector, and carries no key material.
 pub fn participant_forge_decision(
     mode: &ForgeMode,
     durable_servable_tip: Option<TipPoint>,
@@ -1367,33 +1387,58 @@ pub fn participant_forge_decision(
         ForgeMode::SingleProducerExtendOwnDurableSpine { .. } => {
             violation(ParticipantForgeFenceReason::VenueNotDeclaredParticipant)
         }
-        ForgeMode::ParticipantExtendOnSelectedHead { current_tip, .. } => {
+        // The latched `current_tip` / `adopted_root` are NOT read here: they are derived
+        // observations, never the forge authority. The forge base is the live durable
+        // servable tip below.
+        ForgeMode::ParticipantExtendOnSelectedHead { .. } => {
             if venue_role != VenueRole::Participant {
                 return violation(ParticipantForgeFenceReason::VenueNotDeclaredParticipant);
             }
-            // DC-NODE-28: a fork-choice decision is unresolved -- refuse, never forge
-            // on the stale pre-resolution tip. ALL THREE pending signals fence here.
+            // DC-NODE-28 (MANDATORY): a fork-choice decision is unresolved -- refuse,
+            // never forge on the stale pre-resolution tip. ALL THREE pending signals
+            // fence here.
             if pending_reselection || pending_fork_switch || pending_missing_bridge {
                 return violation(ParticipantForgeFenceReason::ForkChoicePending);
             }
-            // The forge base is the AO-selected durable head. It must be present and
-            // byte-equal `current_tip`; a missing/diverged durable tip fails closed.
-            match &durable_servable_tip {
+            // No fork-choice pending: forge on the CURRENT AO-selected durable servable
+            // head read at this decision boundary. Present -> extend on exactly it; an
+            // absent durable tip fails closed (no Origin / cold-start fallback).
+            match durable_servable_tip {
                 None => violation(ParticipantForgeFenceReason::NoDurableServableTip),
-                Some(durable)
-                    if durable.hash == current_tip.hash
-                        && durable.block_no == current_tip.block_no
-                        && durable.slot == current_tip.slot =>
-                {
-                    ParticipantForgeDecision::ExtendOnSelectedHead {
-                        forge_base: durable.clone(),
-                    }
-                }
-                Some(_) => {
-                    violation(ParticipantForgeFenceReason::DurableTipDivergedFromExtendHead)
-                }
+                Some(durable) => ParticipantForgeDecision::ExtendOnSelectedHead {
+                    forge_base: durable,
+                },
             }
         }
+    }
+}
+
+/// CN-FOLLOW-01 / DC-FOLLOW-FORGE-01: the sign-time base-consistency re-check. Pure /
+/// total / deterministic GREEN. Because the decision derives the forge base from the
+/// durable servable tip read at the decision boundary (not a stale latch), a participant
+/// admit / fork-selection could advance the durable head BETWEEN the decision and the
+/// sign/admit boundary. Re-read the durable servable tip immediately before signing and
+/// confirm it byte-equals the decision's `forge_base` (slot AND hash AND block_no);
+/// `Some(refused)` if it changed (refuse deterministically, re-evaluate next tick from
+/// the new tip), `None` if it is unchanged (safe to sign on `decision_base`). This is the
+/// inverse hazard of the stale-latch deadlock: dropping the decision-time byte-equality
+/// check must not become a stale-SIGNING bug.
+pub fn participant_sign_time_base_consistent(
+    decision_base: &TipPoint,
+    sign_time_tip: Option<&TipPoint>,
+) -> Option<ForgeRefused> {
+    match sign_time_tip {
+        Some(tip)
+            if tip.hash == decision_base.hash
+                && tip.block_no == decision_base.block_no
+                && tip.slot == decision_base.slot =>
+        {
+            None
+        }
+        other => Some(ForgeRefused::ParticipantForgeBaseChangedBeforeSign {
+            decision_base: Some(decision_base.clone()),
+            sign_time_tip: other.cloned(),
+        }),
     }
 }
 
@@ -5760,17 +5805,19 @@ mod tests {
         }
     }
 
-    /// CN-FOLLOW-01 MAC: the forge base must be the durable SERVABLE tip and byte-equal
-    /// the latched extend head at forge time. A present-and-equal durable tip yields
-    /// `ExtendOnSelectedHead` with that exact tip; an ABSENT durable tip fails closed
-    /// (`NoDurableServableTip`); a present-but-DIVERGED durable tip fails closed
-    /// (`DurableTipDivergedFromExtendHead`).
+    /// CN-FOLLOW-01 MAC: the forge base IS the current durable SERVABLE tip at the
+    /// decision boundary. A present durable tip yields `ExtendOnSelectedHead` with that
+    /// exact tip; an ABSENT durable tip fails closed (`NoDurableServableTip`). The forge
+    /// base is the live durable tip, NOT the latched `current_tip`: a durable tip that
+    /// advanced beyond the latch (a followed peer admit) is forged upon, never refused —
+    /// the per-tick byte-equality re-check (the proof-#1 deadlock) is gone. The sign-time
+    /// re-check (`participant_sign_time_base_consistent`) guards the decision->sign gap.
     #[test]
     fn participant_forge_base_is_servable_before_forge() {
         use ParticipantForgeFenceReason as R;
         let head = tp(70, 1000, 0xC1);
         let mode = participant_extend(&head);
-        // present + byte-equal -> forge on exactly that servable tip.
+        // present durable tip -> forge on exactly that servable tip.
         assert_eq!(
             participant_forge_decision(
                 &mode,
@@ -5801,23 +5848,23 @@ mod tests {
                 ..
             })
         ));
-        // present but diverged from the latched head -> fail closed.
-        let diverged = tp(71, 1025, 0xC9);
-        assert!(matches!(
+        // a durable tip that advanced past the latched head (a followed peer admit) is
+        // forged upon, NOT refused — the latch is a derived observation, not authority.
+        let advanced = tp(71, 1025, 0xC9);
+        assert_eq!(
             participant_forge_decision(
                 &mode,
-                Some(diverged),
+                Some(advanced.clone()),
                 None,
                 VenueRole::Participant,
                 false,
                 false,
                 false,
             ),
-            ParticipantForgeDecision::Refuse(ForgeRefused::ParticipantFenceViolation {
-                reason: R::DurableTipDivergedFromExtendHead,
-                ..
-            })
-        ));
+            ParticipantForgeDecision::ExtendOnSelectedHead {
+                forge_base: advanced,
+            },
+        );
     }
 
     /// CN-FOLLOW-01 MAC (DC-NODE-28): while a fork-choice decision is pending — any of
@@ -6102,6 +6149,157 @@ mod tests {
             d1[1],
             ParticipantForgeDecision::Refuse(ForgeRefused::ParticipantFenceViolation { .. })
         ));
+    }
+
+    /// CN-FOLLOW-01 (DC-FOLLOW-FORGE-01) regression — the live proof-#1 deadlock. The
+    /// keyed Participant extend mode latches on the first caught-up head; then a FOLLOWED
+    /// peer block is admitted (the durable tip advances via the follow, NOT via Ade's own
+    /// forge — so the latched `current_tip` does NOT advance). The decision must still
+    /// forge: it derives the base from the CURRENT durable servable tip, never refusing
+    /// with the old `DurableTipDivergedFromExtendHead` arm. Each DC-NODE-28 fence still
+    /// refuses when set.
+    #[test]
+    fn keyed_participant_extend_survives_peer_admit_and_reaches_leader_check() {
+        // (1) enter the extend mode on the first caught-up head.
+        let caught_up = tp(50, 800, 0xA1);
+        let mode =
+            participant_forge_mode_on_caughtup(&ForgeMode::InitialCatchupRequired, caught_up.clone());
+        assert_eq!(mode, participant_extend(&caught_up));
+        // The latched current_tip is the caught-up head; it advances ONLY on Ade's own
+        // forge+admit, NOT on a followed peer admit.
+        if let ForgeMode::ParticipantExtendOnSelectedHead { current_tip, .. } = &mode {
+            assert_eq!(current_tip, &caught_up, "latch starts at the caught-up head");
+        } else {
+            panic!("expected the latched Participant extend mode");
+        }
+
+        // (2) a peer block is admitted through the participant/AO follow: the durable tip
+        // advances, but NOT via self-forge -- so `participant_forge_mode_after_admit` with
+        // admitted=false (no own block) leaves the latch UNCHANGED (stale vs the durable).
+        let durable_after_peer_admit = tp(51, 825, 0xA2);
+        let mode_after_follow = participant_forge_mode_after_admit(&mode, false, None);
+        assert_eq!(
+            mode_after_follow, mode,
+            "a followed peer admit (not self-forge) does NOT advance the latch"
+        );
+
+        // (3) the durable/servable tip advanced (the follow admitted block 51).
+        assert_ne!(
+            durable_after_peer_admit, caught_up,
+            "the durable head advanced via the follow"
+        );
+
+        // (4) the next ForgeTick decision does NOT refuse with the removed divergence arm
+        // -- it forges on the live AO-selected durable head even though the latch is stale.
+        let decision = participant_forge_decision(
+            &mode_after_follow,
+            Some(durable_after_peer_admit.clone()),
+            Some(durable_after_peer_admit.clone()),
+            VenueRole::Participant,
+            false,
+            false,
+            false,
+        );
+        // (5) the forge base == the new AO-selected durable tip (NOT the stale latch).
+        assert_eq!(
+            decision,
+            ParticipantForgeDecision::ExtendOnSelectedHead {
+                forge_base: durable_after_peer_admit.clone(),
+            },
+            "the decision forges on the live durable head, not the stale latch"
+        );
+
+        // (6) each DC-NODE-28 fence still refuses when set, on the same post-admit mode.
+        for (reselect, fork_switch, bridge) in
+            [(true, false, false), (false, true, false), (false, false, true)]
+        {
+            assert!(
+                matches!(
+                    participant_forge_decision(
+                        &mode_after_follow,
+                        Some(durable_after_peer_admit.clone()),
+                        Some(durable_after_peer_admit.clone()),
+                        VenueRole::Participant,
+                        reselect,
+                        fork_switch,
+                        bridge,
+                    ),
+                    ParticipantForgeDecision::Refuse(ForgeRefused::ParticipantFenceViolation {
+                        reason: ParticipantForgeFenceReason::ForkChoicePending,
+                        ..
+                    })
+                ),
+                "DC-NODE-28 fence ({reselect},{fork_switch},{bridge}) must still refuse"
+            );
+        }
+    }
+
+    /// CN-FOLLOW-01 (DC-FOLLOW-FORGE-01) regression — the sign-time consistency re-check.
+    /// The decision selects tip A; then the durable tip advances to B (a participant admit
+    /// / fork-selection between decision and sign). The sign-time check refuses
+    /// deterministically (no stale block forged on A) and the next evaluation derives the
+    /// base from B. Dropping the decision-time byte-equality check must not become a
+    /// stale-SIGNING bug.
+    #[test]
+    fn participant_forge_refuses_if_tip_changes_between_decision_and_sign() {
+        let tip_a = tp(60, 900, 0xB1);
+        let tip_b = tp(61, 925, 0xB2);
+        let mode = participant_extend(&tip_a);
+        // The decision selects tip A as the forge base.
+        let decision = participant_forge_decision(
+            &mode,
+            Some(tip_a.clone()),
+            None,
+            VenueRole::Participant,
+            false,
+            false,
+            false,
+        );
+        let decision_base = match decision {
+            ParticipantForgeDecision::ExtendOnSelectedHead { forge_base } => forge_base,
+            other => panic!("expected ExtendOnSelectedHead, got {other:?}"),
+        };
+        assert_eq!(decision_base, tip_a);
+
+        // The durable tip advanced to B before the sign -> the sign-time check refuses.
+        let refusal = participant_sign_time_base_consistent(&decision_base, Some(&tip_b));
+        assert_eq!(
+            refusal,
+            Some(ForgeRefused::ParticipantForgeBaseChangedBeforeSign {
+                decision_base: Some(tip_a.clone()),
+                sign_time_tip: Some(tip_b.clone()),
+            }),
+            "a durable head that raced ahead before signing must refuse (no stale block on A)"
+        );
+        // A vanished durable tip at sign time also refuses (never sign on a stale base).
+        assert!(matches!(
+            participant_sign_time_base_consistent(&decision_base, None),
+            Some(ForgeRefused::ParticipantForgeBaseChangedBeforeSign { .. })
+        ));
+
+        // The next evaluation derives the base from B (the new durable tip): the decision
+        // forges on B, and the sign-time re-check against B is now consistent.
+        let next = participant_forge_decision(
+            &mode,
+            Some(tip_b.clone()),
+            None,
+            VenueRole::Participant,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(
+            next,
+            ParticipantForgeDecision::ExtendOnSelectedHead {
+                forge_base: tip_b.clone(),
+            },
+            "the next evaluation forges from B, the new durable tip"
+        );
+        assert_eq!(
+            participant_sign_time_base_consistent(&tip_b, Some(&tip_b)),
+            None,
+            "re-evaluated base B is sign-time consistent with durable B"
+        );
     }
 
     // ===== PHASE4-N-AG S2 (DC-NODE-19): RED loop continuation past feed-EOF =====

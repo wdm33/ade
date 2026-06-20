@@ -42,14 +42,26 @@ The slice is sealed against these six clauses (each mechanically enforced):
 3. **Fork-choice fence.** No forge while ANY of `pending_reselection` / `pending_fork_switch` /
    `pending_missing_bridge` is set (DC-NODE-28) — each yields a typed `ForkChoicePending` refusal
    (`participant_forge_refused_while_fork_choice_pending` asserts all three separately).
-4. **Forge base.** The base is the AO-selected `ChainDb::tip` — never `followed_peer_tip`, never
-   `observed_peer_tip`, never a stale durable tip, never a local private spine
-   (`participant_forge_base_is_ao_selected_chaindb_tip`, `..._is_servable_before_forge`).
+4. **Forge base.** The base is the **live** AO-selected `ChainDb::tip` read at the decision
+   boundary — never `followed_peer_tip`, never `observed_peer_tip`, never a stale durable tip,
+   never a local private spine, and **never the extend mode's latched `current_tip`** (that latch
+   is a derived observation, not authority). The decision derives the base from the current durable
+   servable tip; the latch never gates it (`participant_forge_base_is_ao_selected_chaindb_tip`,
+   `..._is_servable_before_forge`,
+   `keyed_participant_extend_survives_peer_admit_and_reaches_leader_check`). Because the base is the
+   live tip, a sign-time base-consistency re-check (`participant_sign_time_base_consistent`, RED
+   ForgeTick) re-reads `ChainDb::tip` immediately before signing/admit and refuses deterministically
+   (`ForgeRefused::ParticipantForgeBaseChangedBeforeSign`) if a participant admit / fork-selection
+   advanced the durable head between the decision and the sign — re-evaluating next tick from the
+   new tip (`participant_forge_refuses_if_tip_changes_between_decision_and_sign`).
 5. **No-tip behaviour.** `no_tip_available` is acceptable ONLY before the initial caught-up →
-   extend transition; it must NOT be the steady-state outcome (the pre-fix ~95% per-tick race). The
-   latch-on-first-caught-up replaces the per-tick exact-equality re-check, so a post-latch
-   leader-slot tick on the AO-selected head forges or refuses with a typed fence — never
-   `no_tip_available`.
+   extend transition; it must NOT be the steady-state outcome (the pre-fix ~95% per-tick race, and
+   the live proof-#1 latch deadlock that re-introduced it). The latch-on-first-caught-up records the
+   extend state, but the decision derives the forge base from the **live** durable servable tip
+   (NOT a `current_tip` byte-equality re-check, which deadlocks the moment a followed peer block is
+   admitted — proof-#1, preview epoch 1333). A post-latch leader-slot tick on the AO-selected head
+   forges or refuses with a typed fence (`ForkChoicePending` / `NoDurableServableTip` /
+   `ParticipantForgeBaseChangedBeforeSign`) — never `no_tip_available`.
 6. **Evidence semantics.** Convergence evidence proves follow / admission / agreement ONLY. BA02
    requires the Haskell peer's `AddedToCurrentChain` for Ade's exact forged block hash — claimed
    only after that correlation, and only after separately proving the keyed Participant reaches the
@@ -238,18 +250,34 @@ forge fence while pending (DC-NODE-28), the Participant extend state never needs
 
 ### Types
 - New `ForgeMode::ParticipantExtendOnSelectedHead { adopted_root, current_tip }` (or a shared
-  generalization), and a closed `ParticipantForgeDecision { ExtendOnSelectedHead { forge_base } |
-  UseInitialCatchupGate | Refuse(ForgeRefused) }`.
+  generalization). Both fields are **derived observations** for the transcript / mode discriminant,
+  NEVER the forge authority: `current_tip` advances only on Ade's own forge+admit while the durable
+  head also advances on every followed peer admit, so it is not a valid forge-base gate.
+- Closed `ParticipantForgeDecision { ExtendOnSelectedHead { forge_base } | UseInitialCatchupGate |
+  Refuse(ForgeRefused) }` and `ParticipantForgeFenceReason { VenueNotDeclaredParticipant |
+  ForkChoicePending | NoDurableServableTip }` (no `DurableTipDivergedFromExtendHead` — the decision
+  does not gate on the latch).
+- New `ForgeRefused::ParticipantForgeBaseChangedBeforeSign { decision_base, sign_time_tip }` — the
+  sign-time refusal when the durable head raced ahead between the decision and the sign.
 
 ### State transitions
 - New `participant_forge_decision(mode, durable_servable_tip, followed_peer_tip, venue_role,
   pending_reselection, pending_fork_switch, pending_missing_bridge) -> ParticipantForgeDecision`
-  (total; fail-closed `Refuse` on every off-nominal input).
+  (total; fail-closed `Refuse` on every off-nominal input). The extend arm derives the forge base
+  from the **live** `durable_servable_tip` read at the decision boundary; the DC-NODE-28 fences are
+  MANDATORY; an absent durable tip fails closed (`NoDurableServableTip`). It does NOT read the
+  latched `current_tip`.
+- New `participant_sign_time_base_consistent(decision_base, sign_time_tip) -> Option<ForgeRefused>`
+  (pure GREEN) — `Some(ParticipantForgeBaseChangedBeforeSign)` if the freshly re-read durable tip
+  differs from the decision's forge base (slot/hash/block_no), else `None`.
 - New caught-up transition for the Participant mode (initial → extend), mirroring
-  `forge_mode_on_caughtup`.
+  `forge_mode_on_caughtup`. `participant_forge_mode_after_admit` advances `current_tip` only on an
+  actual own forge+admit; advancing it is harmless because the decision never reads it.
 - Modified `node_lifecycle.rs` ForgeTick `proceed_to_forge`: the `else` branch dispatches
-  `VenueRole::Participant` to `participant_forge_decision`; `VenueRole::Unknown` unchanged.
-- Modified forge-base evidence (`:1900-1924`): emit `ForgeBaseSource::LocalChaindbTip` +
+  `VenueRole::Participant` to `participant_forge_decision`, captures the decision's `forge_base` into
+  `participant_forge_base`, and runs `participant_sign_time_base_consistent` as a `sign_time_ok`
+  guard immediately before `forge_one_from_recovered`; `VenueRole::Unknown` unchanged.
+- Modified forge-base evidence: emit `ForgeBaseSource::LocalChaindbTip` +
   `cert_path_present: false` for Participant too.
 
 ### Persistence
