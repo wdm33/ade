@@ -404,7 +404,7 @@ fn apply_shelley_era_block_classified(
 /// 3. Produce outputs: add to UTxO with key (tx_hash, output_index)
 ///
 /// Returns (updated_utxo, inputs_resolved, inputs_missing).
-fn track_utxo(
+pub(crate) fn track_utxo(
     block: &ade_types::shelley::block::ShelleyBlock,
     era: CardanoEra,
     current_utxo: &crate::utxo::UTxOState,
@@ -1400,7 +1400,7 @@ pub struct EpochBoundaryAccounting {
 ///
 /// For each tx body with a `certs` field (key 4), decode the certificates
 /// and apply them to the certificate state using `apply_cert`.
-fn process_block_certificates(
+pub(crate) fn process_block_certificates(
     block: &ade_types::shelley::block::ShelleyBlock,
     era: CardanoEra,
     state: &LedgerState,
@@ -1627,7 +1627,7 @@ pub fn apply_conway_tx_to_utxo(
     Ok(new_utxo)
 }
 
-fn extract_inputs_outputs_from_tx(
+pub(crate) fn extract_inputs_outputs_from_tx(
     data: &[u8],
     offset: &mut usize,
     era: CardanoEra,

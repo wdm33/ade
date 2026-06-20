@@ -131,6 +131,54 @@ impl ReducedUtxoCheckpoint {
         Ok(fp)
     }
 
+    /// Advance the checkpoint by one block's reduced delta (S3b-2): remove the spent
+    /// inputs, insert the produced reduced outputs. This INVALIDATES the completeness
+    /// marker (the checkpoint is mid-advance and incomplete) — `finalize` recomputes it
+    /// after the whole epoch window. A crash mid-window leaves an INCOMPLETE checkpoint;
+    /// because the reduced UTxO is reconstructible by replay (DC-EVIEW-04), recovery is
+    /// a rebuild, never a wrong stake snapshot from a partial advance.
+    pub fn apply_block_delta(
+        &self,
+        spent: &[TxIn],
+        produced: &[(TxIn, Coin, ReducedStakeRef)],
+    ) -> Result<(), ReducedCheckpointError> {
+        let txn = self.db.begin_write().map_err(rerr)?;
+        {
+            let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            let _ = meta.remove(COMPLETE_KEY).map_err(rerr)?;
+        }
+        {
+            let mut table = txn.open_table(REDUCED_TABLE).map_err(rerr)?;
+            for txin in spent {
+                let _ = table.remove(&txin_key(txin)).map_err(rerr)?;
+            }
+            for (txin, coin, reduced) in produced {
+                table
+                    .insert(&txin_key(txin), encode_value(*coin, reduced).as_slice())
+                    .map_err(rerr)?;
+            }
+        }
+        txn.commit().map_err(rerr)?;
+        Ok(())
+    }
+
+    /// Recompute + write the completeness marker after a window of `apply_block_delta`
+    /// calls (the durable commit that makes the advanced checkpoint complete). Returns
+    /// the new fingerprint.
+    pub fn finalize(&self) -> Result<Hash32, ReducedCheckpointError> {
+        let (fp, count) = self.compute_fingerprint()?;
+        let txn = self.db.begin_write().map_err(rerr)?;
+        {
+            let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            let mut marker = Vec::with_capacity(40);
+            marker.extend_from_slice(&fp.0);
+            marker.extend_from_slice(&count.to_be_bytes());
+            meta.insert(COMPLETE_KEY, marker.as_slice()).map_err(rerr)?;
+        }
+        txn.commit().map_err(rerr)?;
+        Ok(fp)
+    }
+
     /// Hash-chain fingerprint over the canonical records in `TxIn` order, + the count.
     fn compute_fingerprint(&self) -> Result<(Hash32, u64), ReducedCheckpointError> {
         let txn = self.db.begin_read().map_err(rerr)?;
@@ -342,6 +390,66 @@ mod tests {
         assert!(cp.is_complete().unwrap());
         assert_eq!(fp, expected, "rebuild reproduces the canonical fingerprint");
         assert_eq!(cp.len().unwrap(), 3);
+    }
+
+    // S3b-2: apply_block_delta removes spent + inserts produced; the checkpoint is
+    // INCOMPLETE mid-advance and complete only after finalize().
+    #[test]
+    fn apply_block_delta_then_finalize() {
+        let tmp = TempDir::new().unwrap();
+        let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("adv.redb")).unwrap();
+        cp.build_from(&sample()).unwrap(); // start: 3 entries (txin 1/0, 1/1, 2/0)
+        // a block that spends txin(0x01,0) and produces a new txin(0x05,0).
+        cp.apply_block_delta(&[txin(0x01, 0)], &[(txin(0x05, 0), Coin(500), base(0xee))])
+            .unwrap();
+        assert!(!cp.is_complete().unwrap(), "mid-advance is INCOMPLETE until finalize");
+        let fp = cp.finalize().unwrap();
+        assert!(cp.is_complete().unwrap());
+        assert_eq!(cp.fingerprint().unwrap(), fp);
+        assert_eq!(cp.get(&txin(0x01, 0)).unwrap(), None, "spent input removed");
+        assert_eq!(cp.get(&txin(0x05, 0)).unwrap(), Some((Coin(500), base(0xee))), "produced output present");
+        assert_eq!(cp.len().unwrap(), 3); // -1 spent +1 produced
+        // the advanced state equals building from the resulting reduced UTxO directly.
+        let mut expected = sample();
+        expected.remove(&txin(0x01, 0));
+        expected.insert(txin(0x05, 0), (Coin(500), base(0xee)));
+        let cp2 = ReducedUtxoCheckpoint::open(&tmp.path().join("exp.redb")).unwrap();
+        assert_eq!(fp, cp2.build_from(&expected).unwrap());
+    }
+
+    // S3b-2 end-to-end on a REAL Conway block: advancing a fresh checkpoint by the
+    // block's reduced_block_delta equals build_from the reduced block UTxO -- proving
+    // the reduced_block_delta -> apply_block_delta -> finalize chain on real wire data.
+    #[test]
+    fn advance_over_real_conway_block_matches_build_from() {
+        const RAW: &[u8] =
+            include_bytes!("../../../ade_node/tests/fixtures/raw_era_block_conway.cbor");
+        let env = ade_codec::cbor::envelope::decode_block_envelope(RAW).unwrap();
+        let inner = &RAW[env.block_start..env.block_end];
+        let block = ade_codec::conway::decode_conway_block(inner).unwrap().decoded().clone();
+        let delta = ade_ledger::reduced_advance::reduced_block_delta(
+            &block,
+            ade_types::CardanoEra::Conway,
+        )
+        .unwrap();
+        assert!(!delta.produced.is_empty(), "real block produces outputs");
+
+        let tmp = TempDir::new().unwrap();
+        let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("adv.redb")).unwrap();
+        cp.apply_block_delta(&delta.spent, &delta.produced).unwrap();
+        let fp_adv = cp.finalize().unwrap();
+        assert!(cp.is_complete().unwrap());
+
+        let mut map = BTreeMap::new();
+        for (txin, coin, r) in &delta.produced {
+            map.insert(txin.clone(), (*coin, r.clone()));
+        }
+        let cp2 = ReducedUtxoCheckpoint::open(&tmp.path().join("bld.redb")).unwrap();
+        assert_eq!(
+            fp_adv,
+            cp2.build_from(&map).unwrap(),
+            "advance(empty, real block) == build_from(reduced block UTxO)"
+        );
     }
 
     // A fresh store with no build is INCOMPLETE (not mistaken for an empty-but-complete
