@@ -1541,18 +1541,29 @@ pub fn forge_one_from_recovered(
     // same EraSchedule::locate map leadership uses (no divergence). Off-epoch
     // surfaces as the existing structured ForgeNotLeader — never a fabricated
     // off-epoch forge, never a leadership / sign path.
-    if let ForgeEpochAdmission::OffEpoch { .. } =
-        forge_epoch_admission(slot, era_schedule, recovered_inputs.epoch_no)
-    {
-        // PHASE4-N-F-G-B S1: a fail-closed (off-epoch) outcome surfaces no
-        // handoff — a non-self-accepted result yields no servable artifact.
-        return Ok((
-            CoordinatorEvent::ForgeNotLeader {
-                slot,
-                vrf_output_fingerprint: [0u8; 8],
-            },
-            None,
-        ));
+    // S3f-3 (DC-EVIEW-11, strengthening DC-EPOCH-03): the deterministic, fail-closed
+    // epoch-rebind seam. `None` => no bound N+1 view is supplied yet (S3f-4 wires it), so
+    // OffEpoch fails closed EXACTLY as the pre-seam wall -- the recovered seed view stays
+    // authoritative, no leader-election behaviour change. A future bound, matching N+1
+    // view would atomically promote here (the Promote arm); unreachable today.
+    let admission = forge_epoch_admission(slot, era_schedule, recovered_inputs.epoch_no);
+    match crate::epoch_rebind::decide_epoch_rebind(admission, None) {
+        crate::epoch_rebind::EpochRebindDecision::FailClosed(_) => {
+            // PHASE4-N-F-G-B S1: a fail-closed (off-epoch) outcome surfaces no
+            // handoff — a non-self-accepted result yields no servable artifact.
+            return Ok((
+                CoordinatorEvent::ForgeNotLeader {
+                    slot,
+                    vrf_output_fingerprint: [0u8; 8],
+                },
+                None,
+            ));
+        }
+        // The recovered seed view stays authoritative.
+        crate::epoch_rebind::EpochRebindDecision::KeepCurrent => {}
+        // S3f-4: rebind the leadership view to the promoted N+1 view here. UNREACHABLE
+        // today (the bound view is None), so this changes no live behaviour.
+        crate::epoch_rebind::EpochRebindDecision::Promote(_view) => {}
     }
 
     // DC-CINPUT-02b: project the leadership PoolDistrView from the

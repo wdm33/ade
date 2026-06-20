@@ -729,7 +729,7 @@ code_locus = "crates/ade_node/src/node_sync.rs, crates/ade_node/src/node_lifecyc
 tests = ["forge_epoch_admission_within_seed_epoch_admits", "forge_epoch_admission_off_epoch_fails_closed", "forge_epoch_admission_unlocatable_fails_closed", "node_forge_off_epoch_slot_fails_closed", "node_forge_no_epoch_boundary_promotion_on_forge_path", "forge_tick_off_epoch_slot_fails_closed_local"]
 ci_script = "ci/ci_check_node_forge_single_epoch_fail_closed.sh"
 introduced_in = "PHASE4-N-F-G-A"
-strengthened_in = ["PHASE4-N-AE"]
+strengthened_in = ["PHASE4-N-AE", "EPOCH-CONSENSUS-VIEW-S3f-3"]
 status = "enforced"
 evidence_notes = """
 PHASE4-N-F-G invariant sketch (/invariants gate). Declared at sketch. Single-epoch
@@ -8363,3 +8363,31 @@ strengthened_in = []
 open_obligations = ["The driver MECHANISM is enforced (2 hermetic proofs: the bootstrap->aggregate wiring incl. pre-bootstrap delegators; the real-conway-block drive == the proven pieces composed in order). OWED: (1) the FULL-EPOCH proof = the boundary-aligned live oracle (the driver's aggregate over a real epoch's blocks == cardano-cli's fresh stakeMark at >=2 Conway boundaries -- the clean pool match owed from DC-EVIEW-05); (2) the block-SOURCE wiring (feed the window's actual blocks from the ChainDb / live follow to the driver) -- part of the S3f-4 activation. The driver takes &[ShelleyBlock]; the source integration is separate."]
 attack_rationale = "The driver must (a) start from the bootstrap cert state, NOT an empty map -- the gate pins `bootstrap_state.clone()` (an empty start would silently drop every pre-bootstrap delegator, the exact verified gap DC-EVIEW-09 fixed); (b) sequence the proven pieces faithfully -- the real-conway-block test asserts drive == (build_from + apply_block_delta(reduced_block_delta) + advance_cert_state + sum + aggregate) composed by hand, so the driver cannot silently reorder/skip a step; (c) thread cert_state AND gov_state exactly as rules.rs (ledger-faithful); (d) fail closed -- every checkpoint/ledger/aggregate error maps to a WindowDriverError, never a partial aggregate. The driver is RED orchestration but every transform it calls is deterministic + individually proven (no new nondeterminism)."
 evidence_notes = "Introduced at EPOCH-CONSENSUS-VIEW S3f-2 (2026-06-21), unblocked by DC-EVIEW-09 (the bootstrap cert state is now populated, so the window starts from the real delegation map). 2 hermetic tests + ci_check_eview_window_driver.sh; cargo test -p ade_runtime --lib (421) green, no regression. The full-epoch correctness is the boundary-aligned live oracle (NOT pure coding -- needs a real Conway epoch boundary); the hermetic tests prove the orchestration sequences the (already byte-exact-vs-cardano, DC-EVIEW-05) pieces correctly. Next: S3f-3 (the ledger_view rebind seam) + S3f-4 (the live flip: the block-source wiring + feeding the bound view to leader election), gated on the two live proofs."
+
+[[rules]]
+id = "DC-EVIEW-11"
+tier = "derived"
+statement = """
+The deterministic, fail-closed epoch-rebind seam (S3f-3), strengthening DC-EPOCH-03. DC-EPOCH-03 fails the
+forge closed past the seed-epoch boundary (the recovered eta0 is the seed-epoch nonce, stale past it). This
+seam adds the ONLY sanctioned crossing: the recovered seed-epoch view stays authoritative until, AT the
+deterministic epoch transition (a candidate slot in the IMMEDIATE next epoch, seed_epoch+1), a fully-bound
+MATCHING N+1 EpochConsensusView atomically promotes. decide_epoch_rebind (PURE / deterministic) returns
+KeepCurrent within the seed epoch; Promote(view) only when the slot is the immediate next epoch AND the
+supplied bindings ARE that epoch's context AND the view matches them (all 7 bindings + verify_canonical_hash,
+via EpochConsensusView::matches); else FailClosed{Unlocatable|NotImmediateNext|NoBoundView|ViewMismatch}. The
+live seam in the node-forge wall passes None for the bound view (S3f-4 supplies it), so OffEpoch fails closed
+EXACTLY as the pre-seam wall -- NO leader-election behaviour change, no early/silent activation, no fallback.
+It never promotes a wrong-network/era/epoch/point/commitment/nonce/phase or tampered (hash-invalid) view.
+"""
+source = "docs/clusters/EPOCH-CONSENSUS-VIEW/SLICE-3f-activation.md (S3f-3); user directive 2026-06-21 (narrow fail-closed rebind safety slice)"
+cross_ref = ["DC-EPOCH-03", "DC-EVIEW-07", "DC-EVIEW-08", "DC-EVIEW-10"]
+code_locus = "crates/ade_node/src/epoch_rebind.rs: decide_epoch_rebind(admission, bound_n1: Option<(&EpochConsensusView, &ViewBindings)>) -> EpochRebindDecision{KeepCurrent|Promote|FailClosed(EpochRebindReject)}; immediate-next-only (seed_epoch.0.wrapping_add(1)) + bindings.epoch==e + view.matches(bindings). crates/ade_node/src/node_sync.rs: the node-forge DC-EPOCH-03 wall calls decide_epoch_rebind(admission, None) -- FailClosed -> ForgeNotLeader (byte-identical), KeepCurrent -> proceed, Promote -> empty no-op (S3f-4). ci/ci_check_eview_epoch_rebind.sh."
+tests = ["simulated_transition_promotes_bound_n1_view", "same_epoch_keeps_current", "off_epoch_without_bound_view_fails_closed", "not_immediate_next_fails_closed", "unlocatable_fails_closed", "rejects_each_wrong_binding", "rejects_tampered_view_wrong_hash", "replay_equivalent_deterministic", "crash_restart_redrives_same_decision_both_sides"]
+ci_scripts = ["ci/ci_check_eview_epoch_rebind.sh"]
+status = "enforced"
+introduced_in = "EPOCH-CONSENSUS-VIEW-S3f-3"
+strengthened_in = []
+open_obligations = ["The SEAM is enforced (9 hermetic proofs incl. the simulated N->N+1 transition, replay-equivalence, crash/restart both sides, and the 6 required rejections). The live seam passes None, so it is INERT today (byte-identical to the pre-seam wall). OWED (S3f-4): supply the bound N+1 view (from the window driver DC-EVIEW-10 + the bound view DC-EVIEW-07) at the wall, the durable WAL activation record of a promotion (replay-equivalence of the live flip), and feeding the promoted view to live leader election -- gated on the two live cardano-node proofs (the boundary-aligned stake oracle + the leadership-schedule proof)."]
+attack_rationale = "The seam must NEVER (a) promote outside the immediate next epoch -- the reducer pins e == seed_epoch+1 (NotImmediateNext else); (b) promote a view that is not the N+1 context -- requires bindings.epoch == e AND view.matches (all bindings + verify_canonical_hash), so wrong-network/era/epoch/point/commitment/nonce/phase or a tampered hash-invalid view all FailClosed(ViewMismatch); (c) promote without a bound view -- None -> FailClosed(NoBoundView), the current live default, byte-identical to the pre-seam wall; (d) change live behaviour before S3f-4 -- the wall passes None and the Promote arm is an empty no-op (CI-pinned). The reducer is PURE (no I/O/clock/rand/float), so the decision is replay-equivalent and re-derivable across crash/restart from the durable inputs -- no hidden seam state. The current view stays authoritative until an atomic promotion; an unprovable view is INERT."
+evidence_notes = "Introduced at EPOCH-CONSENSUS-VIEW S3f-3 (2026-06-21). A narrow live-path SAFETY slice: the rebind seam exists + is hermetically proven, but is INERT live (the wall passes None). 9 proofs in epoch_rebind.rs + ci_check_eview_epoch_rebind.sh; cargo test -p ade_node --lib (333) green, and the pre-existing forge-admission tests (node_forge_off_epoch_slot_fails_closed, forge_epoch_admission_*) stay green -- byte-identical behaviour confirmed. The boundary event is needed only to prove the FINAL flip (S3f-4), not to build/prove the seam. Strengthens DC-EPOCH-03 (the OffEpoch wall now routes through the rebind reducer, still fail-closed). Next: S3f-4 (the small final wiring/activation slice) + the live boundary proofs."
