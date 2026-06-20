@@ -1,0 +1,356 @@
+// Core Contract:
+// - Deterministic: same inputs + same seed => byte-identical outputs
+// - No wall-clock time, true randomness, HashMap/HashSet, or floats
+// - Encode invariants in types
+// - Explicit state transitions only
+// - Canonical serialization for all persisted/hashed data
+
+//! EPOCH-CONSENSUS-VIEW S3b-1 (DC-EVIEW-04) — the DURABLE reduced-UTxO checkpoint.
+//!
+//! A disk-backed redb store of the reduced UTxO `TxIn → (Coin, ReducedStakeRef)`
+//! (the BLUE record + reduction live in `ade_ledger::reduced_utxo`). It is the
+//! "minimal native state" (Option B): the single ledger authority's own reduced-UTxO
+//! projection — a GREEN durable CACHE of a BLUE-derivable projection, reconstructible
+//! by replay if lost/corrupt, NEVER authority and NEVER on the live follow/forge path
+//! (the live producer stays `track_utxo=false`; this is built/advanced lazily off the
+//! per-block path).
+//!
+//! Crash-safety: `build_from` clears any prior partial build, writes all entries
+//! (durable redb commits), computes the checkpoint fingerprint over the entries in
+//! `TxIn` order, then writes the completeness marker LAST in a separate durable
+//! commit. A SIGKILL before the marker leaves an INCOMPLETE checkpoint
+//! (`is_complete() == false`) that the caller rebuilds — a partial build is NEVER
+//! mistaken for a complete one.
+//!
+//! Replay-equivalence: the fingerprint is a hash chain over the canonical records
+//! (`encode_reduced_record`) in `TxIn` key order, so two builds from the same reduced
+//! UTxO yield a byte-identical checkpoint + fingerprint (DC-WAL-03 lineage).
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use ade_crypto::blake2b::blake2b_256;
+use ade_ledger::reduced_utxo::{encode_reduced_record, ReducedStakeRef};
+use ade_types::tx::{Coin, TxIn};
+use ade_types::Hash32;
+use redb::{Database, ReadableTable, TableDefinition};
+
+const KEY_LEN: usize = 34; // tx_hash(32) ++ index(2 BE)
+const REDUCED_TABLE: TableDefinition<&[u8; KEY_LEN], &[u8]> = TableDefinition::new("reduced_utxo");
+const META_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("reduced_meta");
+/// value = fingerprint(32) ++ count(8 BE). Present iff the build completed.
+const COMPLETE_KEY: &str = "complete";
+const FP_DOMAIN: &[u8] = b"eview-reduced-utxo-checkpoint-v1";
+
+#[derive(Debug)]
+pub enum ReducedCheckpointError {
+    Redb(String),
+    /// The checkpoint has no completeness marker (a crashed / partial build).
+    Incomplete,
+    /// A stored value could not be decoded (corrupt store).
+    Decode,
+}
+
+fn rerr(e: impl std::fmt::Debug) -> ReducedCheckpointError {
+    ReducedCheckpointError::Redb(format!("{e:?}"))
+}
+
+fn txin_key(txin: &TxIn) -> [u8; KEY_LEN] {
+    let mut k = [0u8; KEY_LEN];
+    k[..32].copy_from_slice(&txin.tx_hash.0);
+    k[32..34].copy_from_slice(&txin.index.to_be_bytes());
+    k
+}
+
+fn encode_value(coin: Coin, reduced: &ReducedStakeRef) -> Vec<u8> {
+    let mut v = Vec::with_capacity(8 + 29);
+    v.extend_from_slice(&coin.0.to_be_bytes());
+    reduced.encode(&mut v);
+    v
+}
+
+fn decode_value(bytes: &[u8]) -> Option<(Coin, ReducedStakeRef)> {
+    let coin = Coin(u64::from_be_bytes(bytes.get(0..8)?.try_into().ok()?));
+    let (reduced, _) = ReducedStakeRef::decode(bytes.get(8..)?)?;
+    Some((coin, reduced))
+}
+
+/// A durable, disk-backed reduced-UTxO checkpoint.
+pub struct ReducedUtxoCheckpoint {
+    db: Database,
+}
+
+impl ReducedUtxoCheckpoint {
+    /// Open (create if absent) the checkpoint at `path`. redb's default `Immediate`
+    /// durability (fsync per commit) gives crash-safe commits.
+    pub fn open(path: &Path) -> Result<Self, ReducedCheckpointError> {
+        let db = Database::create(path).map_err(rerr)?;
+        Ok(Self { db })
+    }
+
+    /// Build the checkpoint from a reduced UTxO. Idempotent + rebuild-safe: clears any
+    /// prior (possibly partial) build first, writes all entries, then writes the
+    /// completeness marker LAST. Returns the checkpoint fingerprint.
+    pub fn build_from(
+        &self,
+        reduced: &BTreeMap<TxIn, (Coin, ReducedStakeRef)>,
+    ) -> Result<Hash32, ReducedCheckpointError> {
+        // (1) fresh start + all entries, in one durable commit. Dropping the marker
+        // and the table first guarantees a rebuild discards any prior partial build.
+        {
+            let txn = self.db.begin_write().map_err(rerr)?;
+            {
+                let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+                let _ = meta.remove(COMPLETE_KEY).map_err(rerr)?;
+            }
+            txn.delete_table(REDUCED_TABLE).map_err(rerr)?;
+            {
+                let mut table = txn.open_table(REDUCED_TABLE).map_err(rerr)?;
+                for (txin, (coin, reduced)) in reduced.iter() {
+                    table
+                        .insert(&txin_key(txin), encode_value(*coin, reduced).as_slice())
+                        .map_err(rerr)?;
+                }
+            }
+            txn.commit().map_err(rerr)?;
+        }
+        // (2) fingerprint + count over the entries in TxIn key order (redb iterates
+        // sorted), then (3) the completeness marker LAST in a separate durable commit.
+        let (fp, count) = self.compute_fingerprint()?;
+        {
+            let txn = self.db.begin_write().map_err(rerr)?;
+            {
+                let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+                let mut marker = Vec::with_capacity(40);
+                marker.extend_from_slice(&fp.0);
+                marker.extend_from_slice(&count.to_be_bytes());
+                meta.insert(COMPLETE_KEY, marker.as_slice()).map_err(rerr)?;
+            }
+            txn.commit().map_err(rerr)?;
+        }
+        Ok(fp)
+    }
+
+    /// Hash-chain fingerprint over the canonical records in `TxIn` order, + the count.
+    fn compute_fingerprint(&self) -> Result<(Hash32, u64), ReducedCheckpointError> {
+        let txn = self.db.begin_read().map_err(rerr)?;
+        let table = txn.open_table(REDUCED_TABLE).map_err(rerr)?;
+        let mut h = blake2b_256(FP_DOMAIN);
+        let mut count = 0u64;
+        for entry in table.iter().map_err(rerr)? {
+            let (k, v) = entry.map_err(rerr)?;
+            let key = k.value();
+            let mut tx_hash = [0u8; 32];
+            tx_hash.copy_from_slice(&key[..32]);
+            let index = u16::from_be_bytes([key[32], key[33]]);
+            let (coin, reduced) =
+                decode_value(v.value()).ok_or(ReducedCheckpointError::Decode)?;
+            let txin = TxIn { tx_hash: Hash32(tx_hash), index };
+            let record = encode_reduced_record(&txin, coin, &reduced);
+            let mut chain = Vec::with_capacity(32 + record.len());
+            chain.extend_from_slice(&h.0);
+            chain.extend_from_slice(&record);
+            h = blake2b_256(&chain);
+            count += 1;
+        }
+        Ok((h, count))
+    }
+
+    /// Whether the checkpoint has a completeness marker (a finished build).
+    pub fn is_complete(&self) -> Result<bool, ReducedCheckpointError> {
+        Ok(self.marker()?.is_some())
+    }
+
+    /// The stored checkpoint fingerprint, or `Incomplete` if the build did not finish.
+    pub fn fingerprint(&self) -> Result<Hash32, ReducedCheckpointError> {
+        let (fp, _) = self.marker()?.ok_or(ReducedCheckpointError::Incomplete)?;
+        Ok(fp)
+    }
+
+    /// The number of reduced records (from the completeness marker).
+    pub fn len(&self) -> Result<u64, ReducedCheckpointError> {
+        let (_, count) = self.marker()?.ok_or(ReducedCheckpointError::Incomplete)?;
+        Ok(count)
+    }
+
+    /// Resolve a `TxIn` to its `(Coin, ReducedStakeRef)`, or `None` if absent.
+    pub fn get(&self, txin: &TxIn) -> Result<Option<(Coin, ReducedStakeRef)>, ReducedCheckpointError> {
+        let txn = self.db.begin_read().map_err(rerr)?;
+        let table = txn.open_table(REDUCED_TABLE).map_err(rerr)?;
+        match table.get(&txin_key(txin)).map_err(rerr)? {
+            Some(v) => Ok(Some(decode_value(v.value()).ok_or(ReducedCheckpointError::Decode)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Test-only: write the entries WITHOUT the completeness marker — exactly the
+    /// durable state a crash mid-build leaves (a SIGKILL after the entry commit, before
+    /// the marker commit). Used to prove crash-recovery deterministically.
+    #[cfg(test)]
+    fn write_entries_without_marker_for_test(
+        &self,
+        reduced: &BTreeMap<TxIn, (Coin, ReducedStakeRef)>,
+    ) -> Result<(), ReducedCheckpointError> {
+        let txn = self.db.begin_write().map_err(rerr)?;
+        {
+            let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            let _ = meta.remove(COMPLETE_KEY).map_err(rerr)?;
+        }
+        txn.delete_table(REDUCED_TABLE).map_err(rerr)?;
+        {
+            let mut table = txn.open_table(REDUCED_TABLE).map_err(rerr)?;
+            for (txin, (coin, reduced)) in reduced.iter() {
+                table
+                    .insert(&txin_key(txin), encode_value(*coin, reduced).as_slice())
+                    .map_err(rerr)?;
+            }
+        }
+        txn.commit().map_err(rerr)?;
+        Ok(())
+    }
+
+    fn marker(&self) -> Result<Option<(Hash32, u64)>, ReducedCheckpointError> {
+        let txn = self.db.begin_read().map_err(rerr)?;
+        let meta = match txn.open_table(META_TABLE) {
+            Ok(t) => t,
+            Err(_) => return Ok(None),
+        };
+        match meta.get(COMPLETE_KEY).map_err(rerr)? {
+            Some(v) => {
+                let b = v.value();
+                if b.len() != 40 {
+                    return Err(ReducedCheckpointError::Decode);
+                }
+                let mut fp = [0u8; 32];
+                fp.copy_from_slice(&b[..32]);
+                let count = u64::from_be_bytes(b[32..40].try_into().unwrap());
+                Ok(Some((Hash32(fp), count)))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ade_types::shelley::cert::StakeCredential;
+    use ade_types::Hash28;
+    use tempfile::TempDir;
+
+    fn txin(h: u8, i: u16) -> TxIn {
+        TxIn { tx_hash: Hash32([h; 32]), index: i }
+    }
+    fn base(fill: u8) -> ReducedStakeRef {
+        ReducedStakeRef::Base(StakeCredential::KeyHash(Hash28([fill; 28])))
+    }
+    fn sample() -> BTreeMap<TxIn, (Coin, ReducedStakeRef)> {
+        let mut m = BTreeMap::new();
+        m.insert(txin(0x01, 0), (Coin(100), base(0xaa)));
+        m.insert(txin(0x01, 1), (Coin(200), ReducedStakeRef::NonContributing));
+        m.insert(txin(0x02, 0), (Coin(300), base(0xbb)));
+        m
+    }
+
+    #[test]
+    fn build_then_query_and_complete() {
+        let tmp = TempDir::new().unwrap();
+        let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("rc.redb")).unwrap();
+        let fp = cp.build_from(&sample()).unwrap();
+        assert!(cp.is_complete().unwrap());
+        assert_eq!(cp.len().unwrap(), 3);
+        assert_eq!(cp.fingerprint().unwrap(), fp);
+        assert_eq!(cp.get(&txin(0x01, 0)).unwrap(), Some((Coin(100), base(0xaa))));
+        assert_eq!(
+            cp.get(&txin(0x01, 1)).unwrap(),
+            Some((Coin(200), ReducedStakeRef::NonContributing))
+        );
+        assert_eq!(cp.get(&txin(0x09, 0)).unwrap(), None);
+    }
+
+    #[test]
+    fn durable_across_reopen() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("rc.redb");
+        let fp = {
+            let cp = ReducedUtxoCheckpoint::open(&path).unwrap();
+            cp.build_from(&sample()).unwrap()
+        };
+        // reopen: the checkpoint persists, byte-identical fingerprint + entries.
+        let cp = ReducedUtxoCheckpoint::open(&path).unwrap();
+        assert!(cp.is_complete().unwrap());
+        assert_eq!(cp.fingerprint().unwrap(), fp);
+        assert_eq!(cp.len().unwrap(), 3);
+        assert_eq!(cp.get(&txin(0x02, 0)).unwrap(), Some((Coin(300), base(0xbb))));
+    }
+
+    #[test]
+    fn replay_equivalent_two_builds_byte_identical() {
+        let tmp = TempDir::new().unwrap();
+        let cp1 = ReducedUtxoCheckpoint::open(&tmp.path().join("a.redb")).unwrap();
+        let cp2 = ReducedUtxoCheckpoint::open(&tmp.path().join("b.redb")).unwrap();
+        assert_eq!(
+            cp1.build_from(&sample()).unwrap(),
+            cp2.build_from(&sample()).unwrap(),
+            "two builds from the same reduced UTxO -> identical fingerprint"
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_with_content() {
+        let tmp = TempDir::new().unwrap();
+        let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("c.redb")).unwrap();
+        let fp_a = cp.build_from(&sample()).unwrap();
+        let mut other = sample();
+        other.insert(txin(0x03, 0), (Coin(1), base(0xcc)));
+        let fp_b = cp.build_from(&other).unwrap();
+        assert_ne!(fp_a, fp_b);
+        // rebuild discards the prior content (the extra entry is gone).
+        let fp_c = cp.build_from(&sample()).unwrap();
+        assert_eq!(fp_a, fp_c, "rebuild from the same input reproduces the fingerprint");
+        assert_eq!(cp.len().unwrap(), 3);
+    }
+
+    // Crash mid-build (entries committed, marker NOT) -> on reopen the partial
+    // checkpoint is detected as INCOMPLETE (never mistaken for complete) and a rebuild
+    // produces the correct complete checkpoint. The durable redb survives a real
+    // SIGKILL mid-commit by its Immediate durability (the same backend DC-EVIEW-01
+    // proved under its 1000-kill harness); this proves the completeness-marker
+    // recovery semantics deterministically.
+    #[test]
+    fn crash_mid_build_is_incomplete_then_rebuilds() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("crash.redb");
+        let expected = {
+            // entries written but the marker NOT (the crash-mid-build state).
+            let cp = ReducedUtxoCheckpoint::open(&path).unwrap();
+            cp.write_entries_without_marker_for_test(&sample()).unwrap();
+            assert!(!cp.is_complete().unwrap(), "partial build must be INCOMPLETE");
+            assert!(matches!(cp.fingerprint(), Err(ReducedCheckpointError::Incomplete)));
+            drop(cp);
+            // a separate clean build gives the expected fingerprint.
+            let other = TempDir::new().unwrap();
+            ReducedUtxoCheckpoint::open(&other.path().join("e.redb"))
+                .unwrap()
+                .build_from(&sample())
+                .unwrap()
+        };
+        // reopen the crashed store and rebuild -> complete + the correct fingerprint.
+        let cp = ReducedUtxoCheckpoint::open(&path).unwrap();
+        assert!(!cp.is_complete().unwrap(), "the persisted partial build is still incomplete after reopen");
+        let fp = cp.build_from(&sample()).unwrap();
+        assert!(cp.is_complete().unwrap());
+        assert_eq!(fp, expected, "rebuild reproduces the canonical fingerprint");
+        assert_eq!(cp.len().unwrap(), 3);
+    }
+
+    // A fresh store with no build is INCOMPLETE (not mistaken for an empty-but-complete
+    // checkpoint) -- the crash-mid-build recovery signal.
+    #[test]
+    fn fresh_store_is_incomplete() {
+        let tmp = TempDir::new().unwrap();
+        let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("d.redb")).unwrap();
+        assert!(!cp.is_complete().unwrap());
+        assert!(matches!(cp.fingerprint(), Err(ReducedCheckpointError::Incomplete)));
+    }
+}

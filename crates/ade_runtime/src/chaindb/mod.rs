@@ -23,6 +23,7 @@ mod crash_safety;
 mod error;
 mod in_memory;
 mod persistent;
+mod reduced_utxo_checkpoint;
 mod snapshot_contract;
 mod transient_epoch_view;
 mod types;
@@ -32,6 +33,7 @@ mod utxo_key;
 pub use contract::run_contract_tests;
 pub use crash_safety::{run_crash_safety_tests, KillStrategy, NoKill};
 pub use error::ChainDbError;
+pub use reduced_utxo_checkpoint::{ReducedCheckpointError, ReducedUtxoCheckpoint};
 pub use transient_epoch_view::{
     is_valid_window_key, purge_transient_root, transient_root, window_key,
     TransientEpochViewStore, TransientViewError, TRANSIENT_SUBTREE,

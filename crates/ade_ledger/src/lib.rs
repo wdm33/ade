@@ -41,6 +41,7 @@ pub mod producer;
 pub mod rational;
 pub mod receive;
 pub mod recovered_anchor_point;
+pub mod reduced_utxo;
 pub mod rollback;
 pub mod rules;
 pub mod scripts;
