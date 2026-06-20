@@ -77,6 +77,10 @@ pub enum AdmissionBootstrapError {
     SnapshotDirCreate(io::ErrorKind),
     WalDirCreate(io::ErrorKind),
     SeedToSnapshot(String),
+    /// S3f-2-pre (DC-EVIEW-08): the manifest-bound bootstrap cert-state package failed
+    /// to verify/import (missing one side, hash/network/era mismatch, malformed, or a
+    /// cert-state that does not decode). FAIL-CLOSED before any bootstrap state durables.
+    BootstrapCertState(String),
     BootstrapInitialState(String),
     FileWalStoreOpen(String),
     WalChainBreak(String),
@@ -141,6 +145,53 @@ pub async fn dispatch_admission(
 /// seed UTxO and the bundle were extracted at different chain points, so the peer
 /// rolls forward from `source_tip` while the ledger sits at the seed — applying
 /// blocks across a gap (a hollow hash-agreement rather than a validated chain).
+/// S3f-2-pre (DC-EVIEW-08): import the manifest-bound bootstrap cert state, discovered by
+/// convention next to the seed (`<seed>.manifest` + `<seed>.certstate`). Both present ->
+/// verify the manifest binds the seed + cert-state by hash + network/era, then decode the
+/// COMPLETE `CertState` via the canonical codec. Exactly one present -> FAIL CLOSED (a seed
+/// without its manifest-bound cert state, or a cert state without its binding manifest).
+/// Neither present -> the pre-import empty `CertState` (transition). The verify runs BEFORE
+/// any bootstrap state is durably written. This only populates the bootstrap LedgerState's
+/// cert_state for later self-derived epoch views; it does NOT change live producer behaviour.
+fn import_bootstrap_cert_state(
+    seed_path: &std::path::Path,
+    network_magic: u32,
+) -> Result<ade_ledger::delegation::CertState, AdmissionBootstrapError> {
+    use ade_ledger::bootstrap_manifest::verify_and_import_cert_state;
+    let read = |p: &std::path::Path, what: &str| {
+        fs::read(p).map_err(|e| {
+            AdmissionBootstrapError::BootstrapCertState(format!("read {what}: {:?}", e.kind()))
+        })
+    };
+    let manifest_path = PathBuf::from(format!("{}.manifest", seed_path.display()));
+    let cert_path = PathBuf::from(format!("{}.certstate", seed_path.display()));
+    match (manifest_path.exists(), cert_path.exists()) {
+        (false, false) => Ok(ade_ledger::delegation::CertState::new()),
+        (true, false) => Err(AdmissionBootstrapError::BootstrapCertState(
+            "manifest present but its bound cert-state artifact is missing".into(),
+        )),
+        (false, true) => Err(AdmissionBootstrapError::BootstrapCertState(
+            "cert-state artifact present but its binding manifest is missing".into(),
+        )),
+        (true, true) => {
+            let manifest_bytes = read(&manifest_path, "manifest")?;
+            let seed_bytes = read(seed_path, "seed")?;
+            let cert_bytes = read(&cert_path, "cert-state")?;
+            let (_manifest, cert_state) = verify_and_import_cert_state(
+                &manifest_bytes,
+                &seed_bytes,
+                &cert_bytes,
+                network_magic,
+                CardanoEra::Conway,
+            )
+            .map_err(|e| {
+                AdmissionBootstrapError::BootstrapCertState(format!("manifest verify: {e:?}"))
+            })?;
+            Ok(cert_state)
+        }
+    }
+}
+
 fn check_seed_bundle_tip_consistency(
     source_tip_slot: SlotNo,
     source_tip_hash: &Hash32,
@@ -215,6 +266,14 @@ async fn run_admission_inner(
         &seed_block_hash,
     )?;
 
+    // S3f-2-pre (DC-EVIEW-08): import the manifest-bound bootstrap cert state (the
+    // per-credential delegation/reward continuation state) so the captured snapshot --
+    // and warm-start -- carry it for later self-derived epoch views. Discovered by
+    // convention next to the seed; fail-closed on a partial/mismatched package; empty
+    // (transition) when no package is present. NO live producer behaviour change.
+    let bootstrap_cert_state =
+        import_bootstrap_cert_state(&acli.consensus_inputs_path, acli.network_magic)?;
+
     // 4. seed_to_snapshot (uses ChainDb as the SnapshotStore).
     let chain_dep_seed = PraosChainDepState::genesis(Nonce::ZERO);
     let initial_fp = seed_to_snapshot(
@@ -223,6 +282,7 @@ async fn run_admission_inner(
         SlotNo(acli.seed_point_slot),
         &chaindb,
         current_pparams.clone(),
+        bootstrap_cert_state.clone(),
     )
     .map_err(|e| AdmissionBootstrapError::SeedToSnapshot(format!("{:?}", e)))?;
 
@@ -288,6 +348,10 @@ async fn run_admission_inner(
     //    block ever reached header validity, so the ZERO-nonce
     //    chain_dep was masked.)
     let mut ledger = ade_ledger::state::LedgerState::new(CardanoEra::Conway);
+    // S3f-2-pre: the runner ledger carries the same manifest-bound bootstrap cert state
+    // as the captured snapshot (a consistent bootstrap state). Empty (transition) when no
+    // package is configured; track_utxo=false still skips live cert accumulation.
+    ledger.cert_state = bootstrap_cert_state;
     // MEM-OPT-UTXO-DISK S2b-2c.1b-A.2: compute the constant UTxO-component fingerprint
     // ONCE from the imported UTxO (its durable copy is the snapshot already written by
     // seed_to_snapshot), then DROP the 1.9M-entry in-memory map. The live

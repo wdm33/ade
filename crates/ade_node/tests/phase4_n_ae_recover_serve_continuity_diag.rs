@@ -77,6 +77,7 @@ fn recover_at_anchor(slot: SlotNo) -> InMemoryChainDb {
         slot,
         &db,
         ProtocolParameters::default(),
+        ade_ledger::delegation::CertState::new(),
     )
     .expect("seed_to_snapshot recovers a non-Origin anchor (snapshot only)");
     db

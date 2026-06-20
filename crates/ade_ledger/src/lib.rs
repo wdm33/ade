@@ -16,6 +16,7 @@ pub mod babbage;
 pub mod block_body_hash;
 pub mod block_validity;
 pub mod bootstrap_anchor;
+pub mod bootstrap_manifest;
 pub mod byron;
 pub mod cert_classify;
 pub mod consensus_input_extract;

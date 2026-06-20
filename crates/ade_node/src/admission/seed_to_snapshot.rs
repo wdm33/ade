@@ -59,8 +59,13 @@ pub fn seed_to_snapshot<S: SnapshotStore + ?Sized>(
     seed_point: SlotNo,
     store: &S,
     protocol_params: ProtocolParameters,
+    // S3f-2-pre (DC-EVIEW-08): the manifest-bound cert state imported at bootstrap. The
+    // captured snapshot serializes it via the existing cert-state codec, so warm-start
+    // reloads the real delegation/reward state -- the input later self-derived epoch
+    // views need. `CertState::new()` (empty) preserves the pre-import behaviour.
+    cert_state: ade_ledger::delegation::CertState,
 ) -> Result<Hash32, SeedToSnapshotError> {
-    let ledger = build_seed_ledger(utxo, protocol_params);
+    let ledger = build_seed_ledger(utxo, protocol_params, cert_state);
     let initial_fp = fingerprint(&ledger).combined;
     let cache = PersistentSnapshotCache::new(store);
     cache
@@ -80,10 +85,17 @@ pub fn seed_to_snapshot<S: SnapshotStore + ?Sized>(
 /// `LiveConsensusInputsCanonical::require_forge_current_pparams`). All other
 /// fields are at their canonical defaults (`LedgerState::new(Conway)`). Visible
 /// for tests + B4 reuse.
-pub fn build_seed_ledger(utxo: UTxOState, protocol_params: ProtocolParameters) -> LedgerState {
+pub fn build_seed_ledger(
+    utxo: UTxOState,
+    protocol_params: ProtocolParameters,
+    cert_state: ade_ledger::delegation::CertState,
+) -> LedgerState {
     let mut ledger = LedgerState::new(CardanoEra::Conway);
     ledger.utxo_state = utxo;
     ledger.protocol_params = protocol_params;
+    // S3f-2-pre: populate the bootstrap cert state (the manifest-bound delegation/reward
+    // continuation state); `CertState::new()` from the caller = the pre-import behaviour.
+    ledger.cert_state = cert_state;
     ledger
 }
 
@@ -110,7 +122,7 @@ mod tests {
     fn seed_to_snapshot_writes_via_persistent_cache() {
         let store = InMemoryChainDb::new();
         let slot = SlotNo(12345);
-        let _fp = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &store, ProtocolParameters::default()).expect("ok");
+        let _fp = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &store, ProtocolParameters::default(), ade_ledger::delegation::CertState::new()).expect("ok");
         // Read it back through the cache.
         let cache = PersistentSnapshotCache::new(&store);
         let bytes = store.get_snapshot(slot).expect("get").expect("present");
@@ -126,8 +138,8 @@ mod tests {
     fn seed_to_snapshot_returns_initial_ledger_fingerprint() {
         let store = InMemoryChainDb::new();
         let slot = SlotNo(1);
-        let fp = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &store, ProtocolParameters::default()).expect("ok");
-        let expected = fingerprint(&build_seed_ledger(empty_utxo(), ProtocolParameters::default())).combined;
+        let fp = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &store, ProtocolParameters::default(), ade_ledger::delegation::CertState::new()).expect("ok");
+        let expected = fingerprint(&build_seed_ledger(empty_utxo(), ProtocolParameters::default(), ade_ledger::delegation::CertState::new())).combined;
         assert_eq!(fp, expected);
     }
 
@@ -136,8 +148,8 @@ mod tests {
         let s1 = InMemoryChainDb::new();
         let s2 = InMemoryChainDb::new();
         let slot = SlotNo(42);
-        let fp1 = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &s1, ProtocolParameters::default()).expect("ok");
-        let fp2 = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &s2, ProtocolParameters::default()).expect("ok");
+        let fp1 = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &s1, ProtocolParameters::default(), ade_ledger::delegation::CertState::new()).expect("ok");
+        let fp2 = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &s2, ProtocolParameters::default(), ade_ledger::delegation::CertState::new()).expect("ok");
         assert_eq!(fp1, fp2);
         let b1 = s1.get_snapshot(slot).expect("get").expect("present");
         let b2 = s2.get_snapshot(slot).expect("get").expect("present");
@@ -169,7 +181,7 @@ mod tests {
     fn seed_import_installs_current_protocol_params() {
         // build_seed_ledger installs the supplied current pparams, not the default.
         let pp = pparams_major(9);
-        let ledger = build_seed_ledger(empty_utxo(), pp.clone());
+        let ledger = build_seed_ledger(empty_utxo(), pp.clone(), ade_ledger::delegation::CertState::new());
         assert_eq!(ledger.protocol_params, pp);
         assert_ne!(
             ledger.protocol_params.protocol_major,
@@ -186,7 +198,7 @@ mod tests {
         let store = InMemoryChainDb::new();
         let slot = SlotNo(7);
         let pp = pparams_major(9);
-        seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &store, pp.clone())
+        seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &store, pp.clone(), ade_ledger::delegation::CertState::new())
             .expect("capture");
         let cache = PersistentSnapshotCache::new(&store);
         let (resolved, ledger, _chain_dep) =
