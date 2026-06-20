@@ -42,10 +42,15 @@ grep -qE 'fn replay_equivalent_two_builds_byte_identical' "$CP" \
 grep -qE 'fn durable_across_reopen' "$CP" || fail "the durable-across-reopen proof is missing"
 grep -qE 'fn fresh_store_is_incomplete' "$CP" || fail "the fresh-store-incomplete proof is missing"
 
-# (5) S3b-1 boundary: NO advance / aggregation / live wiring / track_utxo. The
-#     checkpoint is reachable only from S3b; the live producer path never references it.
-if grep -qiE 'aggregate|new_mark|EpochConsensusView|leader|pool_distr' "$RED" "$CP"; then
-    fail "S3b-1 reaches into aggregation / leader -- out of scope (S3c+)"
+# (5) S3b-1 boundary: NO live wiring / track_utxo. The pure reduction ($RED) reaches
+#     into no aggregation/leader. The checkpoint ($CP) legitimately HOSTS the S3c
+#     per-credential fold (sum_base_credential_stake) + the S3b-2 advance primitives,
+#     but must NOT emit an EpochConsensusView (S3e) or feed leadership (DC-EVIEW-08).
+if grep -qiE 'aggregate|new_mark|EpochConsensusView|leader|pool_distr' "$RED"; then
+    fail "the reduced-UTxO record/reduction reaches into aggregation / leader -- out of scope"
+fi
+if grep -qE 'EpochConsensusView|query_leader_schedule' "$CP"; then
+    fail "the checkpoint emits a view / feeds leadership -- that is S3e / DC-EVIEW-08, not S3b-1"
 fi
 if grep -rqE 'ReducedUtxoCheckpoint|reduce_txout' \
     crates/ade_node/src/node_lifecycle.rs crates/ade_node/src/node_sync.rs \
