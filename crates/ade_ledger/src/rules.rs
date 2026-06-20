@@ -613,7 +613,10 @@ pub fn apply_epoch_boundary_full(
     state: &LedgerState,
     new_epoch: ade_types::EpochNo,
 ) -> (LedgerState, EpochBoundaryAccounting) {
-    apply_epoch_boundary_with_registrations(state, new_epoch, None)
+    // The live path passes `None` for the precomputed mark -> the boundary uses the
+    // existing stub, UNCHANGED. Activation (S3f-4) calls _with_registrations with the
+    // real aggregate via a distinct entry point, never through _full.
+    apply_epoch_boundary_with_registrations(state, new_epoch, None, None)
 }
 
 /// Apply epoch boundary with an optional override for the credential registration set.
@@ -626,6 +629,12 @@ pub fn apply_epoch_boundary_with_registrations(
     state: &LedgerState,
     new_epoch: ade_types::EpochNo,
     registration_override: Option<&std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, ()>>,
+    // EPOCH-CONSENSUS-VIEW S3f-1 (DC-EVIEW-08): the activation consumption point. When
+    // `Some(agg)`, the new MARK snapshot is the real per-pool aggregate (S3c, via
+    // form_mark_snapshot); when `None` (the live path, track_utxo=false), the existing
+    // stub is used UNCHANGED -- so the live boundary behaviour does not change until the
+    // window driver (S3f-2) actually produces an aggregate. Fail-safe by construction.
+    precomputed_mark: Option<&crate::reduced_aggregate::StakeByPool>,
 ) -> (LedgerState, EpochBoundaryAccounting) {
     // 1. Reward computation from PRE-rotation go snapshot
     //    Rewards must be computed before rotation — after rotation,
@@ -1094,23 +1103,28 @@ pub fn apply_epoch_boundary_with_registrations(
 
     let _ = (rewarded_pool_count, total_pool_rewards, total_member_rewards, total_stake);
 
-    // 3. Snapshot rotation (AFTER reward computation)
-    let new_mark = crate::epoch::StakeSnapshot {
-        delegations: state.cert_state.delegation.delegations.iter()
-            .map(|(cred, pool)| {
-                let stake = state.cert_state.delegation.rewards
-                    .get(cred)
-                    .copied()
-                    .unwrap_or(ade_types::tx::Coin(0));
-                (cred.hash().clone(), (pool.clone(), stake))
-            })
-            .collect(),
-        pool_stakes: {
-            let mut ps = std::collections::BTreeMap::new();
-            for pool in state.cert_state.delegation.delegations.values() {
-                ps.entry(pool.clone()).or_insert(ade_types::tx::Coin(0));
-            }
-            ps
+    // 3. Snapshot rotation (AFTER reward computation). S3f-1: the new MARK is the real
+    //    S3c per-pool aggregate when one is provided (activation); otherwise the existing
+    //    stub (the unchanged live path).
+    let new_mark = match precomputed_mark {
+        Some(agg) => crate::reduced_snapshot::form_mark_snapshot(agg),
+        None => crate::epoch::StakeSnapshot {
+            delegations: state.cert_state.delegation.delegations.iter()
+                .map(|(cred, pool)| {
+                    let stake = state.cert_state.delegation.rewards
+                        .get(cred)
+                        .copied()
+                        .unwrap_or(ade_types::tx::Coin(0));
+                    (cred.hash().clone(), (pool.clone(), stake))
+                })
+                .collect(),
+            pool_stakes: {
+                let mut ps = std::collections::BTreeMap::new();
+                for pool in state.cert_state.delegation.delegations.values() {
+                    ps.entry(pool.clone()).or_insert(ade_types::tx::Coin(0));
+                }
+                ps
+            },
         },
     };
     let rotated = crate::epoch::rotate_snapshots(
@@ -2656,6 +2670,46 @@ mod cert_state_dispatch {
             Some(&(576 + 20)),
             "DRep expiry accumulated into gov_state from the block path",
         );
+    }
+
+    /// EPOCH-CONSENSUS-VIEW S3f-1 (DC-EVIEW-08): the epoch boundary consumes the S3c
+    /// per-pool aggregate as the new MARK when one is provided (activation), and uses the
+    /// existing stub UNCHANGED when `None` (the live path). Fail-safe: the live boundary
+    /// behaviour does not change until the window driver (S3f-2) supplies an aggregate.
+    #[test]
+    fn epoch_boundary_consumes_precomputed_aggregate_mark() {
+        use super::apply_epoch_boundary_with_registrations;
+        use crate::reduced_aggregate::StakeByPool;
+        use crate::state::LedgerState;
+        use ade_types::tx::PoolId;
+        use ade_types::{EpochNo, Hash28};
+        use std::collections::BTreeMap;
+
+        let mut state = LedgerState::new(CardanoEra::Conway);
+        state.epoch_state.epoch = EpochNo(500);
+
+        let mut pool_stakes = BTreeMap::new();
+        pool_stakes.insert(PoolId(Hash28([0x11; 28])), Coin(1000));
+        pool_stakes.insert(PoolId(Hash28([0x22; 28])), Coin(2000));
+        let agg = StakeByPool { pool_stakes: pool_stakes.clone(), total_active_stake: Coin(3000) };
+
+        // Some(agg) -> the new MARK is the aggregate's per-pool stake.
+        let (with_agg, _) =
+            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&agg));
+        assert_eq!(
+            with_agg.epoch_state.snapshots.mark.0.pool_stakes, pool_stakes,
+            "the precomputed aggregate becomes the new MARK"
+        );
+
+        // None -> the existing stub (the live path UNCHANGED): the empty cert-state here
+        // yields an empty stub mark, NOT the aggregate.
+        let (no_agg, _) =
+            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None);
+        assert!(
+            no_agg.epoch_state.snapshots.mark.0.pool_stakes.is_empty(),
+            "None uses the stub (empty cert-state -> empty mark), not the aggregate"
+        );
+        assert_ne!(no_agg.epoch_state.snapshots.mark.0.pool_stakes, pool_stakes);
     }
 
     /// ENACTMENT-COMMITTEE-WRITEBACK S2: the epoch-boundary apply site now writes
