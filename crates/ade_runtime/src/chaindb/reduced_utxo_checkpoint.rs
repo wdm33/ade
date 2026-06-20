@@ -31,6 +31,7 @@ use std::path::Path;
 
 use ade_crypto::blake2b::blake2b_256;
 use ade_ledger::reduced_utxo::{encode_reduced_record, ReducedStakeRef};
+use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::{Coin, TxIn};
 use ade_types::Hash32;
 use redb::{Database, ReadableTable, TableDefinition};
@@ -49,6 +50,9 @@ pub enum ReducedCheckpointError {
     Incomplete,
     /// A stored value could not be decoded (corrupt store).
     Decode,
+    /// A per-credential coin sum exceeded u64 (fail-closed; unreachable under the
+    /// Cardano max-supply bound, but never silently wrapped).
+    Overflow,
 }
 
 fn rerr(e: impl std::fmt::Debug) -> ReducedCheckpointError {
@@ -219,6 +223,29 @@ impl ReducedUtxoCheckpoint {
     pub fn len(&self) -> Result<u64, ReducedCheckpointError> {
         let (_, count) = self.marker()?.ok_or(ReducedCheckpointError::Incomplete)?;
         Ok(count)
+    }
+
+    /// S3c: fold the reduced UTxO into per-base-credential coin sums (only
+    /// `Base(cred)` entries contribute at Conway; `NonContributing` is skipped). The
+    /// caller (`ade_ledger::reduced_aggregate::aggregate_pool_stake`) groups these by
+    /// the delegation map into per-pool stake. Fail-closed on overflow (unreachable
+    /// under the max-supply bound) — never a silently wrapped sum.
+    pub fn sum_base_credential_stake(
+        &self,
+    ) -> Result<BTreeMap<StakeCredential, Coin>, ReducedCheckpointError> {
+        let txn = self.db.begin_read().map_err(rerr)?;
+        let table = txn.open_table(REDUCED_TABLE).map_err(rerr)?;
+        let mut sums: BTreeMap<StakeCredential, Coin> = BTreeMap::new();
+        for entry in table.iter().map_err(rerr)? {
+            let (_, v) = entry.map_err(rerr)?;
+            let (coin, reduced) =
+                decode_value(v.value()).ok_or(ReducedCheckpointError::Decode)?;
+            if let ReducedStakeRef::Base(cred) = reduced {
+                let e = sums.entry(cred).or_insert(Coin(0));
+                *e = e.checked_add(coin).ok_or(ReducedCheckpointError::Overflow)?;
+            }
+        }
+        Ok(sums)
     }
 
     /// Resolve a `TxIn` to its `(Coin, ReducedStakeRef)`, or `None` if absent.
@@ -450,6 +477,25 @@ mod tests {
             cp2.build_from(&map).unwrap(),
             "advance(empty, real block) == build_from(reduced block UTxO)"
         );
+    }
+
+    // S3c: sum_base_credential_stake folds only Base(cred) coins (per credential);
+    // NonContributing entries (pointer/enterprise/Byron) are skipped.
+    #[test]
+    fn sum_base_credential_stake_skips_non_contributing() {
+        use ade_types::shelley::cert::StakeCredential;
+        let tmp = TempDir::new().unwrap();
+        let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("sum.redb")).unwrap();
+        let cred_a = StakeCredential::KeyHash(Hash28([0xaa; 28]));
+        let mut m = BTreeMap::new();
+        // two Base entries for the SAME credential (must sum) + one NonContributing.
+        m.insert(txin(0x01, 0), (Coin(100), ReducedStakeRef::Base(cred_a.clone())));
+        m.insert(txin(0x01, 1), (Coin(40), ReducedStakeRef::Base(cred_a.clone())));
+        m.insert(txin(0x02, 0), (Coin(9999), ReducedStakeRef::NonContributing));
+        cp.build_from(&m).unwrap();
+        let sums = cp.sum_base_credential_stake().unwrap();
+        assert_eq!(sums.get(&cred_a), Some(&Coin(140)), "Base coins summed per credential");
+        assert_eq!(sums.len(), 1, "NonContributing contributes no credential");
     }
 
     // A fresh store with no build is INCOMPLETE (not mistaken for an empty-but-complete
