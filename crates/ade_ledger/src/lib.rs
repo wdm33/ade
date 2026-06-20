@@ -43,6 +43,7 @@ pub mod receive;
 pub mod recovered_anchor_point;
 pub mod reduced_advance;
 pub mod reduced_aggregate;
+pub mod reduced_snapshot;
 pub mod reduced_utxo;
 pub mod rollback;
 pub mod rules;
