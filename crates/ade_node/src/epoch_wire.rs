@@ -24,6 +24,7 @@ use ade_runtime::chaindb::{
 use ade_types::shelley::block::ShelleyBlock;
 use ade_types::{CardanoEra, EpochNo, Hash32, SlotNo};
 
+use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::events::Point;
 use ade_ledger::wal::WalEntry;
 
@@ -214,6 +215,38 @@ pub struct WindowBounds {
     pub expected_seed_slot: SlotNo,
 }
 
+/// S3f-4d-wire-3b (DC-EPOCH-11): compute the EXPLICIT source-window bounds for the FIRST
+/// activation -- the completed SEED epoch -- from the era schedule (NEVER the wall clock). The
+/// seed checkpoint sits at `seed_point`; the window is the durable blocks AFTER it up to the
+/// seed epoch's LAST slot, so the replay (seed checkpoint + window) yields the mark at the
+/// seed-epoch boundary (which becomes the Set the target epoch's leadership reads, source+2).
+/// `None` if the seed point does not locate in `seed_epoch` (a malformed schedule / wrong seed).
+pub fn compute_first_window_bounds(
+    era_schedule: &EraSchedule,
+    seed_point_slot: SlotNo,
+    seed_point_hash: Hash32,
+    seed_epoch: EpochNo,
+) -> Option<WindowBounds> {
+    let loc = era_schedule.locate(seed_point_slot).ok()?;
+    if loc.epoch.0 != seed_epoch.0 {
+        return None;
+    }
+    let epoch_len =
+        u64::from(era_schedule.eras().get(loc.era_index as usize)?.epoch_length_slots);
+    let epoch_start = seed_point_slot
+        .0
+        .checked_sub(u64::from(loc.relative_slot_in_epoch))?;
+    let seed_epoch_end = epoch_start.checked_add(epoch_len)?.checked_sub(1)?;
+    Some(WindowBounds {
+        source_epoch: seed_epoch,
+        source_window_start: SlotNo(seed_point_slot.0.checked_add(1)?),
+        source_window_end: SlotNo(seed_epoch_end),
+        snapshot_phase: SnapshotPhase::Set,
+        source_window_anchor: seed_point_hash,
+        expected_seed_slot: seed_point_slot,
+    })
+}
+
 /// Why the boundary activation attempt is a TERMINAL epoch-activation failure (halt -- the
 /// caller stops admit/forge/follow, NEVER falls back to the seed view).
 #[derive(Debug)]
@@ -281,6 +314,70 @@ pub fn try_activate_at_boundary(
         wal_write,
     )
     .map_err(ActivationError::Activate)
+}
+
+/// S3f-4d-wire-3b (DC-EPOCH-11): the GATED relay-loop orchestration. When `armed` is false (the
+/// default until the live boundary proofs pass -- the boundary-aligned stake oracle + the
+/// leadership-schedule lag proof), this is a strict NO-OP (`Ok(None)`) -- the live follow/forge
+/// path is BYTE-IDENTICAL, no activation, no WAL write, no rebind. When armed AND the seed epoch
+/// has COMPLETED (the durable tip located in a later epoch) AND no view is promoted yet, it
+/// computes the explicit window bounds + runs the sole authoritative activation
+/// (`try_activate_at_boundary`). Any terminal `ActivationError` propagates (halt). Idempotent:
+/// a no-op once a view is promoted.
+#[allow(clippy::too_many_arguments)]
+pub fn maybe_activate_first_boundary(
+    armed: bool,
+    era_schedule: &EraSchedule,
+    durable_tip_slot: SlotNo,
+    seed_epoch: EpochNo,
+    seed_point_slot: SlotNo,
+    seed_point_hash: Hash32,
+    live: &ReducedUtxoCheckpoint,
+    chaindb: &dyn ChainDb,
+    bootstrap_state: &LedgerState,
+    network_magic: u32,
+    nonce: Hash32,
+    selected_point: &Point,
+    active_view: &mut ActiveEpochView,
+    scratch_path: &std::path::Path,
+    wal_write: impl FnOnce(&WalEntry) -> bool,
+) -> Result<Option<BoundaryActivationOutcome>, ActivationError> {
+    // GATED OFF: until the live boundary proofs arm it, NO activation (byte-identical).
+    if !armed {
+        return Ok(None);
+    }
+    // idempotent: once a view is promoted, the first-boundary activation is done.
+    if active_view.promoted().is_some() {
+        return Ok(None);
+    }
+    // boundary detection: the seed epoch's window is complete only once the durable tip has
+    // located into a LATER epoch (never the wall clock).
+    let tip_epoch = match era_schedule.locate(durable_tip_slot) {
+        Ok(loc) => loc.epoch,
+        Err(_) => return Ok(None),
+    };
+    if tip_epoch.0 <= seed_epoch.0 {
+        return Ok(None);
+    }
+    let bounds =
+        match compute_first_window_bounds(era_schedule, seed_point_slot, seed_point_hash, seed_epoch) {
+            Some(b) => b,
+            None => return Ok(None),
+        };
+    let outcome = try_activate_at_boundary(
+        live,
+        chaindb,
+        &bounds,
+        bootstrap_state,
+        network_magic,
+        nonce,
+        selected_point,
+        true, // the boundary is reached -> the transition is eligible
+        active_view,
+        scratch_path,
+        wal_write,
+    )?;
+    Ok(Some(outcome))
 }
 
 #[cfg(test)]
@@ -430,5 +527,73 @@ mod tests {
             "a lagging live checkpoint is a TERMINAL readiness failure, not a promotion"
         );
         assert!(matches!(active, ActiveEpochView::Seed), "the seed view stays authoritative");
+    }
+
+    /// S3f-4d-wire-3b: the first-activation window spans the completed SEED epoch -- from the
+    /// block after the seed point to the seed epoch's last slot -- computed from the era
+    /// schedule (no wall clock); a wrong seed epoch fails to None.
+    #[test]
+    fn compute_first_window_bounds_spans_the_seed_epoch() {
+        use ade_core::consensus::era_schedule::{BootstrapAnchorHash, EraSchedule, EraSummary};
+        let eras = vec![EraSummary {
+            era: CardanoEra::Conway,
+            start_slot: SlotNo(8_640_000),
+            start_epoch: EpochNo(100),
+            slot_length_ms: 1000,
+            epoch_length_slots: 86_400,
+            safe_zone_slots: 4320,
+        }];
+        let sched = EraSchedule::new(BootstrapAnchorHash(Hash32([0; 32])), 0, eras).unwrap();
+        let seed_slot = SlotNo(8_640_000 + 50_000); // mid epoch 100
+        let b = compute_first_window_bounds(&sched, seed_slot, Hash32([7; 32]), EpochNo(100)).unwrap();
+        assert_eq!(b.source_epoch, EpochNo(100));
+        assert_eq!(b.source_window_start, SlotNo(8_640_000 + 50_001), "first block after the seed");
+        assert_eq!(b.source_window_end, SlotNo(8_640_000 + 86_400 - 1), "the seed epoch's last slot");
+        assert_eq!(b.expected_seed_slot, seed_slot);
+        assert_eq!(b.source_window_anchor, Hash32([7; 32]));
+        // a seed point that does not locate in the claimed seed epoch -> None.
+        assert!(compute_first_window_bounds(&sched, seed_slot, Hash32([7; 32]), EpochNo(101)).is_none());
+    }
+
+    /// S3f-4d-wire-3b: the GATED orchestration is a strict NO-OP when not armed (byte-identical
+    /// live path), and also when armed but the seed epoch's window is not yet complete -- it
+    /// NEVER promotes in either case.
+    #[test]
+    fn maybe_activate_first_boundary_gated_off_and_pre_boundary_are_noops() {
+        use ade_core::consensus::era_schedule::{BootstrapAnchorHash, EraSchedule, EraSummary};
+        use ade_ledger::state::LedgerState;
+        let dir = tempfile::tempdir().unwrap();
+        let live = ReducedUtxoCheckpoint::open(&dir.path().join("live.redb")).unwrap();
+        live.build_from(&std::collections::BTreeMap::new()).unwrap();
+        live.seal_bootstrap(SlotNo(8_640_000 + 50_000)).unwrap();
+        let db = InMemoryChainDb::new();
+        let eras = vec![EraSummary {
+            era: CardanoEra::Conway,
+            start_slot: SlotNo(8_640_000),
+            start_epoch: EpochNo(100),
+            slot_length_ms: 1000,
+            epoch_length_slots: 86_400,
+            safe_zone_slots: 4320,
+        }];
+        let sched = EraSchedule::new(BootstrapAnchorHash(Hash32([0; 32])), 0, eras).unwrap();
+        let state = LedgerState::new(CardanoEra::Conway);
+        let seed_slot = SlotNo(8_640_000 + 50_000);
+        let pt = Point { slot: SlotNo(9_000_000), hash: Hash32([1; 32]) };
+        // (1) GATED OFF (armed=false) -> no-op even with the tip PAST the boundary (epoch 101).
+        let mut av = ActiveEpochView::new();
+        let r = maybe_activate_first_boundary(
+            false, &sched, SlotNo(8_640_000 + 90_000), EpochNo(100), seed_slot, Hash32([7; 32]),
+            &live, &db, &state, 2, Hash32([0; 32]), &pt, &mut av, &dir.path().join("s1.redb"), |_| true,
+        );
+        assert!(matches!(r, Ok(None)), "gated off -> no activation");
+        assert!(matches!(av, ActiveEpochView::Seed), "the seed view is untouched");
+        // (2) armed, but the tip is STILL in the seed epoch (the window is not complete) -> no-op.
+        let mut av2 = ActiveEpochView::new();
+        let r2 = maybe_activate_first_boundary(
+            true, &sched, SlotNo(8_640_000 + 60_000), EpochNo(100), seed_slot, Hash32([7; 32]),
+            &live, &db, &state, 2, Hash32([0; 32]), &pt, &mut av2, &dir.path().join("s2.redb"), |_| true,
+        );
+        assert!(matches!(r2, Ok(None)), "pre-boundary -> no activation");
+        assert!(matches!(av2, ActiveEpochView::Seed));
     }
 }

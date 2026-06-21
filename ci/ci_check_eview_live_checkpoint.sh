@@ -127,6 +127,13 @@ grep -qF 'verify_live_readiness(live,' "$EW" || fail "the orchestration does not
 grep -qF 'activate_at_boundary(' "$EW" || fail "the orchestration does not call the atomic activate_at_boundary"
 grep -qE 'fn try_activate_at_boundary_lagging_live_is_terminal_and_keeps_seed' "$EW" || fail "the -wire-3a fail-closed proof missing"
 
+# (18) -wire-3b-1: the GATED orchestration -- compute_first_window_bounds (era arithmetic, no
+#      wall clock) + maybe_activate_first_boundary (armed-gated; NO-OP byte-identical when off).
+grep -qE 'pub fn compute_first_window_bounds' "$EW" || fail "compute_first_window_bounds missing"
+grep -qE 'pub fn maybe_activate_first_boundary' "$EW" || fail "maybe_activate_first_boundary (gated orchestration) missing"
+grep -qF 'if !armed {' "$EW" || fail "the orchestration is not GATED off (the armed flag) -- it must be byte-identical when off"
+grep -qE 'fn maybe_activate_first_boundary_gated_off_and_pre_boundary_are_noops' "$EW" || fail "the -wire-3b-1 gating proof missing"
+
 if (( FAILED == 0 )); then
     echo "OK: live reduced checkpoint -mat-1 (DC-EPOCH-11; build from seed UTxO via the proven reduce+checkpoint machinery, disk-backed, gated=byte-identical, before drop(utxo), fail-closed)"
 fi
