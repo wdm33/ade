@@ -22,6 +22,7 @@ pub mod cli;
 pub mod convergence_evidence;
 pub mod epoch_activation;
 pub mod epoch_rebind;
+pub mod epoch_source_window;
 pub mod fair_merge;
 pub mod forge_intent;
 pub mod fork_switch;
