@@ -102,6 +102,14 @@ grep -qF '.iter_from_slot(source_window_start)' "$EW" || fail "the extraction do
 grep -qF 'validate_source_window(&window, &window_blocks)' "$EW" || fail "the extraction does not validate the window (fail-closed)"
 grep -qE 'fn extract_source_window_pins_and_validates_a_durable_block' "$EW" || fail "the -wire-1 extraction proof missing"
 
+# (15) -wire-2a: the RUNTIME readiness witness (advanced-THROUGH >= required, not exact-at-B --
+#      the live checkpoint is non-authoritative) + the fresh seed-state replay checkpoint (the
+#      authoritative window replay advances a SEPARATE redb, never the live one).
+grep -qE 'pub fn verify_advanced_through' "$CP" || fail "verify_advanced_through (runtime readiness witness) missing"
+grep -qE 'pub fn materialize_bootstrap_into' "$CP" || fail "materialize_bootstrap_into (fresh replay seed-state) missing"
+grep -qE 'fn verify_advanced_through_admits_at_or_beyond_required' "$CP" || fail "the -wire-2a readiness proof missing"
+grep -qE 'fn materialize_bootstrap_into_yields_fresh_independent_seed_state' "$CP" || fail "the -wire-2a materialize proof missing"
+
 if (( FAILED == 0 )); then
     echo "OK: live reduced checkpoint -mat-1 (DC-EPOCH-11; build from seed UTxO via the proven reduce+checkpoint machinery, disk-backed, gated=byte-identical, before drop(utxo), fail-closed)"
 fi

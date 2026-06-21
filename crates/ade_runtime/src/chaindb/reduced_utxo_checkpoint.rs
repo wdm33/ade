@@ -350,6 +350,70 @@ impl ReducedUtxoCheckpoint {
         Ok(())
     }
 
+    /// S3f-4d-wire-2 (DC-EPOCH-11): RUNTIME readiness witness -- the live checkpoint has ADVANCED
+    /// THROUGH `required_slot` (last_advanced >= required, i.e. it has processed the whole source
+    /// window; advancing BEYOND is expected and fine) with the matching seed lineage. This is the
+    /// runtime epoch-activation gate (the live checkpoint is a non-authoritative readiness/health
+    /// WITNESS, never the at-B comparator). Distinct from `verify_ready_at`'s EXACT-at-slot
+    /// semantics, which is for TESTS / controlled shadow runs at the same chain point. Fails
+    /// closed: unsealed (corrupt), wrong seed lineage, or lagging the required slot.
+    pub fn verify_advanced_through(
+        &self,
+        required_slot: SlotNo,
+        expected_seed_slot: SlotNo,
+    ) -> Result<(), CheckpointReadinessError> {
+        let seed = self
+            .seed_slot()
+            .map_err(|e| CheckpointReadinessError::Read(format!("{e:?}")))?
+            .ok_or(CheckpointReadinessError::Unsealed)?;
+        if seed.0 != expected_seed_slot.0 {
+            return Err(CheckpointReadinessError::SeedMismatch {
+                seed: seed.0,
+                expected: expected_seed_slot.0,
+            });
+        }
+        let advanced = self
+            .last_advanced_slot()
+            .map_err(|e| CheckpointReadinessError::Read(format!("{e:?}")))?
+            .ok_or(CheckpointReadinessError::Unsealed)?;
+        if advanced.0 < required_slot.0 {
+            return Err(CheckpointReadinessError::Lagging {
+                advanced: advanced.0,
+                required: required_slot.0,
+            });
+        }
+        Ok(())
+    }
+
+    /// S3f-4d-wire-2 (DC-EPOCH-11): materialize a FRESH checkpoint at the sealed bootstrap (seed)
+    /// state into `dest` -- the manifest-bound bootstrap baseline the AUTHORITATIVE window replay
+    /// advances over (a SEPARATE redb, so the replay never mutates the continuously-advancing live
+    /// checkpoint). Copies the immutable BOOTSTRAP_TABLE into the fresh REDUCED_TABLE, finalizes,
+    /// and seals the same seed slot. Fail-closed if this checkpoint was never sealed.
+    pub fn materialize_bootstrap_into(
+        &self,
+        dest: &Path,
+    ) -> Result<ReducedUtxoCheckpoint, ReducedCheckpointError> {
+        let seed_slot = self.seed_slot()?.ok_or(ReducedCheckpointError::Incomplete)?;
+        let fresh = ReducedUtxoCheckpoint::open(dest)?;
+        {
+            let src_txn = self.db.begin_read().map_err(rerr)?;
+            let boot = src_txn.open_table(BOOTSTRAP_TABLE).map_err(rerr)?;
+            let dest_txn = fresh.db.begin_write().map_err(rerr)?;
+            {
+                let mut reduced = dest_txn.open_table(REDUCED_TABLE).map_err(rerr)?;
+                for entry in boot.iter().map_err(rerr)? {
+                    let (k, v) = entry.map_err(rerr)?;
+                    reduced.insert(k.value(), v.value()).map_err(rerr)?;
+                }
+            }
+            dest_txn.commit().map_err(rerr)?;
+        }
+        fresh.finalize()?;
+        fresh.seal_bootstrap(seed_slot)?;
+        Ok(fresh)
+    }
+
     /// The slot of the last block the checkpoint advanced over (DC-EPOCH-11), or `None` if it
     /// was only built (never advanced). The live advancer reads this to resume in lockstep.
     pub fn last_advanced_slot(&self) -> Result<Option<SlotNo>, ReducedCheckpointError> {
@@ -667,6 +731,53 @@ mod tests {
         let sbp0 = cp.derive_stake_by_pool(&DelegationState::new()).unwrap();
         assert!(sbp0.pool_stakes.is_empty(), "no delegations -> no pool stake");
         assert_eq!(sbp0.total_active_stake, Coin(0));
+    }
+
+    /// S3f-4d-wire-2 (DC-EPOCH-11): the runtime readiness witness admits a checkpoint that has
+    /// advanced AT OR BEYOND the required slot (unlike verify_ready_at's exact-at-B), and fails
+    /// closed on lagging / wrong-seed.
+    #[test]
+    fn verify_advanced_through_admits_at_or_beyond_required() {
+        let tmp = TempDir::new().unwrap();
+        let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("rc.redb")).unwrap();
+        cp.build_from(&sample()).unwrap();
+        cp.seal_bootstrap(SlotNo(279)).unwrap();
+        cp.advance_block(SlotNo(400), &[], &[]).unwrap();
+        assert_eq!(cp.verify_advanced_through(SlotNo(400), SlotNo(279)), Ok(()), "exactly through");
+        assert_eq!(cp.verify_advanced_through(SlotNo(350), SlotNo(279)), Ok(()), "beyond is fine");
+        assert_eq!(
+            cp.verify_advanced_through(SlotNo(500), SlotNo(279)),
+            Err(CheckpointReadinessError::Lagging { advanced: 400, required: 500 })
+        );
+        assert_eq!(
+            cp.verify_advanced_through(SlotNo(350), SlotNo(280)),
+            Err(CheckpointReadinessError::SeedMismatch { seed: 279, expected: 280 })
+        );
+    }
+
+    /// S3f-4d-wire-2 (DC-EPOCH-11): materialize_bootstrap_into yields a FRESH, independent
+    /// checkpoint at the sealed SEED state (not the live advanced state) -- the replay baseline.
+    #[test]
+    fn materialize_bootstrap_into_yields_fresh_independent_seed_state() {
+        let tmp = TempDir::new().unwrap();
+        let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("rc.redb")).unwrap();
+        cp.build_from(&sample()).unwrap();
+        cp.seal_bootstrap(SlotNo(279)).unwrap();
+        // advance the LIVE checkpoint past the seed (spend a seed output).
+        cp.advance_block(SlotNo(300), &[txin(0x01, 0)], &[]).unwrap();
+        // the fresh checkpoint reflects the SEED state, not the advanced live state.
+        let fresh = cp.materialize_bootstrap_into(&tmp.path().join("fresh.redb")).unwrap();
+        assert_eq!(fresh.seed_slot().unwrap(), Some(SlotNo(279)));
+        assert_eq!(fresh.last_advanced_slot().unwrap(), Some(SlotNo(279)));
+        assert_eq!(fresh.len().unwrap(), 3, "fresh == the 3 seed rows");
+        assert_eq!(
+            fresh.get(&txin(0x01, 0)).unwrap(),
+            Some((Coin(100), base(0xaa))),
+            "fresh has the seed output the LIVE checkpoint spent"
+        );
+        // mutating the fresh replay checkpoint does NOT touch the live one.
+        fresh.advance_block(SlotNo(999), &[txin(0x02, 0)], &[]).unwrap();
+        assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(300)), "live unaffected");
     }
 
     #[test]
