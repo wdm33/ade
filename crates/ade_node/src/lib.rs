@@ -25,6 +25,7 @@ pub mod epoch_activation;
 pub mod epoch_candidate;
 pub mod epoch_rebind;
 pub mod epoch_source_window;
+pub mod epoch_wire;
 pub mod fair_merge;
 pub mod forge_intent;
 pub mod fork_switch;

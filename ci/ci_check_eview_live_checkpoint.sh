@@ -94,6 +94,14 @@ grep -qE 'pub fn derive_stake_by_pool' "$CP" || fail "derive_stake_by_pool (the 
 grep -qF 'aggregate_pool_stake(&cred_stake, delegation)' "$CP" || fail "the derive does not aggregate via the delegation state"
 grep -qE 'fn derive_stake_by_pool_aggregates_via_delegation' "$CP" || fail "the -mat-shadow derive proof missing"
 
+# (14) -wire-1: the live source-window extraction (the AUTHORITATIVE replay path's input).
+#      Reads ONLY the durable selected-chain ChainDB, explicit bounds (no wall clock), validates.
+EW=crates/ade_node/src/epoch_wire.rs
+grep -qE 'pub fn extract_source_window' "$EW" || fail "extract_source_window (the durable-window input) missing"
+grep -qF '.iter_from_slot(source_window_start)' "$EW" || fail "the extraction does not read the durable ChainDB by the explicit start bound"
+grep -qF 'validate_source_window(&window, &window_blocks)' "$EW" || fail "the extraction does not validate the window (fail-closed)"
+grep -qE 'fn extract_source_window_pins_and_validates_a_durable_block' "$EW" || fail "the -wire-1 extraction proof missing"
+
 if (( FAILED == 0 )); then
     echo "OK: live reduced checkpoint -mat-1 (DC-EPOCH-11; build from seed UTxO via the proven reduce+checkpoint machinery, disk-backed, gated=byte-identical, before drop(utxo), fail-closed)"
 fi
