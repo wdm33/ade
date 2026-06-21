@@ -182,6 +182,13 @@ pub fn replay_from_anchor(
                     epoch_no: *epoch_no,
                 });
             }
+            WalEntry::EpochConsensusViewActivated { .. } => {
+                // EPOCH-CONSENSUS-VIEW S3f-4a: a non-transition activation record (no
+                // prior_fp/post_fp), so it does NOT advance the fingerprint chain. The
+                // replay APPLICATION of the idempotence/conflict rule
+                // (`activation_replay_outcome`) + republishing the active view is wired in
+                // S3f-4c; here the entry is a chain no-op.
+            }
         }
     }
 
@@ -227,6 +234,7 @@ pub(crate) fn compute_superseded(entries: &[WalEntry]) -> Result<Vec<bool>, WalE
                 }
             }
             WalEntry::SeedEpochConsensusInputsImported { .. } => {}
+            WalEntry::EpochConsensusViewActivated { .. } => {}
         }
     }
     Ok(superseded)

@@ -159,6 +159,20 @@ impl EpochConsensusView {
         )
     }
 
+    /// A commitment to JUST the stake distribution (per-pool stakes + total), distinct
+    /// from the full-view identity hash. Recorded in the WAL activation record (S3f-4a) so
+    /// the durable activation identity pins the stake content independently of the bindings.
+    pub fn stake_view_canonical_hash(&self) -> Hash32 {
+        let mut buf = Vec::with_capacity(16 + self.stake_by_pool.len() * 36);
+        buf.extend_from_slice(&self.total_active_stake.0.to_be_bytes());
+        buf.extend_from_slice(&(self.stake_by_pool.len() as u64).to_be_bytes());
+        for (pool, coin) in &self.stake_by_pool {
+            buf.extend_from_slice(&pool.0 .0); // PoolId(Hash28) -> 28 bytes
+            buf.extend_from_slice(&coin.0.to_be_bytes());
+        }
+        blake2b_256(&buf)
+    }
+
     /// Recompute the canonical hash from the fields and check it matches the stored one —
     /// proves the view has not been tampered with (no field changed without rebinding).
     pub fn verify_canonical_hash(&self) -> bool {

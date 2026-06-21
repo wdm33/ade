@@ -28,7 +28,9 @@ use ade_codec::cbor::{
     canonical_width, read_array_header, read_bytes, read_uint, write_array_header,
     write_bytes_canonical, write_uint_canonical, ContainerEncoding, IntWidth,
 };
-use ade_types::{BlockNo, EpochNo, Hash32, SlotNo};
+use ade_types::{BlockNo, CardanoEra, EpochNo, Hash32, SlotNo};
+use ade_core::consensus::events::Point;
+use crate::reduced_snapshot::SnapshotPhase;
 
 use super::error::WalError;
 
@@ -42,6 +44,9 @@ pub const TAG_ROLLBACK: u64 = 1;
 /// (PHASE4-N-F-A A3a). Append-only: the next free tag after the
 /// reserved 1/2.
 pub const TAG_SEED_EPOCH_CONSENSUS_INPUTS_IMPORTED: u64 = 3;
+/// Wire tag for `WalEntry::EpochConsensusViewActivated` (EPOCH-CONSENSUS-VIEW S3f-4a).
+/// Append-only: the next free tag after 0/1/3 (2 reserved).
+pub const TAG_EPOCH_CONSENSUS_VIEW_ACTIVATED: u64 = 4;
 
 /// Closed sum: every authority-affecting forward step recorded
 /// in the WAL.
@@ -89,6 +94,66 @@ pub enum WalEntry {
         prior_tip: RollbackPoint,
         selected_tip: RollbackPoint,
     },
+    /// EPOCH-CONSENSUS-VIEW S3f-4a (DC-EPOCH-04 / DC-EPOCH-06): the durable proof that
+    /// THIS exact `EpochConsensusView` became authoritative for `target_epoch` at THIS
+    /// exact selected-chain transition. Records the ENTIRE activation identity (not just
+    /// hash + point) so a replay can prove idempotence (byte-identical record for the same
+    /// target epoch) or detect a structured conflict (any differing binding/hash). Like
+    /// `SeedEpochConsensusInputsImported` it carries no `prior_fp`/`post_fp` — it is not a
+    /// block transition and never advances the fingerprint chain.
+    EpochConsensusViewActivated {
+        target_epoch: EpochNo,
+        network_magic: u32,
+        era: CardanoEra,
+        transition_point: Point,
+        source_checkpoint_commitment: Hash32,
+        snapshot_phase: SnapshotPhase,
+        nonce_commitment: Hash32,
+        stake_view_canonical_hash: Hash32,
+        view_canonical_hash: Hash32,
+    },
+}
+
+/// Wire code for a `SnapshotPhase` in the WAL (0=Mark, 1=Set, 2=Go). An unknown code fails
+/// closed on decode.
+fn snapshot_phase_wire(p: SnapshotPhase) -> u64 {
+    match p {
+        SnapshotPhase::Mark => 0,
+        SnapshotPhase::Set => 1,
+        SnapshotPhase::Go => 2,
+    }
+}
+fn snapshot_phase_from_wire(code: u64) -> Option<SnapshotPhase> {
+    match code {
+        0 => Some(SnapshotPhase::Mark),
+        1 => Some(SnapshotPhase::Set),
+        2 => Some(SnapshotPhase::Go),
+        _ => None,
+    }
+}
+
+/// Whether replaying `new` after `existing` is idempotent or a structured conflict, for an
+/// activation of the SAME target epoch (DC-EPOCH-04: at most one canonically bound view may
+/// activate per target epoch). `None` when the pair is not a same-target-epoch activation
+/// pair (the caller does not apply this rule). Byte-identical (structural equality of the
+/// whole record) ⇒ idempotent; any differing binding/hash ⇒ conflict (fail closed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivationReplayOutcome {
+    Idempotent,
+    Conflict,
+}
+pub fn activation_replay_outcome(existing: &WalEntry, new: &WalEntry) -> Option<ActivationReplayOutcome> {
+    match (existing, new) {
+        (
+            WalEntry::EpochConsensusViewActivated { target_epoch: e1, .. },
+            WalEntry::EpochConsensusViewActivated { target_epoch: e2, .. },
+        ) if e1 == e2 => Some(if existing == new {
+            ActivationReplayOutcome::Idempotent
+        } else {
+            ActivationReplayOutcome::Conflict
+        }),
+        _ => None,
+    }
 }
 
 /// A chain point recorded in a `WalEntry::RollBack` — slot + hash +
@@ -224,6 +289,30 @@ pub fn encode_wal_entry(entry: &WalEntry) -> Vec<u8> {
             write_rollback_point(&mut buf, prior_tip);
             write_rollback_point(&mut buf, selected_tip);
         }
+        WalEntry::EpochConsensusViewActivated {
+            target_epoch,
+            network_magic,
+            era,
+            transition_point,
+            source_checkpoint_commitment,
+            snapshot_phase,
+            nonce_commitment,
+            stake_view_canonical_hash,
+            view_canonical_hash,
+        } => {
+            write_uint_canonical(&mut buf, TAG_EPOCH_CONSENSUS_VIEW_ACTIVATED);
+            write_array_header(&mut buf, ContainerEncoding::Definite(10, canonical_width(10)));
+            write_uint_canonical(&mut buf, target_epoch.0);
+            write_uint_canonical(&mut buf, *network_magic as u64);
+            write_uint_canonical(&mut buf, *era as u64);
+            write_uint_canonical(&mut buf, transition_point.slot.0);
+            write_bytes_canonical(&mut buf, &transition_point.hash.0);
+            write_bytes_canonical(&mut buf, &source_checkpoint_commitment.0);
+            write_uint_canonical(&mut buf, snapshot_phase_wire(*snapshot_phase));
+            write_bytes_canonical(&mut buf, &nonce_commitment.0);
+            write_bytes_canonical(&mut buf, &stake_view_canonical_hash.0);
+            write_bytes_canonical(&mut buf, &view_canonical_hash.0);
+        }
     }
     buf
 }
@@ -292,6 +381,42 @@ pub fn decode_wal_entry(bytes: &[u8]) -> Result<(WalEntry, usize), WalError> {
                     reason,
                     prior_tip,
                     selected_tip,
+                },
+                o,
+            ))
+        }
+        TAG_EPOCH_CONSENSUS_VIEW_ACTIVATED => {
+            expect_definite_array(bytes, &mut o, 10, "EpochConsensusViewActivated payload")?;
+            let (target_epoch, _w) = read_uint(bytes, &mut o).map_err(WalError::Decode)?;
+            let (network_magic, _w) = read_uint(bytes, &mut o).map_err(WalError::Decode)?;
+            if network_magic > u32::MAX as u64 {
+                return Err(WalError::Structural { reason: "network_magic out of u32 range" });
+            }
+            let (era_code, _w) = read_uint(bytes, &mut o).map_err(WalError::Decode)?;
+            let era = CardanoEra::ALL
+                .into_iter()
+                .find(|e| *e as u64 == era_code)
+                .ok_or(WalError::Structural { reason: "unknown era code" })?;
+            let (slot, _w) = read_uint(bytes, &mut o).map_err(WalError::Decode)?;
+            let transition_hash = read_hash32(bytes, &mut o)?;
+            let source_checkpoint_commitment = read_hash32(bytes, &mut o)?;
+            let (phase_code, _w) = read_uint(bytes, &mut o).map_err(WalError::Decode)?;
+            let snapshot_phase = snapshot_phase_from_wire(phase_code)
+                .ok_or(WalError::Structural { reason: "unknown snapshot phase code" })?;
+            let nonce_commitment = read_hash32(bytes, &mut o)?;
+            let stake_view_canonical_hash = read_hash32(bytes, &mut o)?;
+            let view_canonical_hash = read_hash32(bytes, &mut o)?;
+            Ok((
+                WalEntry::EpochConsensusViewActivated {
+                    target_epoch: EpochNo(target_epoch),
+                    network_magic: network_magic as u32,
+                    era,
+                    transition_point: Point { slot: SlotNo(slot), hash: transition_hash },
+                    source_checkpoint_commitment,
+                    snapshot_phase,
+                    nonce_commitment,
+                    stake_view_canonical_hash,
+                    view_canonical_hash,
                 },
                 o,
             ))
@@ -454,6 +579,9 @@ mod tests {
                 assert_eq!(epoch_no.0, 576);
             }
             WalEntry::RollBack { .. } => unreachable!("sample() is an AdmitBlock"),
+            WalEntry::EpochConsensusViewActivated { .. } => {
+                unreachable!("sample() is an AdmitBlock")
+            }
         }
     }
 
@@ -478,5 +606,61 @@ mod tests {
         let (tag, _w): (u64, IntWidth) = read_uint(&bytes, &mut o).expect("tag");
         assert_eq!(tag, TAG_SEED_EPOCH_CONSENSUS_INPUTS_IMPORTED);
         assert_eq!(tag, 3);
+    }
+
+    fn activation_with(epoch: u64, view_hash: u8) -> WalEntry {
+        WalEntry::EpochConsensusViewActivated {
+            target_epoch: EpochNo(epoch),
+            network_magic: 2,
+            era: CardanoEra::Conway,
+            transition_point: Point { slot: SlotNo(115_000_000), hash: Hash32([0xa1; 32]) },
+            source_checkpoint_commitment: Hash32([0xb2; 32]),
+            snapshot_phase: SnapshotPhase::Set,
+            nonce_commitment: Hash32([0xc3; 32]),
+            stake_view_canonical_hash: Hash32([0xd4; 32]),
+            view_canonical_hash: Hash32([view_hash; 32]),
+        }
+    }
+
+    #[test]
+    fn wal_epoch_view_activated_round_trips_byte_identical() {
+        let e = activation_with(577, 0xe5);
+        let bytes = encode_wal_entry(&e);
+        let (decoded, consumed) = decode_wal_entry(&bytes).expect("decode");
+        assert_eq!(consumed, bytes.len());
+        assert_eq!(decoded, e);
+        // determinism: two encodes byte-identical.
+        assert_eq!(encode_wal_entry(&e), encode_wal_entry(&activation_with(577, 0xe5)));
+    }
+
+    #[test]
+    fn wal_epoch_view_activated_uses_tag_four() {
+        let bytes = encode_wal_entry(&activation_with(577, 0xe5));
+        let mut o = 0usize;
+        expect_definite_array(&bytes, &mut o, 2, "entry wrapper").expect("wrapper");
+        let (tag, _w): (u64, IntWidth) = read_uint(&bytes, &mut o).expect("tag");
+        assert_eq!(tag, TAG_EPOCH_CONSENSUS_VIEW_ACTIVATED);
+        assert_eq!(tag, 4);
+    }
+
+    #[test]
+    fn activation_replay_idempotent_vs_conflict() {
+        // DC-EPOCH-04: same target epoch + byte-identical record -> idempotent.
+        assert_eq!(
+            activation_replay_outcome(&activation_with(577, 0xe5), &activation_with(577, 0xe5)),
+            Some(ActivationReplayOutcome::Idempotent)
+        );
+        // same target epoch + ANY differing binding/hash -> structured conflict (fail closed).
+        assert_eq!(
+            activation_replay_outcome(&activation_with(577, 0xe5), &activation_with(577, 0xff)),
+            Some(ActivationReplayOutcome::Conflict)
+        );
+        // a DIFFERENT target epoch is not an idempotence/conflict pair.
+        assert_eq!(
+            activation_replay_outcome(&activation_with(577, 0xe5), &activation_with(578, 0xe5)),
+            None
+        );
+        // a non-activation pair is not subject to the rule.
+        assert_eq!(activation_replay_outcome(&sample(), &activation_with(577, 0xe5)), None);
     }
 }

@@ -101,6 +101,9 @@ fn wal_replay_from_anchor_post_fp_matches_wal_tail() {
             panic!("this chain has no provenance entry")
         }
         WalEntry::RollBack { .. } => panic!("this chain has no rollback entry"),
+        WalEntry::EpochConsensusViewActivated { .. } => {
+            panic!("this chain has no activation entry")
+        }
     };
     assert_eq!(final_fp.tail_fp, expected);
 }

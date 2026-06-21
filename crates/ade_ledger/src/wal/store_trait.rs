@@ -100,6 +100,9 @@ pub trait WalStore: Send + Sync {
                 WalEntry::SeedEpochConsensusInputsImported { .. } => {
                     // Not part of the block-transition chain.
                 }
+                WalEntry::EpochConsensusViewActivated { .. } => {
+                    // Not part of the block-transition chain (S3f-4a).
+                }
             }
         }
         Ok(())

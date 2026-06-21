@@ -2393,6 +2393,9 @@ pub(crate) fn warm_start_recovery(
             // rollback-aware T-REC-05 fingerprint check in replay_from_anchor --
             // NOT this scan.
             ade_ledger::wal::WalEntry::RollBack { .. } => None,
+            // EPOCH-CONSENSUS-VIEW S3f-4a: an activation record is not an AdmitBlock and
+            // does not define the WAL-tail slot.
+            ade_ledger::wal::WalEntry::EpochConsensusViewActivated { .. } => None,
         })
         .unwrap_or(SlotNo(0));
     chaindb
