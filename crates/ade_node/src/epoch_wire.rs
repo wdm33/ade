@@ -26,11 +26,12 @@ use ade_types::{CardanoEra, EpochNo, Hash32, SlotNo};
 
 use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::events::Point;
+use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
 use ade_ledger::wal::WalEntry;
 
 use crate::epoch_activate::{activate_at_boundary, BoundaryActivationOutcome};
 use crate::epoch_activation::{ActiveEpochView, EpochViewActivationError};
-use crate::epoch_candidate::{derive_candidate, CandidateDeriveError};
+use crate::epoch_candidate::{derive_candidate, CandidateDeriveError, CandidateProfile};
 use crate::epoch_source_window::{
     target_epoch_for_source, validate_source_window, ActivationSourceWindow, SourceWindowBlock,
     SourceWindowError,
@@ -55,6 +56,13 @@ pub struct EviewActivationInputs {
     pub seed_epoch: EpochNo,
     pub network_magic: u32,
     pub nonce: Hash32,
+    /// The canonical leadership consensus profile (ECA-0b), bound ONCE at bootstrap: the genesis
+    /// hash + the protocol-params hash + the ASC. The candidate's `protocol_params_commitment` is
+    /// computed from these; the projection verifies against them. All already-bound canonical values
+    /// (no filesystem/config/network read in derivation).
+    pub genesis_hash: Hash32,
+    pub protocol_params_hash: Hash32,
+    pub asc: ActiveSlotsCoeff,
     /// The durable path for the FRESH replay checkpoint the authoritative window replay
     /// materializes (a separate redb -- never the live checkpoint).
     pub replay_scratch_path: std::path::PathBuf,
@@ -88,6 +96,9 @@ impl EviewActivationInputs {
             &self.seed_bootstrap_state,
             self.network_magic,
             self.nonce.clone(),
+            self.genesis_hash.clone(),
+            self.protocol_params_hash.clone(),
+            self.asc,
             selected_point,
             active_view,
             scratch_path,
@@ -238,6 +249,7 @@ pub enum ActivationDeriveError {
 /// durable selected-chain `shelley_blocks` over it to the exact boundary, binding the
 /// `EpochConsensusView` at B. Reproducible from durable canonical inputs ALONE; no peer/network/
 /// CLI/cache supplies a block.
+#[allow(clippy::too_many_arguments)]
 pub fn derive_authoritative_candidate(
     live: &ReducedUtxoCheckpoint,
     window: &ActivationSourceWindow,
@@ -245,6 +257,7 @@ pub fn derive_authoritative_candidate(
     bootstrap_state: &LedgerState,
     network_magic: u32,
     nonce: Hash32,
+    profile: &CandidateProfile,
     scratch_path: &std::path::Path,
 ) -> Result<EpochConsensusView, ActivationDeriveError> {
     let replay_cp = live
@@ -258,6 +271,7 @@ pub fn derive_authoritative_candidate(
         CardanoEra::Conway,
         network_magic,
         nonce,
+        profile,
     )
     .map_err(ActivationDeriveError::Derive)
 }
@@ -273,6 +287,8 @@ pub struct WindowBounds {
     pub source_window_anchor: Hash32,
     /// The live checkpoint's sealed seed slot (the bootstrap lineage the readiness witness pins).
     pub expected_seed_slot: SlotNo,
+    /// The source epoch's length (slots) — for the window driver's boundary detection (ECA-0b).
+    pub slots_per_epoch: u64,
 }
 
 /// S3f-4d-wire-3b (DC-EPOCH-11): compute the EXPLICIT source-window bounds for the FIRST
@@ -304,6 +320,7 @@ pub fn compute_first_window_bounds(
         snapshot_phase: SnapshotPhase::Set,
         source_window_anchor: seed_point_hash,
         expected_seed_slot: seed_point_slot,
+        slots_per_epoch: epoch_len,
     })
 }
 
@@ -339,6 +356,7 @@ pub fn try_activate_at_boundary(
     bootstrap_state: &LedgerState,
     network_magic: u32,
     nonce: Hash32,
+    profile: &CandidateProfile,
     selected_point: &Point,
     transition_eligible: bool,
     active_view: &mut ActiveEpochView,
@@ -368,6 +386,7 @@ pub fn try_activate_at_boundary(
         CardanoEra::Conway,
         network_magic,
         nonce,
+        profile,
         selected_point,
         transition_eligible,
         active_view,
@@ -397,6 +416,9 @@ pub fn maybe_activate_first_boundary(
     bootstrap_state: &LedgerState,
     network_magic: u32,
     nonce: Hash32,
+    genesis_hash: Hash32,
+    protocol_params_hash: Hash32,
+    asc: ActiveSlotsCoeff,
     selected_point: &Point,
     active_view: &mut ActiveEpochView,
     scratch_path: &std::path::Path,
@@ -424,6 +446,12 @@ pub fn maybe_activate_first_boundary(
             Some(b) => b,
             None => return Ok(None),
         };
+    let profile = CandidateProfile {
+        slots_per_epoch: bounds.slots_per_epoch,
+        genesis_hash,
+        protocol_params_hash,
+        asc,
+    };
     let outcome = try_activate_at_boundary(
         live,
         chaindb,
@@ -431,6 +459,7 @@ pub fn maybe_activate_first_boundary(
         bootstrap_state,
         network_magic,
         nonce,
+        &profile,
         selected_point,
         true, // the boundary is reached -> the transition is eligible
         active_view,
@@ -566,9 +595,16 @@ mod tests {
             snapshot_phase: SnapshotPhase::Set,
             source_window_anchor: anchor,
             expected_seed_slot: SlotNo(100),
+            slots_per_epoch: 86_400,
         };
         let state = LedgerState::new(CardanoEra::Conway);
         let mut active = ActiveEpochView::new();
+        let profile = CandidateProfile {
+            slots_per_epoch: 86_400,
+            genesis_hash: Hash32([0x91; 32]),
+            protocol_params_hash: Hash32([0x92; 32]),
+            asc: ActiveSlotsCoeff { numer: 1, denom: 20 },
+        };
         let r = try_activate_at_boundary(
             &live,
             &db,
@@ -576,6 +612,7 @@ mod tests {
             &state,
             2,
             Hash32([0; 32]),
+            &profile,
             &Point { slot: SlotNo(600), hash: Hash32([0xab; 32]) },
             true,
             &mut active,
@@ -643,7 +680,7 @@ mod tests {
         let mut av = ActiveEpochView::new();
         let r = maybe_activate_first_boundary(
             false, &sched, SlotNo(8_640_000 + 90_000), EpochNo(100), seed_slot, Hash32([7; 32]),
-            &live, &db, &state, 2, Hash32([0; 32]), &pt, &mut av, &dir.path().join("s1.redb"), |_| true,
+            &live, &db, &state, 2, Hash32([0; 32]), Hash32([0x91; 32]), Hash32([0x92; 32]), ActiveSlotsCoeff { numer: 1, denom: 20 }, &pt, &mut av, &dir.path().join("s1.redb"), |_| true,
         );
         assert!(matches!(r, Ok(None)), "gated off -> no activation");
         assert!(matches!(av, ActiveEpochView::Seed), "the seed view is untouched");
@@ -651,7 +688,7 @@ mod tests {
         let mut av2 = ActiveEpochView::new();
         let r2 = maybe_activate_first_boundary(
             true, &sched, SlotNo(8_640_000 + 60_000), EpochNo(100), seed_slot, Hash32([7; 32]),
-            &live, &db, &state, 2, Hash32([0; 32]), &pt, &mut av2, &dir.path().join("s2.redb"), |_| true,
+            &live, &db, &state, 2, Hash32([0; 32]), Hash32([0x91; 32]), Hash32([0x92; 32]), ActiveSlotsCoeff { numer: 1, denom: 20 }, &pt, &mut av2, &dir.path().join("s2.redb"), |_| true,
         );
         assert!(matches!(r2, Ok(None)), "pre-boundary -> no activation");
         assert!(matches!(av2, ActiveEpochView::Seed));

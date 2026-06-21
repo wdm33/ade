@@ -107,6 +107,7 @@ mod tests {
             checkpoint_commitment: Hash32([0xbb; 32]),
             nonce: Hash32([0xcc; 32]),
             snapshot_phase: SnapshotPhase::Set,
+            protocol_params_commitment: Hash32([0xdd; 32]),
         }
     }
 
@@ -124,7 +125,9 @@ mod tests {
             b.nonce,
             b.snapshot_phase,
             stake,
+            [(PoolId(Hash28([0x11; 28])), Hash32([0x71; 32]))].into_iter().collect(),
             Coin(1000),
+            b.protocol_params_commitment.clone(),
         )
     }
 

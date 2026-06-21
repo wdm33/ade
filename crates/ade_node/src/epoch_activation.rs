@@ -277,6 +277,7 @@ mod tests {
             checkpoint_commitment: Hash32([0xbb; 32]),
             nonce: Hash32([0xcc; 32]),
             snapshot_phase: SnapshotPhase::Set,
+            protocol_params_commitment: Hash32([0xdd; 32]),
         }
     }
     fn view(stake: u64) -> EpochConsensusView {
@@ -285,7 +286,10 @@ mod tests {
         s.insert(PoolId(Hash28([0x11; 28])), Coin(stake));
         EpochConsensusView::bind(
             b.network_magic, b.era, b.epoch, b.source_point, b.checkpoint_commitment, b.nonce,
-            b.snapshot_phase, s, Coin(stake),
+            b.snapshot_phase, s,
+            [(PoolId(Hash28([0x11; 28])), Hash32([0x71; 32]))].into_iter().collect(),
+            Coin(stake),
+            b.protocol_params_commitment.clone(),
         )
     }
 

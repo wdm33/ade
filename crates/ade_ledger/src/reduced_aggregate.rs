@@ -55,8 +55,9 @@ pub enum AggregateError {
 /// cannot delegate an unregistered credential), summing each credential's UTxO coin +
 /// reward balance into its delegated pool. A credential with UTxO but no delegation
 /// contributes nothing (not iterated); a delegated credential with a reward balance but
-/// no UTxO still contributes its reward (Conway). Pure, total, deterministic,
-/// fail-closed on overflow.
+/// no UTxO still contributes its reward (Conway). A pool with >=1 delegator is INCLUDED even at 0
+/// stake (cardano `numDelegators > 0`, count-not-amount) so the pool SET matches cardano's PoolDistr.
+/// Pure, total, deterministic, fail-closed on overflow.
 pub fn aggregate_pool_stake(
     cred_utxo_stake: &BTreeMap<StakeCredential, Coin>,
     delegation: &DelegationState,
@@ -66,9 +67,10 @@ pub fn aggregate_pool_stake(
         let utxo = cred_utxo_stake.get(cred).copied().unwrap_or(Coin(0));
         let reward = delegation.rewards.get(cred).copied().unwrap_or(Coin(0));
         let cred_total = utxo.checked_add(reward).ok_or(AggregateError::StakeOverflow)?;
-        if cred_total.0 == 0 {
-            continue; // a delegated credential with neither UTxO nor reward adds nothing
-        }
+        // cardano includes a pool with >=1 delegator regardless of stake amount (numDelegators > 0,
+        // count-not-amount): ensure the pool has an entry even when this delegator contributes 0, so
+        // the pool SET matches cardano's PoolDistr (a 0-stake pool can never win, but the DERIVED
+        // state must be Cardano-compatible for snapshot/oracle/hash equality).
         let entry = pool_stakes.entry(pool.clone()).or_insert(Coin(0));
         *entry = entry
             .checked_add(cred_total)
@@ -151,14 +153,19 @@ mod tests {
         assert_eq!(agg.total_active_stake, Coin(0));
     }
 
-    // A delegated credential with neither UTxO nor reward adds no pool entry.
+    // cardano numDelegators>0 (count-not-amount): a pool with a delegator is INCLUDED even at 0 stake.
     #[test]
-    fn delegated_but_zero_stake_adds_no_pool_entry() {
+    fn delegated_zero_stake_pool_is_included_with_zero() {
         let c = key_cred(0x33);
         let cred_utxo: BTreeMap<StakeCredential, Coin> = BTreeMap::new();
         let d = deleg(&[(c.clone(), pool(9))], &[]);
         let agg = aggregate_pool_stake(&cred_utxo, &d).unwrap();
-        assert!(agg.pool_stakes.is_empty(), "a zero-stake delegated cred adds no pool");
+        assert_eq!(
+            agg.pool_stakes.get(&pool(9)),
+            Some(&Coin(0)),
+            "a pool with a delegator is included even at 0 stake (numDelegators>0)"
+        );
+        assert_eq!(agg.total_active_stake, Coin(0));
     }
 
     // Multiple pools aggregate independently; the total is the sum.

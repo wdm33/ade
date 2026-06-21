@@ -18,7 +18,7 @@ use crate::epoch_activation::{
     activate_durable_before_visible, activation_predicate, activation_record_for, ActivationOutcome,
     ActivationReject, ActiveEpochView, EpochViewActivationError,
 };
-use crate::epoch_candidate::derive_candidate;
+use crate::epoch_candidate::{derive_candidate, CandidateProfile};
 use crate::epoch_source_window::{validate_source_window, ActivationSourceWindow, SourceWindowBlock};
 use ade_core::consensus::events::Point;
 use ade_ledger::reduced_epoch_view::{EpochConsensusView, ViewBindings};
@@ -49,6 +49,7 @@ fn candidate_bindings(c: &EpochConsensusView) -> ViewBindings {
         checkpoint_commitment: c.checkpoint_commitment.clone(),
         nonce: c.nonce.clone(),
         snapshot_phase: c.snapshot_phase,
+        protocol_params_commitment: c.protocol_params_commitment.clone(),
     }
 }
 
@@ -67,6 +68,7 @@ pub fn activate_at_boundary(
     era: CardanoEra,
     network_magic: u32,
     nonce: Hash32,
+    profile: &CandidateProfile,
     selected_point: &Point,
     transition_eligible: bool,
     active_view: &mut ActiveEpochView,
@@ -79,7 +81,7 @@ pub fn activate_at_boundary(
 
     // 2. derive the candidate (DC-EPOCH-09). A derivation failure is TERMINAL.
     let candidate = derive_candidate(
-        window, checkpoint, bootstrap_state, blocks, era, network_magic, nonce,
+        window, checkpoint, bootstrap_state, blocks, era, network_magic, nonce, profile,
     )
     .map_err(|_| EpochViewActivationError::EpochViewActivationFailed)?;
 
@@ -122,6 +124,7 @@ mod tests {
     use ade_types::primitives::SlotNo;
     use ade_types::shelley::cert::StakeCredential;
     use ade_types::tx::{Coin, PoolId, TxIn};
+    use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
     use ade_types::{EpochNo, Hash28};
     use std::collections::BTreeMap;
 
@@ -176,6 +179,14 @@ mod tests {
     fn selected_point() -> Point {
         Point { slot: SlotNo(1000), hash: Hash32([0xab; 32]) }
     }
+    fn profile() -> CandidateProfile {
+        CandidateProfile {
+            slots_per_epoch: 432_000,
+            genesis_hash: Hash32([0x91; 32]),
+            protocol_params_hash: Hash32([0x92; 32]),
+            asc: ActiveSlotsCoeff { numer: 1, denom: 20 },
+        }
+    }
 
     #[test]
     fn happy_path_promotes_after_durable_wal() {
@@ -191,6 +202,7 @@ mod tests {
             CardanoEra::Conway,
             2,
             Hash32([0x42; 32]),
+            &profile(),
             &selected_point(),
             true,
             &mut active,
@@ -218,6 +230,7 @@ mod tests {
             CardanoEra::Conway,
             2,
             Hash32([0x42; 32]),
+            &profile(),
             &selected_point(),
             true,
             &mut active,
@@ -241,6 +254,7 @@ mod tests {
             CardanoEra::Conway,
             2,
             Hash32([0x42; 32]),
+            &profile(),
             &selected_point(),
             false, // transition NOT eligible
             &mut active,
@@ -270,6 +284,7 @@ mod tests {
             CardanoEra::Conway,
             2,
             Hash32([0x42; 32]),
+            &profile(),
             &Point { slot: SlotNo(1000), hash: Hash32([0x99; 32]) },
             true,
             &mut active,
@@ -297,6 +312,7 @@ mod tests {
             CardanoEra::Conway,
             2,
             Hash32([0x42; 32]),
+            &profile(),
             &Point { slot: SlotNo(7), hash: Hash32([0xee; 32]) }, // not the candidate's point
             true,
             &mut active,
