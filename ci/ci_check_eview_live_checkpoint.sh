@@ -110,6 +110,16 @@ grep -qE 'pub fn materialize_bootstrap_into' "$CP" || fail "materialize_bootstra
 grep -qE 'fn verify_advanced_through_admits_at_or_beyond_required' "$CP" || fail "the -wire-2a readiness proof missing"
 grep -qE 'fn materialize_bootstrap_into_yields_fresh_independent_seed_state' "$CP" || fail "the -wire-2a materialize proof missing"
 
+# (16) -wire-2b: the orchestration -- the live readiness WITNESS (advanced-through the window
+#      end + the terminal ChainDB lineage commitment) + the SOLE authoritative derive (durable
+#      window replay over a FRESH seed-state checkpoint; the live checkpoint is NOT the derive).
+grep -qE 'pub fn verify_live_readiness' "$EW" || fail "verify_live_readiness (the readiness witness) missing"
+grep -qF 'live.verify_advanced_through(window.source_window_end' "$EW" || fail "readiness does not check advanced-through the window end"
+grep -qF '.get_block_by_hash(&window.lineage_pin)' "$EW" || fail "readiness does not check the terminal ChainDB lineage commitment"
+grep -qE 'pub fn derive_authoritative_candidate' "$EW" || fail "derive_authoritative_candidate (the SOLE authoritative derive) missing"
+grep -qF 'materialize_bootstrap_into(scratch_path)' "$EW" || fail "the authoritative derive does not replay over a FRESH seed-state checkpoint"
+grep -qE 'fn verify_live_readiness_requires_advanced_through_and_terminal_present' "$EW" || fail "the -wire-2b readiness proof missing"
+
 if (( FAILED == 0 )); then
     echo "OK: live reduced checkpoint -mat-1 (DC-EPOCH-11; build from seed UTxO via the proven reduce+checkpoint machinery, disk-backed, gated=byte-identical, before drop(utxo), fail-closed)"
 fi

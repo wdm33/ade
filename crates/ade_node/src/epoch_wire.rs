@@ -15,11 +15,16 @@
 //! `derive_stake_by_pool` (the live cross-check), and `activate_at_boundary` (`epoch_activate`).
 
 use ade_ledger::block_validity::header_input::decode_block;
+use ade_ledger::reduced_epoch_view::EpochConsensusView;
 use ade_ledger::reduced_snapshot::SnapshotPhase;
-use ade_runtime::chaindb::ChainDb;
+use ade_ledger::state::LedgerState;
+use ade_runtime::chaindb::{
+    ChainDb, CheckpointReadinessError, ReducedCheckpointError, ReducedUtxoCheckpoint,
+};
 use ade_types::shelley::block::ShelleyBlock;
-use ade_types::{EpochNo, Hash32, SlotNo};
+use ade_types::{CardanoEra, EpochNo, Hash32, SlotNo};
 
+use crate::epoch_candidate::{derive_candidate, CandidateDeriveError};
 use crate::epoch_source_window::{
     target_epoch_for_source, validate_source_window, ActivationSourceWindow, SourceWindowBlock,
     SourceWindowError,
@@ -115,6 +120,82 @@ pub fn extract_source_window(
     })
 }
 
+/// Why the live reduced checkpoint is NOT a valid readiness witness for the boundary candidate
+/// (TERMINAL -- the activation halts rather than promote against an unproven live state).
+#[derive(Debug)]
+pub enum ReadinessError {
+    /// The live checkpoint is not a healthy advanced-through witness (unsealed / wrong seed /
+    /// lagging the source-window end).
+    Checkpoint(CheckpointReadinessError),
+    /// Reading the durable ChainDB for the lineage commitment failed.
+    ChainDb(ade_runtime::chaindb::ChainDbError),
+    /// The window's terminal point (`lineage_pin`) is NO LONGER on the durable selected chain
+    /// (a reorg removed it between extraction and activation) -- the live checkpoint cannot be
+    /// proven to have processed THIS window's lineage.
+    TerminalMissing,
+}
+
+/// S3f-4d-wire-2 (DC-EPOCH-11): the live checkpoint as a NON-AUTHORITATIVE readiness/health
+/// WITNESS for the boundary candidate (NOT a same-state comparator -- the authoritative view is
+/// the durable window replay). It must PROVE it processed the EXACT selected-chain source window:
+/// (1) it has ADVANCED THROUGH `source_window_end` (last_advanced >= end; beyond is fine) with
+/// the matching seed lineage; AND (2) the window's terminal point (`lineage_pin`) is still
+/// durably present on the selected chain. Fail-closed (terminal) on any miss -- never promote
+/// against a lagging / corrupt / reorged-away readiness state.
+pub fn verify_live_readiness(
+    live: &ReducedUtxoCheckpoint,
+    window: &ActivationSourceWindow,
+    expected_seed_slot: SlotNo,
+    chaindb: &dyn ChainDb,
+) -> Result<(), ReadinessError> {
+    live.verify_advanced_through(window.source_window_end, expected_seed_slot)
+        .map_err(ReadinessError::Checkpoint)?;
+    chaindb
+        .get_block_by_hash(&window.lineage_pin)
+        .map_err(ReadinessError::ChainDb)?
+        .ok_or(ReadinessError::TerminalMissing)?;
+    Ok(())
+}
+
+/// Why the authoritative candidate derivation failed (TERMINAL).
+#[derive(Debug)]
+pub enum ActivationDeriveError {
+    /// Materializing the fresh seed-state replay checkpoint failed.
+    Materialize(ReducedCheckpointError),
+    /// Replaying the window over the seed-state checkpoint failed.
+    Derive(CandidateDeriveError),
+}
+
+/// S3f-4d-wire-2 (DC-EPOCH-11): derive the SOLE AUTHORITATIVE activation candidate by DURABLE
+/// WINDOW REPLAY -- materialize a FRESH seed-state checkpoint from the manifest-bound bootstrap
+/// baseline (a separate redb, so the live checkpoint is never mutated) and replay the validated
+/// durable selected-chain `shelley_blocks` over it to the exact boundary, binding the
+/// `EpochConsensusView` at B. Reproducible from durable canonical inputs ALONE; no peer/network/
+/// CLI/cache supplies a block.
+pub fn derive_authoritative_candidate(
+    live: &ReducedUtxoCheckpoint,
+    window: &ActivationSourceWindow,
+    shelley_blocks: &[ShelleyBlock],
+    bootstrap_state: &LedgerState,
+    network_magic: u32,
+    nonce: Hash32,
+    scratch_path: &std::path::Path,
+) -> Result<EpochConsensusView, ActivationDeriveError> {
+    let replay_cp = live
+        .materialize_bootstrap_into(scratch_path)
+        .map_err(ActivationDeriveError::Materialize)?;
+    derive_candidate(
+        window,
+        &replay_cp,
+        bootstrap_state,
+        shelley_blocks,
+        CardanoEra::Conway,
+        network_magic,
+        nonce,
+    )
+    .map_err(ActivationDeriveError::Derive)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -168,5 +249,50 @@ mod tests {
             Hash32([0; 32]),
         );
         assert!(matches!(err, Err(SourceWindowExtractError::Window(SourceWindowError::Empty))));
+    }
+
+    /// S3f-4d-wire-2: the live checkpoint is a readiness WITNESS -- ready iff it advanced THROUGH
+    /// the window end AND the window's terminal point is still on the durable selected chain;
+    /// fails closed (terminal) on lagging or a reorged-away terminal.
+    #[test]
+    fn verify_live_readiness_requires_advanced_through_and_terminal_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = ReducedUtxoCheckpoint::open(&dir.path().join("live.redb")).unwrap();
+        live.build_from(&std::collections::BTreeMap::new()).unwrap();
+        live.seal_bootstrap(SlotNo(100)).unwrap();
+        live.advance_block(SlotNo(300), &[], &[]).unwrap(); // live is at 300
+        let d = decode_block(RAW_CONWAY_BLOCK).unwrap();
+        let db = InMemoryChainDb::new();
+        db.put_block(&StoredBlock {
+            hash: d.block_hash.clone(),
+            slot: SlotNo(250),
+            bytes: RAW_CONWAY_BLOCK.to_vec(),
+        })
+        .unwrap();
+        let window = ActivationSourceWindow {
+            source_epoch: EpochNo(10),
+            source_window_start: SlotNo(101),
+            source_window_end: SlotNo(250),
+            snapshot_phase: SnapshotPhase::Set,
+            target_epoch: EpochNo(12),
+            source_window_anchor: Hash32([1; 32]),
+            lineage_pin: d.block_hash.clone(),
+        };
+        // advanced through 250 (live at 300) + terminal present -> READY.
+        assert!(verify_live_readiness(&live, &window, SlotNo(100), &db).is_ok());
+        // lagging: a window ending past the live tip -> terminal.
+        let mut lagging = window.clone();
+        lagging.source_window_end = SlotNo(400);
+        assert!(matches!(
+            verify_live_readiness(&live, &lagging, SlotNo(100), &db),
+            Err(ReadinessError::Checkpoint(_))
+        ));
+        // terminal reorged away (lineage_pin not in the durable chain) -> terminal.
+        let mut gone = window.clone();
+        gone.lineage_pin = Hash32([0xff; 32]);
+        assert!(matches!(
+            verify_live_readiness(&live, &gone, SlotNo(100), &db),
+            Err(ReadinessError::TerminalMissing)
+        ));
     }
 }
