@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# EPOCH-CONSENSUS-VIEW S3f-4d-mat (DC-EPOCH-11): the live reduced-UTxO checkpoint. -mat-1
+# (this gate): build the authoritative reduced checkpoint from the seed UTxO at bootstrap,
+# BEFORE the UTxO is dropped. It is a deterministic projection of the ledger UTxO (replay-
+# equivalent), disk-backed (redb), and GATED on the EVIEW cert-state package so non-EVIEW
+# bootstrap stays BYTE-IDENTICAL. Fail-closed on a build failure. (Per-block advance, reorg
+# re-materialize, fail-closed gating, and the shadow-derivation proof are owed sub-slices.)
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$REPO_ROOT"
+FAILED=0; fail() { echo "FAIL: $1"; FAILED=1; }
+B=crates/ade_node/src/admission/bootstrap.rs
+
+# (1) the bootstrap build reuses the proven reduce + checkpoint machinery (NOT a new stake system).
+grep -qE 'fn build_live_reduced_checkpoint' "$B" || fail "build_live_reduced_checkpoint missing"
+grep -qF 'reduce_txout(txout)' "$B" || fail "the build does not reduce via reduce_txout (DC-EVIEW-04)"
+grep -qF 'ReducedUtxoCheckpoint::open' "$B" || fail "the build does not open the durable reduced checkpoint"
+grep -qF '.build_from(&reduced)' "$B" || fail "the build does not build_from the reduced map (DC-EVIEW-10 machinery)"
+
+# (2) disk-backed durable path (redb in the snapshot dir).
+grep -qF 'reduced-checkpoint.redb' "$B" || fail "the reduced checkpoint is not a disk-backed redb in the snapshot dir"
+
+# (3) BYTE-IDENTICAL until -wire: the build is GATED on the EVIEW cert-state package, so a
+#     non-EVIEW bootstrap (empty cert state) builds nothing and is unchanged.
+grep -qF 'ledger.cert_state.delegation.delegations.is_empty()' "$B" \
+    || fail "the build is not gated on the EVIEW cert-state -- non-EVIEW bootstrap must stay byte-identical"
+
+# (4) the build happens BEFORE the UTxO is dropped (so the seed UTxO is still resident).
+awk '/build_live_reduced_checkpoint\(&snapshot_dir, &utxo\)/{b=NR} /drop\(utxo\);/{d=NR} END{exit !(b>0 && d>0 && b<d)}' "$B" \
+    || fail "the reduced checkpoint must be built BEFORE drop(utxo)"
+
+# (5) fail-closed on a build failure.
+grep -qE 'AdmissionBootstrapError::ReducedCheckpoint' "$B" || fail "a reduced-checkpoint build failure is not fail-closed"
+
+# (6) no resident full UTxO is retained by the build (the reduced map is transient, freed; the
+#     existing drop(utxo) + track_utxo=false path is preserved).
+grep -qF 'drop(utxo);' "$B" || fail "the seed UTxO drop (track_utxo=false steady state) was removed"
+
+# (7) the proof.
+grep -qE 'fn live_reduced_checkpoint_builds_durable_deterministic' "$B" || fail "the -mat-1 durable/deterministic proof is missing"
+
+if (( FAILED == 0 )); then
+    echo "OK: live reduced checkpoint -mat-1 (DC-EPOCH-11; build from seed UTxO via the proven reduce+checkpoint machinery, disk-backed, gated=byte-identical, before drop(utxo), fail-closed)"
+fi
+exit $FAILED

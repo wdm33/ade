@@ -81,6 +81,10 @@ pub enum AdmissionBootstrapError {
     /// to verify/import (missing one side, hash/network/era mismatch, malformed, or a
     /// cert-state that does not decode). FAIL-CLOSED before any bootstrap state durables.
     BootstrapCertState(String),
+    /// EPOCH-CONSENSUS-VIEW S3f-4d-mat (DC-EPOCH-11): building the live reduced-UTxO
+    /// checkpoint from the seed UTxO failed. FAIL-CLOSED -- without the authoritative
+    /// reduced checkpoint, no live EpochConsensusView can be derived.
+    ReducedCheckpoint(String),
     BootstrapInitialState(String),
     FileWalStoreOpen(String),
     WalChainBreak(String),
@@ -190,6 +194,35 @@ fn import_bootstrap_cert_state(
             Ok(cert_state)
         }
     }
+}
+
+/// EPOCH-CONSENSUS-VIEW S3f-4d-mat-1 (DC-EPOCH-11): build the live reduced-UTxO checkpoint
+/// from the seed UTxO -- the authoritative reduced-stake state the EVIEW window driver
+/// (DC-EVIEW-10) advances per admitted block. Reduces each output (reduce_txout, DC-EVIEW-04)
+/// and builds the durable redb checkpoint, returning its commitment fingerprint. Disk-backed
+/// (redb in the snapshot dir); the transient reduced map (~70 bytes/entry) is freed here. It
+/// adds an ADDITIONAL durable artifact and changes NO existing bootstrap output, so the
+/// existing follow/forge path stays byte-identical (DC-EPOCH-11 point 8).
+fn build_live_reduced_checkpoint(
+    snapshot_dir: &std::path::Path,
+    utxo: &ade_ledger::utxo::UTxOState,
+) -> Result<Hash32, ade_runtime::chaindb::ReducedCheckpointError> {
+    use ade_ledger::reduced_utxo::{reduce_txout, ReducedStakeRef};
+    let mut reduced: std::collections::BTreeMap<
+        ade_types::tx::TxIn,
+        (ade_types::tx::Coin, ReducedStakeRef),
+    > = std::collections::BTreeMap::new();
+    for (txin, txout) in utxo.utxos.iter() {
+        reduced.insert(txin.clone(), reduce_txout(txout));
+    }
+    let checkpoint =
+        ade_runtime::chaindb::ReducedUtxoCheckpoint::open(&reduced_checkpoint_path(snapshot_dir))?;
+    checkpoint.build_from(&reduced)
+}
+
+/// The durable path of the live reduced checkpoint (in the snapshot dir, beside chain.db).
+fn reduced_checkpoint_path(snapshot_dir: &std::path::Path) -> std::path::PathBuf {
+    snapshot_dir.join("reduced-checkpoint.redb")
 }
 
 fn check_seed_bundle_tip_consistency(
@@ -359,6 +392,15 @@ async fn run_admission_inner(
     // ledger.utxo_state stays EMPTY (UTxOState::new()).
     let static_utxo_fp =
         ade_ledger::fingerprint::StaticUtxoFp::from_bootstrap_utxo(&utxo, initial_fp.clone());
+    // S3f-4d-mat-1 (DC-EPOCH-11): when the EVIEW cert-state package is present (the
+    // activation is configured), build the live reduced checkpoint from the seed UTxO
+    // BEFORE it is dropped. Gated on the imported cert-state so non-EVIEW bootstrap is
+    // BYTE-IDENTICAL (point 8). Fail-closed: a build failure aborts bootstrap.
+    if !ledger.cert_state.delegation.delegations.is_empty() {
+        let reduced_checkpoint_fp = build_live_reduced_checkpoint(&snapshot_dir, &utxo)
+            .map_err(|e| AdmissionBootstrapError::ReducedCheckpoint(format!("{:?}", e)))?;
+        let _ = reduced_checkpoint_fp; // the binding/lineage check consumes it in -mat-4
+    }
     drop(utxo);
     // S2a: the runner's recovered ledger carries the oracle-bound current pparams.
     ledger.protocol_params = current_pparams.clone();
@@ -636,6 +678,25 @@ fn _snapshot_store_marker(_s: &dyn SnapshotStore) {}
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    /// S3f-4d-mat-1 (DC-EPOCH-11): the live reduced checkpoint builds from the seed UTxO
+    /// into a DURABLE, COMPLETE, deterministic redb store -- the authoritative reduced-stake
+    /// state the EVIEW window driver advances. The commitment fingerprint is a pure function
+    /// of the UTxO (replay-equivalent).
+    #[test]
+    fn live_reduced_checkpoint_builds_durable_deterministic() {
+        let dir = tempfile::tempdir().unwrap();
+        let utxo = ade_ledger::utxo::UTxOState::new();
+        let fp1 = build_live_reduced_checkpoint(dir.path(), &utxo).expect("build");
+        // durable + complete + reopenable.
+        let cp = ade_runtime::chaindb::ReducedUtxoCheckpoint::open(&reduced_checkpoint_path(dir.path()))
+            .expect("reopen");
+        assert!(cp.is_complete().expect("complete"), "the built checkpoint is marked complete");
+        // deterministic: a fresh build of the same UTxO -> the same commitment fingerprint.
+        let dir2 = tempfile::tempdir().unwrap();
+        let fp2 = build_live_reduced_checkpoint(dir2.path(), &utxo).expect("build2");
+        assert_eq!(fp1, fp2, "the reduced checkpoint commitment is a pure function of the UTxO");
+    }
 
     /// RO-LIVE-05 / #18: the bundle's `source_tip` (chain-sync intersect point)
     /// must equal the recovered ledger tip (the seed point), else the catch-up
