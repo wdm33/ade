@@ -1409,15 +1409,15 @@ fn advance_reduced_checkpoint_to_durable_tip(
     let Some(cp) = reduced_checkpoint else {
         return Ok(());
     };
-    // A LIVE checkpoint MUST carry its bootstrap slot (the build calls set_built_at_slot).
-    // A present-but-slotless checkpoint is malformed -- advancing it from slot 0 would
-    // re-apply blocks already folded into the seed UTxO. FAIL-CLOSED rather than corrupt.
-    let bootstrap_slot = cp
-        .last_advanced_slot()
-        .map_err(|e| NodeLifecycleError::RelaySync(format!("reduced-checkpoint slot read: {e:?}")))?
+    // A LIVE checkpoint MUST carry its sealed seed slot (the build calls seal_bootstrap). A
+    // present-but-unsealed checkpoint is malformed -- advancing it from slot 0 would re-apply
+    // blocks already folded into the seed UTxO. FAIL-CLOSED rather than corrupt.
+    let seed_slot = cp
+        .seed_slot()
+        .map_err(|e| NodeLifecycleError::RelaySync(format!("reduced-checkpoint seed slot: {e:?}")))?
         .ok_or_else(|| {
             NodeLifecycleError::RelaySync(
-                "reduced checkpoint has no recorded bootstrap slot (malformed)".to_string(),
+                "reduced checkpoint has no sealed bootstrap baseline (malformed)".to_string(),
             )
         })?;
     let Some(tip) = chaindb.tip().map_err(|e| {
@@ -1426,10 +1426,23 @@ fn advance_reduced_checkpoint_to_durable_tip(
     else {
         return Ok(());
     };
+    // S3f-4d-mat-3 (DC-EPOCH-11): reorg detection. If the checkpoint advanced PAST the current
+    // durable tip, a rollback shortened the chain -- re-materialize to the sealed seed baseline
+    // (the reduced delta is not invertible), then the advancer replays the rolled-back chain
+    // forward from seed_slot+1. Fail-closed.
+    let advanced = cp
+        .last_advanced_slot()
+        .map_err(|e| NodeLifecycleError::RelaySync(format!("reduced-checkpoint slot: {e:?}")))?
+        .unwrap_or(seed_slot);
+    if advanced.0 > tip.slot.0 {
+        cp.reset_to_bootstrap().map_err(|e| {
+            NodeLifecycleError::RelaySync(format!("reduced-checkpoint re-materialize: {e:?}"))
+        })?;
+    }
     ade_runtime::chaindb::advance_reduced_checkpoint_over_chaindb(
         cp,
         chaindb,
-        bootstrap_slot,
+        seed_slot,
         tip.slot,
         ade_types::CardanoEra::Conway,
     )

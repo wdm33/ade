@@ -29,8 +29,9 @@ grep -qF 'ledger.cert_state.delegation.delegations.is_empty()' "$B" \
 # (4) the build happens BEFORE the UTxO is dropped (so the seed UTxO is still resident).
 awk '/build_live_reduced_checkpoint\(&snapshot_dir, &utxo/{b=NR} /drop\(utxo\);/{d=NR} END{exit !(b>0 && d>0 && b<d)}' "$B" \
     || fail "the reduced checkpoint must be built BEFORE drop(utxo)"
-# the build records the bootstrap slot so the advancer resumes from seed_slot+1 (anchor not re-applied).
-grep -qF 'checkpoint.set_built_at_slot(seed_slot)' "$B" || fail "the build does not record the bootstrap slot (set_built_at_slot)"
+# the build SEALS the immutable bootstrap baseline + records the seed slot (advancer resumes
+# from seed_slot+1, anchor not re-applied; a reorg rollback re-materializes from this baseline).
+grep -qF 'checkpoint.seal_bootstrap(seed_slot)' "$B" || fail "the build does not seal the bootstrap baseline (seal_bootstrap)"
 
 # (5) fail-closed on a build failure.
 grep -qE 'AdmissionBootstrapError::ReducedCheckpoint' "$B" || fail "a reduced-checkpoint build failure is not fail-closed"
@@ -48,7 +49,6 @@ CP=crates/ade_runtime/src/chaindb/reduced_utxo_checkpoint.rs
 grep -qE 'pub fn advance_block' "$CP" || fail "advance_block (the per-block advance) missing"
 grep -qE 'pub fn last_advanced_slot' "$CP" || fail "last_advanced_slot (the lockstep cursor) missing"
 grep -qF 'LAST_SLOT_KEY' "$CP" || fail "the durable last-advanced-slot marker is missing"
-grep -qE 'pub fn set_built_at_slot' "$CP" || fail "set_built_at_slot (the bootstrap-slot resume point) missing"
 grep -qE 'fn advance_block_applies_delta_and_records_slot' "$CP" || fail "the -mat-2 advance/slot proof is missing"
 
 # (9) -mat-2b: the live ChainDB-replay advancer reads ONLY the durable ChainDB (selected
@@ -69,6 +69,15 @@ grep -qF 'advance_reduced_checkpoint_to_durable_tip(reduced_checkpoint, chaindb)
 grep -qF 'advance_reduced_checkpoint_over_chaindb(' "$NL" || fail "the loop helper does not call the durable-ChainDB advancer"
 # the helper no-ops when EVIEW is not configured (None) -> the follow/forge path is byte-identical.
 grep -qF 'let Some(cp) = reduced_checkpoint else {' "$NL" || fail "the advance is not a no-op when EVIEW is unconfigured (byte-identical)"
+
+# (11) -mat-3: reorg re-materialize. The checkpoint seals an IMMUTABLE bootstrap baseline; a
+#      rollback (advanced past the durable tip) re-materializes the live table from it.
+grep -qE 'pub fn seal_bootstrap' "$CP" || fail "seal_bootstrap (the immutable bootstrap baseline) missing"
+grep -qE 'pub fn reset_to_bootstrap' "$CP" || fail "reset_to_bootstrap (the reorg re-materialize) missing"
+grep -qF 'BOOTSTRAP_TABLE' "$CP" || fail "the immutable bootstrap table is missing"
+grep -qF 'cp.reset_to_bootstrap()' "$NL" || fail "the loop does not re-materialize the checkpoint on a rollback"
+grep -qF 'if advanced.0 > tip.slot.0 {' "$NL" || fail "the loop does not DETECT a rollback (advanced past the durable tip)"
+grep -qE 'fn reset_to_bootstrap_re_materializes_seed_state' "$CP" || fail "the -mat-3 re-materialize proof is missing"
 
 if (( FAILED == 0 )); then
     echo "OK: live reduced checkpoint -mat-1 (DC-EPOCH-11; build from seed UTxO via the proven reduce+checkpoint machinery, disk-backed, gated=byte-identical, before drop(utxo), fail-closed)"

@@ -45,6 +45,14 @@ const COMPLETE_KEY: &str = "complete";
 /// Durable so the live advancer replays the ChainDB in lockstep and a lagging checkpoint
 /// (behind the durable tip) is detectable.
 const LAST_SLOT_KEY: &str = "last_advanced_slot";
+/// S3f-4d-mat-3 (DC-EPOCH-11): the IMMUTABLE bootstrap reduced records (the seed state),
+/// sealed once at build and never advanced. A reorg rollback re-materializes the live table
+/// from this baseline (`reset_to_bootstrap`), then the advancer replays the rolled-back chain.
+const BOOTSTRAP_TABLE: TableDefinition<&[u8; KEY_LEN], &[u8]> =
+    TableDefinition::new("reduced_bootstrap");
+/// S3f-4d-mat-3 (DC-EPOCH-11): the IMMUTABLE bootstrap slot (the seed point), distinct from
+/// LAST_SLOT (which advances). `reset_to_bootstrap` resets LAST_SLOT back to this.
+const SEED_SLOT_KEY: &str = "seed_slot";
 const FP_DOMAIN: &[u8] = b"eview-reduced-utxo-checkpoint-v1";
 
 #[derive(Debug)]
@@ -204,21 +212,81 @@ impl ReducedUtxoCheckpoint {
         Ok(())
     }
 
-    /// S3f-4d-mat-2c (DC-EPOCH-11): record the slot the checkpoint was BUILT at (the
-    /// bootstrap/anchor slot) as the last-advanced slot, WITHOUT applying any delta. The
-    /// bootstrap UTxO already reflects every block up to and including this slot, so the
-    /// live advancer must start from `slot + 1` -- this marker makes that the resume point
-    /// (the anchor block is never re-applied). Idempotent; does not touch the reduced table
-    /// or the completeness marker.
-    pub fn set_built_at_slot(&self, slot: SlotNo) -> Result<(), ReducedCheckpointError> {
+    /// S3f-4d-mat-3 (DC-EPOCH-11): seal the freshly-built checkpoint as the bootstrap baseline.
+    /// Copies the seed reduced records into the IMMUTABLE bootstrap table and records the seed
+    /// slot as BOTH the resume cursor (LAST_SLOT) and the immutable re-materialization anchor
+    /// (SEED_SLOT). Called once at build -- a reorg rollback re-materializes the live table
+    /// from this sealed baseline.
+    pub fn seal_bootstrap(&self, seed_slot: SlotNo) -> Result<(), ReducedCheckpointError> {
         let txn = self.db.begin_write().map_err(rerr)?;
         {
+            let reduced = txn.open_table(REDUCED_TABLE).map_err(rerr)?;
+            let mut boot = txn.open_table(BOOTSTRAP_TABLE).map_err(rerr)?;
+            // Clear any prior baseline first, so a re-seal cannot accumulate stale rows
+            // (idempotent). The cold-bootstrap call graph seals exactly once, but this keeps
+            // seal_bootstrap correct independent of that invariant.
+            while boot.pop_first().map_err(rerr)?.is_some() {}
+            for entry in reduced.iter().map_err(rerr)? {
+                let (k, v) = entry.map_err(rerr)?;
+                boot.insert(k.value(), v.value()).map_err(rerr)?;
+            }
+        }
+        {
             let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
-            let slot_bytes = slot.0.to_be_bytes();
+            let slot_bytes = seed_slot.0.to_be_bytes();
+            meta.insert(SEED_SLOT_KEY, slot_bytes.as_slice()).map_err(rerr)?;
             meta.insert(LAST_SLOT_KEY, slot_bytes.as_slice()).map_err(rerr)?;
         }
         txn.commit().map_err(rerr)?;
         Ok(())
+    }
+
+    /// S3f-4d-mat-3 (DC-EPOCH-11): re-materialize the live checkpoint to the sealed bootstrap
+    /// baseline after a reorg rollback. Clears the live reduced table, copies the immutable
+    /// bootstrap records back, and resets LAST_SLOT to SEED_SLOT -- so the advancer then replays
+    /// the (rolled-back) ChainDB from seed_slot+1 to the new tip. The reduced delta is NOT
+    /// invertible, so re-materializing from the sealed seed state is the only way to restore the
+    /// EXACT post-rollback lineage. Fail-closed if the checkpoint was never sealed.
+    pub fn reset_to_bootstrap(&self) -> Result<(), ReducedCheckpointError> {
+        let seed_slot = self.seed_slot()?.ok_or(ReducedCheckpointError::Incomplete)?;
+        let txn = self.db.begin_write().map_err(rerr)?;
+        {
+            let mut reduced = txn.open_table(REDUCED_TABLE).map_err(rerr)?;
+            // clear the live table, then copy the immutable bootstrap records back.
+            while reduced.pop_first().map_err(rerr)?.is_some() {}
+            let boot = txn.open_table(BOOTSTRAP_TABLE).map_err(rerr)?;
+            for entry in boot.iter().map_err(rerr)? {
+                let (k, v) = entry.map_err(rerr)?;
+                reduced.insert(k.value(), v.value()).map_err(rerr)?;
+            }
+        }
+        {
+            let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            let _ = meta.remove(COMPLETE_KEY).map_err(rerr)?;
+            let slot_bytes = seed_slot.0.to_be_bytes();
+            meta.insert(LAST_SLOT_KEY, slot_bytes.as_slice()).map_err(rerr)?;
+        }
+        txn.commit().map_err(rerr)?;
+        Ok(())
+    }
+
+    /// The immutable bootstrap (seed) slot, or `None` if the checkpoint was never sealed.
+    pub fn seed_slot(&self) -> Result<Option<SlotNo>, ReducedCheckpointError> {
+        let txn = self.db.begin_read().map_err(rerr)?;
+        let meta = match txn.open_table(META_TABLE) {
+            Ok(t) => t,
+            Err(_) => return Ok(None),
+        };
+        match meta.get(SEED_SLOT_KEY).map_err(rerr)? {
+            Some(v) => {
+                let b = v.value();
+                if b.len() != 8 {
+                    return Err(ReducedCheckpointError::Decode);
+                }
+                Ok(Some(SlotNo(u64::from_be_bytes(b.try_into().unwrap()))))
+            }
+            None => Ok(None),
+        }
     }
 
     /// The slot of the last block the checkpoint advanced over (DC-EPOCH-11), or `None` if it
@@ -429,6 +497,39 @@ mod tests {
         drop(cp);
         let cp2 = ReducedUtxoCheckpoint::open(&path).unwrap();
         assert_eq!(cp2.last_advanced_slot().unwrap(), Some(SlotNo(510)), "slot durable across reopen");
+    }
+
+    /// S3f-4d-mat-3 (DC-EPOCH-11): seal the bootstrap baseline, advance the live state, then
+    /// reset_to_bootstrap re-materializes EXACTLY the seed state + resets the slot to the seed
+    /// slot -- the reorg-rollback recovery (the reduced delta is not invertible, so re-
+    /// materialize from the sealed seed is the only faithful restore).
+    #[test]
+    fn reset_to_bootstrap_re_materializes_seed_state() {
+        let tmp = TempDir::new().unwrap();
+        let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("rc.redb")).unwrap();
+        cp.build_from(&sample()).unwrap();
+        cp.seal_bootstrap(SlotNo(279)).unwrap();
+        assert_eq!(cp.seed_slot().unwrap(), Some(SlotNo(279)), "seed slot sealed");
+        assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(279)), "resume cursor = seed");
+        // advance: mutate the live state (spend a seed output, produce a new one).
+        cp.advance_block(SlotNo(300), &[txin(0x01, 0)], &[(txin(0x07, 0), Coin(555), base(0xdd))])
+            .unwrap();
+        assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(300)));
+        assert_eq!(cp.get(&txin(0x01, 0)).unwrap(), None, "seed output spent");
+        assert_eq!(cp.get(&txin(0x07, 0)).unwrap(), Some((Coin(555), base(0xdd))), "new output present");
+        // reorg: re-materialize to the sealed seed baseline.
+        cp.reset_to_bootstrap().unwrap();
+        assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(279)), "slot reset to seed");
+        assert_eq!(
+            cp.get(&txin(0x01, 0)).unwrap(),
+            Some((Coin(100), base(0xaa))),
+            "spent seed output restored"
+        );
+        assert_eq!(cp.get(&txin(0x07, 0)).unwrap(), None, "post-seed output removed");
+        // reset clears the completeness marker (like advance_block); the advancer re-finalizes
+        // after replaying. Re-finalize here to confirm the live table is EXACTLY the 3 seed rows.
+        cp.finalize().unwrap();
+        assert_eq!(cp.len().unwrap(), 3, "live table == the seed state exactly");
     }
 
     #[test]

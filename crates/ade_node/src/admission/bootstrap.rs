@@ -219,10 +219,11 @@ fn build_live_reduced_checkpoint(
     let checkpoint =
         ade_runtime::chaindb::ReducedUtxoCheckpoint::open(&reduced_checkpoint_path(snapshot_dir))?;
     let fp = checkpoint.build_from(&reduced)?;
-    // S3f-4d-mat-2c: record the bootstrap slot so the live advancer (DC-EPOCH-11) resumes
-    // from seed_slot+1. The seed UTxO already reflects every block up to and including
-    // seed_slot, so the anchor block is never re-applied.
-    checkpoint.set_built_at_slot(seed_slot)?;
+    // S3f-4d-mat-3: seal the seed records as the IMMUTABLE bootstrap baseline + record the
+    // seed slot (DC-EPOCH-11). The advancer resumes from seed_slot+1 (the seed UTxO already
+    // reflects every block up to the anchor, so it is never re-applied), and a reorg rollback
+    // re-materializes the live table from this baseline.
+    checkpoint.seal_bootstrap(seed_slot)?;
     Ok(fp)
 }
 
