@@ -8468,3 +8468,32 @@ strengthened_in = []
 open_obligations = ["The predicate + the terminal-state types + the conflict-is-terminal container rule are enforced. OWED (S3f-4c/d): wire the live orchestration to RETURN these terminal states (halt) on a WAL-record failure (EpochViewActivationFailed) or a post-publication mismatch (EpochViewPostPromotionMismatch), with NO seed-view fallback -- a structured terminal node state, gated on the live proofs."]
 attack_rationale = "A failed/conflicting/mismatched activation must HALT, never silently continue on the epoch-wrong seed view. The predicate is conjunctive (every precondition required) and ordered, so a partial/unverified/non-durable candidate yields NoPromotion -- the seed stays on its own epoch path (correct pre-boundary), and the live wiring (S3f-4c/d) turns a durability/post-promotion failure into a terminal EpochViewActivation* state, not a fallback. 'No leadership' alone is insufficient past the boundary (header validation/follow could read stale inputs), so the outcome is a structured terminal halt."
 evidence_notes = "Introduced at EPOCH-CONSENSUS-VIEW S3f-4b (2026-06-21). The predicate + terminal-state types only -- 3 hermetic tests + the gate. cargo test -p ade_node --lib (epoch_activation 5) green. The live HALT wiring (returning the terminal states on WAL failure / post-promotion mismatch) is S3f-4c/d, gated on the live proofs. Next: S3f-4c (durable-before-visible + replay application + crash recovery)."
+
+[[rules]]
+id = "DC-EPOCH-06"
+tier = "derived"
+statement = """
+Activation is durable-before-visible and replay-identical (S3f-4c). The activation WAL record
+(EpochConsensusViewActivated) is written and made durable BEFORE the active view is published:
+activate_durable_before_visible publishes Promoted(view) ONLY when the WAL write is durable; a non-durable
+write is the terminal EpochViewActivationFailed (halt before promotion), never a publish. Recovery is
+replay-identical: recover_active_view(record, candidate) returns Seed when there is NO durable activation
+record (crash before the WAL: the old epoch stays active); Promoted(candidate) when a record exists AND the
+re-derived candidate reproduces its ENTIRE identity -- every binding + the stake-view hash + the full-view
+hash + verify_canonical_hash, via activation_record_matches -- so the recovered active view equals the WAL
+record (crash after the WAL or after publication); and the terminal EpochViewPostPromotionMismatch when a
+record exists but the candidate mismatches or cannot be re-derived (NEVER a fallback to the epoch-wrong seed
+view). resolve_activation_record folds repeated records via the DC-EPOCH-04 idempotence/conflict rule (same
+epoch byte-identical => keep; differing => terminal conflict; a different epoch => the later supersedes).
+"""
+source = "docs/clusters/EPOCH-CONSENSUS-VIEW/SLICE-3f4-activation-flip.md (S3f-4c); user directive 2026-06-21 (durable-before-visible; crash before/after WAL; recovered must match WAL)"
+cross_ref = ["DC-EPOCH-04", "DC-EPOCH-05", "DC-EPOCH-07", "DC-WAL-03"]
+code_locus = "crates/ade_node/src/epoch_activation.rs: activate_durable_before_visible(candidate, wal_write_durable) (durable->Promoted, else EpochViewActivationFailed); recover_active_view(record, candidate) (None->Seed; match->Promoted; else EpochViewPostPromotionMismatch); activation_record_matches (complete identity incl. both hashes + verify); activation_record_for (the record builder); resolve_activation_record (DC-EPOCH-04 fold). ci/ci_check_eview_activation_recovery.sh."
+tests = ["crash_before_durable_wal_keeps_seed", "crash_after_wal_republishes_same_view", "recovered_view_mismatch_is_terminal", "durable_before_visible_halts_on_wal_failure", "resolve_activation_idempotent_conflict_supersede"]
+ci_scripts = ["ci/ci_check_eview_activation_recovery.sh"]
+status = "enforced"
+introduced_in = "EPOCH-CONSENSUS-VIEW-S3f-4c"
+strengthened_in = []
+open_obligations = ["The durable-before-visible ordering + the replay-identical recovery + the complete identity match are enforced (5 hermetic proofs). OWED (S3f-4d): wire the live orchestration -- write the WAL record (activation_record_for) durably BEFORE publishing the ActiveEpochView, and on warm-start re-derive the candidate (window driver) + recover_active_view from the durable WAL -- gated on the two live cardano-node proofs."]
+attack_rationale = "The active view must never become visible before its activation is durable (else a crash loses the promotion while leadership already acted on it): activate_durable_before_visible gates publication on wal_write_durable and halts (terminal) otherwise. Recovery must reproduce EXACTLY the activated view: activation_record_matches requires the re-derived candidate to reproduce every binding + the stake-view hash + the full-view hash AND self-verify, so a divergent re-derivation is a terminal PostPromotionMismatch, not a silent acceptance. No durable record => Seed (the old epoch), which is correct (the promotion never committed). A record with a non-re-derivable or mismatched candidate is terminal, NEVER a fallback to the epoch-wrong seed. Repeated records fold deterministically (DC-EPOCH-04), so replay is idempotent or fails closed -- never two different active views."
+evidence_notes = "Introduced at EPOCH-CONSENSUS-VIEW S3f-4c (2026-06-21), the third sub-slice of the activation flip. The PURE ordering + recovery logic -- 5 hermetic proofs (crash before WAL -> Seed; crash after WAL -> republish same view; mismatch/absent -> terminal; durable-before-visible halts on WAL failure; resolve idempotent/conflict/supersede) + ci_check_eview_activation_recovery.sh. cargo test -p ade_node --lib (epoch_activation 10) green. The LIVE orchestration (write WAL durably then publish; warm-start re-derive + recover) is S3f-4d, gated on the live proofs. Next: S3f-4d (the live flip) -- the ONLY remaining sub-slice, gated on the boundary-aligned stake oracle + the leadership-schedule proof."
