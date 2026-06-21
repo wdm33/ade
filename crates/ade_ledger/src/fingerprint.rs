@@ -397,6 +397,14 @@ fn fingerprint_cert(cert: &CertState) -> Hash32 {
         write_uint_canonical(&mut buf, epoch.0);
     }
 
+    // NOTE: `future_pools` is intentionally NOT fingerprinted here. The durable ledger
+    // fingerprint covers the live (track_utxo=false) state, whose cert state — and hence
+    // future_pools — is always empty; including it would change every existing fingerprint
+    // (an empty-map header) and break warm-start for no benefit. The bootstrap cert-state
+    // artifact commits to future_pools via the manifest's cert_state_hash (the cert_state
+    // codec). A future track_utxo=true LIVE-LEDGER-APPLY slice that makes the durable cert
+    // state carry staged re-registrations must add it here under a fingerprint-version bump.
+
     blake2b_256(&buf)
 }
 

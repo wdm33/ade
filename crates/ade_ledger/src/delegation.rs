@@ -71,8 +71,14 @@ impl Default for DelegationState {
 /// Pool registration and retirement tracking.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PoolState {
-    /// Registered pools and their parameters.
+    /// Registered pools and their parameters — the ACTIVE set leadership/header
+    /// validation reads. The mark snapshot is captured from this map.
     pub pools: BTreeMap<PoolId, PoolParams>,
+    /// Staged pool re-registrations (cardano-ledger `psFutureStakePoolParams`), adopted
+    /// into `pools` at the next epoch boundary by [`apply_pool_reap`]. A re-registration
+    /// does NOT change the active `pools` entry (or its VRF) until adoption — so the mark
+    /// snapshot captured before a boundary carries the pre-adoption (old) VRF.
+    pub future_pools: BTreeMap<PoolId, PoolParams>,
     /// Pools scheduled for retirement at a given epoch.
     pub retiring: BTreeMap<PoolId, EpochNo>,
 }
@@ -81,6 +87,7 @@ impl PoolState {
     pub fn new() -> Self {
         PoolState {
             pools: BTreeMap::new(),
+            future_pools: BTreeMap::new(),
             retiring: BTreeMap::new(),
         }
     }
@@ -227,7 +234,12 @@ fn apply_stake_delegation(
     Ok(new_state)
 }
 
-/// Register (or update) a stake pool.
+/// Register (first time) or re-register a stake pool, matching cardano-ledger's POOL rule
+/// (`poolTransition`, `Pool.hs:266-310` @ 226b002d): a FIRST registration (the pool is not
+/// yet in `pools`) takes effect immediately; a RE-REGISTRATION of an already-registered pool
+/// is STAGED into `future_pools` — the active `pools` entry, including its VRF keyhash, is
+/// left UNCHANGED until the next epoch boundary adopts it ([`apply_pool_reap`]) — and any
+/// pending retirement is cancelled immediately.
 fn apply_pool_registration(
     state: &CertState,
     pool_cert: &PoolRegistrationCert,
@@ -244,12 +256,21 @@ fn apply_pool_registration(
     };
 
     let mut new_state = state.clone();
-    // Insert or update — pool re-registration is allowed and overwrites params.
-    new_state
-        .pool
-        .pools
-        .insert(pool_cert.pool_id.clone(), params);
-    // If the pool was previously scheduled for retirement, cancel it.
+    if new_state.pool.pools.contains_key(&pool_cert.pool_id) {
+        // Re-registration: stage the new params; the active entry (and its VRF) governs
+        // leadership until the next boundary adopts the staged params.
+        new_state
+            .pool
+            .future_pools
+            .insert(pool_cert.pool_id.clone(), params);
+    } else {
+        // First registration: takes effect in the active `pools` set immediately.
+        new_state
+            .pool
+            .pools
+            .insert(pool_cert.pool_id.clone(), params);
+    }
+    // A (re-)registration cancels a pending retirement immediately (Pool.hs:309).
     new_state.pool.retiring.remove(&pool_cert.pool_id);
     Ok(new_state)
 }
@@ -271,6 +292,54 @@ fn apply_pool_retirement(
     let mut new_state = state.clone();
     new_state.pool.retiring.insert(pool_id.clone(), epoch);
     Ok(new_state)
+}
+
+/// Apply the epoch-boundary pool reaping — cardano-ledger POOLREAP (`PoolReap.hs:132-241`
+/// @ 226b002d), restricted to the cert-state lifecycle relevant to the next-epoch consensus
+/// view (deposit/treasury/reward accounting is separately scoped — see the slice doc; it does
+/// not affect the mark at the relevant snapshot phase because SNAP captures the mark BEFORE
+/// POOLREAP, `Epoch.hs:292-297`):
+///   1. ADOPT staged re-registrations: a future entry whose pool is still active becomes the
+///      active params; an orphan future (no matching active pool) is dropped (cardano's
+///      `Map.dropMissing`, PoolReap.hs:154-167).
+///   2. Determine the pools retiring AT `entered_epoch` (`v == e`, PoolReap.hs:173).
+///   3. CLEAR delegations targeting those reaped pools (cardano `removeStakePoolDelegations
+///      (delegsToClear ...)`, PoolReap.hs:221,239-241): a credential delegated to a retiring pool
+///      is un-delegated so it cannot silently reattach if that pool id ever re-registers later.
+///      The credential's registration + reward account are preserved — only the delegation
+///      pointer is cleared.
+///   4. REMOVE the reaped pools from the active set + the retiring schedule (PoolReap.hs:223-224).
+/// Adopt-then-reap; the two sets are disjoint (a re-registration cancels a pending retirement).
+/// Pure + deterministic (BTreeMap/BTreeSet order), so a windowed replay applies it at each crossed
+/// boundary replay-identically; the MARK is captured BEFORE this runs.
+pub fn apply_pool_reap(cert: &mut CertState, entered_epoch: EpochNo) {
+    // 1. Adopt staged re-registrations (drop an orphan future with no active pool).
+    let adopted = std::mem::take(&mut cert.pool.future_pools);
+    for (pool_id, params) in adopted {
+        if cert.pool.pools.contains_key(&pool_id) {
+            cert.pool.pools.insert(pool_id, params);
+        }
+    }
+    // 2. The pools scheduled to retire at exactly this epoch.
+    let retired: std::collections::BTreeSet<PoolId> = cert
+        .pool
+        .retiring
+        .iter()
+        .filter(|(_, e)| e.0 == entered_epoch.0)
+        .map(|(id, _)| id.clone())
+        .collect();
+    // 3. Clear delegations targeting any reaped pool — no silent reattach on a later re-registration.
+    if !retired.is_empty() {
+        cert
+            .delegation
+            .delegations
+            .retain(|_cred, pool_id| !retired.contains(&*pool_id));
+    }
+    // 4. Remove the reaped pools from the active set + the retiring schedule.
+    for pool_id in &retired {
+        cert.pool.pools.remove(pool_id);
+        cert.pool.retiring.remove(pool_id);
+    }
 }
 
 /// Apply a sequence of certificates to the certificate state.
@@ -723,12 +792,13 @@ mod tests {
     }
 
     #[test]
-    fn pool_re_registration_updates_params() {
+    fn pool_re_registration_stages_params_adopted_at_reap() {
         let state = CertState::new();
         let cert = Certificate::PoolRegistration(make_pool_cert(0xff));
         let state = apply_cert(&state, &cert, key_deposit(), 0).unwrap();
 
-        // Re-register with different pledge
+        // Re-register with a different pledge: STAGED in future_pools, NOT applied to the
+        // active pool entry (cardano-ledger psFutureStakePoolParams).
         let mut updated_cert = make_pool_cert(0xff);
         updated_cert.pledge = Coin(200_000_000);
         let cert2 = Certificate::PoolRegistration(updated_cert);
@@ -736,7 +806,138 @@ mod tests {
 
         assert_eq!(
             new_state.pool.pools[&make_pool_id(0xff)].pledge,
-            Coin(200_000_000)
+            Coin(100_000_000),
+            "re-registration leaves the active pool entry unchanged"
+        );
+        assert_eq!(
+            new_state.pool.future_pools[&make_pool_id(0xff)].pledge,
+            Coin(200_000_000),
+            "the new params are staged for boundary adoption"
+        );
+
+        // The next epoch boundary adopts the staged params into the active set.
+        let mut cert = new_state.clone();
+        apply_pool_reap(&mut cert, EpochNo(5));
+        assert_eq!(cert.pool.pools[&make_pool_id(0xff)].pledge, Coin(200_000_000));
+        assert!(cert.pool.future_pools.is_empty(), "future params drained on adoption");
+    }
+
+    #[test]
+    fn re_registration_keeps_old_vrf_until_reap() {
+        let state = CertState::new();
+        let mut c1 = make_pool_cert(0xab);
+        c1.vrf_hash = Hash32([0x11; 32]);
+        let state =
+            apply_cert(&state, &Certificate::PoolRegistration(c1), key_deposit(), 0).unwrap();
+        assert_eq!(state.pool.pools[&make_pool_id(0xab)].vrf_hash, Hash32([0x11; 32]));
+
+        // Re-register with a NEW VRF: the active (leadership) VRF stays OLD; new one staged.
+        let mut c2 = make_pool_cert(0xab);
+        c2.vrf_hash = Hash32([0x22; 32]);
+        let state =
+            apply_cert(&state, &Certificate::PoolRegistration(c2), key_deposit(), 1).unwrap();
+        assert_eq!(
+            state.pool.pools[&make_pool_id(0xab)].vrf_hash,
+            Hash32([0x11; 32]),
+            "leadership VRF stays OLD until the boundary (matches cardano mark)"
+        );
+        assert_eq!(
+            state.pool.future_pools[&make_pool_id(0xab)].vrf_hash,
+            Hash32([0x22; 32])
+        );
+
+        // Boundary adoption swaps in the new VRF.
+        let mut cert = state.clone();
+        apply_pool_reap(&mut cert, EpochNo(7));
+        assert_eq!(cert.pool.pools[&make_pool_id(0xab)].vrf_hash, Hash32([0x22; 32]));
+    }
+
+    #[test]
+    fn pool_reap_reaps_matching_epoch_only() {
+        let mut state = CertState::new();
+        state = apply_cert(
+            &state,
+            &Certificate::PoolRegistration(make_pool_cert(0x01)),
+            key_deposit(),
+            0,
+        )
+        .unwrap();
+        state = apply_cert(
+            &state,
+            &Certificate::PoolRegistration(make_pool_cert(0x02)),
+            key_deposit(),
+            1,
+        )
+        .unwrap();
+        state = apply_cert(
+            &state,
+            &Certificate::PoolRetirement { pool_id: make_pool_id(0x01), epoch: EpochNo(9) },
+            key_deposit(),
+            2,
+        )
+        .unwrap();
+        state = apply_cert(
+            &state,
+            &Certificate::PoolRetirement { pool_id: make_pool_id(0x02), epoch: EpochNo(10) },
+            key_deposit(),
+            3,
+        )
+        .unwrap();
+
+        // POOLREAP entering epoch 9 reaps only pool 0x01 (retire==9); 0x02 (retire 10) stays.
+        let mut cert = state.clone();
+        apply_pool_reap(&mut cert, EpochNo(9));
+        assert!(!cert.pool.pools.contains_key(&make_pool_id(0x01)), "retire==entered_epoch reaped");
+        assert!(!cert.pool.retiring.contains_key(&make_pool_id(0x01)));
+        assert!(cert.pool.pools.contains_key(&make_pool_id(0x02)), "retire at a later epoch kept");
+        assert_eq!(cert.pool.retiring[&make_pool_id(0x02)], EpochNo(10));
+    }
+
+    // THE continuous-node correctness test (user-directed): a credential delegated to a pool that
+    // retires + is reaped must be UN-DELEGATED, so it cannot silently reattach when that pool id
+    // later re-registers (a delayed divergence that would survive an initial boundary proof).
+    #[test]
+    fn reaped_pool_delegation_cleared_no_silent_reattach_on_reregistration() {
+        let p = make_pool_id(0x55);
+        let c = StakeCredential::KeyHash(Hash28([0xcc; 28]));
+
+        let mut state = CertState::new();
+        // register pool P; register + delegate credential C to P.
+        state = apply_cert(&state, &Certificate::PoolRegistration(make_pool_cert(0x55)), key_deposit(), 0).unwrap();
+        state = apply_cert(&state, &Certificate::StakeRegistration(c.clone()), key_deposit(), 1).unwrap();
+        state = apply_cert(
+            &state,
+            &Certificate::StakeDelegation { credential: c.clone(), pool_id: p.clone() },
+            key_deposit(),
+            2,
+        )
+        .unwrap();
+        assert_eq!(state.delegation.delegations.get(&c), Some(&p), "C delegated to P");
+        // schedule P to retire at epoch 12.
+        state = apply_cert(
+            &state,
+            &Certificate::PoolRetirement { pool_id: p.clone(), epoch: EpochNo(12) },
+            key_deposit(),
+            3,
+        )
+        .unwrap();
+
+        // POOLREAP entering epoch 12: P reaped AND C's delegation cleared.
+        let mut cert = state.clone();
+        apply_pool_reap(&mut cert, EpochNo(12));
+        assert!(!cert.pool.pools.contains_key(&p), "P reaped");
+        assert_eq!(cert.delegation.delegations.get(&c), None, "C's delegation to the reaped pool is cleared");
+        assert!(cert.delegation.registrations.contains_key(&c), "C remains a registered credential (account preserved)");
+
+        // P later re-registers with the same pool id (a fresh pool — the reaped id is gone, so this
+        // is a first registration, not a staged re-registration).
+        let cert = apply_cert(&cert, &Certificate::PoolRegistration(make_pool_cert(0x55)), key_deposit(), 4).unwrap();
+        assert!(cert.pool.pools.contains_key(&p), "P re-registered");
+        // THE crux: C does NOT silently reattach — only a new delegation cert could re-delegate it.
+        assert_eq!(
+            cert.delegation.delegations.get(&c),
+            None,
+            "C does NOT silently reattach to the re-registered pool id"
         );
     }
 

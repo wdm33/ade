@@ -10,8 +10,9 @@
 //! Wraps `(LedgerState, PraosChainDepState)` as a single
 //! byte payload with:
 //!
-//! * a versioned schema tag (`SCHEMA_VERSION == 1`) — unknown
-//!   versions reject before any payload work (DC-STORE-09);
+//! * a versioned schema tag (`SCHEMA_VERSION == 2`; v2 = the embedded cert state is the
+//!   6-field encoding with future_pools, ECA-0a) — unknown versions (incl. an old v1
+//!   persistent-cache blob) reject before any payload work (DC-STORE-09);
 //! * the source state's combined `LedgerFingerprint.combined` hash
 //!   embedded inline — verified after decode (DC-STORE-08).
 //!
@@ -44,7 +45,10 @@ use super::chain_dep::{decode_chain_dep, encode_chain_dep};
 use super::error::{SnapshotDecodeError, SnapshotEncodeError, StructuralReason};
 use super::ledger::{decode_ledger_state, encode_ledger_state};
 
-pub const SCHEMA_VERSION: u32 = 1;
+// v2 (ECA-0a): the embedded LedgerState's cert state is the 6-field encoding (adds future_pools).
+// The bump makes an old v1 persistent-cache blob reject as UnknownVersion (clean) rather than as a
+// structural ArrayLengthMismatch from the embedded cert-state decode.
+pub const SCHEMA_VERSION: u32 = 2;
 
 const FIELDS: u64 = 4;
 
@@ -219,14 +223,14 @@ mod tests {
         let cd = sample_chain_dep();
         let mut bytes = encode_snapshot(&l, &cd).expect("encode");
         // Array header is 0x84 (definite array(4) inline); version is the next
-        // byte. Patch SCHEMA_VERSION=1 (0x01) → 2 (0x02).
+        // byte. Patch SCHEMA_VERSION=2 (0x02) → an unknown 3 (0x03).
         assert_eq!(bytes[0], 0x84);
-        assert_eq!(bytes[1], 0x01);
-        bytes[1] = 0x02;
+        assert_eq!(bytes[1], 0x02);
+        bytes[1] = 0x03;
         match decode_snapshot(&bytes) {
             Err(SnapshotDecodeError::UnknownVersion { expected, found }) => {
                 assert_eq!(expected, SCHEMA_VERSION);
-                assert_eq!(found, 2);
+                assert_eq!(found, 3);
             }
             other => panic!("expected UnknownVersion, got {other:?}"),
         }

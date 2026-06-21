@@ -38,8 +38,8 @@ pub use reduced_utxo_checkpoint::{
     CheckpointReadinessError, ReducedCheckpointError, ReducedUtxoCheckpoint,
 };
 pub use reduced_window_driver::{
-    advance_reduced_checkpoint_over_chaindb, drive_window_aggregate, CheckpointAdvanceError,
-    WindowDriverError,
+    advance_reduced_checkpoint_over_chaindb, drive_window_aggregate, drive_window_consensus_inputs,
+    CheckpointAdvanceError, WindowConsensusInputs, WindowDriverError,
 };
 pub use transient_epoch_view::{
     is_valid_window_key, purge_transient_root, transient_root, window_key,

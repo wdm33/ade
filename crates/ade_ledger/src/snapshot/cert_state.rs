@@ -7,14 +7,15 @@
 
 //! BLUE `CertState` snapshot encoder/decoder (PHASE4-N-J S3).
 //!
-//! Wire shape (5-item array — same map ordering as fingerprint.rs):
+//! Wire shape (6-item array):
 //! ```text
-//! array(5) [
+//! array(6) [
 //!   map(N1) StakeCredential -> Coin,                      // registrations
 //!   map(N2) StakeCredential -> PoolId (bytes(28)),        // delegations
 //!   map(N3) StakeCredential -> Coin,                      // rewards
 //!   map(N4) PoolId -> PoolParams,                         // pools
 //!   map(N5) PoolId -> uint epoch,                         // retiring
+//!   map(N6) PoolId -> PoolParams,                         // future_pools (staged re-regs, ECA-0a)
 //! ]
 //! ```
 //!
@@ -37,7 +38,7 @@ use crate::delegation::{CertState, DelegationState, PoolParams, PoolState};
 
 use super::error::{SnapshotDecodeError, StructuralReason};
 
-const FIELDS: u64 = 5;
+const FIELDS: u64 = 6;
 
 pub fn encode_cert_state(state: &CertState) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -105,6 +106,18 @@ pub fn encode_cert_state(state: &CertState) -> Vec<u8> {
         write_pool_id(&mut buf, pool);
         write_uint_canonical(&mut buf, epoch.0);
     }
+    // 6. future_pools (staged re-registrations, adopted at the next epoch boundary; ECA-0a)
+    write_map_header(
+        &mut buf,
+        ContainerEncoding::Definite(
+            state.pool.future_pools.len() as u64,
+            canonical_width(state.pool.future_pools.len() as u64),
+        ),
+    );
+    for (pool, params) in &state.pool.future_pools {
+        write_pool_id(&mut buf, pool);
+        write_pool_params(&mut buf, params);
+    }
     buf
 }
 
@@ -137,6 +150,11 @@ pub fn decode_cert_state(bytes: &[u8]) -> Result<CertState, SnapshotDecodeError>
         let (epoch, _, _) = read_any_int(b, off).map_err(SnapshotDecodeError::Cbor)?;
         Ok((pool, EpochNo(epoch)))
     })?;
+    let future_pools = decode_map(bytes, &mut o, |b, off| {
+        let pool = read_pool_id(b, off)?;
+        let params = read_pool_params(b, off)?;
+        Ok((pool, params))
+    })?;
 
     Ok(CertState {
         delegation: DelegationState {
@@ -144,7 +162,7 @@ pub fn decode_cert_state(bytes: &[u8]) -> Result<CertState, SnapshotDecodeError>
             delegations,
             rewards,
         },
-        pool: PoolState { pools, retiring },
+        pool: PoolState { pools, future_pools, retiring },
     })
 }
 
@@ -270,7 +288,9 @@ fn read_pool_params(bytes: &[u8], o: &mut usize) -> Result<PoolParams, SnapshotD
             })
         }
     };
-    let mut owners = Vec::with_capacity(owners_n as usize);
+    // Do NOT pre-allocate on the attacker-declared `owners_n`: a huge count would trigger an OOM
+    // pre-allocation before the per-element EOF check. Grow as we read (bounded by the input length).
+    let mut owners = Vec::new();
     for _ in 0..owners_n {
         let (b, _) = read_bytes(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
         if b.len() != 28 {
@@ -347,6 +367,8 @@ mod tests {
         s.pool.pools.insert(pool(0x20), params(0x20));
         s.pool.pools.insert(pool(0x21), params(0x21));
         s.pool.retiring.insert(pool(0x21), EpochNo(600));
+        // A staged re-registration of pool 0x20 (different params) — exercises field 6.
+        s.pool.future_pools.insert(pool(0x20), params(0x99));
         s
     }
 

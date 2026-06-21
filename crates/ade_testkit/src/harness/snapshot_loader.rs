@@ -451,6 +451,7 @@ impl LoadedSnapshot {
             },
             pool: PoolState {
                 pools,
+                future_pools: BTreeMap::new(),
                 retiring: BTreeMap::new(),
             },
         }
