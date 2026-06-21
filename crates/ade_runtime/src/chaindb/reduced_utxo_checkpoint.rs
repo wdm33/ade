@@ -33,7 +33,7 @@ use ade_crypto::blake2b::blake2b_256;
 use ade_ledger::reduced_utxo::{encode_reduced_record, ReducedStakeRef};
 use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::{Coin, TxIn};
-use ade_types::Hash32;
+use ade_types::{Hash32, SlotNo};
 use redb::{Database, ReadableTable, TableDefinition};
 
 const KEY_LEN: usize = 34; // tx_hash(32) ++ index(2 BE)
@@ -41,6 +41,10 @@ const REDUCED_TABLE: TableDefinition<&[u8; KEY_LEN], &[u8]> = TableDefinition::n
 const META_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("reduced_meta");
 /// value = fingerprint(32) ++ count(8 BE). Present iff the build completed.
 const COMPLETE_KEY: &str = "complete";
+/// S3f-4d-mat-2 (DC-EPOCH-11): the slot of the last block the checkpoint advanced over.
+/// Durable so the live advancer replays the ChainDB in lockstep and a lagging checkpoint
+/// (behind the durable tip) is detectable.
+const LAST_SLOT_KEY: &str = "last_advanced_slot";
 const FP_DOMAIN: &[u8] = b"eview-reduced-utxo-checkpoint-v1";
 
 #[derive(Debug)]
@@ -164,6 +168,60 @@ impl ReducedUtxoCheckpoint {
         }
         txn.commit().map_err(rerr)?;
         Ok(())
+    }
+
+    /// S3f-4d-mat-2 (DC-EPOCH-11): advance the checkpoint by ONE durably-admitted block,
+    /// ATOMICALLY applying its reduced delta AND recording `slot` as the last-advanced slot
+    /// (a single redb commit, so the checkpoint can never record a slot it did not apply, or
+    /// apply a delta whose slot it did not record). Removes the completeness marker (re-
+    /// finalize after a window of advances). The caller drives this in strict ChainDB/WAL
+    /// order; a missing block leaves a gap the lagging check (DC-EPOCH-11) detects.
+    pub fn advance_block(
+        &self,
+        slot: SlotNo,
+        spent: &[TxIn],
+        produced: &[(TxIn, Coin, ReducedStakeRef)],
+    ) -> Result<(), ReducedCheckpointError> {
+        let txn = self.db.begin_write().map_err(rerr)?;
+        {
+            let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            let _ = meta.remove(COMPLETE_KEY).map_err(rerr)?;
+            let slot_bytes = slot.0.to_be_bytes();
+            meta.insert(LAST_SLOT_KEY, slot_bytes.as_slice()).map_err(rerr)?;
+        }
+        {
+            let mut table = txn.open_table(REDUCED_TABLE).map_err(rerr)?;
+            for txin in spent {
+                let _ = table.remove(&txin_key(txin)).map_err(rerr)?;
+            }
+            for (txin, coin, reduced) in produced {
+                table
+                    .insert(&txin_key(txin), encode_value(*coin, reduced).as_slice())
+                    .map_err(rerr)?;
+            }
+        }
+        txn.commit().map_err(rerr)?;
+        Ok(())
+    }
+
+    /// The slot of the last block the checkpoint advanced over (DC-EPOCH-11), or `None` if it
+    /// was only built (never advanced). The live advancer reads this to resume in lockstep.
+    pub fn last_advanced_slot(&self) -> Result<Option<SlotNo>, ReducedCheckpointError> {
+        let txn = self.db.begin_read().map_err(rerr)?;
+        let meta = match txn.open_table(META_TABLE) {
+            Ok(t) => t,
+            Err(_) => return Ok(None),
+        };
+        match meta.get(LAST_SLOT_KEY).map_err(rerr)? {
+            Some(v) => {
+                let b = v.value();
+                if b.len() != 8 {
+                    return Err(ReducedCheckpointError::Decode);
+                }
+                Ok(Some(SlotNo(u64::from_be_bytes(b.try_into().unwrap()))))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Recompute + write the completeness marker after a window of `apply_block_delta`
@@ -325,6 +383,35 @@ mod tests {
         m.insert(txin(0x01, 1), (Coin(200), ReducedStakeRef::NonContributing));
         m.insert(txin(0x02, 0), (Coin(300), base(0xbb)));
         m
+    }
+
+    /// S3f-4d-mat-2 (DC-EPOCH-11): advance_block applies a block's reduced delta AND records
+    /// its slot ATOMICALLY (durable across reopen) -- the per-block advance the live ChainDB
+    /// replay drives in lockstep.
+    #[test]
+    fn advance_block_applies_delta_and_records_slot() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("rc.redb");
+        let cp = ReducedUtxoCheckpoint::open(&path).unwrap();
+        cp.build_from(&sample()).unwrap();
+        assert_eq!(cp.last_advanced_slot().unwrap(), None, "built-only -> no advanced slot");
+        // advance: spend txin(0x01,0), produce a new base-cred output, at slot 500.
+        cp.advance_block(SlotNo(500), &[txin(0x01, 0)], &[(txin(0x05, 0), Coin(999), base(0xcc))])
+            .unwrap();
+        assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(500)), "slot recorded");
+        assert_eq!(cp.get(&txin(0x01, 0)).unwrap(), None, "spent output removed");
+        assert_eq!(
+            cp.get(&txin(0x05, 0)).unwrap(),
+            Some((Coin(999), base(0xcc))),
+            "produced output present"
+        );
+        // a second advance moves the slot forward.
+        cp.advance_block(SlotNo(510), &[], &[]).unwrap();
+        assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(510)));
+        // durable across reopen (the slot survives).
+        drop(cp);
+        let cp2 = ReducedUtxoCheckpoint::open(&path).unwrap();
+        assert_eq!(cp2.last_advanced_slot().unwrap(), Some(SlotNo(510)), "slot durable across reopen");
     }
 
     #[test]

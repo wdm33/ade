@@ -40,6 +40,14 @@ grep -qF 'drop(utxo);' "$B" || fail "the seed UTxO drop (track_utxo=false steady
 # (7) the proof.
 grep -qE 'fn live_reduced_checkpoint_builds_durable_deterministic' "$B" || fail "the -mat-1 durable/deterministic proof is missing"
 
+# (8) -mat-2 primitive: the per-block advance records its slot ATOMICALLY (the lockstep
+#     cursor the live ChainDB replay drives) -- a durable marker, not best-effort.
+CP=crates/ade_runtime/src/chaindb/reduced_utxo_checkpoint.rs
+grep -qE 'pub fn advance_block' "$CP" || fail "advance_block (the per-block advance) missing"
+grep -qE 'pub fn last_advanced_slot' "$CP" || fail "last_advanced_slot (the lockstep cursor) missing"
+grep -qF 'LAST_SLOT_KEY' "$CP" || fail "the durable last-advanced-slot marker is missing"
+grep -qE 'fn advance_block_applies_delta_and_records_slot' "$CP" || fail "the -mat-2 advance/slot proof is missing"
+
 if (( FAILED == 0 )); then
     echo "OK: live reduced checkpoint -mat-1 (DC-EPOCH-11; build from seed UTxO via the proven reduce+checkpoint machinery, disk-backed, gated=byte-identical, before drop(utxo), fail-closed)"
 fi
