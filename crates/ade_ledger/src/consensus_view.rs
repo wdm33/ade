@@ -177,6 +177,8 @@ mod tests {
             epoch_start_slot: SlotNo(576 * 432_000),
             epoch_length_slots: 432_000,
             epoch_nonce: ade_core::consensus::praos_state::Nonce(Hash32([0x55; 32])),
+            genesis_hash: Hash32([0x9a; 32]),
+            protocol_params_hash: Hash32([0x9b; 32]),
             active_slots_coeff: ActiveSlotsCoeff { numer: 5, denom: 100 },
             total_active_stake: 3_500,
             pool_distribution: pools,

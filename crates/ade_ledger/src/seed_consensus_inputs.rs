@@ -42,10 +42,15 @@ use crate::consensus_view::PoolEntry;
 /// `UnknownVersion` — never a default-to-zero eta0, never a re-derived or
 /// defaulted epoch length). Bumped 1 -> 2 by PHASE4-N-F-G-N (T-REC-04 /
 /// DC-CINPUT-03); 2 -> 3 by WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05), which
-/// carries the venue epoch geometry as durable replay authority.
-pub const SEED_CINPUT_SCHEMA_VERSION: u32 = 3;
+/// carries the venue epoch geometry as durable replay authority; 3 -> 4 by
+/// EPOCH-CONTINUITY-ACTIVATION ECA-2-pre (DC-CINPUT-06), which carries the
+/// durable consensus-profile hashes (`genesis_hash`, `protocol_params_hash`) so
+/// a continuous producer recovers the FULL consensus profile from the store, not
+/// a restart CLI/genesis (a pre-v4 store fails closed as a TYPED schema-upgrade
+/// requirement, not corruption — see `bootstrap.rs`).
+pub const SEED_CINPUT_SCHEMA_VERSION: u32 = 4;
 
-const FIELDS_OUTER: u64 = 9;
+const FIELDS_OUTER: u64 = 11;
 const ASC_FIELDS: u64 = 2;
 const POOL_ENTRY_FIELDS: u64 = 2;
 
@@ -75,6 +80,15 @@ pub struct SeedEpochConsensusInputs {
     /// input is `praos_vrf_input(slot, epoch_nonce)`, and WarmStart overlays this
     /// onto `chain_dep.epoch_nonce` (DC-CINPUT-03).
     pub epoch_nonce: Nonce,
+    /// The network's genesis-config hash, bound at import. EPOCH-CONTINUITY-ACTIVATION
+    /// ECA-2-pre (DC-CINPUT-06): part of the durable consensus profile recovered IDENTICALLY
+    /// at warm-start, NEVER re-supplied by a restart CLI/genesis. Feeds the ECA-0b commitment
+    /// `blake2b(domain ‖ genesis_hash ‖ protocol_params_hash ‖ asc)`.
+    pub genesis_hash: Hash32,
+    /// `blake2b_256` of the IMPORTED protocol-params JSON (the consensus-profile parameter
+    /// commitment). Durable replay authority (DC-CINPUT-06): never recomputed from reserialized
+    /// params at runtime (byte-sensitive), never CLI-supplied.
+    pub protocol_params_hash: Hash32,
     pub active_slots_coeff: ActiveSlotsCoeff,
     pub total_active_stake: u64,
     /// Deterministic `BTreeMap` ordering; `PoolEntry` carries the VRF keyhash,
@@ -104,12 +118,17 @@ pub enum SeedConsensusInputsError {
 
 /// Canonical CBOR encode. CN-CINPUT-01: sole pub encoder.
 ///
-/// Wire shape:
+/// Wire shape (v4):
 /// ```text
-/// array(6) [
-///   uint   SEED_CINPUT_SCHEMA_VERSION (= 1),
+/// array(11) [
+///   uint   SEED_CINPUT_SCHEMA_VERSION (= 4),
 ///   bytes(32) anchor_fp,
 ///   uint   epoch_no,
+///   uint   epoch_start_slot,
+///   uint   epoch_length_slots,
+///   bytes(32) epoch_nonce,
+///   bytes(32) genesis_hash,                   // ECA-2-pre (DC-CINPUT-06)
+///   bytes(32) protocol_params_hash,           // ECA-2-pre (DC-CINPUT-06)
 ///   array(2) [ uint asc.numer, uint asc.denom ],
 ///   uint   total_active_stake,
 ///   map(K) {                                  // K = pool count, BTreeMap order
@@ -131,6 +150,8 @@ pub fn encode_seed_epoch_consensus_inputs(inputs: &SeedEpochConsensusInputs) -> 
     write_uint_canonical(&mut buf, inputs.epoch_start_slot.0);
     write_uint_canonical(&mut buf, inputs.epoch_length_slots as u64);
     write_bytes_canonical(&mut buf, inputs.epoch_nonce.as_bytes());
+    write_bytes_canonical(&mut buf, &inputs.genesis_hash.0);
+    write_bytes_canonical(&mut buf, &inputs.protocol_params_hash.0);
 
     write_array_header(
         &mut buf,
@@ -183,6 +204,8 @@ pub fn decode_seed_epoch_consensus_inputs(
     let epoch_start_slot = SlotNo(read_u64_field(bytes, &mut o)?);
     let epoch_length_slots = read_u32_field(bytes, &mut o)?;
     let epoch_nonce = Nonce(read_hash32(bytes, &mut o)?);
+    let genesis_hash = read_hash32(bytes, &mut o)?;
+    let protocol_params_hash = read_hash32(bytes, &mut o)?;
 
     expect_definite_array(bytes, &mut o, ASC_FIELDS, "active_slots_coeff")?;
     let numer = read_u32_field(bytes, &mut o)?;
@@ -205,6 +228,8 @@ pub fn decode_seed_epoch_consensus_inputs(
         epoch_start_slot,
         epoch_length_slots,
         epoch_nonce,
+        genesis_hash,
+        protocol_params_hash,
         active_slots_coeff,
         total_active_stake,
         pool_distribution,
@@ -363,6 +388,8 @@ mod tests {
             epoch_start_slot: SlotNo(576 * 432_000),
             epoch_length_slots: 432_000,
             epoch_nonce: Nonce(Hash32([0x55; 32])),
+            genesis_hash: Hash32([0x9a; 32]),
+            protocol_params_hash: Hash32([0x9b; 32]),
             active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 20 },
             total_active_stake: 1_003_499,
             pool_distribution,
@@ -381,17 +408,49 @@ mod tests {
     }
 
     #[test]
+    fn seed_cinput_canonical_bytes_cover_the_consensus_profile_hashes() {
+        // ECA-2-pre (DC-CINPUT-06): genesis_hash + protocol_params_hash are IN the
+        // canonical encoding, so they are covered by the byte-canonical round-trip,
+        // the WAL/provenance sidecar_hash, AND the BootstrapManifest seed_hash (all
+        // computed over THESE bytes). A change to either hash changes the bytes.
+        let base = sample();
+        let base_bytes = encode_seed_epoch_consensus_inputs(&base);
+
+        let mut diff_genesis = base.clone();
+        diff_genesis.genesis_hash = Hash32([0xF1; 32]);
+        assert_ne!(
+            encode_seed_epoch_consensus_inputs(&diff_genesis),
+            base_bytes,
+            "genesis_hash is part of the canonical bytes (so every binding over them covers it)"
+        );
+
+        let mut diff_pp = base.clone();
+        diff_pp.protocol_params_hash = Hash32([0xF2; 32]);
+        assert_ne!(
+            encode_seed_epoch_consensus_inputs(&diff_pp),
+            base_bytes,
+            "protocol_params_hash is part of the canonical bytes"
+        );
+
+        // and the changed record still round-trips byte-identically.
+        let rt =
+            decode_seed_epoch_consensus_inputs(&encode_seed_epoch_consensus_inputs(&diff_genesis))
+                .expect("decode");
+        assert_eq!(rt, diff_genesis);
+    }
+
+    #[test]
     fn seed_cinput_decode_rejects_unknown_version() {
         // Splice a bad version header in front of an otherwise-valid body.
-        // The outer array header is 1 byte (0x89 for array(9)); the version
-        // (=3) is the next 1 byte (0x03). So the body after the version starts
-        // at index 2. WARMSTART-ERA-SCHEDULE-VENUE: the current version is 3;
-        // bad_version=1 is the old v1 sidecar (omitted epoch_nonce) and
-        // bad_version=2 is the old v2 sidecar (omitted the venue epoch geometry)
-        // — BOTH fail closed (UnknownVersion), never a default-to-zero eta0 and
-        // never a re-derived/defaulted epoch length.
+        // The outer array header is 1 byte (0x8b for array(11)); the version
+        // (=4) is the next 1 byte (0x04). So the body after the version starts
+        // at index 2. ECA-2-pre (DC-CINPUT-06): the current version is 4; v1/v2/v3
+        // are old sidecars (omitting eta0 / venue geometry / the consensus-profile
+        // hashes) — ALL fail closed at the codec (UnknownVersion); the bootstrap
+        // authority surfaces that as the typed ConsensusInputsSchemaUnsupported
+        // (a reimport requirement, not corruption).
         let fresh = encode_seed_epoch_consensus_inputs(&sample());
-        for bad_version in [0u64, 1, 2, 4, 99] {
+        for bad_version in [0u64, 1, 2, 3, 99] {
             let mut buf = Vec::new();
             write_array_header(
                 &mut buf,
@@ -400,7 +459,7 @@ mod tests {
             write_uint_canonical(&mut buf, bad_version);
             buf.extend_from_slice(&fresh[2..]);
             match decode_seed_epoch_consensus_inputs(&buf) {
-                Err(SeedConsensusInputsError::UnknownVersion { expected: 3, found })
+                Err(SeedConsensusInputsError::UnknownVersion { expected: 4, found })
                     if found == bad_version as u32 => {}
                 other => panic!("expected UnknownVersion for v{bad_version}, got {other:?}"),
             }
@@ -476,6 +535,8 @@ mod tests {
         write_uint_canonical(&mut buf, s.epoch_start_slot.0);
         write_uint_canonical(&mut buf, s.epoch_length_slots as u64);
         write_bytes_canonical(&mut buf, s.epoch_nonce.as_bytes());
+        write_bytes_canonical(&mut buf, &s.genesis_hash.0);
+        write_bytes_canonical(&mut buf, &s.protocol_params_hash.0);
         write_array_header(
             &mut buf,
             ContainerEncoding::Definite(ASC_FIELDS, canonical_width(ASC_FIELDS)),

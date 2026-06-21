@@ -57,7 +57,7 @@ use ade_ledger::consensus_view::PoolDistrView;
 use ade_ledger::fingerprint::fingerprint;
 use ade_ledger::state::LedgerState;
 use ade_ledger::seed_consensus_inputs::{
-    decode_seed_epoch_consensus_inputs, SeedEpochConsensusInputs,
+    decode_seed_epoch_consensus_inputs, SeedConsensusInputsError, SeedEpochConsensusInputs,
 };
 use ade_ledger::wal::{replay_from_anchor, RollbackPoint, RollbackReason, WalEntry, WalStore};
 use ade_runtime::bootstrap::{
@@ -280,6 +280,17 @@ pub enum NodeLifecycleError {
     /// mismatch, byte-identity mismatch, or a malformed sidecar. Carries the
     /// closed `BootstrapError` debug. Fail closed — NO bundle fallback.
     WarmStartBootstrap(String),
+    /// ECA-2-pre (DC-CINPUT-06): the warm-start sidecar is an OLD schema version
+    /// (pre-v4 — missing the consensus-profile hashes / eta0 / venue geometry). A
+    /// TYPED upgrade/reimport requirement, DISTINCT from a corrupt/malformed sidecar
+    /// (`WarmStartBootstrap`): the store is well-formed but predates this node's
+    /// required schema. Fail closed (no defaulting / no CLI re-supply); re-import to
+    /// upgrade. Recoverable + auditable — the SAME typed error the bootstrap
+    /// authority raises, on the live warm-start path (which decodes the sidecar first).
+    ConsensusInputsSchemaUnsupported {
+        found_version: u32,
+        required_version: u32,
+    },
     /// The relay run loop's sync step (`run_node_sync` → `pump_block`)
     /// fail-closed on a block (undecodable, unvalidatable, a cross-epoch
     /// header beyond the recovered single-epoch view, or a durability
@@ -375,7 +386,10 @@ fn exit_code_for(e: &NodeLifecycleError) -> i32 {
         | NodeLifecycleError::DurableBlockBytesMissing { .. }
         | NodeLifecycleError::WarmStartForwardReplayUnsupported { .. }
         | NodeLifecycleError::RestartGenesisGeometryMismatch { .. }
-        | NodeLifecycleError::WarmStartBootstrap(_) => EXIT_NODE_WARM_START_RECOVERY_FAILED,
+        | NodeLifecycleError::WarmStartBootstrap(_)
+        | NodeLifecycleError::ConsensusInputsSchemaUnsupported { .. } => {
+            EXIT_NODE_WARM_START_RECOVERY_FAILED
+        }
         NodeLifecycleError::RelaySync(_)
         | NodeLifecycleError::FeedMissingRecoveredConsensusInputs => EXIT_NODE_RELAY_SYNC_FAILED,
         NodeLifecycleError::ForgeKeyIngress(_) => EXIT_NODE_FORGE_KEY_INGRESS_FAILED,
@@ -2516,8 +2530,20 @@ pub(crate) fn warm_start_recovery(
     let sidecar_bytes = SnapshotStore::get_seed_epoch_consensus_inputs(chaindb, &anchor_fp)
         .map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?
         .ok_or(NodeLifecycleError::WarmStartNoProvenance)?;
-    let sidecar = decode_seed_epoch_consensus_inputs(&sidecar_bytes)
-        .map_err(|e| NodeLifecycleError::WarmStartBootstrap(format!("sidecar decode: {e:?}")))?;
+    // ECA-2-pre (DC-CINPUT-06): a schema-VERSION mismatch (a pre-v4 sidecar) is a
+    // TYPED upgrade/reimport requirement on the LIVE warm-start path too -- this is
+    // the FIRST decode of the sidecar (for geometry), so it must surface the same
+    // typed error the bootstrap authority does, never a generic decode string, so an
+    // operator can tell "reimport the store" from "the store is corrupt".
+    let sidecar = decode_seed_epoch_consensus_inputs(&sidecar_bytes).map_err(|e| match e {
+        SeedConsensusInputsError::UnknownVersion { expected, found } => {
+            NodeLifecycleError::ConsensusInputsSchemaUnsupported {
+                found_version: found,
+                required_version: expected,
+            }
+        }
+        other => NodeLifecycleError::WarmStartBootstrap(format!("sidecar decode: {other:?}")),
+    })?;
     let ledger_view = PoolDistrView::from_seed_epoch_consensus_inputs(&sidecar);
     // WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05): rebuild the recovery
     // era-schedule from the DURABLE sidecar geometry persisted at import -- the
@@ -2970,6 +2996,19 @@ fn report(e: &NodeLifecycleError) {
                 "ade_node --mode node: warm-start FAIL-CLOSED -- WAL AdmitBlock #{entry_index} \
                  references block {block_hash:?} whose preserved bytes are absent from the ChainDb \
                  (via {source}); corrupted durable state, NOT block absence (DURABLE-ADMISSION-BYTES)."
+            );
+        }
+        NodeLifecycleError::ConsensusInputsSchemaUnsupported {
+            found_version,
+            required_version,
+        } => {
+            eprintln!(
+                "ade_node --mode node: warm-start FAIL-CLOSED -- the durable seed-epoch \
+                 consensus-inputs sidecar is schema v{found_version}, but this node requires \
+                 v{required_version} (ECA-2-pre / DC-CINPUT-06: the durable consensus profile now \
+                 carries genesis_hash + protocol_params_hash). This is a SCHEMA-UPGRADE / REIMPORT \
+                 requirement, NOT corruption -- re-import the seed consensus inputs to rewrite the \
+                 sidecar at v{required_version}."
             );
         }
         NodeLifecycleError::ExtractionRead(d) => {
@@ -4950,6 +4989,8 @@ mod tests {
             epoch_start_slot: SlotNo(epoch.0 * 432_000),
             epoch_length_slots: 432_000,
             epoch_nonce: Nonce(Hash32([0x99; 32])),
+            genesis_hash: Hash32([0x9a; 32]),
+            protocol_params_hash: Hash32([0x9b; 32]),
             active_slots_coeff: ActiveSlotsCoeff {
                 numer: 5,
                 denom: 100,
@@ -5066,6 +5107,42 @@ mod tests {
         assert_eq!(encode_seed_epoch_consensus_inputs(&recovered), bytes);
         // Recovered tip matches the persisted tip.
         assert_eq!(state.tip.map(|t| t.slot.0), Some(WARM_TIP_SLOT));
+    }
+
+    #[test]
+    fn warm_start_pre_v4_sidecar_is_typed_schema_upgrade_not_corruption() {
+        // ECA-2-pre (DC-CINPUT-06): on the LIVE warm-start path, a well-formed
+        // pre-v4 sidecar fails closed with the TYPED ConsensusInputsSchemaUnsupported
+        // (a reimport requirement), DISTINCT from the generic WarmStartBootstrap
+        // (corruption) -- so the live-path diagnostics match the bootstrap authority.
+        let d = fresh_warm_dirs();
+        // A valid current-schema (v4) sidecar, with the version uint (index 1; index
+        // 0 is the array(11) header) rewritten 0x04 -> 0x03 so it decodes as pre-v4.
+        let mut bytes =
+            encode_seed_epoch_consensus_inputs(&warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH));
+        bytes[1] = 0x03;
+        {
+            let (chaindb, mut wal) = open_warm_stores(&d);
+            chaindb
+                .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
+                .unwrap();
+            append_seed_epoch_provenance(&mut wal, &WARM_ANCHOR_FP, WARM_EPOCH, &bytes).unwrap();
+            put_durable_tip(&chaindb, &mut wal, WARM_TIP_SLOT);
+        }
+
+        let (chaindb, wal) = open_warm_stores(&d);
+        let err = warm_start_recovery(&chaindb, &wal)
+            .expect_err("a pre-v4 sidecar must fail closed on the warm-start path");
+        assert!(
+            matches!(
+                err,
+                NodeLifecycleError::ConsensusInputsSchemaUnsupported {
+                    found_version: 3,
+                    required_version: 4
+                }
+            ),
+            "the live warm-start path must surface the TYPED schema-upgrade error, not generic corruption; got {err:?}"
+        );
     }
 
     /// Capture a bare-Conway snapshot AT `slot` with NO stored block — a BARE

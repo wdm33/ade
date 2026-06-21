@@ -159,8 +159,19 @@ pub enum BootstrapError {
         actual_epoch: EpochNo,
     },
     /// A3b: the sidecar bytes failed `decode_seed_epoch_consensus_inputs`
-    /// (malformed / unknown version / non-canonical). Fail-closed.
+    /// (malformed / non-canonical). Fail-closed. (A schema-version mismatch is
+    /// surfaced as the distinct `ConsensusInputsSchemaUnsupported` below, NOT here.)
     SeedConsensusSidecarDecode(SeedConsensusInputsError),
+    /// ECA-2-pre (DC-CINPUT-06): the durable sidecar is an OLD schema version
+    /// (pre-v4 — missing the consensus-profile hashes / eta0 / venue geometry). A
+    /// TYPED upgrade/reimport requirement, DISTINCT from corruption: the store is
+    /// well-formed but its schema predates this node's required version. Fail
+    /// closed (no defaulting, no CLI/genesis re-supply); re-import to upgrade the
+    /// sidecar to the current schema. Recoverable + auditable.
+    ConsensusInputsSchemaUnsupported {
+        found_version: u32,
+        required_version: u32,
+    },
     /// AK-S1 (DC-NODE-31): the recover path demanded the persisted recovered
     /// anchor-point record for `anchor_fp`, but none was stored — a non-Origin
     /// recovered store missing its anchor-point provenance. Fail-closed (no
@@ -375,9 +386,20 @@ where
     }
 
     // 3. Decode via the A1 sole codec (byte-canonical; a malformed
-    //    or non-canonical buffer fails here).
-    let sidecar = decode_seed_epoch_consensus_inputs(&bytes)
-        .map_err(BootstrapError::SeedConsensusSidecarDecode)?;
+    //    or non-canonical buffer fails here). ECA-2-pre (DC-CINPUT-06): a
+    //    schema-VERSION mismatch (a pre-v4 sidecar) is a TYPED upgrade/reimport
+    //    requirement, distinct from corruption — never lumped into the generic
+    //    decode error, so an operator can tell "reimport the store" from "the
+    //    store is corrupt".
+    let sidecar = decode_seed_epoch_consensus_inputs(&bytes).map_err(|e| match e {
+        SeedConsensusInputsError::UnknownVersion { expected, found } => {
+            BootstrapError::ConsensusInputsSchemaUnsupported {
+                found_version: found,
+                required_version: expected,
+            }
+        }
+        other => BootstrapError::SeedConsensusSidecarDecode(other),
+    })?;
 
     // 4. Anchor + epoch binding: the sidecar must describe this
     //    anchor and the provenance's seed epoch.
@@ -781,6 +803,8 @@ mod tests {
             epoch_start_slot: SlotNo(epoch.0 * 432_000),
             epoch_length_slots: 432_000,
             epoch_nonce: Nonce(Hash32([0x99; 32])),
+            genesis_hash: Hash32([0x9a; 32]),
+            protocol_params_hash: Hash32([0x9b; 32]),
             active_slots_coeff: ActiveSlotsCoeff {
                 numer: 5,
                 denom: 100,
@@ -1094,6 +1118,51 @@ mod tests {
         assert!(
             matches!(err, BootstrapError::SeedConsensusSidecarDecode(_)),
             "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn warm_start_pre_v4_sidecar_is_typed_schema_upgrade_not_corruption() {
+        // ECA-2-pre (DC-CINPUT-06): a WELL-FORMED sidecar of an OLD schema
+        // version (here v3) is a TYPED upgrade/reimport requirement
+        // (ConsensusInputsSchemaUnsupported), DISTINCT from a corrupt buffer
+        // (SeedConsensusSidecarDecode) — so an operator can tell "reimport the
+        // store" from "the store is corrupt". Fail-closed but recoverable.
+        let (db, sched, view) = warm_started_db();
+        // Encode a valid current-schema (v4) sidecar, then rewrite the version
+        // uint (index 1; index 0 is the array(11) header) from 0x04 to 0x03 so it
+        // decodes as a pre-v4 sidecar. The provenance hash binds the spliced bytes,
+        // so the hash check passes and the decode is what fails closed (on version).
+        let mut old = encode_seed_epoch_consensus_inputs(&sample_sidecar(A3B_ANCHOR, EPOCH_576));
+        old[1] = 0x03;
+        db.put_seed_epoch_consensus_inputs(&A3B_ANCHOR, &old)
+            .expect("put pre-v4 sidecar");
+        let provenance = RecoveredBootstrapProvenance {
+            anchor_fp: A3B_ANCHOR,
+            sidecar_hash: blake2b_256(&old),
+            epoch_no: EPOCH_576,
+        };
+
+        let err = bootstrap_initial_state(BootstrapInputs {
+            chaindb: &db,
+            snapshot_store: &db,
+            era_schedule: &sched,
+            ledger_view: &view,
+            genesis_initial: None,
+            seed_epoch_consensus_source:
+                SeedEpochConsensusSource::RequiredFromRecoveredProvenance(provenance),
+            recovered_anchor: None,
+        })
+        .expect_err("a pre-v4 sidecar must fail closed");
+        assert!(
+            matches!(
+                err,
+                BootstrapError::ConsensusInputsSchemaUnsupported {
+                    found_version: 3,
+                    required_version: 4
+                }
+            ),
+            "a pre-v4 sidecar is a typed schema-upgrade requirement, not corruption; got {err:?}"
         );
     }
 

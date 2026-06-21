@@ -114,6 +114,11 @@ pub fn merge_seed_epoch_consensus_inputs(
         // PHASE4-N-F-G-N (DC-CINPUT-03): carry the imported eta0 into the
         // persisted sidecar so WarmStart can recover it onto chain_dep.
         epoch_nonce: canonical.epoch_nonce.clone(),
+        // ECA-2-pre (DC-CINPUT-06): persist the durable consensus-profile hashes
+        // from the canonical import bundle so warm-start recovers the FULL profile
+        // (the ECA-0b commitment inputs) from the STORE, not a restart CLI/genesis.
+        genesis_hash: canonical.genesis_hash.clone(),
+        protocol_params_hash: canonical.protocol_params_hash.clone(),
         active_slots_coeff: canonical.active_slots_coeff,
         total_active_stake,
         pool_distribution,
@@ -208,6 +213,32 @@ mod tests {
         assert_eq!(
             err,
             SeedConsensusMergeError::PoolMissingStake { pool: pool(0x03) }
+        );
+    }
+
+    #[test]
+    fn merge_persists_consensus_profile_hashes() {
+        // ECA-2-pre (DC-CINPUT-06): the merge carries genesis_hash +
+        // protocol_params_hash from the canonical import bundle into the durable
+        // sidecar (the ECA-0b commitment inputs), so warm-start recovers the FULL
+        // consensus profile from the STORE, never a restart CLI/genesis.
+        let mut stake = BTreeMap::new();
+        stake.insert(pool(0x01), 1_000u64);
+        let mut vrfs = BTreeMap::new();
+        vrfs.insert(pool(0x01), vrf(0x07));
+        let canonical = LiveConsensusInputsCanonical {
+            genesis_hash: vrf(0xC0),
+            protocol_params_hash: vrf(0xC1),
+            ..test_canonical_inputs(EpochNo(576), stake, vrfs)
+        };
+        let merged =
+            merge_seed_epoch_consensus_inputs(Hash32([0x44; 32]), EpochNo(576), &canonical)
+                .expect("merge");
+        assert_eq!(merged.genesis_hash, vrf(0xC0), "genesis_hash carried from the bundle");
+        assert_eq!(
+            merged.protocol_params_hash,
+            vrf(0xC1),
+            "protocol_params_hash carried from the bundle"
         );
     }
 

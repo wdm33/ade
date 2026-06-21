@@ -145,6 +145,8 @@ mod tests {
             epoch_start_slot: SlotNo(r.epoch_no.0 * 432_000),
             epoch_length_slots: 432_000,
             epoch_nonce: r.eta0.clone(),
+            genesis_hash: Hash32([0x9a; 32]),
+            protocol_params_hash: Hash32([0x9b; 32]),
             active_slots_coeff: r.asc,
             total_active_stake: r.total_active_stake,
             pool_distribution: r.pools.clone(),

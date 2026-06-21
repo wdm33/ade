@@ -111,7 +111,11 @@ impl NodeRunError {
                 | BootstrapError::SeedConsensusSidecarMissing { .. }
                 | BootstrapError::SeedConsensusHashMismatch { .. }
                 | BootstrapError::SeedConsensusBindingMismatch { .. }
-                | BootstrapError::SeedConsensusSidecarDecode(_),
+                | BootstrapError::SeedConsensusSidecarDecode(_)
+                // ECA-2-pre (DC-CINPUT-06): a pre-v4 sidecar (typed schema-upgrade
+                // requirement) is the same authority-fatal startup-halt class — the
+                // recovered consensus inputs cannot be trusted until reimported.
+                | BootstrapError::ConsensusInputsSchemaUnsupported { .. },
             ) => EXIT_AUTHORITY_FATAL_DECODE,
             // AK-S1 (DC-NODE-31): a non-Origin recovered store whose anchor-point
             // record is missing / malformed / fingerprint-mismatched is a

@@ -433,6 +433,8 @@ mod tests {
             epoch_start_slot: inputs.epoch_start_slot,
             epoch_length_slots: inputs.epoch_length_slots().expect("valid epoch window"),
             epoch_nonce: inputs.epoch_nonce.clone(),
+            genesis_hash: inputs.genesis_hash.clone(),
+            protocol_params_hash: inputs.protocol_params_hash.clone(),
             active_slots_coeff: inputs.active_slots_coeff,
             total_active_stake: 3_500,
             pool_distribution: expected_pools,

@@ -777,6 +777,8 @@ fn feed_header_validates_against_recovered_surface_not_empty_view() {
         epoch_start_slot: SlotNo(epoch.0 * 432_000),
         epoch_length_slots: 432_000,
         epoch_nonce: fixture.eta0_holder.epoch_nonce.clone(),
+        genesis_hash: Hash32([0x9a; 32]),
+        protocol_params_hash: Hash32([0x9b; 32]),
         active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
         total_active_stake: 1,
         pool_distribution: pools,

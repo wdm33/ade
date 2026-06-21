@@ -515,6 +515,8 @@ mod tests {
             epoch_start_slot: cinputs.epoch_start_slot,
             epoch_length_slots: cinputs.epoch_length_slots().expect("valid epoch window"),
             epoch_nonce: cinputs.epoch_nonce.clone(),
+            genesis_hash: cinputs.genesis_hash.clone(),
+            protocol_params_hash: cinputs.protocol_params_hash.clone(),
             active_slots_coeff: cinputs.active_slots_coeff,
             total_active_stake: 3_500,
             pool_distribution: expected_pools,
