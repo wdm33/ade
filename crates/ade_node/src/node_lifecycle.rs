@@ -543,6 +543,7 @@ async fn run_node_lifecycle_inner(
                 Some(&mut sched_log),
                 None,
                 reduced_checkpoint.as_ref(),
+                None, // forge-off: no EVIEW activation
             )
             .await?;
             eprintln!(
@@ -642,6 +643,14 @@ async fn run_node_lifecycle_inner(
                 .seed_epoch_consensus_inputs
                 .as_ref()
                 .map(|s| s.epoch_nonce.clone());
+            // S3f-4d-wire-3b-2 (DC-EPOCH-11): EVIEW activation inputs. The relay-loop activation
+            // call + orchestration are wired and GATED OFF (EVIEW_ACTIVATION_ARMED == false ->
+            // the call no-ops, byte-identical). Constructing the SEED-derived EviewActivationInputs
+            // (seed bootstrap_state = state.ledger clone; seed point = state.tip; seed_epoch;
+            // nonce = ade_core::consensus::Nonce -> Hash32; the resolved network magic; the replay
+            // scratch path) is the FINAL ARMING connection -- done at the boundary with the live
+            // proofs. Until then `None` keeps the activation doubly inert (no inputs + gate off).
+            let eview_activation: Option<&crate::epoch_wire::EviewActivationInputs> = None;
             // PHASE4-N-F-G-C S1: wire a LIVE WirePump feed when an upstream peer
             // is configured (`--peer`). Empty `--peer` keeps the prior empty
             // source (forge-CAPABLE, halts clean — the `On` arm is observable
@@ -810,6 +819,7 @@ async fn run_node_lifecycle_inner(
                 Some(&mut sched_log),
                 Some(&mut convergence),
                 reduced_checkpoint.as_ref(),
+                eview_activation,
             )
             .await?;
             // MEM-MEASURE-A2 (OP-MEM-01): final sustained sample + run-level memory
@@ -1375,6 +1385,7 @@ pub async fn run_relay_loop(
 ) -> Result<(), NodeLifecycleError> {
     run_relay_loop_with_sched(
         state, source, chaindb, wal, era_schedule, ledger_view, shutdown, forge, None, None, None,
+        None,
     )
     .await
 }
@@ -1449,6 +1460,51 @@ fn advance_reduced_checkpoint_to_durable_tip(
     .map_err(|e| NodeLifecycleError::RelaySync(format!("reduced-checkpoint advance: {e:?}")))
 }
 
+/// S3f-4d-wire-3b-2 (DC-EPOCH-11): the GATED first-boundary epoch-view activation, called after
+/// each durable admit. NO-OP (byte-identical) unless EVIEW is configured (`eview_activation` +
+/// `reduced_checkpoint` both `Some`) AND `EVIEW_ACTIVATION_ARMED` is true AND the seed epoch has
+/// completed. The SOLE authoritative derive is the durable window replay; the live checkpoint is
+/// the readiness witness, never the derive source. A terminal `ActivationError` halts the loop.
+fn maybe_activate_epoch_boundary(
+    eview_activation: Option<&crate::epoch_wire::EviewActivationInputs>,
+    reduced_checkpoint: Option<&ade_runtime::chaindb::ReducedUtxoCheckpoint>,
+    chaindb: &PersistentChainDb,
+    era_schedule: &EraSchedule,
+    wal: &mut FileWalStore,
+    active_view: &mut crate::epoch_activation::ActiveEpochView,
+) -> Result<(), NodeLifecycleError> {
+    let (Some(inputs), Some(live)) = (eview_activation, reduced_checkpoint) else {
+        return Ok(());
+    };
+    let Some(tip) = chaindb
+        .tip()
+        .map_err(|e| NodeLifecycleError::RelaySync(format!("eview activation tip: {e:?}")))?
+    else {
+        return Ok(());
+    };
+    let selected_point = ade_core::consensus::events::Point {
+        slot: tip.slot,
+        hash: tip.hash.clone(),
+    };
+    let scratch = inputs.replay_scratch_path.clone();
+    let outcome = inputs
+        .maybe_activate(
+            crate::epoch_wire::EVIEW_ACTIVATION_ARMED,
+            era_schedule,
+            tip.slot,
+            live,
+            chaindb,
+            &selected_point,
+            active_view,
+            &scratch,
+            |entry| wal.append(entry.clone()).is_ok(),
+        )
+        .map_err(|e| NodeLifecycleError::RelaySync(format!("eview activation: {e:?}")))?;
+    // observe-only here; the promoted view is consumed at the forge feed (the -wire-3b-2 rebind).
+    let _ = outcome;
+    Ok(())
+}
+
 /// Relay loop with an optional emit-only CN-NODE-04 diagnostic sink
 /// (PHASE4-N-F-G-J S1). The binary `--mode node` path passes a real sink; the
 /// sink is best-effort and NEVER alters the loop's scheduling / control flow,
@@ -1472,7 +1528,13 @@ pub async fn run_relay_loop_with_sched(
     // durable admit the loop advances it to the ChainDB tip (replay-equivalent, fail-closed).
     // `None` on non-EVIEW / wrapper / test callers -> the follow/forge path is byte-identical.
     reduced_checkpoint: Option<&ade_runtime::chaindb::ReducedUtxoCheckpoint>,
+    // EPOCH-CONSENSUS-VIEW S3f-4d-wire-3b-2 (DC-EPOCH-11): the SEED-derived activation inputs,
+    // `Some` ONLY when EVIEW is configured. The loop runs the GATED first-boundary activation
+    // (epoch_wire::EVIEW_ACTIVATION_ARMED, currently false -> strict NO-OP, byte-identical) after
+    // each admit. `None` on non-EVIEW / wrapper / test callers.
+    eview_activation: Option<&crate::epoch_wire::EviewActivationInputs>,
 ) -> Result<(), NodeLifecycleError> {
+    let mut active_epoch_view = crate::epoch_activation::ActiveEpochView::new();
     loop {
         let shutdown_status = if *shutdown.borrow() {
             ShutdownStatus::ShutdownRequested
@@ -1828,6 +1890,18 @@ pub async fn run_relay_loop_with_sched(
                     // reduced checkpoint to the ChainDB tip (EVIEW only; None elsewhere ->
                     // no-op, byte-identical). Reads only the durable ChainDB; fail-closed.
                     advance_reduced_checkpoint_to_durable_tip(reduced_checkpoint, chaindb)?;
+                    // S3f-4d-wire-3b-2 (DC-EPOCH-11): the GATED first-boundary activation. With
+                    // EVIEW_ACTIVATION_ARMED == false this is a strict no-op (byte-identical);
+                    // when armed + the seed epoch completes it derives the bound view (durable
+                    // window replay) + atomically promotes `active_epoch_view`. Terminal halt.
+                    maybe_activate_epoch_boundary(
+                        eview_activation,
+                        reduced_checkpoint,
+                        chaindb,
+                        era_schedule,
+                        wal,
+                        &mut active_epoch_view,
+                    )?;
                 }
             }
             LoopStep::ForgeTick => {

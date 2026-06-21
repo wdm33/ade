@@ -36,6 +36,66 @@ use crate::epoch_source_window::{
     SourceWindowError,
 };
 
+/// S3f-4d-wire-3b-2 (DC-EPOCH-11): the runtime ARMING gate for the live epoch-view activation.
+/// FALSE until the live boundary proofs pass (the boundary-aligned stake oracle + the
+/// leadership-schedule lag proof, at a real Conway boundary). While false, the relay loop's
+/// activation call is a strict NO-OP -- the live follow/forge path is BYTE-IDENTICAL (no
+/// activation, no WAL write, no ledger_view rebind). Flip to true ONLY after the proofs, in a
+/// controlled build at the boundary.
+pub const EVIEW_ACTIVATION_ARMED: bool = false;
+
+/// S3f-4d-wire-3b-2 (DC-EPOCH-11): the SEED-derived activation inputs the relay loop holds for
+/// the (gated) first-boundary activation -- bound ONCE at bootstrap to the manifest-bound seed.
+/// The seed `bootstrap_state` is the cert state at the bootstrap point (the window replay
+/// advances it); the relay loop's advanced ledger is NOT it.
+pub struct EviewActivationInputs {
+    pub seed_bootstrap_state: LedgerState,
+    pub seed_point_slot: SlotNo,
+    pub seed_point_hash: Hash32,
+    pub seed_epoch: EpochNo,
+    pub network_magic: u32,
+    pub nonce: Hash32,
+    /// The durable path for the FRESH replay checkpoint the authoritative window replay
+    /// materializes (a separate redb -- never the live checkpoint).
+    pub replay_scratch_path: std::path::PathBuf,
+}
+
+impl EviewActivationInputs {
+    /// Run the gated first-boundary activation with the loop's runtime args. NO-OP when not
+    /// armed (byte-identical) or pre-boundary; a terminal `ActivationError` propagates (halt).
+    #[allow(clippy::too_many_arguments)]
+    pub fn maybe_activate(
+        &self,
+        armed: bool,
+        era_schedule: &EraSchedule,
+        durable_tip_slot: SlotNo,
+        live: &ReducedUtxoCheckpoint,
+        chaindb: &dyn ChainDb,
+        selected_point: &Point,
+        active_view: &mut ActiveEpochView,
+        scratch_path: &std::path::Path,
+        wal_write: impl FnOnce(&WalEntry) -> bool,
+    ) -> Result<Option<BoundaryActivationOutcome>, ActivationError> {
+        maybe_activate_first_boundary(
+            armed,
+            era_schedule,
+            durable_tip_slot,
+            self.seed_epoch,
+            self.seed_point_slot,
+            self.seed_point_hash.clone(),
+            live,
+            chaindb,
+            &self.seed_bootstrap_state,
+            self.network_magic,
+            self.nonce.clone(),
+            selected_point,
+            active_view,
+            scratch_path,
+            wal_write,
+        )
+    }
+}
+
 /// The extracted, VALIDATED source window: the pinned window roles + its selected-chain block
 /// identities (for the completeness proof) + the full decoded blocks (for the replay derive).
 pub struct SourceWindowExtract {

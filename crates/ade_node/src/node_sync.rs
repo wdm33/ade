@@ -2406,6 +2406,7 @@ mod tests {
             Some(&mut sched_log),
             None,
             None,
+            None,
         )
         .await
         .expect("relay loop halts cleanly on a drained feed");
@@ -7189,6 +7190,7 @@ mod tests {
             &mut sd_rx,
             Some(&mut act),
             Some(&mut sched_log),
+            None,
             None,
             None,
         );

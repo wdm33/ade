@@ -134,6 +134,14 @@ grep -qE 'pub fn maybe_activate_first_boundary' "$EW" || fail "maybe_activate_fi
 grep -qF 'if !armed {' "$EW" || fail "the orchestration is not GATED off (the armed flag) -- it must be byte-identical when off"
 grep -qE 'fn maybe_activate_first_boundary_gated_off_and_pre_boundary_are_noops' "$EW" || fail "the -wire-3b-1 gating proof missing"
 
+# (19) -wire-3b-2: the relay-loop CALL, wired + GATED OFF (doubly inert: EVIEW_ACTIVATION_ARMED
+#      == false AND None inputs) -> byte-identical live follow/forge until armed at the boundary.
+grep -qF 'pub const EVIEW_ACTIVATION_ARMED: bool = false' "$EW" || fail "the arming gate is not OFF by default -- the activation must be byte-identical until armed"
+grep -qE 'pub struct EviewActivationInputs' "$EW" || fail "EviewActivationInputs (the seed activation inputs) missing"
+grep -qE 'fn maybe_activate_epoch_boundary' "$NL" || fail "the relay-loop activation-call helper missing"
+grep -qF 'maybe_activate_epoch_boundary(' "$NL" || fail "the relay loop does not call the (gated) boundary activation after the admit"
+grep -qF 'EVIEW_ACTIVATION_ARMED' "$NL" || fail "the loop activation is not gated on the arming const"
+
 if (( FAILED == 0 )); then
     echo "OK: live reduced checkpoint -mat-1 (DC-EPOCH-11; build from seed UTxO via the proven reduce+checkpoint machinery, disk-backed, gated=byte-identical, before drop(utxo), fail-closed)"
 fi
