@@ -204,6 +204,23 @@ impl ReducedUtxoCheckpoint {
         Ok(())
     }
 
+    /// S3f-4d-mat-2c (DC-EPOCH-11): record the slot the checkpoint was BUILT at (the
+    /// bootstrap/anchor slot) as the last-advanced slot, WITHOUT applying any delta. The
+    /// bootstrap UTxO already reflects every block up to and including this slot, so the
+    /// live advancer must start from `slot + 1` -- this marker makes that the resume point
+    /// (the anchor block is never re-applied). Idempotent; does not touch the reduced table
+    /// or the completeness marker.
+    pub fn set_built_at_slot(&self, slot: SlotNo) -> Result<(), ReducedCheckpointError> {
+        let txn = self.db.begin_write().map_err(rerr)?;
+        {
+            let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            let slot_bytes = slot.0.to_be_bytes();
+            meta.insert(LAST_SLOT_KEY, slot_bytes.as_slice()).map_err(rerr)?;
+        }
+        txn.commit().map_err(rerr)?;
+        Ok(())
+    }
+
     /// The slot of the last block the checkpoint advanced over (DC-EPOCH-11), or `None` if it
     /// was only built (never advanced). The live advancer reads this to resume in lockstep.
     pub fn last_advanced_slot(&self) -> Result<Option<SlotNo>, ReducedCheckpointError> {

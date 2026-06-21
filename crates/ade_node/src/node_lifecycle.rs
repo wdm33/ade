@@ -424,6 +424,21 @@ async fn run_node_lifecycle_inner(
     let mut wal =
         FileWalStore::open(wal_dir).map_err(|e| NodeLifecycleError::WalOpen(format!("{e:?}")))?;
 
+    // S3f-4d-mat-2c (DC-EPOCH-11): open the live reduced checkpoint IFF the EVIEW activation
+    // is configured -- the admission bootstrap built it at snapshot_dir/reduced-checkpoint.redb
+    // (gated on the EVIEW cert-state package). Absent -> None (a non-EVIEW run; the relay
+    // loop's follow/forge path is byte-identical). When present, the loop advances it to the
+    // durable ChainDB tip after each admit.
+    let reduced_checkpoint_path = snapshot_dir.join("reduced-checkpoint.redb");
+    let reduced_checkpoint = if reduced_checkpoint_path.exists() {
+        Some(
+            ade_runtime::chaindb::ReducedUtxoCheckpoint::open(&reduced_checkpoint_path)
+                .map_err(|e| NodeLifecycleError::ChainDbOpen(format!("reduced checkpoint: {e:?}")))?,
+        )
+    } else {
+        None
+    };
+
     // 4. Classify first-run vs warm-start as a pure function of on-disk
     //    state. (The same `(tip, snapshots)` axes `bootstrap_initial_state`
     //    branches on.)
@@ -527,6 +542,7 @@ async fn run_node_lifecycle_inner(
                 None,
                 Some(&mut sched_log),
                 None,
+                reduced_checkpoint.as_ref(),
             )
             .await?;
             eprintln!(
@@ -793,6 +809,7 @@ async fn run_node_lifecycle_inner(
                 Some(&mut activation),
                 Some(&mut sched_log),
                 Some(&mut convergence),
+                reduced_checkpoint.as_ref(),
             )
             .await?;
             // MEM-MEASURE-A2 (OP-MEM-01): final sustained sample + run-level memory
@@ -1357,7 +1374,7 @@ pub async fn run_relay_loop(
     forge: Option<&mut ForgeActivation<'_>>,
 ) -> Result<(), NodeLifecycleError> {
     run_relay_loop_with_sched(
-        state, source, chaindb, wal, era_schedule, ledger_view, shutdown, forge, None, None,
+        state, source, chaindb, wal, era_schedule, ledger_view, shutdown, forge, None, None, None,
     )
     .await
 }
@@ -1379,6 +1396,46 @@ fn forge_mode_kind(m: &ForgeMode) -> crate::live_log::ForgeModeKind {
     }
 }
 
+/// S3f-4d-mat-2c (DC-EPOCH-11): advance the live reduced checkpoint to the current durable
+/// ChainDB tip after an admit. No-op when EVIEW is not configured (`None`) -> the follow/forge
+/// path is byte-identical. Reads ONLY the durable ChainDB (the selected chain) -- replay-
+/// equivalent, in admission order -- and FAIL-CLOSES any advance error: the checkpoint stays
+/// at its last good slot, so the lagging check blocks EpochConsensusView production rather
+/// than producing from a stale/partial checkpoint.
+fn advance_reduced_checkpoint_to_durable_tip(
+    reduced_checkpoint: Option<&ade_runtime::chaindb::ReducedUtxoCheckpoint>,
+    chaindb: &PersistentChainDb,
+) -> Result<(), NodeLifecycleError> {
+    let Some(cp) = reduced_checkpoint else {
+        return Ok(());
+    };
+    // A LIVE checkpoint MUST carry its bootstrap slot (the build calls set_built_at_slot).
+    // A present-but-slotless checkpoint is malformed -- advancing it from slot 0 would
+    // re-apply blocks already folded into the seed UTxO. FAIL-CLOSED rather than corrupt.
+    let bootstrap_slot = cp
+        .last_advanced_slot()
+        .map_err(|e| NodeLifecycleError::RelaySync(format!("reduced-checkpoint slot read: {e:?}")))?
+        .ok_or_else(|| {
+            NodeLifecycleError::RelaySync(
+                "reduced checkpoint has no recorded bootstrap slot (malformed)".to_string(),
+            )
+        })?;
+    let Some(tip) = chaindb.tip().map_err(|e| {
+        NodeLifecycleError::RelaySync(format!("reduced-checkpoint tip read: {e:?}"))
+    })?
+    else {
+        return Ok(());
+    };
+    ade_runtime::chaindb::advance_reduced_checkpoint_over_chaindb(
+        cp,
+        chaindb,
+        bootstrap_slot,
+        tip.slot,
+        ade_types::CardanoEra::Conway,
+    )
+    .map_err(|e| NodeLifecycleError::RelaySync(format!("reduced-checkpoint advance: {e:?}")))
+}
+
 /// Relay loop with an optional emit-only CN-NODE-04 diagnostic sink
 /// (PHASE4-N-F-G-J S1). The binary `--mode node` path passes a real sink; the
 /// sink is best-effort and NEVER alters the loop's scheduling / control flow,
@@ -1397,6 +1454,11 @@ pub async fn run_relay_loop_with_sched(
     // the Participant receive path. `None` on the forge-off / wrapper / test
     // callers. Evidence observes authority; it never becomes authority.
     mut convergence: Option<&mut ConvergenceEvidence>,
+    // EPOCH-CONSENSUS-VIEW S3f-4d-mat-2c (DC-EPOCH-11): the live reduced-UTxO checkpoint,
+    // `Some` ONLY when the EVIEW activation is configured (the bootstrap built it). After each
+    // durable admit the loop advances it to the ChainDB tip (replay-equivalent, fail-closed).
+    // `None` on non-EVIEW / wrapper / test callers -> the follow/forge path is byte-identical.
+    reduced_checkpoint: Option<&ade_runtime::chaindb::ReducedUtxoCheckpoint>,
 ) -> Result<(), NodeLifecycleError> {
     loop {
         let shutdown_status = if *shutdown.borrow() {
@@ -1749,6 +1811,10 @@ pub async fn run_relay_loop_with_sched(
                     run_node_sync(source, state, chaindb, wal, era_schedule, ledger_view)
                         .await
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                    // S3f-4d-mat-2c (DC-EPOCH-11): after the durable admit, advance the live
+                    // reduced checkpoint to the ChainDB tip (EVIEW only; None elsewhere ->
+                    // no-op, byte-identical). Reads only the durable ChainDB; fail-closed.
+                    advance_reduced_checkpoint_to_durable_tip(reduced_checkpoint, chaindb)?;
                 }
             }
             LoopStep::ForgeTick => {

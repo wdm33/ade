@@ -206,6 +206,7 @@ fn import_bootstrap_cert_state(
 fn build_live_reduced_checkpoint(
     snapshot_dir: &std::path::Path,
     utxo: &ade_ledger::utxo::UTxOState,
+    seed_slot: SlotNo,
 ) -> Result<Hash32, ade_runtime::chaindb::ReducedCheckpointError> {
     use ade_ledger::reduced_utxo::{reduce_txout, ReducedStakeRef};
     let mut reduced: std::collections::BTreeMap<
@@ -217,7 +218,12 @@ fn build_live_reduced_checkpoint(
     }
     let checkpoint =
         ade_runtime::chaindb::ReducedUtxoCheckpoint::open(&reduced_checkpoint_path(snapshot_dir))?;
-    checkpoint.build_from(&reduced)
+    let fp = checkpoint.build_from(&reduced)?;
+    // S3f-4d-mat-2c: record the bootstrap slot so the live advancer (DC-EPOCH-11) resumes
+    // from seed_slot+1. The seed UTxO already reflects every block up to and including
+    // seed_slot, so the anchor block is never re-applied.
+    checkpoint.set_built_at_slot(seed_slot)?;
+    Ok(fp)
 }
 
 /// The durable path of the live reduced checkpoint (in the snapshot dir, beside chain.db).
@@ -397,7 +403,8 @@ async fn run_admission_inner(
     // BEFORE it is dropped. Gated on the imported cert-state so non-EVIEW bootstrap is
     // BYTE-IDENTICAL (point 8). Fail-closed: a build failure aborts bootstrap.
     if !ledger.cert_state.delegation.delegations.is_empty() {
-        let reduced_checkpoint_fp = build_live_reduced_checkpoint(&snapshot_dir, &utxo)
+        let reduced_checkpoint_fp =
+            build_live_reduced_checkpoint(&snapshot_dir, &utxo, SlotNo(acli.seed_point_slot))
             .map_err(|e| AdmissionBootstrapError::ReducedCheckpoint(format!("{:?}", e)))?;
         let _ = reduced_checkpoint_fp; // the binding/lineage check consumes it in -mat-4
     }
@@ -687,14 +694,14 @@ mod tests {
     fn live_reduced_checkpoint_builds_durable_deterministic() {
         let dir = tempfile::tempdir().unwrap();
         let utxo = ade_ledger::utxo::UTxOState::new();
-        let fp1 = build_live_reduced_checkpoint(dir.path(), &utxo).expect("build");
+        let fp1 = build_live_reduced_checkpoint(dir.path(), &utxo, SlotNo(0)).expect("build");
         // durable + complete + reopenable.
         let cp = ade_runtime::chaindb::ReducedUtxoCheckpoint::open(&reduced_checkpoint_path(dir.path()))
             .expect("reopen");
         assert!(cp.is_complete().expect("complete"), "the built checkpoint is marked complete");
         // deterministic: a fresh build of the same UTxO -> the same commitment fingerprint.
         let dir2 = tempfile::tempdir().unwrap();
-        let fp2 = build_live_reduced_checkpoint(dir2.path(), &utxo).expect("build2");
+        let fp2 = build_live_reduced_checkpoint(dir2.path(), &utxo, SlotNo(0)).expect("build2");
         assert_eq!(fp1, fp2, "the reduced checkpoint commitment is a pure function of the UTxO");
     }
 

@@ -2405,6 +2405,7 @@ mod tests {
             None,
             Some(&mut sched_log),
             None,
+            None,
         )
         .await
         .expect("relay loop halts cleanly on a drained feed");
@@ -7188,6 +7189,7 @@ mod tests {
             &mut sd_rx,
             Some(&mut act),
             Some(&mut sched_log),
+            None,
             None,
         );
         let driver = async {

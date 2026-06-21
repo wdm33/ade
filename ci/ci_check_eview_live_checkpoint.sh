@@ -27,8 +27,10 @@ grep -qF 'ledger.cert_state.delegation.delegations.is_empty()' "$B" \
     || fail "the build is not gated on the EVIEW cert-state -- non-EVIEW bootstrap must stay byte-identical"
 
 # (4) the build happens BEFORE the UTxO is dropped (so the seed UTxO is still resident).
-awk '/build_live_reduced_checkpoint\(&snapshot_dir, &utxo\)/{b=NR} /drop\(utxo\);/{d=NR} END{exit !(b>0 && d>0 && b<d)}' "$B" \
+awk '/build_live_reduced_checkpoint\(&snapshot_dir, &utxo/{b=NR} /drop\(utxo\);/{d=NR} END{exit !(b>0 && d>0 && b<d)}' "$B" \
     || fail "the reduced checkpoint must be built BEFORE drop(utxo)"
+# the build records the bootstrap slot so the advancer resumes from seed_slot+1 (anchor not re-applied).
+grep -qF 'checkpoint.set_built_at_slot(seed_slot)' "$B" || fail "the build does not record the bootstrap slot (set_built_at_slot)"
 
 # (5) fail-closed on a build failure.
 grep -qE 'AdmissionBootstrapError::ReducedCheckpoint' "$B" || fail "a reduced-checkpoint build failure is not fail-closed"
@@ -46,6 +48,7 @@ CP=crates/ade_runtime/src/chaindb/reduced_utxo_checkpoint.rs
 grep -qE 'pub fn advance_block' "$CP" || fail "advance_block (the per-block advance) missing"
 grep -qE 'pub fn last_advanced_slot' "$CP" || fail "last_advanced_slot (the lockstep cursor) missing"
 grep -qF 'LAST_SLOT_KEY' "$CP" || fail "the durable last-advanced-slot marker is missing"
+grep -qE 'pub fn set_built_at_slot' "$CP" || fail "set_built_at_slot (the bootstrap-slot resume point) missing"
 grep -qE 'fn advance_block_applies_delta_and_records_slot' "$CP" || fail "the -mat-2 advance/slot proof is missing"
 
 # (9) -mat-2b: the live ChainDB-replay advancer reads ONLY the durable ChainDB (selected
@@ -57,6 +60,15 @@ grep -qF 'reduced_block_delta(&block, era)' "$WD" || fail "the advancer does not
 grep -qF '.advance_block(stored.slot' "$WD" || fail "the advancer does not advance_block (lockstep slot)"
 grep -qE 'enum CheckpointAdvanceError' "$WD" || fail "the advancer is not fail-closed (CheckpointAdvanceError)"
 grep -qE 'fn advance_over_chaindb_replays_durable_blocks' "$WD" || fail "the -mat-2b advancer proof is missing"
+
+# (10) -mat-2c: the relay loop opens the checkpoint ONLY when it exists (= EVIEW configured)
+#      and advances it to the durable tip after each admit -- byte-identical when absent.
+NL=crates/ade_node/src/node_lifecycle.rs
+grep -qF 'if reduced_checkpoint_path.exists()' "$NL" || fail "the relay-loop open is not gated on the checkpoint existing (EVIEW-only)"
+grep -qF 'advance_reduced_checkpoint_to_durable_tip(reduced_checkpoint, chaindb)' "$NL" || fail "the loop does not advance the checkpoint after the admit"
+grep -qF 'advance_reduced_checkpoint_over_chaindb(' "$NL" || fail "the loop helper does not call the durable-ChainDB advancer"
+# the helper no-ops when EVIEW is not configured (None) -> the follow/forge path is byte-identical.
+grep -qF 'let Some(cp) = reduced_checkpoint else {' "$NL" || fail "the advance is not a no-op when EVIEW is unconfigured (byte-identical)"
 
 if (( FAILED == 0 )); then
     echo "OK: live reduced checkpoint -mat-1 (DC-EPOCH-11; build from seed UTxO via the proven reduce+checkpoint machinery, disk-backed, gated=byte-identical, before drop(utxo), fail-closed)"
