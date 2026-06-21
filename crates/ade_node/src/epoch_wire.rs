@@ -24,6 +24,11 @@ use ade_runtime::chaindb::{
 use ade_types::shelley::block::ShelleyBlock;
 use ade_types::{CardanoEra, EpochNo, Hash32, SlotNo};
 
+use ade_core::consensus::events::Point;
+use ade_ledger::wal::WalEntry;
+
+use crate::epoch_activate::{activate_at_boundary, BoundaryActivationOutcome};
+use crate::epoch_activation::{ActiveEpochView, EpochViewActivationError};
 use crate::epoch_candidate::{derive_candidate, CandidateDeriveError};
 use crate::epoch_source_window::{
     target_epoch_for_source, validate_source_window, ActivationSourceWindow, SourceWindowBlock,
@@ -196,6 +201,88 @@ pub fn derive_authoritative_candidate(
     .map_err(ActivationDeriveError::Derive)
 }
 
+/// The explicit, durable-derived bounds of the source window the orchestrator computes from the
+/// era schedule for the completed source epoch (NEVER the wall clock).
+pub struct WindowBounds {
+    pub source_epoch: EpochNo,
+    pub source_window_start: SlotNo,
+    pub source_window_end: SlotNo,
+    pub snapshot_phase: SnapshotPhase,
+    /// The durable tip immediately BEFORE the window (the first block's expected parent).
+    pub source_window_anchor: Hash32,
+    /// The live checkpoint's sealed seed slot (the bootstrap lineage the readiness witness pins).
+    pub expected_seed_slot: SlotNo,
+}
+
+/// Why the boundary activation attempt is a TERMINAL epoch-activation failure (halt -- the
+/// caller stops admit/forge/follow, NEVER falls back to the seed view).
+#[derive(Debug)]
+pub enum ActivationError {
+    /// The durable source window could not be extracted/validated (incomplete / out-of-lineage).
+    SourceWindow(SourceWindowExtractError),
+    /// The live checkpoint is not a valid readiness witness (lagging / wrong-seed / reorged tip).
+    Readiness(ReadinessError),
+    /// Materializing the fresh seed-state replay checkpoint failed.
+    Materialize(ReducedCheckpointError),
+    /// The atomic activation (derive -> predicate -> WAL -> promote) failed after the predicate
+    /// passed -- a terminal halt.
+    Activate(EpochViewActivationError),
+}
+
+/// S3f-4d-wire-3 (DC-EPOCH-11): the live boundary-activation orchestration -- the SINGLE entry
+/// the relay loop calls when the durable tip has crossed an epoch boundary. Composes the dual-
+/// path design: (1) extract + validate the durable selected-chain source window (the
+/// AUTHORITATIVE input); (2) the live checkpoint readiness WITNESS (advanced-through + terminal
+/// lineage); (3) materialize a FRESH seed-state replay checkpoint (the live one is never
+/// mutated); (4) `activate_at_boundary` -- the sole authoritative derive (window replay) ->
+/// predicate -> durable WAL activation -> atomic promote. Any failure is a TERMINAL
+/// `ActivationError` (halt); a predicate decline is `NotYet` (the seed stays authoritative,
+/// retry the next boundary). No peer/network/CLI/cache; bounds are explicit, never wall-clock.
+#[allow(clippy::too_many_arguments)]
+pub fn try_activate_at_boundary(
+    live: &ReducedUtxoCheckpoint,
+    chaindb: &dyn ChainDb,
+    bounds: &WindowBounds,
+    bootstrap_state: &LedgerState,
+    network_magic: u32,
+    nonce: Hash32,
+    selected_point: &Point,
+    transition_eligible: bool,
+    active_view: &mut ActiveEpochView,
+    scratch_path: &std::path::Path,
+    wal_write: impl FnOnce(&WalEntry) -> bool,
+) -> Result<BoundaryActivationOutcome, ActivationError> {
+    let extract = extract_source_window(
+        chaindb,
+        bounds.source_epoch,
+        bounds.source_window_start,
+        bounds.source_window_end,
+        bounds.snapshot_phase,
+        bounds.source_window_anchor.clone(),
+    )
+    .map_err(ActivationError::SourceWindow)?;
+    verify_live_readiness(live, &extract.window, bounds.expected_seed_slot, chaindb)
+        .map_err(ActivationError::Readiness)?;
+    let replay_cp = live
+        .materialize_bootstrap_into(scratch_path)
+        .map_err(ActivationError::Materialize)?;
+    activate_at_boundary(
+        &extract.window,
+        &extract.window_blocks,
+        &replay_cp,
+        bootstrap_state,
+        &extract.shelley_blocks,
+        CardanoEra::Conway,
+        network_magic,
+        nonce,
+        selected_point,
+        transition_eligible,
+        active_view,
+        wal_write,
+    )
+    .map_err(ActivationError::Activate)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -294,5 +381,54 @@ mod tests {
             verify_live_readiness(&live, &gone, SlotNo(100), &db),
             Err(ReadinessError::TerminalMissing)
         ));
+    }
+
+    /// S3f-4d-wire-3: the orchestration FAILS CLOSED (terminal) when the live checkpoint is
+    /// lagging the source window -- it never promotes, the seed view stays authoritative.
+    #[test]
+    fn try_activate_at_boundary_lagging_live_is_terminal_and_keeps_seed() {
+        use ade_ledger::state::LedgerState;
+        let dir = tempfile::tempdir().unwrap();
+        let live = ReducedUtxoCheckpoint::open(&dir.path().join("live.redb")).unwrap();
+        live.build_from(&std::collections::BTreeMap::new()).unwrap();
+        live.seal_bootstrap(SlotNo(100)).unwrap();
+        live.advance_block(SlotNo(200), &[], &[]).unwrap(); // live only at 200
+        let d = decode_block(RAW_CONWAY_BLOCK).unwrap();
+        let db = InMemoryChainDb::new();
+        db.put_block(&StoredBlock {
+            hash: d.block_hash.clone(),
+            slot: SlotNo(250),
+            bytes: RAW_CONWAY_BLOCK.to_vec(),
+        })
+        .unwrap();
+        let anchor = d.prev_hash.block_hash().cloned().unwrap_or(Hash32([0; 32]));
+        let bounds = WindowBounds {
+            source_epoch: EpochNo(10),
+            source_window_start: SlotNo(101),
+            source_window_end: SlotNo(500), // window ends past the live tip -> lagging
+            snapshot_phase: SnapshotPhase::Set,
+            source_window_anchor: anchor,
+            expected_seed_slot: SlotNo(100),
+        };
+        let state = LedgerState::new(CardanoEra::Conway);
+        let mut active = ActiveEpochView::new();
+        let r = try_activate_at_boundary(
+            &live,
+            &db,
+            &bounds,
+            &state,
+            2,
+            Hash32([0; 32]),
+            &Point { slot: SlotNo(600), hash: Hash32([0xab; 32]) },
+            true,
+            &mut active,
+            &dir.path().join("scratch.redb"),
+            |_| true,
+        );
+        assert!(
+            matches!(r, Err(ActivationError::Readiness(ReadinessError::Checkpoint(_)))),
+            "a lagging live checkpoint is a TERMINAL readiness failure, not a promotion"
+        );
+        assert!(matches!(active, ActiveEpochView::Seed), "the seed view stays authoritative");
     }
 }

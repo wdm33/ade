@@ -120,6 +120,13 @@ grep -qE 'pub fn derive_authoritative_candidate' "$EW" || fail "derive_authorita
 grep -qF 'materialize_bootstrap_into(scratch_path)' "$EW" || fail "the authoritative derive does not replay over a FRESH seed-state checkpoint"
 grep -qE 'fn verify_live_readiness_requires_advanced_through_and_terminal_present' "$EW" || fail "the -wire-2b readiness proof missing"
 
+# (17) -wire-3a: the orchestration -- extract -> readiness witness -> materialize FRESH seed
+#      state -> activate_at_boundary (the SOLE authoritative path); terminal on any failure.
+grep -qE 'pub fn try_activate_at_boundary' "$EW" || fail "try_activate_at_boundary (the orchestration) missing"
+grep -qF 'verify_live_readiness(live,' "$EW" || fail "the orchestration does not gate on the readiness witness"
+grep -qF 'activate_at_boundary(' "$EW" || fail "the orchestration does not call the atomic activate_at_boundary"
+grep -qE 'fn try_activate_at_boundary_lagging_live_is_terminal_and_keeps_seed' "$EW" || fail "the -wire-3a fail-closed proof missing"
+
 if (( FAILED == 0 )); then
     echo "OK: live reduced checkpoint -mat-1 (DC-EPOCH-11; build from seed UTxO via the proven reduce+checkpoint machinery, disk-backed, gated=byte-identical, before drop(utxo), fail-closed)"
 fi
