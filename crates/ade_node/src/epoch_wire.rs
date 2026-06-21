@@ -37,18 +37,11 @@ use crate::epoch_source_window::{
     SourceWindowError,
 };
 
-/// S3f-4d-wire-3b-2 (DC-EPOCH-11): the runtime ARMING gate for the live epoch-view activation.
-/// FALSE until the live boundary proofs pass (the boundary-aligned stake oracle + the
-/// leadership-schedule lag proof, at a real Conway boundary). While false, the relay loop's
-/// activation call is a strict NO-OP -- the live follow/forge path is BYTE-IDENTICAL (no
-/// activation, no WAL write, no ledger_view rebind). Flip to true ONLY after the proofs, in a
-/// controlled build at the boundary.
-pub const EVIEW_ACTIVATION_ARMED: bool = false;
-
-/// S3f-4d-wire-3b-2 (DC-EPOCH-11): the SEED-derived activation inputs the relay loop holds for
-/// the (gated) first-boundary activation -- bound ONCE at bootstrap to the manifest-bound seed.
-/// The seed `bootstrap_state` is the cert state at the bootstrap point (the window replay
-/// advances it); the relay loop's advanced ledger is NOT it.
+/// EPOCH-CONTINUITY-ACTIVATION ECA-1 (DC-EPOCH-13): the SEED-derived activation inputs the relay
+/// loop holds for the first-boundary activation -- bound ONCE at bootstrap to the manifest-bound
+/// seed. The seed `bootstrap_state` is the cert state at the bootstrap point (the window replay
+/// advances it); the relay loop's advanced ledger is NOT it. Activation is AUTOMATIC: there is NO
+/// arming flag; the only gate is the deterministic predicate over canonical durable state.
 pub struct EviewActivationInputs {
     pub seed_bootstrap_state: LedgerState,
     pub seed_point_slot: SlotNo,
@@ -69,12 +62,12 @@ pub struct EviewActivationInputs {
 }
 
 impl EviewActivationInputs {
-    /// Run the gated first-boundary activation with the loop's runtime args. NO-OP when not
-    /// armed (byte-identical) or pre-boundary; a terminal `ActivationError` propagates (halt).
+    /// Run the first-boundary activation with the loop's runtime args. A strict NO-OP (byte-
+    /// identical) pre-boundary or once a view is promoted; a terminal `ActivationError`
+    /// propagates (halt). Activation is AUTOMATIC -- no arming flag (DC-EPOCH-13).
     #[allow(clippy::too_many_arguments)]
     pub fn maybe_activate(
         &self,
-        armed: bool,
         era_schedule: &EraSchedule,
         durable_tip_slot: SlotNo,
         live: &ReducedUtxoCheckpoint,
@@ -85,7 +78,6 @@ impl EviewActivationInputs {
         wal_write: impl FnOnce(&WalEntry) -> bool,
     ) -> Result<Option<BoundaryActivationOutcome>, ActivationError> {
         maybe_activate_first_boundary(
-            armed,
             era_schedule,
             durable_tip_slot,
             self.seed_epoch,
@@ -395,17 +387,16 @@ pub fn try_activate_at_boundary(
     .map_err(ActivationError::Activate)
 }
 
-/// S3f-4d-wire-3b (DC-EPOCH-11): the GATED relay-loop orchestration. When `armed` is false (the
-/// default until the live boundary proofs pass -- the boundary-aligned stake oracle + the
-/// leadership-schedule lag proof), this is a strict NO-OP (`Ok(None)`) -- the live follow/forge
-/// path is BYTE-IDENTICAL, no activation, no WAL write, no rebind. When armed AND the seed epoch
-/// has COMPLETED (the durable tip located in a later epoch) AND no view is promoted yet, it
-/// computes the explicit window bounds + runs the sole authoritative activation
+/// EPOCH-CONTINUITY-ACTIVATION ECA-1 (DC-EPOCH-13): the relay-loop boundary-activation
+/// orchestration. Activation is AUTOMATIC and DETERMINISTIC -- there is NO arming flag. It is a
+/// strict NO-OP (`Ok(None)`, byte-identical) until the seed epoch's window is COMPLETE (the
+/// durable tip located in a LATER epoch -- never the wall clock) and no view is promoted yet;
+/// then it computes the explicit window bounds + runs the sole authoritative activation
 /// (`try_activate_at_boundary`). Any terminal `ActivationError` propagates (halt). Idempotent:
-/// a no-op once a view is promoted.
+/// a no-op once a view is promoted. The ONLY gate is the deterministic activation predicate over
+/// canonical durable state.
 #[allow(clippy::too_many_arguments)]
 pub fn maybe_activate_first_boundary(
-    armed: bool,
     era_schedule: &EraSchedule,
     durable_tip_slot: SlotNo,
     seed_epoch: EpochNo,
@@ -424,10 +415,6 @@ pub fn maybe_activate_first_boundary(
     scratch_path: &std::path::Path,
     wal_write: impl FnOnce(&WalEntry) -> bool,
 ) -> Result<Option<BoundaryActivationOutcome>, ActivationError> {
-    // GATED OFF: until the live boundary proofs arm it, NO activation (byte-identical).
-    if !armed {
-        return Ok(None);
-    }
     // idempotent: once a view is promoted, the first-boundary activation is done.
     if active_view.promoted().is_some() {
         return Ok(None);
@@ -652,11 +639,14 @@ mod tests {
         assert!(compute_first_window_bounds(&sched, seed_slot, Hash32([7; 32]), EpochNo(101)).is_none());
     }
 
-    /// S3f-4d-wire-3b: the GATED orchestration is a strict NO-OP when not armed (byte-identical
-    /// live path), and also when armed but the seed epoch's window is not yet complete -- it
-    /// NEVER promotes in either case.
+    /// EPOCH-CONTINUITY-ACTIVATION ECA-1 (DC-EPOCH-13): with the arming flag REMOVED, the
+    /// orchestration is a strict NO-OP only while the seed epoch's window is incomplete (the tip
+    /// still in the seed epoch); once the boundary is CROSSED it AUTOMATICALLY drives the sole
+    /// authoritative activation -- here it FAILS CLOSED (terminal) on an empty durable window,
+    /// proving it proceeds by the deterministic predicate over canonical state, NOT by any flag,
+    /// and never promotes against an unproven state (the seed view stays authoritative).
     #[test]
-    fn maybe_activate_first_boundary_gated_off_and_pre_boundary_are_noops() {
+    fn maybe_activate_first_boundary_is_automatic_and_fails_closed_not_flag_gated() {
         use ade_core::consensus::era_schedule::{BootstrapAnchorHash, EraSchedule, EraSummary};
         use ade_ledger::state::LedgerState;
         let dir = tempfile::tempdir().unwrap();
@@ -676,21 +666,28 @@ mod tests {
         let state = LedgerState::new(CardanoEra::Conway);
         let seed_slot = SlotNo(8_640_000 + 50_000);
         let pt = Point { slot: SlotNo(9_000_000), hash: Hash32([1; 32]) };
-        // (1) GATED OFF (armed=false) -> no-op even with the tip PAST the boundary (epoch 101).
+        // (1) PRE-BOUNDARY: the tip is STILL in the seed epoch (the window is not complete) -> a
+        //     strict no-op (byte-identical); the seed view is untouched.
         let mut av = ActiveEpochView::new();
         let r = maybe_activate_first_boundary(
-            false, &sched, SlotNo(8_640_000 + 90_000), EpochNo(100), seed_slot, Hash32([7; 32]),
+            &sched, SlotNo(8_640_000 + 60_000), EpochNo(100), seed_slot, Hash32([7; 32]),
             &live, &db, &state, 2, Hash32([0; 32]), Hash32([0x91; 32]), Hash32([0x92; 32]), ActiveSlotsCoeff { numer: 1, denom: 20 }, &pt, &mut av, &dir.path().join("s1.redb"), |_| true,
         );
-        assert!(matches!(r, Ok(None)), "gated off -> no activation");
+        assert!(matches!(r, Ok(None)), "pre-boundary -> no activation");
         assert!(matches!(av, ActiveEpochView::Seed), "the seed view is untouched");
-        // (2) armed, but the tip is STILL in the seed epoch (the window is not complete) -> no-op.
+        // (2) BOUNDARY CROSSED (the tip located in epoch 101): activation is AUTOMATIC -- with no
+        //     flag it proceeds to the authoritative window replay and FAILS CLOSED on the empty
+        //     durable window (terminal), never no-opping and never promoting against an unproven
+        //     state. Before ECA-1 this same call would have returned Ok(None) on `armed == false`.
         let mut av2 = ActiveEpochView::new();
         let r2 = maybe_activate_first_boundary(
-            true, &sched, SlotNo(8_640_000 + 60_000), EpochNo(100), seed_slot, Hash32([7; 32]),
+            &sched, SlotNo(8_640_000 + 90_000), EpochNo(100), seed_slot, Hash32([7; 32]),
             &live, &db, &state, 2, Hash32([0; 32]), Hash32([0x91; 32]), Hash32([0x92; 32]), ActiveSlotsCoeff { numer: 1, denom: 20 }, &pt, &mut av2, &dir.path().join("s2.redb"), |_| true,
         );
-        assert!(matches!(r2, Ok(None)), "pre-boundary -> no activation");
-        assert!(matches!(av2, ActiveEpochView::Seed));
+        assert!(
+            matches!(r2, Err(ActivationError::SourceWindow(_))),
+            "a crossed boundary AUTOMATICALLY drives the activation (fail-closed on an empty window), not a flag no-op"
+        );
+        assert!(matches!(av2, ActiveEpochView::Seed), "fail-closed: no promotion, the seed stays authoritative");
     }
 }

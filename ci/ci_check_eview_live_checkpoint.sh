@@ -127,20 +127,23 @@ grep -qF 'verify_live_readiness(live,' "$EW" || fail "the orchestration does not
 grep -qF 'activate_at_boundary(' "$EW" || fail "the orchestration does not call the atomic activate_at_boundary"
 grep -qE 'fn try_activate_at_boundary_lagging_live_is_terminal_and_keeps_seed' "$EW" || fail "the -wire-3a fail-closed proof missing"
 
-# (18) -wire-3b-1: the GATED orchestration -- compute_first_window_bounds (era arithmetic, no
-#      wall clock) + maybe_activate_first_boundary (armed-gated; NO-OP byte-identical when off).
+# (18) -wire-3b-1 + ECA-1 (DC-EPOCH-13): the orchestration -- compute_first_window_bounds (era
+#      arithmetic, no wall clock) + maybe_activate_first_boundary. ECA-1 removed the arming flag:
+#      the gate is now the DETERMINISTIC boundary detection (era_schedule.locate) + the idempotent
+#      promoted check (absence of any flag is enforced by ci_check_eview_automatic_activation.sh).
 grep -qE 'pub fn compute_first_window_bounds' "$EW" || fail "compute_first_window_bounds missing"
-grep -qE 'pub fn maybe_activate_first_boundary' "$EW" || fail "maybe_activate_first_boundary (gated orchestration) missing"
-grep -qF 'if !armed {' "$EW" || fail "the orchestration is not GATED off (the armed flag) -- it must be byte-identical when off"
-grep -qE 'fn maybe_activate_first_boundary_gated_off_and_pre_boundary_are_noops' "$EW" || fail "the -wire-3b-1 gating proof missing"
+grep -qE 'pub fn maybe_activate_first_boundary' "$EW" || fail "maybe_activate_first_boundary (the orchestration) missing"
+grep -qF 'era_schedule.locate(durable_tip_slot)' "$EW" || fail "the orchestration does not gate on deterministic boundary detection (era_schedule.locate)"
+grep -qF 'if active_view.promoted().is_some()' "$EW" || fail "the orchestration is not idempotent (the promoted-view check)"
+grep -qE 'fn maybe_activate_first_boundary_is_automatic_and_fails_closed_not_flag_gated' "$EW" || fail "the ECA-1 automatic-activation proof missing"
 
-# (19) -wire-3b-2: the relay-loop CALL, wired + GATED OFF (doubly inert: EVIEW_ACTIVATION_ARMED
-#      == false AND None inputs) -> byte-identical live follow/forge until armed at the boundary.
-grep -qF 'pub const EVIEW_ACTIVATION_ARMED: bool = false' "$EW" || fail "the arming gate is not OFF by default -- the activation must be byte-identical until armed"
+# (19) -wire-3b-2 + ECA-1 (DC-EPOCH-13): the relay-loop CALL, wired + keyed on CANONICAL STATE,
+#      no flag. It runs only when EVIEW is configured (Some inputs + Some checkpoint = the
+#      cert-state package present); None on non-EVIEW callers -> byte-identical live follow/forge.
 grep -qE 'pub struct EviewActivationInputs' "$EW" || fail "EviewActivationInputs (the seed activation inputs) missing"
 grep -qE 'fn maybe_activate_epoch_boundary' "$NL" || fail "the relay-loop activation-call helper missing"
-grep -qF 'maybe_activate_epoch_boundary(' "$NL" || fail "the relay loop does not call the (gated) boundary activation after the admit"
-grep -qF 'EVIEW_ACTIVATION_ARMED' "$NL" || fail "the loop activation is not gated on the arming const"
+grep -qF 'maybe_activate_epoch_boundary(' "$NL" || fail "the relay loop does not call the boundary activation after the admit"
+grep -qF 'let (Some(inputs), Some(live)) = (eview_activation, reduced_checkpoint) else {' "$NL" || fail "the activation is not keyed on canonical state (Some inputs + Some checkpoint = EVIEW configured)"
 
 if (( FAILED == 0 )); then
     echo "OK: live reduced checkpoint -mat-1 (DC-EPOCH-11; build from seed UTxO via the proven reduce+checkpoint machinery, disk-backed, gated=byte-identical, before drop(utxo), fail-closed)"
