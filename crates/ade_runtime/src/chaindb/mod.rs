@@ -34,7 +34,9 @@ mod utxo_key;
 pub use contract::run_contract_tests;
 pub use crash_safety::{run_crash_safety_tests, KillStrategy, NoKill};
 pub use error::ChainDbError;
-pub use reduced_utxo_checkpoint::{ReducedCheckpointError, ReducedUtxoCheckpoint};
+pub use reduced_utxo_checkpoint::{
+    CheckpointReadinessError, ReducedCheckpointError, ReducedUtxoCheckpoint,
+};
 pub use reduced_window_driver::{
     advance_reduced_checkpoint_over_chaindb, drive_window_aggregate, CheckpointAdvanceError,
     WindowDriverError,

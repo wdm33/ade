@@ -67,6 +67,25 @@ pub enum ReducedCheckpointError {
     Overflow,
 }
 
+/// S3f-4d-mat-4 (DC-EPOCH-11): why the live reduced checkpoint is NOT ready to derive an
+/// EpochConsensusView at a required slot. EVERY variant fails closed -- a missing / corrupt /
+/// lagging / wrong-lineage / overshot checkpoint MUST block view production rather than derive
+/// a stake distribution from a stale or wrong-lineage state.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CheckpointReadinessError {
+    /// Reading the checkpoint state failed (redb / decode error -- a corrupt store).
+    Read(String),
+    /// The checkpoint carries no sealed bootstrap baseline (uninitialised / crashed build).
+    Unsealed,
+    /// The checkpoint's sealed seed slot does not match the expected bootstrap lineage.
+    SeedMismatch { seed: u64, expected: u64 },
+    /// The checkpoint has not advanced to the required slot yet (behind the boundary).
+    Lagging { advanced: u64, required: u64 },
+    /// The checkpoint advanced PAST the required slot (an unhandled rollback / overshoot) --
+    /// its state no longer reflects the required slot exactly.
+    Ahead { advanced: u64, required: u64 },
+}
+
 fn rerr(e: impl std::fmt::Debug) -> ReducedCheckpointError {
     ReducedCheckpointError::Redb(format!("{e:?}"))
 }
@@ -287,6 +306,48 @@ impl ReducedUtxoCheckpoint {
             }
             None => Ok(None),
         }
+    }
+
+    /// S3f-4d-mat-4 (DC-EPOCH-11): verify the checkpoint is READY to derive an
+    /// EpochConsensusView at `required_slot` against the expected bootstrap lineage
+    /// (`expected_seed_slot`). The gate the boundary derive consults -- it FAILS CLOSED on any
+    /// of: a read error (corrupt store), an unsealed checkpoint, a seed/lineage mismatch, the
+    /// checkpoint lagging the required slot, or the checkpoint advanced PAST it (an unhandled
+    /// rollback). Ready iff the checkpoint sits EXACTLY at `required_slot` with the matching
+    /// seed -- so a missing / corrupt / lagging / wrong-lineage checkpoint can never produce a
+    /// view from a stale or wrong state.
+    pub fn verify_ready_at(
+        &self,
+        required_slot: SlotNo,
+        expected_seed_slot: SlotNo,
+    ) -> Result<(), CheckpointReadinessError> {
+        let seed = self
+            .seed_slot()
+            .map_err(|e| CheckpointReadinessError::Read(format!("{e:?}")))?
+            .ok_or(CheckpointReadinessError::Unsealed)?;
+        if seed.0 != expected_seed_slot.0 {
+            return Err(CheckpointReadinessError::SeedMismatch {
+                seed: seed.0,
+                expected: expected_seed_slot.0,
+            });
+        }
+        let advanced = self
+            .last_advanced_slot()
+            .map_err(|e| CheckpointReadinessError::Read(format!("{e:?}")))?
+            .ok_or(CheckpointReadinessError::Unsealed)?;
+        if advanced.0 < required_slot.0 {
+            return Err(CheckpointReadinessError::Lagging {
+                advanced: advanced.0,
+                required: required_slot.0,
+            });
+        }
+        if advanced.0 > required_slot.0 {
+            return Err(CheckpointReadinessError::Ahead {
+                advanced: advanced.0,
+                required: required_slot.0,
+            });
+        }
+        Ok(())
     }
 
     /// The slot of the last block the checkpoint advanced over (DC-EPOCH-11), or `None` if it
@@ -530,6 +591,38 @@ mod tests {
         // after replaying. Re-finalize here to confirm the live table is EXACTLY the 3 seed rows.
         cp.finalize().unwrap();
         assert_eq!(cp.len().unwrap(), 3, "live table == the seed state exactly");
+    }
+
+    /// S3f-4d-mat-4 (DC-EPOCH-11): verify_ready_at fails closed on every not-ready shape
+    /// (unsealed, wrong lineage, lagging, overshot) and admits ONLY an exact-slot, matching-
+    /// lineage checkpoint -- the gate that blocks view production from a stale/wrong state.
+    #[test]
+    fn verify_ready_at_fails_closed_unless_exact_and_lineage_bound() {
+        let tmp = TempDir::new().unwrap();
+        let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("rc.redb")).unwrap();
+        // unsealed (only built) -> fail closed.
+        cp.build_from(&sample()).unwrap();
+        assert_eq!(cp.verify_ready_at(SlotNo(300), SlotNo(279)), Err(CheckpointReadinessError::Unsealed));
+        // seal at seed 279, advance to 300.
+        cp.seal_bootstrap(SlotNo(279)).unwrap();
+        cp.advance_block(SlotNo(300), &[], &[]).unwrap();
+        // exact slot + matching lineage -> READY.
+        assert_eq!(cp.verify_ready_at(SlotNo(300), SlotNo(279)), Ok(()));
+        // wrong lineage -> SeedMismatch.
+        assert_eq!(
+            cp.verify_ready_at(SlotNo(300), SlotNo(280)),
+            Err(CheckpointReadinessError::SeedMismatch { seed: 279, expected: 280 })
+        );
+        // required slot ahead of the checkpoint -> Lagging.
+        assert_eq!(
+            cp.verify_ready_at(SlotNo(310), SlotNo(279)),
+            Err(CheckpointReadinessError::Lagging { advanced: 300, required: 310 })
+        );
+        // checkpoint past the required slot -> Ahead.
+        assert_eq!(
+            cp.verify_ready_at(SlotNo(290), SlotNo(279)),
+            Err(CheckpointReadinessError::Ahead { advanced: 300, required: 290 })
+        );
     }
 
     #[test]

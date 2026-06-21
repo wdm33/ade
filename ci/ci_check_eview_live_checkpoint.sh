@@ -79,6 +79,15 @@ grep -qF 'cp.reset_to_bootstrap()' "$NL" || fail "the loop does not re-materiali
 grep -qF 'if advanced.0 > tip.slot.0 {' "$NL" || fail "the loop does not DETECT a rollback (advanced past the durable tip)"
 grep -qE 'fn reset_to_bootstrap_re_materializes_seed_state' "$CP" || fail "the -mat-3 re-materialize proof is missing"
 
+# (12) -mat-4: the fail-closed readiness gate -- blocks view production on a missing/corrupt/
+#      lagging/wrong-lineage/overshot checkpoint; admits ONLY an exact-slot, matching-lineage one.
+grep -qE 'pub fn verify_ready_at' "$CP" || fail "verify_ready_at (the readiness gate) missing"
+grep -qE 'enum CheckpointReadinessError' "$CP" || fail "the readiness reject enum missing"
+grep -qF 'CheckpointReadinessError::Lagging' "$CP" || fail "the lagging reject missing (fail-closed on behind)"
+grep -qF 'CheckpointReadinessError::SeedMismatch' "$CP" || fail "the lineage reject missing (fail-closed on wrong seed)"
+grep -qF 'CheckpointReadinessError::Ahead' "$CP" || fail "the overshoot reject missing (fail-closed on past-required)"
+grep -qE 'fn verify_ready_at_fails_closed_unless_exact_and_lineage_bound' "$CP" || fail "the -mat-4 readiness proof missing"
+
 if (( FAILED == 0 )); then
     echo "OK: live reduced checkpoint -mat-1 (DC-EPOCH-11; build from seed UTxO via the proven reduce+checkpoint machinery, disk-backed, gated=byte-identical, before drop(utxo), fail-closed)"
 fi
