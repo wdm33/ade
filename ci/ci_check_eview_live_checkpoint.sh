@@ -88,6 +88,12 @@ grep -qF 'CheckpointReadinessError::SeedMismatch' "$CP" || fail "the lineage rej
 grep -qF 'CheckpointReadinessError::Ahead' "$CP" || fail "the overshoot reject missing (fail-closed on past-required)"
 grep -qE 'fn verify_ready_at_fails_closed_unless_exact_and_lineage_bound' "$CP" || fail "the -mat-4 readiness proof missing"
 
+# (13) -mat-shadow: the live derive -- the checkpoint's per-pool stake via the delegation state
+#      (the candidate view's stake-by-pool, compared to the oracle in the live shadow proof).
+grep -qE 'pub fn derive_stake_by_pool' "$CP" || fail "derive_stake_by_pool (the live derive) missing"
+grep -qF 'aggregate_pool_stake(&cred_stake, delegation)' "$CP" || fail "the derive does not aggregate via the delegation state"
+grep -qE 'fn derive_stake_by_pool_aggregates_via_delegation' "$CP" || fail "the -mat-shadow derive proof missing"
+
 if (( FAILED == 0 )); then
     echo "OK: live reduced checkpoint -mat-1 (DC-EPOCH-11; build from seed UTxO via the proven reduce+checkpoint machinery, disk-backed, gated=byte-identical, before drop(utxo), fail-closed)"
 fi

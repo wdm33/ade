@@ -452,6 +452,22 @@ impl ReducedUtxoCheckpoint {
         Ok(sums)
     }
 
+    /// S3f-4d-mat-shadow (DC-EPOCH-11): derive the per-pool active stake distribution from the
+    /// LIVE reduced checkpoint -- the candidate EpochConsensusView's stake-by-pool. Composes
+    /// the per-base-credential UTxO sums (`sum_base_credential_stake`) with the delegation state
+    /// (`aggregate_pool_stake`): each registered+delegated credential's UTxO + reward folds into
+    /// its pool. Pure over the checkpoint + delegation; fail-closed on overflow. This is the
+    /// direct live derive the shadow proof compares against the oracle, and that S3f-4d-wire
+    /// produces the bound view from.
+    pub fn derive_stake_by_pool(
+        &self,
+        delegation: &ade_ledger::delegation::DelegationState,
+    ) -> Result<ade_ledger::reduced_aggregate::StakeByPool, ReducedCheckpointError> {
+        let cred_stake = self.sum_base_credential_stake()?;
+        ade_ledger::reduced_aggregate::aggregate_pool_stake(&cred_stake, delegation)
+            .map_err(|_| ReducedCheckpointError::Overflow)
+    }
+
     /// Resolve a `TxIn` to its `(Coin, ReducedStakeRef)`, or `None` if absent.
     pub fn get(&self, txin: &TxIn) -> Result<Option<(Coin, ReducedStakeRef)>, ReducedCheckpointError> {
         let txn = self.db.begin_read().map_err(rerr)?;
@@ -623,6 +639,34 @@ mod tests {
             cp.verify_ready_at(SlotNo(290), SlotNo(279)),
             Err(CheckpointReadinessError::Ahead { advanced: 300, required: 290 })
         );
+    }
+
+    /// S3f-4d-mat-shadow (DC-EPOCH-11): derive_stake_by_pool folds each delegated credential's
+    /// UTxO into its pool (the candidate view's stake-by-pool); non-contributing UTxO and
+    /// undelegated credentials add nothing -- the live derive the shadow proof compares to the
+    /// oracle and that -wire produces the bound view from.
+    #[test]
+    fn derive_stake_by_pool_aggregates_via_delegation() {
+        use ade_ledger::delegation::DelegationState;
+        use ade_types::tx::PoolId;
+        let tmp = TempDir::new().unwrap();
+        let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("rc.redb")).unwrap();
+        cp.build_from(&sample()).unwrap(); // aa=100, bb=300, + non-contributing 200
+        let p1 = PoolId(Hash28([0x11; 28]));
+        let mut deleg = DelegationState::new();
+        deleg
+            .delegations
+            .insert(StakeCredential::KeyHash(Hash28([0xaa; 28])), p1.clone());
+        deleg
+            .delegations
+            .insert(StakeCredential::KeyHash(Hash28([0xbb; 28])), p1.clone());
+        let sbp = cp.derive_stake_by_pool(&deleg).unwrap();
+        assert_eq!(sbp.pool_stakes.get(&p1), Some(&Coin(400)), "aa(100)+bb(300) -> P1");
+        assert_eq!(sbp.total_active_stake, Coin(400), "non-contributing (200) excluded");
+        // an undelegated credential (no entry in the delegation map) contributes nothing.
+        let sbp0 = cp.derive_stake_by_pool(&DelegationState::new()).unwrap();
+        assert!(sbp0.pool_stakes.is_empty(), "no delegations -> no pool stake");
+        assert_eq!(sbp0.total_active_stake, Coin(0));
     }
 
     #[test]
