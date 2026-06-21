@@ -20,6 +20,7 @@ pub mod ba02_pass;
 pub mod candidate_aggregator;
 pub mod cli;
 pub mod convergence_evidence;
+pub mod epoch_activation;
 pub mod epoch_rebind;
 pub mod fair_merge;
 pub mod forge_intent;

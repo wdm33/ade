@@ -8418,3 +8418,53 @@ strengthened_in = []
 open_obligations = ["The RECORD + the pure idempotence/conflict decision are enforced (3 hermetic proofs). OWED: the replay APPLICATION of activation_replay_outcome -- replaying a second activation for the same target epoch must be idempotent (byte-identical) or fail closed on conflict, and republish the active view (S3f-4c). Today the replay loop treats the entry as a non-transition chain no-op. The live wiring that EMITS the record (S3f-4d) is gated on the two live cardano-node proofs."]
 attack_rationale = "Two different bound views must NEVER both activate for one target epoch: the durable record pins the full activation identity, and activation_replay_outcome makes same-epoch divergence a structured Conflict (fail closed), not a silent overwrite. Idempotence is restricted to byte-identical records (structural equality), so a record differing in ANY binding/hash for the same epoch is a Conflict. The seed's DuplicateProvenance is untouched (CI-pinned) -- the activation rule is a SEPARATE, narrower idempotence, not a broad weakening. The record carries no fingerprint-chain fields, so it cannot corrupt the AdmitBlock chain. Canonical encode/decode is byte-identical (replay-equivalent), and an unknown era/phase code or out-of-range network fails closed on decode."
 evidence_notes = "Introduced at EPOCH-CONSENSUS-VIEW S3f-4a (2026-06-21), the first sub-slice of the activation flip. The DURABLE SUBSTRATE only -- the WAL record + the pure idempotence/conflict decision + a stake-distribution commitment (stake_view_canonical_hash, distinct from the full-view hash). 3 hermetic tests + ci_check_eview_activation_wal.sh; updated 6 WalEntry match sites (replay main-loop + compute_superseded, store_trait, restart, node_lifecycle, 2 tests) to handle the non-transition entry; ade_ledger wal 29 green, no regression. NOT yet emitted or applied live. Next: S3f-4b (the activation predicate + atomic publish + the terminal EpochViewActivation* states), S3f-4c (durable-before-visible + the replay application + crash recovery), S3f-4d (the live flip), with DC-EPOCH-05/06/07 introduced at their sub-slices."
+
+[[rules]]
+id = "DC-EPOCH-05"
+tier = "derived"
+statement = """
+Epoch N+1 validation and leadership may NOT observe epoch-N seed inputs (S3f-4b). The active epoch view is a
+ONE-WAY ActiveEpochView transition: `Seed` (the recovered seed view is authoritative) -> `Promoted(view)` (the
+bound N+1 view is authoritative). There is NO config that selects between them -- the activation predicate is
+the gate, not a flag. `ActiveEpochView::promoted()` is `Some` ONLY after a promotion, so N+1 leadership reading
+it can NEVER observe the seed inputs as if they were the N+1 view; before promotion it is `None` (the seed is
+authoritative on its own seed-epoch path). A re-promotion with the SAME view is idempotent; with a DIFFERENT
+view it is the terminal EpochViewActivationConflict (never a silent swap).
+"""
+source = "docs/clusters/EPOCH-CONSENSUS-VIEW/SLICE-3f4-activation-flip.md (S3f-4b); user directive 2026-06-21 (no runtime flag; promoted view fully replaces the seed view)"
+cross_ref = ["DC-EPOCH-04", "DC-EPOCH-07", "DC-EVIEW-11", "DC-EVIEW-07"]
+code_locus = "crates/ade_node/src/epoch_activation.rs: ActiveEpochView{Seed|Promoted(EpochConsensusView)} -- one-way promote() (Seed->Promoted; same-view idempotent; differing-view -> EpochViewActivationConflict), promoted()->Option (Some only post-promotion), is_promoted(). ci/ci_check_eview_activation_predicate.sh."
+tests = ["active_view_one_way_promote_and_idempotence", "active_view_conflicting_promotion_is_terminal", "seed_exposes_no_n1_view_until_promotion"]
+ci_scripts = ["ci/ci_check_eview_activation_predicate.sh"]
+status = "enforced"
+introduced_in = "EPOCH-CONSENSUS-VIEW-S3f-4b"
+strengthened_in = []
+open_obligations = ["The ActiveEpochView state machine (one-way, no seed-after-promotion, terminal conflict) is enforced. OWED (S3f-4d): wire N+1 leadership/header-validation at the node-forge wall to read ActiveEpochView::promoted() (replacing the recovered seed PoolDistrView once Promoted), so the no-seed-inputs guarantee holds on the LIVE path. Gated on the two live cardano-node proofs."]
+attack_rationale = "N+1 must never run on the stale seed view: the active view is one-way (no path back to Seed once Promoted) and exposes the N+1 view ONLY via promoted() which is Some solely after a promotion -- so there is no 'choose old or new by config' state and no fallback. A differing re-promotion is a terminal conflict, not a silent overwrite (no two-view ambiguity). The promotion is atomic (a single enum replace), so a reader sees either the seed or the fully-published promoted view, never a partial."
+evidence_notes = "Introduced at EPOCH-CONSENSUS-VIEW S3f-4b (2026-06-21). The CONTAINER semantics only -- 3 hermetic tests + the gate. cargo test -p ade_node --lib (epoch_activation 5) green. The LIVE leadership read (promoted view replaces the seed view at the wall) is S3f-4d, gated on the live proofs. Next: S3f-4c (durable-before-visible + replay application + crash recovery), then S3f-4d."
+
+[[rules]]
+id = "DC-EPOCH-07"
+tier = "derived"
+statement = """
+A missing / stale / conflicting / mismatched candidate view causes TERMINAL fail-closed behaviour, NEVER
+fallback consensus (S3f-4b). The activation predicate (activation_predicate) is the only gate: Promote requires
+transition-eligible AND bindings-verify AND selected-point-correct AND wal-durable, in that order; any failure
+is NoPromotion(ActivationReject) -- the seed view simply stays authoritative on its seed-epoch path (no
+flag, no fallback to an epoch-WRONG view past the boundary). The terminal states are
+EpochViewActivationError{EpochViewActivationFailed (WAL not durable -> halt before promotion),
+EpochViewActivationConflict (a conflicting activation for the target epoch -> halt), EpochViewPostPromotionMismatch
+(the active view != the WAL record after publication -> halt)}. Falling back to the seed view past the boundary
+is forbidden because it is known epoch-wrong and header validation / follow could then observe stale inputs.
+"""
+source = "docs/clusters/EPOCH-CONSENSUS-VIEW/SLICE-3f4-activation-flip.md (S3f-4b); user directive 2026-06-21 (halt on activation failure or mismatch; no seed-view fallback)"
+cross_ref = ["DC-EPOCH-04", "DC-EPOCH-05", "DC-EVIEW-11", "DC-EPOCH-03"]
+code_locus = "crates/ade_node/src/epoch_activation.rs: activation_predicate(candidate, n1_bindings, selected_point, transition_eligible, wal_durable) -> ActivationOutcome{Promote|NoPromotion(ActivationReject{TransitionIneligible|BindingsUnverified|WrongSelectedPoint|WalNotDurable})}; EpochViewActivationError{EpochViewActivationFailed|EpochViewActivationConflict|EpochViewPostPromotionMismatch}. ci/ci_check_eview_activation_predicate.sh."
+tests = ["predicate_promotes_only_when_every_precondition_holds", "predicate_rejects_each_failed_precondition", "active_view_conflicting_promotion_is_terminal"]
+ci_scripts = ["ci/ci_check_eview_activation_predicate.sh"]
+status = "enforced"
+introduced_in = "EPOCH-CONSENSUS-VIEW-S3f-4b"
+strengthened_in = []
+open_obligations = ["The predicate + the terminal-state types + the conflict-is-terminal container rule are enforced. OWED (S3f-4c/d): wire the live orchestration to RETURN these terminal states (halt) on a WAL-record failure (EpochViewActivationFailed) or a post-publication mismatch (EpochViewPostPromotionMismatch), with NO seed-view fallback -- a structured terminal node state, gated on the live proofs."]
+attack_rationale = "A failed/conflicting/mismatched activation must HALT, never silently continue on the epoch-wrong seed view. The predicate is conjunctive (every precondition required) and ordered, so a partial/unverified/non-durable candidate yields NoPromotion -- the seed stays on its own epoch path (correct pre-boundary), and the live wiring (S3f-4c/d) turns a durability/post-promotion failure into a terminal EpochViewActivation* state, not a fallback. 'No leadership' alone is insufficient past the boundary (header validation/follow could read stale inputs), so the outcome is a structured terminal halt."
+evidence_notes = "Introduced at EPOCH-CONSENSUS-VIEW S3f-4b (2026-06-21). The predicate + terminal-state types only -- 3 hermetic tests + the gate. cargo test -p ade_node --lib (epoch_activation 5) green. The live HALT wiring (returning the terminal states on WAL failure / post-promotion mismatch) is S3f-4c/d, gated on the live proofs. Next: S3f-4c (durable-before-visible + replay application + crash recovery)."
