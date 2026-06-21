@@ -48,6 +48,16 @@ grep -qE 'pub fn last_advanced_slot' "$CP" || fail "last_advanced_slot (the lock
 grep -qF 'LAST_SLOT_KEY' "$CP" || fail "the durable last-advanced-slot marker is missing"
 grep -qE 'fn advance_block_applies_delta_and_records_slot' "$CP" || fail "the -mat-2 advance/slot proof is missing"
 
+# (9) -mat-2b: the live ChainDB-replay advancer reads ONLY the durable ChainDB (selected
+#     chain), in slot order, fail-closed -- not peer/network/clock.
+WD=crates/ade_runtime/src/chaindb/reduced_window_driver.rs
+grep -qE 'pub fn advance_reduced_checkpoint_over_chaindb' "$WD" || fail "the live ChainDB-replay advancer missing"
+grep -qF '.iter_from_slot(from)' "$WD" || fail "the advancer does not replay the durable ChainDB in order"
+grep -qF 'reduced_block_delta(&block, era)' "$WD" || fail "the advancer does not reduce via DC-EVIEW-04"
+grep -qF '.advance_block(stored.slot' "$WD" || fail "the advancer does not advance_block (lockstep slot)"
+grep -qE 'enum CheckpointAdvanceError' "$WD" || fail "the advancer is not fail-closed (CheckpointAdvanceError)"
+grep -qE 'fn advance_over_chaindb_replays_durable_blocks' "$WD" || fail "the -mat-2b advancer proof is missing"
+
 if (( FAILED == 0 )); then
     echo "OK: live reduced checkpoint -mat-1 (DC-EPOCH-11; build from seed UTxO via the proven reduce+checkpoint machinery, disk-backed, gated=byte-identical, before drop(utxo), fail-closed)"
 fi

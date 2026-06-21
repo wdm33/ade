@@ -73,6 +73,66 @@ pub fn drive_window_aggregate(
         .map_err(WindowDriverError::Aggregate)
 }
 
+/// Why the live ChainDB-replay advance could not bring the checkpoint to the tip. Every
+/// variant aborts the advance (fail-closed); the checkpoint stays at its last good slot, so
+/// the lagging check (DC-EPOCH-11) blocks EpochConsensusView production.
+#[derive(Debug)]
+pub enum CheckpointAdvanceError {
+    Checkpoint(ReducedCheckpointError),
+    ChainDb(crate::chaindb::ChainDbError),
+    Decode(String),
+    Delta(ade_ledger::error::LedgerError),
+}
+
+/// EPOCH-CONSENSUS-VIEW S3f-4d-mat-2b (DC-EPOCH-11): advance the live reduced checkpoint over
+/// the durable ChainDB -- the authoritative selected chain -- from its last-advanced slot (or
+/// `bootstrap_slot` if only built) up to `to_slot`, in ChainDB (selected-chain, WAL) order.
+/// Each durably-admitted block: decode -> `reduced_block_delta` (DC-EVIEW-04) ->
+/// `advance_block` (slot recorded atomically). Reads ONLY the durable ChainDB (no peer/
+/// network/wall-clock), so the advance is replay-equivalent + in admission order. Fail-closed:
+/// any decode/delta/checkpoint error aborts with the checkpoint left at its last good slot.
+pub fn advance_reduced_checkpoint_over_chaindb(
+    checkpoint: &ReducedUtxoCheckpoint,
+    chaindb: &dyn crate::chaindb::ChainDb,
+    bootstrap_slot: ade_types::SlotNo,
+    to_slot: ade_types::SlotNo,
+    era: CardanoEra,
+) -> Result<(), CheckpointAdvanceError> {
+    let from = checkpoint
+        .last_advanced_slot()
+        .map_err(CheckpointAdvanceError::Checkpoint)?
+        .map(|s| ade_types::SlotNo(s.0.saturating_add(1)))
+        .unwrap_or(bootstrap_slot);
+    let iter = chaindb
+        .iter_from_slot(from)
+        .map_err(CheckpointAdvanceError::ChainDb)?;
+    for stored in iter {
+        let stored = stored.map_err(CheckpointAdvanceError::ChainDb)?;
+        if stored.slot.0 > to_slot.0 {
+            break;
+        }
+        let block = decode_stored_to_shelley(&stored.bytes)?;
+        let delta = reduced_block_delta(&block, era).map_err(CheckpointAdvanceError::Delta)?;
+        checkpoint
+            .advance_block(stored.slot, &delta.spent, &delta.produced)
+            .map_err(CheckpointAdvanceError::Checkpoint)?;
+    }
+    Ok(())
+}
+
+/// Decode a stored block's bytes into a `ShelleyBlock` via the proven envelope + Conway path.
+fn decode_stored_to_shelley(
+    bytes: &[u8],
+) -> Result<ade_types::shelley::block::ShelleyBlock, CheckpointAdvanceError> {
+    let env = ade_codec::cbor::envelope::decode_block_envelope(bytes)
+        .map_err(|e| CheckpointAdvanceError::Decode(format!("envelope: {e:?}")))?;
+    let inner = &bytes[env.block_start..env.block_end];
+    Ok(ade_codec::conway::decode_conway_block(inner)
+        .map_err(|e| CheckpointAdvanceError::Decode(format!("conway: {e:?}")))?
+        .decoded()
+        .clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,6 +145,39 @@ mod tests {
 
     const RAW_CONWAY_BLOCK: &[u8] =
         include_bytes!("../../../ade_node/tests/fixtures/raw_era_block_conway.cbor");
+
+    /// S3f-4d-mat-2b (DC-EPOCH-11): the live advancer replays the durable ChainDB into the
+    /// checkpoint -- reads the admitted block from the ChainDB, applies its reduced delta,
+    /// and records its slot. Resumes idempotently from last_advanced_slot.
+    #[test]
+    fn advance_over_chaindb_replays_durable_blocks() {
+        use crate::chaindb::types::StoredBlock;
+        use crate::chaindb::{ChainDb, InMemoryChainDb};
+        use ade_types::SlotNo;
+        let dir = tempfile::tempdir().unwrap();
+        let cp = ReducedUtxoCheckpoint::open(&dir.path().join("rc.redb")).unwrap();
+        cp.build_from(&BTreeMap::new()).unwrap(); // empty bootstrap UTxO
+        // store the real conway block durably at slot 1000.
+        let db = InMemoryChainDb::new();
+        db.put_block(&StoredBlock {
+            hash: Hash32([0xab; 32]),
+            slot: SlotNo(1000),
+            bytes: RAW_CONWAY_BLOCK.to_vec(),
+        })
+        .unwrap();
+        // advance from bootstrap_slot 0 up to 2000 -> reads + applies the durable block.
+        advance_reduced_checkpoint_over_chaindb(&cp, &db, SlotNo(0), SlotNo(2000), CardanoEra::Conway)
+            .expect("advance");
+        assert_eq!(
+            cp.last_advanced_slot().unwrap(),
+            Some(SlotNo(1000)),
+            "advanced to the durable block's slot, in ChainDB order"
+        );
+        // resume: a second advance with no new blocks is an idempotent no-op.
+        advance_reduced_checkpoint_over_chaindb(&cp, &db, SlotNo(0), SlotNo(2000), CardanoEra::Conway)
+            .expect("advance2");
+        assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(1000)));
+    }
 
     fn temp_checkpoint() -> (ReducedUtxoCheckpoint, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");

@@ -35,7 +35,10 @@ pub use contract::run_contract_tests;
 pub use crash_safety::{run_crash_safety_tests, KillStrategy, NoKill};
 pub use error::ChainDbError;
 pub use reduced_utxo_checkpoint::{ReducedCheckpointError, ReducedUtxoCheckpoint};
-pub use reduced_window_driver::{drive_window_aggregate, WindowDriverError};
+pub use reduced_window_driver::{
+    advance_reduced_checkpoint_over_chaindb, drive_window_aggregate, CheckpointAdvanceError,
+    WindowDriverError,
+};
 pub use transient_epoch_view::{
     is_valid_window_key, purge_transient_root, transient_root, window_key,
     TransientEpochViewStore, TransientViewError, TRANSIENT_SUBTREE,
