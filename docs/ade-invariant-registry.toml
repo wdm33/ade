@@ -8526,3 +8526,31 @@ strengthened_in = []
 open_obligations = ["The named-role window type + the pure validation are enforced (8 hermetic proofs). TWO PROOF OBLIGATIONS remain: (1) the EXACT value of LEADERSHIP_SNAPSHOT_LAG_EPOCHS (=2) -- pinned by the Cardano snapshot-timing proof + CONFIRMED by the live leadership-schedule proof (the target_epoch whose leadership reads a source_epoch's window). (2) the LIVE extraction (S3f-4d-3): reading the actual durable ChainDB range for source_epoch into SourceWindowBlock[] at the boundary apply site (validated by validate_source_window before producing a candidate). Both gated on a real Conway epoch boundary."]
 attack_rationale = "The candidate must be derived ONLY from the selected, admitted durable chain -- never a peer/file/cache/reconstructed range: the window is pinned by source_window_anchor (the pre-window tip the first block links to) AND lineage_pin (the tip the last block IS), and every intermediate link is checked (block[i].prev_hash == block[i-1].hash), so a missing/duplicate/out-of-window/forked block fails closed BEFORE a candidate is produced. The Mark->Set off-by-one is structurally prevented: target_epoch is never an inline source+k -- it is the single LEADERSHIP_SNAPSHOT_LAG_EPOCHS constant via target_epoch_for_source, and validate_source_window rejects any window whose target_epoch is not that mapping. The exact lag is an explicit proof obligation, not a buried assumption."
 evidence_notes = "Introduced at EPOCH-CONSENSUS-VIEW S3f-4d-1 (2026-06-21), the first sub-slice of the live flip. The named-role window type + the pure validation + the explicit source->target mapping -- HERMETIC, no live behaviour. 8 fail-closed proofs + ci_check_eview_source_window.sh; cargo test -p ade_node --lib (epoch_source_window 8) green. The user flagged the Mark/Set off-by-one as load-bearing: the lag is one auditable constant marked PROOF OBLIGATION (=2, the Set-phase 2-epoch leadership lag), pinned by the snapshot-timing proof + the live leadership-schedule proof. Next: S3f-4d-2 (candidate derivation: window -> drive_window_aggregate -> form_mark_snapshot -> bind), then S3f-4d-3 (the live orchestration + flip), gated on the two live proofs."
+
+[[rules]]
+id = "DC-EPOCH-09"
+tier = "derived"
+statement = """
+The activation candidate is derived ONLY from a validated source window, bound to the TARGET-epoch context
+(S3f-4d-2). derive_candidate drives the reduced checkpoint + cert state forward over the (DC-EPOCH-08 validated)
+window's blocks (DC-EVIEW-10 drive_window_aggregate) -> per-pool stake, then binds it (DC-EVIEW-07
+EpochConsensusView::bind) with the window's TARGET epoch (the Mark->Set lag, NEVER source_epoch), the
+window-end Point{source_window_end, lineage_pin}, the FINALIZED checkpoint commitment (the window drive clears
+the completeness marker; finalize re-marks + returns the commitment), the supplied network/nonce, and the
+window's snapshot_phase. Candidate binding happens BEFORE WAL activation; the candidate's identity is exactly
+what the WAL record (DC-EPOCH-04 activation_record_for) commits to and recovery (DC-EPOCH-06 recover_active_view)
+reproduces. The candidate contents are a pure function of (checkpoint, bootstrap cert state, the window's blocks,
+era, network, nonce) -- no peer/network read, wall-clock, or async side channel. A drive/checkpoint failure is
+fail-closed CandidateDeriveError -- no partial candidate reaches the predicate.
+"""
+source = "docs/clusters/EPOCH-CONSENSUS-VIEW/SLICE-3f4d-live-flip.md (S3f-4d-2)"
+cross_ref = ["DC-EPOCH-08", "DC-EVIEW-10", "DC-EVIEW-07", "DC-EPOCH-04"]
+code_locus = "crates/ade_node/src/epoch_candidate.rs: derive_candidate(window, checkpoint, bootstrap_state, blocks, era, network_magic, nonce) -> drive_window_aggregate -> checkpoint.finalize() (the commitment) -> EpochConsensusView::bind(.., window.target_epoch, Point{source_window_end, lineage_pin}, commitment, nonce, window.snapshot_phase, stake..); CandidateDeriveError{Drive|Checkpoint}. ci/ci_check_eview_candidate.sh."
+tests = ["derive_candidate_binds_target_epoch_and_round_trips_through_recovery"]
+ci_scripts = ["ci/ci_check_eview_candidate.sh"]
+status = "enforced"
+introduced_in = "EPOCH-CONSENSUS-VIEW-S3f-4d-2"
+strengthened_in = []
+open_obligations = ["The derivation (drive -> finalize -> bind to the target-epoch context) is enforced + its identity round-trips through the WAL record + recovery. OWED (S3f-4d-3): the LIVE call -- at the boundary apply site, validate the durable ChainDB window (DC-EPOCH-08), derive the candidate, run the predicate (DC-EPOCH-05/07), write the WAL (DC-EPOCH-06), publish; gated on the two live proofs."]
+attack_rationale = "The candidate must be bound to the epoch whose leadership reads it (target_epoch), NOT the source epoch -- derive_candidate binds window.target_epoch (CI-pinned; binding source_epoch is rejected by the gate), so the Mark->Set off-by-one cannot leak into the candidate identity. The checkpoint commitment is the FINALIZED window-end state (the drive clears the marker; a stale/incomplete commitment is impossible because finalize re-marks + returns it). Binding happens before WAL activation, so the durable record commits to the exact candidate. The contents are pure (no peer/clock/async), so the candidate is replay-identical -- recovery re-derives the SAME view (proven: the candidate round-trips through activation_record_for + recover_active_view to Promoted). A drive/checkpoint error yields no candidate (fail closed), never a partial one."
+evidence_notes = "Introduced at EPOCH-CONSENSUS-VIEW S3f-4d-2 (2026-06-21), the second sub-slice of the live flip. The candidate derivation composing the proven driver (DC-EVIEW-10) + bind (DC-EVIEW-07) -- RED (drives the redb checkpoint) but pure contents. 1 hermetic proof over the REAL conway block: the candidate is bound to the target epoch + the window context AND round-trips through the WAL activation record + recovery (tying S3f-4d-2 to S3f-4a/c). ci_check_eview_candidate.sh; cargo test -p ade_node --lib (epoch_candidate 1) green. Next: S3f-4d-3 (the live orchestration + the flip) -- the ONLY remaining sub-slice, gated on the boundary-aligned stake oracle + the leadership-schedule proof."
