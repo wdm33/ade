@@ -33,6 +33,7 @@
 //!   - C2  — `view` adds `LiveLedgerView`. DC-VIEW-01.
 
 pub mod canonical;
+pub mod cert_state_extract;
 pub mod importer;
 pub mod json;
 pub mod protocol_params;

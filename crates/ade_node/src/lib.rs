@@ -17,6 +17,7 @@ pub mod admission;
 pub mod admission_log;
 pub mod ba02_evidence;
 pub mod ba02_pass;
+pub mod bootstrap_export;
 pub mod candidate_aggregator;
 pub mod cli;
 pub mod convergence_evidence;

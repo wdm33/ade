@@ -144,6 +144,36 @@ async fn main() -> ExitCode {
             let _ = std::fs::remove_file(&cli.log_path);
             ade_node::run_node_lifecycle(cli, shutdown_rx).await
         }
+        Mode::BootstrapExport => {
+            // One-shot producer command; drop the wire-only writer + its stray log.
+            drop(writer);
+            let _ = std::fs::remove_file(&cli.log_path);
+            let output_base = match cli.output_base.clone() {
+                Some(p) => p,
+                None => {
+                    eprintln!("--mode bootstrap_export requires --output <base>");
+                    return ExitCode::from(ade_node::EXIT_GENERIC_STARTUP as u8);
+                }
+            };
+            match ade_node::bootstrap_export::run_bootstrap_export_command(
+                &cli.network,
+                &output_base,
+                cli.keep_raw_capture,
+            ) {
+                Ok(r) => {
+                    println!("bootstrap-export OK (network {}):", cli.network);
+                    println!("  bundle:    {}  ({})", r.bundle_path, r.bundle_hash);
+                    println!("  certstate: {}  ({})", r.certstate_path, r.certstate_hash);
+                    println!("  manifest:  {}  ({})", r.manifest_path, r.manifest_hash);
+                    println!("  inspect:   {}", r.inspect_path);
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("bootstrap-export FAILED: {e:?}");
+                    ExitCode::from(ade_node::bootstrap_export::EXIT_BOOTSTRAP_EXPORT_FAILURE as u8)
+                }
+            }
+        }
     }
 }
 

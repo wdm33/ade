@@ -4855,6 +4855,8 @@ mod tests {
             single_producer_venue: false,
             participant_venue: false,
             convergence_evidence_path: None,
+            output_base: None,
+            keep_raw_capture: false,
         };
         Fixture { _dir: dir, cli }
     }
@@ -5754,6 +5756,8 @@ mod tests {
             single_producer_venue: false,
             participant_venue: false,
             convergence_evidence_path: None,
+            output_base: None,
+            keep_raw_capture: false,
         }
     }
 

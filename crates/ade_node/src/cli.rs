@@ -46,6 +46,12 @@ pub enum Mode {
     /// recovery (L3) wiring. Required flags: `--snapshot-dir`,
     /// `--wal-dir`.
     Node,
+    /// BOOTSTRAP-CERTSTATE-PRODUCER: one-shot deterministic bootstrap-package
+    /// export. Resolves a committed `NetworkProfile` for `--network`, captures
+    /// the live node's immutable-tip state at one pinned point, and emits the
+    /// four mutually-bound `<output>.json{,.certstate,.manifest,.inspect.json}`
+    /// artifacts. Required flags: `--network`, `--output`.
+    BootstrapExport,
 }
 
 impl Mode {
@@ -56,6 +62,7 @@ impl Mode {
             "key_gen_kes" => Some(Self::KeyGenKes),
             "produce" => Some(Self::Produce),
             "node" => Some(Self::Node),
+            "bootstrap_export" => Some(Self::BootstrapExport),
             _ => None,
         }
     }
@@ -149,6 +156,12 @@ pub struct Cli {
     /// (parsed but not yet read by the node lifecycle; the participant-path
     /// emission flip is AJ-S2).
     pub convergence_evidence_path: Option<PathBuf>,
+    /// BOOTSTRAP-CERTSTATE-PRODUCER (`--mode bootstrap_export`): the output base
+    /// `<output>` → `<output>.json` + the three bound siblings. Required for the mode.
+    pub output_base: Option<PathBuf>,
+    /// `--keep-raw-capture`: preserve the RED raw ledger-state dump for diagnosis
+    /// (NEVER the default; the dump is otherwise deleted on all paths).
+    pub keep_raw_capture: bool,
 }
 
 /// Closed admission-mode CLI bundle (B5).
@@ -265,6 +278,8 @@ impl Cli {
         let mut single_producer_venue = false;
         let mut participant_venue = false;
         let mut convergence_evidence_path: Option<PathBuf> = None;
+        let mut output_base: Option<PathBuf> = None;
+        let mut keep_raw_capture = false;
 
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -317,6 +332,15 @@ impl Cli {
                         CliError::FlagMissingValue("--convergence-evidence-path".to_string())
                     })?;
                     convergence_evidence_path = Some(PathBuf::from(v));
+                }
+                "--output" => {
+                    let v = iter
+                        .next()
+                        .ok_or_else(|| CliError::FlagMissingValue("--output".to_string()))?;
+                    output_base = Some(PathBuf::from(v));
+                }
+                "--keep-raw-capture" => {
+                    keep_raw_capture = true;
                 }
                 "--mode" => {
                     let v = iter
@@ -471,7 +495,7 @@ impl Cli {
         // context; --genesis-path is not relevant. We synthesize a
         // sentinel placeholder so the field stays non-optional for
         // downstream consumers.
-        let genesis_path = if mode == Mode::KeyGenKes || mode == Mode::Produce {
+        let genesis_path = if mode == Mode::KeyGenKes || mode == Mode::Produce || mode == Mode::BootstrapExport {
             // KeyGenKes: no chain context needed.
             // Produce: --genesis-file is the produce-mode-specific
             //          genesis path; --genesis-path stays optional.
@@ -516,6 +540,8 @@ impl Cli {
             single_producer_venue,
             participant_venue,
             convergence_evidence_path,
+            output_base,
+            keep_raw_capture,
         })
     }
 
@@ -666,6 +692,32 @@ mod tests {
         assert_eq!(cli.network, "preprod");
         assert!(cli.chain_db_path.is_none());
         assert!(cli.peer_addrs.is_empty());
+    }
+
+    #[test]
+    fn parses_bootstrap_export_mode_and_flags_without_genesis() {
+        // bootstrap_export needs no --genesis-path (it resolves the committed NetworkProfile).
+        let cli = parse(&[
+            "--mode",
+            "bootstrap_export",
+            "--network",
+            "preview",
+            "--output",
+            "/tmp/ade-inputs-ep1336",
+            "--keep-raw-capture",
+        ])
+        .expect("parse");
+        assert_eq!(cli.mode, Mode::BootstrapExport);
+        assert_eq!(cli.network, "preview");
+        assert_eq!(cli.output_base, Some(PathBuf::from("/tmp/ade-inputs-ep1336")));
+        assert!(cli.keep_raw_capture);
+    }
+
+    #[test]
+    fn bootstrap_export_keep_raw_defaults_false() {
+        let cli = parse(&["--mode", "bootstrap_export", "--network", "preview", "--output", "/tmp/x"])
+            .expect("parse");
+        assert!(!cli.keep_raw_capture, "--keep-raw-capture must default to false");
     }
 
     #[test]

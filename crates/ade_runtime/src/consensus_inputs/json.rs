@@ -17,13 +17,13 @@
 //! commands and assemble the result. The expected shape is
 //! fixed; per ¬P-C4 there is no partial-import fallback.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// The full operator bundle. All fields are mandatory and there is
 /// no `#[serde(default)]`: a missing field is a JSON deserialization
 /// error before the typed-import layer is even reached.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RawConsensusInputs {
     /// Cardano network magic (e.g. `1` for preprod).
@@ -88,7 +88,7 @@ pub struct RawConsensusInputs {
 
 /// Rational fraction `numer / denom` for ASC. `denom` must be
 /// non-zero (enforced in `importer.rs`).
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RawFraction {
     pub numer: u32,
@@ -96,7 +96,7 @@ pub struct RawFraction {
 }
 
 /// Per-pool entry. Active stake in lovelace.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RawPoolEntry {
     pub active_stake: u64,
@@ -109,10 +109,49 @@ pub fn parse_consensus_inputs_json(bytes: &[u8]) -> Result<RawConsensusInputs, s
     serde_json::from_slice(bytes)
 }
 
+/// The encoder counterpart to [`parse_consensus_inputs_json`] — the SOLE pub fn producing the
+/// operator-bundle JSON bytes from the typed shape. `bootstrap-export` (BOOTSTRAP-CERTSTATE-PRODUCER)
+/// assembles a `RawConsensusInputs` and calls THIS to emit `<base>.json`; it never hand-rolls the
+/// format, so the emitted bundle is parse-identical to the import authority (the round-trip test
+/// pins `parse(encode(raw)) == raw`).
+pub fn encode_consensus_inputs_json(raw: &RawConsensusInputs) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec_pretty(raw)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    const MINIMAL_BUNDLE: &str = r#"{
+        "network_magic": 2,
+        "genesis_hash_hex": "9a",
+        "era": "conway",
+        "epoch_no": 1336,
+        "epoch_start_slot": 1,
+        "epoch_end_slot": 432000,
+        "active_slots_coeff": {"numer": 1, "denom": 20},
+        "epoch_nonce_hex": "bb",
+        "pool_distribution": {"11": {"active_stake": 1000}},
+        "pool_vrf_keyhashes": {"11": "22"},
+        "protocol_params_hash_hex": "dd",
+        "source_cardano_node_version": "cardano-node 11.0.1",
+        "source_query_command": "cardano-cli query ...",
+        "source_tip_hash_hex": "ab",
+        "source_tip_slot": 115455568,
+        "protocol_params_json": "{\"k\":1}",
+        "network": "preview"
+    }"#;
+
+    #[test]
+    fn encode_round_trips_through_the_parser_authority() {
+        // bootstrap-export reuses THIS authority to emit <base>.json: encode(parse(json)) must
+        // re-parse to the identical typed shape (never a parallel JSON format).
+        let raw = parse_consensus_inputs_json(MINIMAL_BUNDLE.as_bytes()).unwrap();
+        let bytes = encode_consensus_inputs_json(&raw).unwrap();
+        let raw2 = parse_consensus_inputs_json(&bytes).unwrap();
+        assert_eq!(raw, raw2, "encode(parse(json)) re-parses to the SAME RawConsensusInputs");
+    }
 
     const MINIMAL: &str = r#"{
         "network_magic": 1,
