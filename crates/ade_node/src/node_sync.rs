@@ -31,7 +31,6 @@ use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::leader_schedule::{query_leader_schedule, LeaderScheduleQuery};
 use ade_core::consensus::ledger_view::LedgerView;
 use ade_core::consensus::praos_state::PraosChainDepState;
-use ade_ledger::consensus_view::PoolDistrView;
 use ade_ledger::pparams::ProtocolParameters;
 use ade_ledger::receive::events::TipPoint;
 use ade_ledger::state::LedgerState;
@@ -617,6 +616,12 @@ pub enum NodeForgeError {
     /// Fail closed rather than default to a magic block number (the
     /// cold-start `block 0` path is the `selected_tip == None` branch).
     RecoveredTipMissingBlockNo,
+    /// EPOCH-CONTINUITY-ACTIVATION ECA-3 (DC-EPOCH-14 #9): the active epoch-authority's epoch does
+    /// NOT equal the slot's protocol epoch -- a MISSING promotion (authority behind: the boundary was
+    /// crossed but N+1 was never activated; NEVER forge with the stale seed view) or a PREMATURE
+    /// promotion (authority ahead). A structured TERMINAL halt BEFORE leadership, NOT the
+    /// ForgeNotLeader skip -- a wrong-epoch leadership view would forge an invalid block.
+    AuthorityEpochMismatch(crate::epoch_activation::AuthorityEpochError),
 }
 
 /// PHASE4-N-F-G-A S4 — the node forge path's explicit single-recovered-seed-epoch
@@ -1527,6 +1532,11 @@ pub fn forge_one_from_recovered(
     slot: u64,
     kes_period: u32,
     protocol_version: ProtocolVersion,
+    // ECA-3 (DC-EPOCH-14): the ONE epoch-authority -- the SAME holder header validation reads. The
+    // forge's leadership view IS `authority.pool_distr_view()` (the seed view before promotion, the
+    // promoted N+1 view after); its promoted source feeds the rebind gate. Both consumers resolve
+    // the one holder (criterion #2/#11) -- never a separately-built leadership view.
+    authority: &crate::epoch_activation::ActiveEpochAuthority,
 ) -> Result<(CoordinatorEvent, Option<SelfAcceptedHandoff>), NodeForgeError> {
     // Fail-closed: the leadership view MUST be the recovered surface.
     let recovered_inputs = recovered
@@ -1547,7 +1557,48 @@ pub fn forge_one_from_recovered(
     // authoritative, no leader-election behaviour change. A future bound, matching N+1
     // view would atomically promote here (the Promote arm); unreachable today.
     let admission = forge_epoch_admission(slot, era_schedule, recovered_inputs.epoch_no);
-    match crate::epoch_rebind::decide_epoch_rebind(admission, None) {
+    // DC-EPOCH-14 #9 (guard, slot-aware bidirectional, BEFORE leader eligibility): the authority MUST
+    // be at the slot's protocol epoch -- a missing/premature promotion is a structured TERMINAL halt,
+    // NOT the ForgeNotLeader skip (a wrong-epoch leadership view would forge an invalid block). The
+    // slot's epoch is the admission's located epoch (the SAME EraSchedule::locate map leadership +
+    // forge_epoch_admission use, so the guard never diverges); an unlocatable slot falls through to
+    // the rebind gate's existing fail-closed skip below. Runs BEFORE the gate so a mismatch HALTS.
+    let slot_protocol_epoch = match admission {
+        ForgeEpochAdmission::WithinSeedEpoch => Some(recovered_inputs.epoch_no),
+        ForgeEpochAdmission::OffEpoch { candidate_epoch, .. } => candidate_epoch,
+    };
+    if let Some(protocol_epoch) = slot_protocol_epoch {
+        match authority.guard_epoch(protocol_epoch) {
+            crate::epoch_activation::AuthorityEpochVerdict::Permitted => {}
+            // PrematurePromotion (authority ahead), or MissingPromotion under ContinuityRequired ->
+            // a structured TERMINAL halt (a wrong-epoch leadership view would forge an invalid block).
+            crate::epoch_activation::AuthorityEpochVerdict::Terminal(e) => {
+                return Err(NodeForgeError::AuthorityEpochMismatch(e));
+            }
+            // A SEED-ONLY producer past its supported epoch: it has no N+1 view, so it does NOT forge
+            // -- but this is NOT a fault (the contract is single-epoch), so it keeps FOLLOWING. The
+            // structured no-forge is the existing DC-EPOCH-03 ForgeNotLeader; the loop stays alive.
+            crate::epoch_activation::AuthorityEpochVerdict::SeedOnlyPastSupport { .. } => {
+                return Ok((
+                    CoordinatorEvent::ForgeNotLeader {
+                        slot,
+                        vrf_output_fingerprint: [0u8; 8],
+                    },
+                    None,
+                ));
+            }
+        }
+    }
+    // ECA-3 (DC-EPOCH-14): feed the authority's bound N+1 view into the rebind gate (was `None`).
+    // NOT promoted -> `None` -> OffEpoch fails closed EXACTLY as the pre-seam wall (byte-identical).
+    // Promoted -> the gate's Promote arm opens (off-epoch forging on the N+1 view the authority
+    // already holds + validated at the boundary). The decision and `authority.pool_distr_view()`
+    // agree by construction; the authority is the view source either way.
+    let bound_bindings = authority
+        .promoted_source()
+        .map(crate::epoch_activate::candidate_bindings);
+    let bound_n1 = authority.promoted_source().zip(bound_bindings.as_ref());
+    match crate::epoch_rebind::decide_epoch_rebind(admission, bound_n1) {
         crate::epoch_rebind::EpochRebindDecision::FailClosed(_) => {
             // PHASE4-N-F-G-B S1: a fail-closed (off-epoch) outcome surfaces no
             // handoff — a non-self-accepted result yields no servable artifact.
@@ -1566,9 +1617,11 @@ pub fn forge_one_from_recovered(
         crate::epoch_rebind::EpochRebindDecision::Promote(_view) => {}
     }
 
-    // DC-CINPUT-02b: project the leadership PoolDistrView from the
-    // RECOVERED record — the sole consensus-input source on this path.
-    let pool_distr_view = PoolDistrView::from_seed_epoch_consensus_inputs(recovered_inputs);
+    // ECA-3 (DC-EPOCH-14): the leadership view IS the ONE authority's current view -- the SEED view
+    // (== the recovered surface `from_seed_epoch_consensus_inputs`, byte-identical) before promotion,
+    // the promoted N+1 view after. The SAME holder header validation reads; never a separately-built
+    // view (criterion #2/#11). `recovered_inputs` still anchors the seed-epoch admission above.
+    let pool_distr_view = authority.pool_distr_view();
 
     // Leadership is decided OVER the recovered projected view: query the
     // leader schedule for the operator's pool against it. The view passed
@@ -1581,7 +1634,7 @@ pub fn forge_one_from_recovered(
             slot: SlotNo(slot),
             pool: pool_id.clone(),
         },
-        &pool_distr_view,
+        pool_distr_view,
         era_schedule,
         live_chain_dep,
     ) {
@@ -1612,7 +1665,7 @@ pub fn forge_one_from_recovered(
         base_state: live_ledger,
         chain_dep_state: live_chain_dep,
         era_schedule,
-        pool_distr_view: &pool_distr_view,
+        pool_distr_view,
         block_number: BlockNo(next_block_number),
         prev_hash,
         protocol_version,
@@ -3255,6 +3308,24 @@ mod tests {
     /// leadership is decidable from the RECOVERED surface). `vrf_keyhash`
     /// is arbitrary — leadership eligibility (not header binding) is what
     /// the projection drives here.
+    // ECA-3 (DC-EPOCH-14): a SEED authority over the recovered surface for the forge tests. Its
+    // `pool_distr_view()` == `PoolDistrView::from_seed_epoch_consensus_inputs(recovered inputs)` --
+    // the SAME view the forge built internally pre-unification -- so leadership is byte-identical
+    // (the forge tests are the byte-identity proof for Phase 3b's seed path).
+    fn seed_pdv(recovered: &BootstrapState) -> PoolDistrView {
+        match recovered.seed_epoch_consensus_inputs.as_ref() {
+            Some(inputs) => PoolDistrView::from_seed_epoch_consensus_inputs(inputs),
+            // The no-recovered-inputs fail-closed test forges with NO sidecar -- the forge halts on
+            // MissingRecoveredConsensusInputs BEFORE it consults the view, so an empty view is unused.
+            None => PoolDistrView::new(
+                EpochNo(0),
+                0,
+                ActiveSlotsCoeff { numer: 0, denom: 1 },
+                BTreeMap::new(),
+            ),
+        }
+    }
+
     fn l5_recovered_inputs() -> SeedEpochConsensusInputs {
         let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
         pools.insert(
@@ -3398,6 +3469,7 @@ mod tests {
             13,
             0,
             ProtocolVersion { major: 9, minor: 0 },
+            &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
         )
         .expect("recovered base hosts a forge");
         assert!(
@@ -3430,6 +3502,7 @@ mod tests {
             100,
             0,
             ProtocolVersion { major: 9, minor: 0 },
+            &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
         )
         .expect("ok");
         let (e2, h2) = forge_one_from_recovered(
@@ -3444,6 +3517,7 @@ mod tests {
             100,
             0,
             ProtocolVersion { major: 9, minor: 0 },
+            &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
         )
         .expect("ok");
         assert_eq!(e1, e2, "recovered-state forge is replay byte-identical");
@@ -3549,6 +3623,7 @@ mod tests {
             1,
             0,
             ProtocolVersion { major: 9, minor: 0 },
+            &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
         )
         .expect("forge over the recovered genesis base");
         let handoff = match (event, handoff) {
@@ -3713,6 +3788,7 @@ mod tests {
             1,
             0,
             ProtocolVersion { major: 9, minor: 0 },
+            &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
         )
         .expect("forge block 0 over the recovered genesis base");
         let handoff0 = match (event0, handoff0) {
@@ -3784,6 +3860,7 @@ mod tests {
                 2,
                 0,
                 ProtocolVersion { major: 9, minor: 0 },
+                &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
             )
             .expect("forge block 1 over the durable tip");
             let handoff1 = match (event1, handoff1) {
@@ -3925,6 +4002,7 @@ mod tests {
             1,
             0,
             ProtocolVersion { major: 9, minor: 0 },
+            &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
         )
         .expect("forge block 0 over the recovered genesis base");
         let handoff0 = match (event0, handoff0) {
@@ -3987,6 +4065,7 @@ mod tests {
                 2,
                 0,
                 ProtocolVersion { major: 9, minor: 0 },
+                &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
             )
             .expect("forge block 1 over durable tip 0");
             let handoff1 = match (event1, handoff1) {
@@ -4020,6 +4099,7 @@ mod tests {
                 3,
                 0,
                 ProtocolVersion { major: 9, minor: 0 },
+                &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
             )
             .expect("forge block 2 over durable tip 1");
             let handoff2 = match (event2, handoff2) {
@@ -4084,6 +4164,7 @@ mod tests {
             7,
             0,
             ProtocolVersion { major: 9, minor: 0 },
+            &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
         );
         assert!(
             matches!(r, Err(NodeForgeError::MissingRecoveredConsensusInputs)),
@@ -4138,6 +4219,7 @@ mod tests {
             100,
             0,
             ProtocolVersion { major: 9, minor: 0 },
+            &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
         );
         // The forge READ the evolved block_no and proceeded past the position to
         // build the successor — it did NOT RecoveredTipMissingBlockNo. (A
@@ -4166,6 +4248,7 @@ mod tests {
             100,
             0,
             ProtocolVersion { major: 9, minor: 0 },
+            &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
         );
         assert!(
             matches!(r, Err(NodeForgeError::RecoveredTipMissingBlockNo)),
@@ -4257,6 +4340,7 @@ mod tests {
             13,
             0,
             ProtocolVersion { major: 9, minor: 0 },
+            &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
         )
         .expect("cold-start forge over the recovered base");
         match event {
@@ -5137,6 +5221,7 @@ mod tests {
             432_000,
             3,
             ProtocolVersion { major: 9, minor: 0 },
+            &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
         )
         .expect("off-epoch forge handoff is representable as a structured outcome");
         assert!(
@@ -5152,6 +5237,52 @@ mod tests {
         assert!(
             handoff.is_none(),
             "off-epoch fail-closed must surface no self-accepted handoff"
+        );
+    }
+
+    #[test]
+    fn forge_continuity_required_missing_promotion_at_n1_is_terminal() {
+        // DC-EPOCH-14 #9 (the CONTINUITY contract): a continuity-capable producer (the EVIEW package
+        // is bound -> ContinuityRequired) at an off-epoch slot with a seed (unpromoted) authority is
+        // a TERMINAL MissingPromotion -- the boundary should have activated. The deliberate contrast
+        // to node_forge_off_epoch_slot_fails_closed (SeedOnly: a graceful ForgeNotLeader, loop alive):
+        // SAME recovered surface + SAME off-epoch slot 432000, ONLY the authority MODE differs.
+        let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+        let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
+        let sched = l5_era_schedule();
+        let tip = recovered.tip.clone().expect("recovered tip");
+        let sv = seed_pdv(&recovered);
+        let continuity = crate::epoch_activation::ActiveEpochAuthority::continuity(
+            &sv,
+            ade_core::consensus::events::Point {
+                slot: SlotNo(0),
+                hash: Hash32([0; 32]),
+            },
+            Hash32([0xAB; 32]),
+            crate::epoch_activation::TargetEpochPolicy::SetSnapshotLag { lag_epochs: 2 },
+        );
+        let r = forge_one_from_recovered(
+            &recovered,
+            &recovered.chain_dep,
+            &recovered.ledger,
+            Some(&tip),
+            &mut shell,
+            &L5_POOL,
+            &ProtocolParameters::default(),
+            &sched,
+            432_000,
+            3,
+            ProtocolVersion { major: 9, minor: 0 },
+            &continuity,
+        );
+        assert!(
+            matches!(
+                r,
+                Err(NodeForgeError::AuthorityEpochMismatch(
+                    crate::epoch_activation::AuthorityEpochError::MissingPromotion { .. }
+                ))
+            ),
+            "continuity-required + N+1 slot + no promotion must be TERMINAL MissingPromotion, got {r:?}"
         );
     }
 
@@ -5187,6 +5318,7 @@ mod tests {
             100,
             0,
             ProtocolVersion { major: 9, minor: 0 },
+            &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
         )
         .expect("on-epoch forge handoff is representable");
         // Leadership ran (on-epoch) — a real forge result, never the typed
@@ -5342,7 +5474,10 @@ mod tests {
         let recovered =
             l5_recovered_state_cold(Some(l5_recovered_inputs_for_pool(op_pool.clone())));
         let coordinator = s2_coordinator_state();
-        let view = s2_idle_view();
+        // ECA-3 (DC-EPOCH-14): the relay loop's seed view MUST be the SAME surface the forge's
+        // `recovered` carries (in production they ARE one recovered state) -- the forge now reads the
+        // loop's ONE authority, so an idle/empty seed view here would make the operator a non-leader.
+        let view = seed_pdv(&recovered);
         let mut clock = DeterministicClock::new(0, vec![100_000]);
         let mut act = ForgeActivation::new(
             &mut clock,
@@ -6455,6 +6590,7 @@ mod tests {
             1,
             0,
             ProtocolVersion { major: 9, minor: 0 },
+            &crate::epoch_activation::ActiveEpochAuthority::seed(&seed_pdv(&recovered)),
         )
         .expect("forge block 0 over the recovered genesis base");
         let handoff0 = match (event0, handoff0) {

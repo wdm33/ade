@@ -16,10 +16,12 @@
 //! seed view.
 
 use ade_core::consensus::events::Point;
+use ade_core::consensus::ledger_view::LedgerView;
+use ade_ledger::consensus_view::PoolDistrView;
 use ade_ledger::reduced_epoch_view::{EpochConsensusView, ViewBindings};
 use ade_ledger::wal::event::{activation_replay_outcome, ActivationReplayOutcome};
 use ade_ledger::wal::WalEntry;
-use ade_types::EpochNo;
+use ade_types::{EpochNo, Hash32};
 use std::collections::BTreeMap;
 
 /// Whether a candidate view may be PUBLISHED as the active view. The activation predicate
@@ -84,6 +86,75 @@ pub enum EpochViewActivationError {
     EpochViewPostPromotionMismatch,
 }
 
+/// EPOCH-CONTINUITY-ACTIVATION ECA-3 (DC-EPOCH-14, criterion #9): why an authoritative decision is
+/// refused because the active authority's epoch does not equal the protocol epoch implied by the
+/// block/slot context. Slot-aware + bidirectional; each is a structured TERMINAL halt — NEVER an
+/// implicit fallback to the seed view. (The two variants partition every inequality: `!=` is always
+/// either `<` or `>`.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorityEpochError {
+    /// `authority_epoch < protocol_epoch(slot)`: the boundary was crossed but the N+1 view was never
+    /// promoted (a MISSING promotion). The seed view is epoch-wrong for this block — halt, never fall
+    /// back to it.
+    MissingPromotion {
+        authority_epoch: EpochNo,
+        protocol_epoch: EpochNo,
+    },
+    /// `authority_epoch > protocol_epoch(slot)`: a PREMATURE promotion — the active view is ahead of
+    /// the block/slot's protocol epoch.
+    PrematurePromotion {
+        authority_epoch: EpochNo,
+        protocol_epoch: EpochNo,
+    },
+}
+
+/// EPOCH-CONTINUITY-ACTIVATION ECA-3 (DC-EPOCH-14): the producer's epoch-authority CONTRACT — a
+/// CANONICAL mode established from durable bootstrap/sidecar/manifest state (NOT an ambient runtime
+/// flag, which would be a forbidden semantic switch deciding consensus), recovered IDENTICALLY on
+/// warm-start, part of the authority's identity. It decides whether a missing N+1 promotion at an
+/// N+1 slot is a graceful no-forge (a seed-only limited producer past its supported epoch — keeps
+/// following) or a TERMINAL authority failure (a continuity-capable producer whose boundary should
+/// have activated).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EpochAuthorityMode {
+    /// The producer supports forging ONLY within its seed epoch — no continuity mechanism is bound.
+    /// Past `supported_epoch` it does NOT forge (no N+1 view) but keeps following; this is NOT a
+    /// fault, so it never halts the node.
+    SeedOnly { supported_epoch: EpochNo },
+    /// The producer is continuity-capable: an N+1 activation is EXPECTED at the boundary because the
+    /// EVIEW package (the reduced checkpoint + the v4 consensus-profile sidecar) is bound in durable
+    /// state. A missing promotion at an N+1 slot is a TERMINAL authority failure.
+    ContinuityRequired {
+        /// The bound source chain point the activation derives from (the bootstrap/seed point).
+        source_binding: Point,
+        /// The consensus-profile commitment (genesis ++ protocol-params ++ ASC) the activation must
+        /// match — the DC-CINPUT-06 hashes recovered from the v4 sidecar.
+        activation_profile_commitment: Hash32,
+        /// The leadership snapshot / target-epoch policy (the DC-EPOCH-08 lag).
+        target_epoch_policy: TargetEpochPolicy,
+    },
+}
+
+/// The leadership target-epoch / snapshot policy bound into [`EpochAuthorityMode::ContinuityRequired`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetEpochPolicy {
+    /// Leadership reads the SET snapshot at the documented lag (`LEADERSHIP_SNAPSHOT_LAG_EPOCHS`).
+    SetSnapshotLag { lag_epochs: u32 },
+}
+
+/// DC-EPOCH-14 #9: the verdict of the per-call epoch guard. `Permitted` proceeds; `Terminal` halts
+/// (a structured [`AuthorityEpochError`]); `SeedOnlyPastSupport` is a graceful no-forge for a
+/// seed-only producer past its supported epoch — the follow loop stays ALIVE (never a halt).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorityEpochVerdict {
+    Permitted,
+    Terminal(AuthorityEpochError),
+    SeedOnlyPastSupport {
+        supported_epoch: EpochNo,
+        slot_epoch: EpochNo,
+    },
+}
+
 /// The atomically-published active epoch view (DC-EPOCH-05). A ONE-WAY Seed→Promoted
 /// transition: before promotion the recovered seed view is authoritative; after, ONLY the
 /// promoted view is. There is no config that selects between them.
@@ -130,6 +201,154 @@ impl ActiveEpochView {
     /// Whether a promotion has occurred.
     pub fn is_promoted(&self) -> bool {
         matches!(self, ActiveEpochView::Promoted(_))
+    }
+}
+
+/// EPOCH-CONTINUITY-ACTIVATION ECA-3 (DC-EPOCH-14): the ONE owned, epoch-versioned authority the
+/// relay loop holds — the SOLE view source for BOTH header validation AND leadership/forge. It
+/// carries the recovered seed `PoolDistrView` (epoch N) and, after an atomic boundary promotion,
+/// the projected N+1 `PoolDistrView` (derived from the bound `EpochConsensusView` via DC-EPOCH-12's
+/// `to_pool_distr_view`). Consumers resolve `ledger_view()` / `pool_distr_view()` FRESH at each
+/// authoritative decision, so a borrowed view never outlives the swap. The promotion reuses the
+/// `ActiveEpochView` activation-state logic (one-way Seed→Promoted; idempotent on the SAME source;
+/// a conflicting source is terminal), with the projected view as a derived cache kept in lockstep
+/// (`activation.is_promoted() == promoted_view.is_some()`, established by the constructors).
+#[derive(Debug, Clone)]
+pub struct ActiveEpochAuthority<'a> {
+    /// The recovered seed (epoch-N) view — BORROWED for the loop's lifetime (the relay loop's seed
+    /// `PoolDistrView`, the same value the pre-refactor `ledger_view` param carried); the authority
+    /// before any promotion.
+    seed_view: &'a PoolDistrView,
+    /// The activation state: `Seed` until the boundary promotes the bound N+1 `EpochConsensusView`.
+    /// The single source of truth for the one-way + conflict + idempotence semantics.
+    activation: ActiveEpochView,
+    /// The projected N+1 `PoolDistrView` (DC-EPOCH-12), `Some` IFF `activation.is_promoted()` —
+    /// OWNED, installed atomically with the promotion. A derived cache of the promoted view.
+    promoted_view: Option<PoolDistrView>,
+    /// The CANONICAL authority mode (DC-EPOCH-14): `SeedOnly` (a limited producer) vs
+    /// `ContinuityRequired` (continuity-capable). Established from durable state, part of the
+    /// authority's identity; decides whether a missing promotion at an N+1 slot is terminal.
+    mode: EpochAuthorityMode,
+}
+
+impl<'a> ActiveEpochAuthority<'a> {
+    /// Construct a SEED-ONLY authority from the recovered seed `PoolDistrView` (epoch N): a limited
+    /// producer that forges only within its seed epoch and gracefully no-forges (keeps following)
+    /// past it. No promotion; the mode is `SeedOnly` keyed to the seed view's epoch.
+    pub fn seed(seed_view: &'a PoolDistrView) -> Self {
+        let supported_epoch = seed_view.epoch();
+        Self {
+            seed_view,
+            activation: ActiveEpochView::Seed,
+            promoted_view: None,
+            mode: EpochAuthorityMode::SeedOnly { supported_epoch },
+        }
+    }
+
+    /// Construct a CONTINUITY-REQUIRED authority (DC-EPOCH-14): a continuity-capable producer whose
+    /// boundary activation is EXPECTED — a missing promotion at an N+1 slot is terminal. The mode's
+    /// bindings (the source point + the consensus-profile commitment + the target-epoch policy) are
+    /// established from durable state, recovered identically on warm-start.
+    pub fn continuity(
+        seed_view: &'a PoolDistrView,
+        source_binding: Point,
+        activation_profile_commitment: Hash32,
+        target_epoch_policy: TargetEpochPolicy,
+    ) -> Self {
+        Self {
+            seed_view,
+            activation: ActiveEpochView::Seed,
+            promoted_view: None,
+            mode: EpochAuthorityMode::ContinuityRequired {
+                source_binding,
+                activation_profile_commitment,
+                target_epoch_policy,
+            },
+        }
+    }
+
+    /// The current authoritative `LedgerView` (header VRF validation): the promoted N+1 view once
+    /// promoted, else the seed view. Resolve FRESH at each decision — never retained across a swap.
+    pub fn ledger_view(&self) -> &dyn LedgerView {
+        self.pool_distr_view()
+    }
+
+    /// The current authoritative `PoolDistrView` (leadership / leader-schedule): the promoted N+1
+    /// view once promoted, else the seed view. The concrete companion of `ledger_view()`.
+    pub fn pool_distr_view(&self) -> &PoolDistrView {
+        self.promoted_view.as_ref().unwrap_or(self.seed_view)
+    }
+
+    /// Whether the N+1 view has been promoted.
+    pub fn is_promoted(&self) -> bool {
+        self.activation.is_promoted()
+    }
+
+    /// The promoted source `EpochConsensusView` (the bound N+1 identity), if promoted.
+    pub fn promoted_source(&self) -> Option<&EpochConsensusView> {
+        self.activation.promoted()
+    }
+
+    /// Atomically promote to the bound N+1 view: record the source `EpochConsensusView` (one-way;
+    /// idempotent on the SAME source; a DIFFERENT source for an existing promotion is a terminal
+    /// `EpochViewActivationConflict`) and, on success, install the projected `PoolDistrView` as the
+    /// active view. The projected view is the caller's `source.to_pool_distr_view(...)`
+    /// (DC-EPOCH-12), so the authority never re-projects or reads an unbound parameter.
+    pub fn promote(
+        &mut self,
+        source: EpochConsensusView,
+        projected: PoolDistrView,
+    ) -> Result<(), EpochViewActivationError> {
+        self.activation.promote(source)?;
+        self.promoted_view = Some(projected);
+        Ok(())
+    }
+
+    /// The epoch the current authoritative view answers for (the seed epoch N before promotion, the
+    /// target epoch N+1 after). The input to the epoch-match guard.
+    pub fn epoch(&self) -> EpochNo {
+        self.pool_distr_view().epoch()
+    }
+
+    /// The identity of the currently-active view (DC-EPOCH-14 #11 cross-consumer identity): its
+    /// epoch + the promoted source's canonical hash (`None` while seed). Two consumers reading THIS
+    /// one holder at the same slot resolve the SAME identity BY CONSTRUCTION; the boundary test
+    /// asserts header-validation and forge agree on `(epoch, canonical hash)`, not merely the epoch.
+    pub fn active_view_identity(&self) -> (EpochNo, Option<Hash32>) {
+        (self.epoch(), self.promoted_source().map(|v| v.canonical_hash()))
+    }
+
+    /// DC-EPOCH-14 #9 (slot-aware, bidirectional, MODE-aware): the per-call epoch guard. Equality ⇒
+    /// `Permitted`. `authority > slot` ⇒ terminal `PrematurePromotion` (BOTH modes — a promoted
+    /// authority ahead of a real slot is a routing bug). `authority < slot` depends on the CANONICAL
+    /// mode: `SeedOnly` ⇒ `SeedOnlyPastSupport` (a limited producer past its supported epoch — no
+    /// forge, but the follow loop stays ALIVE, never a halt); `ContinuityRequired` ⇒ terminal
+    /// `MissingPromotion` (the boundary should have activated — NEVER fall back to the seed view).
+    pub fn guard_epoch(&self, slot_epoch: EpochNo) -> AuthorityEpochVerdict {
+        let authority_epoch = self.epoch();
+        match authority_epoch.0.cmp(&slot_epoch.0) {
+            std::cmp::Ordering::Equal => AuthorityEpochVerdict::Permitted,
+            std::cmp::Ordering::Greater => AuthorityEpochVerdict::Terminal(
+                AuthorityEpochError::PrematurePromotion {
+                    authority_epoch,
+                    protocol_epoch: slot_epoch,
+                },
+            ),
+            std::cmp::Ordering::Less => match &self.mode {
+                EpochAuthorityMode::SeedOnly { supported_epoch } => {
+                    AuthorityEpochVerdict::SeedOnlyPastSupport {
+                        supported_epoch: *supported_epoch,
+                        slot_epoch,
+                    }
+                }
+                EpochAuthorityMode::ContinuityRequired { .. } => AuthorityEpochVerdict::Terminal(
+                    AuthorityEpochError::MissingPromotion {
+                        authority_epoch,
+                        protocol_epoch: slot_epoch,
+                    },
+                ),
+            },
+        }
     }
 }
 
@@ -360,6 +579,183 @@ mod tests {
     fn seed_exposes_no_n1_view_until_promotion() {
         let active = ActiveEpochView::Seed;
         assert!(active.promoted().is_none(), "the seed state exposes no N+1 view");
+    }
+
+    fn pdv(epoch: u64, marker: u8) -> PoolDistrView {
+        use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
+        use ade_ledger::consensus_view::PoolEntry as BluePoolEntry;
+        let mut pools = BTreeMap::new();
+        pools.insert(
+            Hash28([marker; 28]),
+            BluePoolEntry { active_stake: 1_000, vrf_keyhash: Hash32([marker; 32]) },
+        );
+        PoolDistrView::new(EpochNo(epoch), 1_000, ActiveSlotsCoeff { numer: 1, denom: 20 }, pools)
+    }
+
+    // ECA-3 (DC-EPOCH-14): the ONE owned authority yields the seed view until promotion, then the
+    // promoted N+1 view -- for BOTH ledger_view() (header validation) AND pool_distr_view()
+    // (leadership). Promotion is one-way + idempotent + conflict-terminal.
+    #[test]
+    fn authority_seed_then_promote_swaps_the_view_for_both_consumers() {
+        let seed = pdv(577, 0x10);
+        let mut auth = ActiveEpochAuthority::seed(&seed);
+        assert!(!auth.is_promoted());
+        assert_eq!(auth.pool_distr_view(), &seed, "seed view active before promotion");
+        assert_eq!(auth.ledger_view().total_active_stake(EpochNo(577)), Some(1_000));
+        assert!(auth.promoted_source().is_none());
+
+        let src = view(2_000); // an EpochConsensusView (epoch 578 per bindings())
+        let promoted = pdv(578, 0x20);
+        auth.promote(src.clone(), promoted.clone()).expect("first promotion");
+        assert!(auth.is_promoted());
+        assert_eq!(auth.pool_distr_view(), &promoted, "promoted N+1 view now active (leadership)");
+        assert_eq!(
+            auth.ledger_view().total_active_stake(EpochNo(578)),
+            Some(1_000),
+            "header validation now reads the promoted view"
+        );
+        assert!(
+            auth.ledger_view().total_active_stake(EpochNo(577)).is_none(),
+            "the seed epoch is no longer observable post-promotion (DC-EPOCH-05)"
+        );
+        assert_eq!(auth.promoted_source(), Some(&src));
+
+        // idempotent on the SAME source.
+        auth.promote(src.clone(), promoted.clone()).expect("idempotent re-promotion");
+        assert_eq!(auth.pool_distr_view(), &promoted);
+
+        // a DIFFERENT source is a terminal conflict; the active view is unchanged.
+        assert_eq!(
+            auth.promote(view(9_999), promoted.clone()),
+            Err(EpochViewActivationError::EpochViewActivationConflict)
+        );
+        assert_eq!(auth.pool_distr_view(), &promoted, "unchanged on conflict (no partial mutation)");
+    }
+
+    // DC-EPOCH-14 #9 (mode-aware, slot-aware, bidirectional guard) + #11 (exact active-view identity).
+    #[test]
+    fn authority_epoch_guard_is_mode_aware_and_identity_is_exact() {
+        let seed = pdv(577, 0x10);
+
+        // SEED-ONLY (a limited producer): at its epoch -> Permitted; AHEAD slot is a routing bug
+        // (terminal); PAST its supported epoch -> a graceful no-forge (NOT terminal), the loop lives.
+        let seed_only = ActiveEpochAuthority::seed(&seed);
+        assert_eq!(seed_only.epoch(), EpochNo(577));
+        assert_eq!(seed_only.guard_epoch(EpochNo(577)), AuthorityEpochVerdict::Permitted);
+        assert_eq!(
+            seed_only.guard_epoch(EpochNo(578)),
+            AuthorityEpochVerdict::SeedOnlyPastSupport {
+                supported_epoch: EpochNo(577),
+                slot_epoch: EpochNo(578),
+            },
+            "a seed-only producer past its supported epoch is a graceful no-forge, NEVER terminal"
+        );
+        assert_eq!(
+            seed_only.guard_epoch(EpochNo(576)),
+            AuthorityEpochVerdict::Terminal(AuthorityEpochError::PrematurePromotion {
+                authority_epoch: EpochNo(577),
+                protocol_epoch: EpochNo(576),
+            }),
+            "an authority AHEAD of the slot is a routing bug -> terminal in either mode"
+        );
+
+        // CONTINUITY-REQUIRED: behind its slot -> TERMINAL MissingPromotion (the boundary should
+        // have activated -- never fall back to the seed view).
+        let cont = ActiveEpochAuthority::continuity(
+            &seed,
+            Point { slot: SlotNo(1), hash: Hash32([0; 32]) },
+            Hash32([0xAB; 32]),
+            TargetEpochPolicy::SetSnapshotLag { lag_epochs: 2 },
+        );
+        assert_eq!(cont.guard_epoch(EpochNo(577)), AuthorityEpochVerdict::Permitted);
+        assert_eq!(
+            cont.guard_epoch(EpochNo(578)),
+            AuthorityEpochVerdict::Terminal(AuthorityEpochError::MissingPromotion {
+                authority_epoch: EpochNo(577),
+                protocol_epoch: EpochNo(578),
+            }),
+            "a continuity-capable producer with no promotion at an N+1 slot is TERMINAL"
+        );
+
+        // #11: identity carries the promoted source's canonical hash, not merely the epoch -- so two
+        // N+1 candidates with different bindings are distinguishable.
+        let mut auth = ActiveEpochAuthority::seed(&seed);
+        assert_eq!(auth.active_view_identity(), (EpochNo(577), None), "seed identity: (epoch, None)");
+        let src = view(2_000);
+        let promoted = pdv(578, 0x20);
+        auth.promote(src.clone(), promoted).expect("promote");
+        assert_eq!(auth.active_view_identity(), (EpochNo(578), Some(src.canonical_hash())));
+    }
+
+    // DC-EPOCH-14 #11 (cross-consumer identity): at a given slot, header validation and the forge
+    // decision MUST resolve the SAME authority epoch AND the SAME active-view canonical hash from the
+    // ONE holder. Epoch alone is INSUFFICIENT -- two N+1 candidates with different source bindings
+    // both report 578 -- so identity binds the canonical hash; reading the one authority guarantees it.
+    #[test]
+    fn cross_consumer_identity_validation_and_forge_resolve_one_authority_view() {
+        let seed = pdv(577, 0x10);
+        let mut auth = ActiveEpochAuthority::seed(&seed);
+
+        // SEED: the forge view (pool_distr_view) and the validation view (ledger_view) are the SAME
+        // underlying PoolDistrView; identity is (577, None).
+        assert_eq!(auth.active_view_identity(), (EpochNo(577), None));
+        assert_eq!(auth.pool_distr_view().epoch(), EpochNo(577));
+        assert_eq!(
+            auth.ledger_view().total_active_stake(EpochNo(577)),
+            auth.pool_distr_view().total_active_stake(EpochNo(577)),
+            "validation + forge resolve the SAME seed view"
+        );
+
+        // PROMOTE to an N+1 candidate; identity now binds the source's canonical hash, and BOTH
+        // consumers resolve the promoted (578) view identically.
+        let src = view(2_000);
+        auth.promote(src.clone(), pdv(578, 0x20)).expect("promote");
+        let identity = auth.active_view_identity();
+        assert_eq!(identity, (EpochNo(578), Some(src.canonical_hash())));
+        assert_eq!(auth.pool_distr_view().epoch(), EpochNo(578));
+        assert_eq!(
+            auth.ledger_view().total_active_stake(EpochNo(578)),
+            auth.pool_distr_view().total_active_stake(EpochNo(578)),
+            "validation + forge resolve the SAME promoted view"
+        );
+
+        // A DIFFERENT source binding at the SAME epoch 578 yields a DIFFERENT identity hash -- so
+        // epoch alone would NOT distinguish the two candidates; cross-consumer agreement must bind the
+        // canonical hash, which reading the ONE holder guarantees.
+        let seed_b = pdv(577, 0x10);
+        let mut auth_b = ActiveEpochAuthority::seed(&seed_b);
+        auth_b.promote(view(9_999), pdv(578, 0x20)).expect("promote");
+        assert_ne!(
+            auth_b.active_view_identity().1,
+            identity.1,
+            "two N+1 candidates with different source bindings have distinct active-view hashes"
+        );
+    }
+
+    // DC-EPOCH-14 (header-validation GATED-FAIL-CLOSED contract, user 2026-06-22 option 2): a SeedOnly
+    // producer past its seed epoch CANNOT validate an N+1 peer header -- its SOLE ledger view (the
+    // authority's, criterion #7) is epoch-gated, so EVERY N+1 leadership query returns None. The
+    // leader/VRF check cannot resolve the header's pool at N+1 -> the header is REJECTED before
+    // acceptance (a wrong-epoch view can NEVER admit an N+1 block). On the single-producer admit path
+    // this rejection is the EXISTING fail-closed halt (run_node_sync Err -> NodeLifecycleError::
+    // RelaySync, node_lifecycle ~1962) -- the Cardano-compatible REQUIRED closure (DC-NODE-12: never
+    // admit an unvalidatable block). The structured AuthorityEpochMismatch classification for THIS
+    // path is DEFERRED as diagnostic refinement; the SEMANTIC enforcement -- reject, never admit -- is
+    // proven here, and the forge-tick SeedOnly follow stays alive (forge_tick_off_epoch_slot...local).
+    #[test]
+    fn seed_only_sole_view_cannot_validate_n1_header_rejects_before_acceptance() {
+        let seed = pdv(577, 0x10);
+        let auth = ActiveEpochAuthority::seed(&seed);
+        let sole_view = auth.ledger_view();
+        let pool = Hash28([0x11; 28]);
+        // EVERY N+1 (578) leadership query -> None: an N+1 header cannot be validated/admitted.
+        assert_eq!(sole_view.total_active_stake(EpochNo(578)), None);
+        assert_eq!(sole_view.pool_active_stake(EpochNo(578), &pool), None);
+        assert_eq!(sole_view.pool_vrf_keyhash(EpochNo(578), &pool), None);
+        assert_eq!(sole_view.active_slots_coeff(EpochNo(578)), None);
+        // ... while it DOES answer for its own seed epoch 577 -> it follows WITHIN the epoch normally
+        // (the rejection is scoped to past-epoch headers, not a blanket follow halt).
+        assert!(sole_view.active_slots_coeff(EpochNo(577)).is_some());
     }
 
     // ---- S3f-4c (DC-EPOCH-06): durable-before-visible + crash recovery ----

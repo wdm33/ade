@@ -657,17 +657,41 @@ async fn run_node_lifecycle_inner(
                 .seed_epoch_consensus_inputs
                 .as_ref()
                 .map(|s| s.epoch_nonce.clone());
-            // EPOCH-CONTINUITY-ACTIVATION ECA-1 (DC-EPOCH-13): EVIEW activation inputs. Activation
-            // is AUTOMATIC -- the forbidden arming flag was removed in ECA-1. The relay loop
-            // activates at the deterministic epoch boundary whenever EVIEW is configured (the
-            // cert-state package + the reduced checkpoint are present = canonical durable state,
-            // NOT a flag) and the activation predicate passes. Constructing the SEED-derived
-            // EviewActivationInputs deterministically from canonical state (seed bootstrap_state =
-            // state.ledger clone; seed point = state.tip; seed_epoch; nonce =
-            // ade_core::consensus::Nonce -> Hash32; the resolved network magic; the replay scratch
-            // path) is ECA-2; until it is wired this binding is `None`, so the path stays inert
-            // (byte-identical) -- inert by un-wired inputs, never by a semantic gate.
-            let eview_activation: Option<&crate::epoch_wire::EviewActivationInputs> = None;
+            // EPOCH-CONTINUITY-ACTIVATION ECA-2 (DC-EPOCH-14): construct the SEED-derived activation
+            // inputs DETERMINISTICALLY from canonical durable state -- never a flag, never a restart
+            // CLI/genesis. EVIEW is "configured" IFF the live reduced checkpoint + the v4 cert-state
+            // sidecar + a recovered tip are ALL present (the bootstrap built them together);
+            // otherwise `None` keeps the path inert (byte-identical). Every field is recovered from
+            // the STORE: the seed ledger (cert state), the seed point (the recovered tip), the seed
+            // epoch + eta0 + ASC + the consensus-profile hashes (the v4 sidecar, DC-CINPUT-06), the
+            // resolved network magic, and a deterministic scratch path (a sibling of the live
+            // checkpoint). No wall clock, no peer, no genesis re-read.
+            let eview_inputs: Option<crate::epoch_wire::EviewActivationInputs> = match (
+                reduced_checkpoint.as_ref(),
+                state.seed_epoch_consensus_inputs.as_ref(),
+                state.tip.as_ref(),
+            ) {
+                (Some(_live), Some(sidecar), Some(tip)) => {
+                    let network_magic = cli
+                        .network_magic
+                        .ok_or(NodeLifecycleError::MissingFlag("--network-magic"))?;
+                    Some(crate::epoch_wire::EviewActivationInputs {
+                        seed_bootstrap_state: state.ledger.clone(),
+                        seed_point_slot: tip.slot,
+                        seed_point_hash: tip.hash.clone(),
+                        seed_epoch: sidecar.epoch_no,
+                        network_magic,
+                        nonce: sidecar.epoch_nonce.0.clone(),
+                        genesis_hash: sidecar.genesis_hash.clone(),
+                        protocol_params_hash: sidecar.protocol_params_hash.clone(),
+                        asc: sidecar.active_slots_coeff,
+                        replay_scratch_path: snapshot_dir.join("eview-replay-scratch.redb"),
+                    })
+                }
+                _ => None,
+            };
+            let eview_activation: Option<&crate::epoch_wire::EviewActivationInputs> =
+                eview_inputs.as_ref();
             // PHASE4-N-F-G-C S1: wire a LIVE WirePump feed when an upstream peer
             // is configured (`--peer`). Empty `--peer` keeps the prior empty
             // source (forge-CAPABLE, halts clean — the `On` arm is observable
@@ -1396,12 +1420,12 @@ pub async fn run_relay_loop(
     chaindb: &PersistentChainDb,
     wal: &mut FileWalStore,
     era_schedule: &EraSchedule,
-    ledger_view: &dyn LedgerView,
+    seed_view: &PoolDistrView,
     shutdown: &mut watch::Receiver<bool>,
     forge: Option<&mut ForgeActivation<'_>>,
 ) -> Result<(), NodeLifecycleError> {
     run_relay_loop_with_sched(
-        state, source, chaindb, wal, era_schedule, ledger_view, shutdown, forge, None, None, None,
+        state, source, chaindb, wal, era_schedule, seed_view, shutdown, forge, None, None, None,
         None,
     )
     .await
@@ -1489,7 +1513,7 @@ fn maybe_activate_epoch_boundary(
     chaindb: &PersistentChainDb,
     era_schedule: &EraSchedule,
     wal: &mut FileWalStore,
-    active_view: &mut crate::epoch_activation::ActiveEpochView,
+    authority: &mut crate::epoch_activation::ActiveEpochAuthority,
 ) -> Result<(), NodeLifecycleError> {
     let (Some(inputs), Some(live)) = (eview_activation, reduced_checkpoint) else {
         return Ok(());
@@ -1512,12 +1536,14 @@ fn maybe_activate_epoch_boundary(
             live,
             chaindb,
             &selected_point,
-            active_view,
+            authority,
             &scratch,
             |entry| wal.append(entry.clone()).is_ok(),
         )
         .map_err(|e| NodeLifecycleError::RelaySync(format!("eview activation: {e:?}")))?;
-    // observe-only here; the promoted view is consumed at the forge feed (the -wire-3b-2 rebind).
+    // ECA-3 (DC-EPOCH-14): the authority is promoted IN PLACE (the atomic Seed->Promoted swap) — both
+    // header validation AND leadership now resolve the promoted N+1 view from this ONE holder. The
+    // outcome (Promoted / NotYet) is evidence only; the mutation of `authority` is the effect.
     let _ = outcome;
     Ok(())
 }
@@ -1532,7 +1558,12 @@ pub async fn run_relay_loop_with_sched(
     chaindb: &PersistentChainDb,
     wal: &mut FileWalStore,
     era_schedule: &EraSchedule,
-    ledger_view: &dyn LedgerView,
+    // EPOCH-CONTINUITY-ACTIVATION ECA-3 (DC-EPOCH-14): the recovered SEED PoolDistrView. The loop
+    // owns an `ActiveEpochAuthority` over it — the SOLE view source for BOTH header validation AND
+    // leadership; at the boundary it atomically swaps Seed->Promoted. (Was `ledger_view: &dyn
+    // LedgerView`; the borrowed seed view is unchanged until a promotion, so this is byte-identical
+    // until the swap is wired.)
+    seed_view: &PoolDistrView,
     shutdown: &mut watch::Receiver<bool>,
     mut forge: Option<&mut ForgeActivation<'_>>,
     mut sched: Option<&mut dyn crate::live_log::NodeSchedSink>,
@@ -1552,7 +1583,64 @@ pub async fn run_relay_loop_with_sched(
     // (byte-identical).
     eview_activation: Option<&crate::epoch_wire::EviewActivationInputs>,
 ) -> Result<(), NodeLifecycleError> {
-    let mut active_epoch_view = crate::epoch_activation::ActiveEpochView::new();
+    // ECA-3 (DC-EPOCH-14): the ONE owned epoch-authority the loop holds — the SOLE view source for
+    // BOTH header validation and leadership. Resolved FRESH at each authoritative decision via
+    // `authority.ledger_view()` / `authority.pool_distr_view()` (never retained across the swap);
+    // promoted IN PLACE at the boundary by `maybe_activate_epoch_boundary` (the atomic Seed->Promoted).
+    // Its CANONICAL mode is established from durable state -- NOT an ambient flag: EVIEW configured
+    // (the activation inputs are present = the reduced checkpoint + the v4 consensus-profile sidecar
+    // are bound durably) => ContinuityRequired (a missing N+1 promotion is terminal); otherwise
+    // SeedOnly (a limited producer that no-forges past its seed epoch but KEEPS FOLLOWING). The mode
+    // is the SAME on warm-start (the inputs are recovered from the store, never CLI/genesis).
+    let mut authority = match eview_activation {
+        Some(inputs) => crate::epoch_activation::ActiveEpochAuthority::continuity(
+            seed_view,
+            ade_core::consensus::events::Point {
+                slot: inputs.seed_point_slot,
+                hash: inputs.seed_point_hash.clone(),
+            },
+            ade_ledger::reduced_epoch_view::consensus_profile_commitment(
+                &inputs.genesis_hash,
+                &inputs.protocol_params_hash,
+                inputs.asc,
+            ),
+            crate::epoch_activation::TargetEpochPolicy::SetSnapshotLag {
+                lag_epochs: crate::epoch_source_window::LEADERSHIP_SNAPSHOT_LAG_EPOCHS as u32,
+            },
+        ),
+        None => crate::epoch_activation::ActiveEpochAuthority::seed(seed_view),
+    };
+    // Phase 4 (ECA-4, DC-EPOCH-06 recovery exactness): BEFORE the loop, if a durable activation record
+    // exists, recover the promoted authority from the VERIFIED record (re-derive via the SAME window
+    // replay + reject-non-recomputable) — so a restart AFTER a promotion starts from the recorded N+1
+    // view (criteria 4/5), never a stale seed. The live first-boundary re-fire is then idempotent. A
+    // None record (crash before the WAL) keeps Seed; a record whose candidate cannot be RECOMPUTED
+    // identically is a TERMINAL halt (never trust a parsed record alone, never fall back to the seed).
+    if let (Some(inputs), Some(live)) = (eview_activation, reduced_checkpoint) {
+        let entries = wal
+            .read_all()
+            .map_err(|e| NodeLifecycleError::RelaySync(format!("eview recovery WAL read: {e:?}")))?;
+        let resolved = crate::epoch_activation::resolve_activation_record(&entries)
+            .map_err(|e| NodeLifecycleError::RelaySync(format!("eview recovery resolve: {e:?}")))?;
+        crate::epoch_wire::maybe_recover_promoted_authority(
+            resolved.as_ref(),
+            era_schedule,
+            inputs.seed_epoch,
+            inputs.seed_point_slot,
+            inputs.seed_point_hash.clone(),
+            live,
+            chaindb,
+            &inputs.seed_bootstrap_state,
+            inputs.network_magic,
+            inputs.nonce.clone(),
+            inputs.genesis_hash.clone(),
+            inputs.protocol_params_hash.clone(),
+            inputs.asc,
+            &mut authority,
+            &inputs.replay_scratch_path,
+        )
+        .map_err(|e| NodeLifecycleError::RelaySync(format!("eview recovery: {e:?}")))?;
+    }
     loop {
         let shutdown_status = if *shutdown.borrow() {
             ShutdownStatus::ShutdownRequested
@@ -1647,7 +1735,7 @@ pub async fn run_relay_loop_with_sched(
                         chaindb,
                         wal,
                         era_schedule,
-                        ledger_view,
+                        authority.ledger_view(),
                         &mut act.pending_reselection,
                         act.security_param,
                         &mut act.pending_fork_switch,
@@ -1715,7 +1803,7 @@ pub async fn run_relay_loop_with_sched(
                             &mut act.last_fork_switch_failure,
                             body_source.as_ref(),
                             era_schedule,
-                            ledger_view,
+                            authority.ledger_view(),
                             act.security_param,
                             &mut act.rollback_retention,
                         )
@@ -1849,7 +1937,7 @@ pub async fn run_relay_loop_with_sched(
                                     &prefetched,
                                     &req,
                                     era_schedule,
-                                    ledger_view,
+                                    authority.ledger_view(),
                                     source,
                                     convergence.as_deref_mut(),
                                 );
@@ -1901,7 +1989,7 @@ pub async fn run_relay_loop_with_sched(
                         act.pending_reselection = false;
                     }
                 } else {
-                    run_node_sync(source, state, chaindb, wal, era_schedule, ledger_view)
+                    run_node_sync(source, state, chaindb, wal, era_schedule, authority.ledger_view())
                         .await
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
                     // S3f-4d-mat-2c (DC-EPOCH-11): after the durable admit, advance the live
@@ -1911,15 +1999,15 @@ pub async fn run_relay_loop_with_sched(
                     // EPOCH-CONTINUITY-ACTIVATION ECA-1 (DC-EPOCH-13): the AUTOMATIC first-boundary
                     // activation (no arming flag). A strict no-op (byte-identical) until EVIEW is
                     // configured + the seed epoch completes; then it derives the bound view
-                    // (durable window replay) + atomically promotes `active_epoch_view`. Terminal
-                    // halt on failure.
+                    // (durable window replay) + atomically promotes the ONE authority
+                    // (Seed->Promoted; both consumers then read the N+1 view). Terminal halt on failure.
                     maybe_activate_epoch_boundary(
                         eview_activation,
                         reduced_checkpoint,
                         chaindb,
                         era_schedule,
                         wal,
-                        &mut active_epoch_view,
+                        &mut authority,
                     )?;
                 }
             }
@@ -2229,6 +2317,7 @@ pub async fn run_relay_loop_with_sched(
                             slot.0,
                             kes_period,
                             act.protocol_version,
+                            &authority,
                         ) {
                             Ok((event, handoff)) => NodeForgeOutcome::Forged(event, handoff),
                             Err(e) => NodeForgeOutcome::Failed(e),
@@ -2274,7 +2363,7 @@ pub async fn run_relay_loop_with_sched(
                                         chaindb,
                                         wal,
                                         era_schedule,
-                                        ledger_view,
+                                        authority.ledger_view(),
                                     )
                                     .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
                                 }

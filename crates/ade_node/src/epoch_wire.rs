@@ -29,8 +29,8 @@ use ade_core::consensus::events::Point;
 use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
 use ade_ledger::wal::WalEntry;
 
-use crate::epoch_activate::{activate_at_boundary, BoundaryActivationOutcome};
-use crate::epoch_activation::{ActiveEpochView, EpochViewActivationError};
+use crate::epoch_activate::{activate_at_boundary, recover_at_boundary, BoundaryActivationOutcome};
+use crate::epoch_activation::{ActiveEpochAuthority, EpochViewActivationError};
 use crate::epoch_candidate::{derive_candidate, CandidateDeriveError, CandidateProfile};
 use crate::epoch_source_window::{
     target_epoch_for_source, validate_source_window, ActivationSourceWindow, SourceWindowBlock,
@@ -73,7 +73,7 @@ impl EviewActivationInputs {
         live: &ReducedUtxoCheckpoint,
         chaindb: &dyn ChainDb,
         selected_point: &Point,
-        active_view: &mut ActiveEpochView,
+        active_view: &mut ActiveEpochAuthority,
         scratch_path: &std::path::Path,
         wal_write: impl FnOnce(&WalEntry) -> bool,
     ) -> Result<Option<BoundaryActivationOutcome>, ActivationError> {
@@ -351,7 +351,7 @@ pub fn try_activate_at_boundary(
     profile: &CandidateProfile,
     selected_point: &Point,
     transition_eligible: bool,
-    active_view: &mut ActiveEpochView,
+    active_view: &mut ActiveEpochAuthority,
     scratch_path: &std::path::Path,
     wal_write: impl FnOnce(&WalEntry) -> bool,
 ) -> Result<BoundaryActivationOutcome, ActivationError> {
@@ -411,12 +411,12 @@ pub fn maybe_activate_first_boundary(
     protocol_params_hash: Hash32,
     asc: ActiveSlotsCoeff,
     selected_point: &Point,
-    active_view: &mut ActiveEpochView,
+    active_view: &mut ActiveEpochAuthority,
     scratch_path: &std::path::Path,
     wal_write: impl FnOnce(&WalEntry) -> bool,
 ) -> Result<Option<BoundaryActivationOutcome>, ActivationError> {
     // idempotent: once a view is promoted, the first-boundary activation is done.
-    if active_view.promoted().is_some() {
+    if active_view.is_promoted() {
         return Ok(None);
     }
     // boundary detection: the seed epoch's window is complete only once the durable tip has
@@ -456,11 +456,136 @@ pub fn maybe_activate_first_boundary(
     Ok(Some(outcome))
 }
 
+/// EPOCH-CONTINUITY-ACTIVATION ECA-4 (DC-EPOCH-06): the WARM-START recovery twin of
+/// [`try_activate_at_boundary`]. SAME assembly (extract the durable source window → verify live
+/// readiness → materialize the replay checkpoint), then [`recover_at_boundary`] (re-derive + recover
+/// against the durable `record`) instead of the live activate. Promotes the authority from the
+/// VERIFIED record, or a TERMINAL `ActivationError` on a mismatch / un-recomputable candidate.
+#[allow(clippy::too_many_arguments)]
+pub fn try_recover_at_boundary(
+    live: &ReducedUtxoCheckpoint,
+    chaindb: &dyn ChainDb,
+    bounds: &WindowBounds,
+    bootstrap_state: &LedgerState,
+    network_magic: u32,
+    nonce: Hash32,
+    profile: &CandidateProfile,
+    record: &WalEntry,
+    active_view: &mut ActiveEpochAuthority,
+    scratch_path: &std::path::Path,
+) -> Result<(), ActivationError> {
+    let extract = extract_source_window(
+        chaindb,
+        bounds.source_epoch,
+        bounds.source_window_start,
+        bounds.source_window_end,
+        bounds.snapshot_phase,
+        bounds.source_window_anchor.clone(),
+    )
+    .map_err(ActivationError::SourceWindow)?;
+    verify_live_readiness(live, &extract.window, bounds.expected_seed_slot, chaindb)
+        .map_err(ActivationError::Readiness)?;
+    let replay_cp = live
+        .materialize_bootstrap_into(scratch_path)
+        .map_err(ActivationError::Materialize)?;
+    recover_at_boundary(
+        &extract.window,
+        &extract.window_blocks,
+        &replay_cp,
+        bootstrap_state,
+        &extract.shelley_blocks,
+        CardanoEra::Conway,
+        network_magic,
+        nonce,
+        profile,
+        record,
+        active_view,
+    )
+    .map_err(ActivationError::Activate)
+}
+
+/// EPOCH-CONTINUITY-ACTIVATION ECA-4 (DC-EPOCH-06): warm-start recovery of a promoted authority, run
+/// BEFORE the relay loop. Given the resolved durable activation `record` (or `None`), it re-derives
+/// the candidate from the SAME first-boundary window replay + recovers (reject-non-recomputable) +
+/// promotes the ONE authority. A `None` record is a no-op (Seed stays — a crash before the durable
+/// WAL keeps the old epoch active). Idempotent: a no-op once promoted, so the live first-boundary
+/// re-fire is itself idempotent on the recovered authority. The bounds / profile are computed EXACTLY
+/// as the live `maybe_activate_first_boundary` (the recorded target epoch is the seed epoch's
+/// successor), so the re-derivation is byte-identical to the live one.
+#[allow(clippy::too_many_arguments)]
+pub fn maybe_recover_promoted_authority(
+    record: Option<&WalEntry>,
+    era_schedule: &EraSchedule,
+    seed_epoch: EpochNo,
+    seed_point_slot: SlotNo,
+    seed_point_hash: Hash32,
+    live: &ReducedUtxoCheckpoint,
+    chaindb: &dyn ChainDb,
+    bootstrap_state: &LedgerState,
+    network_magic: u32,
+    nonce: Hash32,
+    genesis_hash: Hash32,
+    protocol_params_hash: Hash32,
+    asc: ActiveSlotsCoeff,
+    active_view: &mut ActiveEpochAuthority,
+    scratch_path: &std::path::Path,
+) -> Result<(), ActivationError> {
+    // idempotent: nothing to recover once promoted.
+    if active_view.is_promoted() {
+        return Ok(());
+    }
+    // no durable activation record => Seed stays authoritative (a crash before the WAL).
+    let Some(record) = record else {
+        return Ok(());
+    };
+    // a durable record is present (checked above), so the boundary WAS crossed and its first-boundary
+    // window WAS computable when the record was written. If the bounds are now uncomputable from the
+    // SAME durable seed point/epoch, the store is inconsistent with the record -- the recorded promotion
+    // CANNOT be reproduced => TERMINAL (reject-non-recomputable surfaces at the recovery seam, louder +
+    // earlier, never a deferred no-op). (The live path's bounds-None IS a no-op -- there is no record.)
+    let bounds =
+        match compute_first_window_bounds(era_schedule, seed_point_slot, seed_point_hash, seed_epoch) {
+            Some(b) => b,
+            None => {
+                return Err(ActivationError::Activate(
+                    EpochViewActivationError::EpochViewPostPromotionMismatch,
+                ))
+            }
+        };
+    let profile = CandidateProfile {
+        slots_per_epoch: bounds.slots_per_epoch,
+        genesis_hash,
+        protocol_params_hash,
+        asc,
+    };
+    try_recover_at_boundary(
+        live,
+        chaindb,
+        &bounds,
+        bootstrap_state,
+        network_magic,
+        nonce,
+        &profile,
+        record,
+        active_view,
+        scratch_path,
+    )
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use ade_runtime::chaindb::{InMemoryChainDb, StoredBlock};
+
+    fn pdv() -> ade_ledger::consensus_view::PoolDistrView {
+        ade_ledger::consensus_view::PoolDistrView::new(
+            EpochNo(100),
+            0,
+            ActiveSlotsCoeff { numer: 1, denom: 20 },
+            std::collections::BTreeMap::new(),
+        )
+    }
 
     const RAW_CONWAY_BLOCK: &[u8] =
         include_bytes!("../tests/fixtures/raw_era_block_conway.cbor");
@@ -585,7 +710,8 @@ mod tests {
             slots_per_epoch: 86_400,
         };
         let state = LedgerState::new(CardanoEra::Conway);
-        let mut active = ActiveEpochView::new();
+        let active_sv = pdv();
+        let mut active = ActiveEpochAuthority::seed(&active_sv);
         let profile = CandidateProfile {
             slots_per_epoch: 86_400,
             genesis_hash: Hash32([0x91; 32]),
@@ -610,7 +736,7 @@ mod tests {
             matches!(r, Err(ActivationError::Readiness(ReadinessError::Checkpoint(_)))),
             "a lagging live checkpoint is a TERMINAL readiness failure, not a promotion"
         );
-        assert!(matches!(active, ActiveEpochView::Seed), "the seed view stays authoritative");
+        assert!(!active.is_promoted(), "the seed view stays authoritative");
     }
 
     /// S3f-4d-wire-3b: the first-activation window spans the completed SEED epoch -- from the
@@ -668,18 +794,20 @@ mod tests {
         let pt = Point { slot: SlotNo(9_000_000), hash: Hash32([1; 32]) };
         // (1) PRE-BOUNDARY: the tip is STILL in the seed epoch (the window is not complete) -> a
         //     strict no-op (byte-identical); the seed view is untouched.
-        let mut av = ActiveEpochView::new();
+        let av_sv = pdv();
+        let mut av = ActiveEpochAuthority::seed(&av_sv);
         let r = maybe_activate_first_boundary(
             &sched, SlotNo(8_640_000 + 60_000), EpochNo(100), seed_slot, Hash32([7; 32]),
             &live, &db, &state, 2, Hash32([0; 32]), Hash32([0x91; 32]), Hash32([0x92; 32]), ActiveSlotsCoeff { numer: 1, denom: 20 }, &pt, &mut av, &dir.path().join("s1.redb"), |_| true,
         );
         assert!(matches!(r, Ok(None)), "pre-boundary -> no activation");
-        assert!(matches!(av, ActiveEpochView::Seed), "the seed view is untouched");
+        assert!(!av.is_promoted(), "the seed view is untouched");
         // (2) BOUNDARY CROSSED (the tip located in epoch 101): activation is AUTOMATIC -- with no
         //     flag it proceeds to the authoritative window replay and FAILS CLOSED on the empty
         //     durable window (terminal), never no-opping and never promoting against an unproven
         //     state. Before ECA-1 this same call would have returned Ok(None) on `armed == false`.
-        let mut av2 = ActiveEpochView::new();
+        let av2_sv = pdv();
+        let mut av2 = ActiveEpochAuthority::seed(&av2_sv);
         let r2 = maybe_activate_first_boundary(
             &sched, SlotNo(8_640_000 + 90_000), EpochNo(100), seed_slot, Hash32([7; 32]),
             &live, &db, &state, 2, Hash32([0; 32]), Hash32([0x91; 32]), Hash32([0x92; 32]), ActiveSlotsCoeff { numer: 1, denom: 20 }, &pt, &mut av2, &dir.path().join("s2.redb"), |_| true,
@@ -688,6 +816,6 @@ mod tests {
             matches!(r2, Err(ActivationError::SourceWindow(_))),
             "a crossed boundary AUTOMATICALLY drives the activation (fail-closed on an empty window), not a flag no-op"
         );
-        assert!(matches!(av2, ActiveEpochView::Seed), "fail-closed: no promotion, the seed stays authoritative");
+        assert!(!av2.is_promoted(), "fail-closed: no promotion, the seed stays authoritative");
     }
 }

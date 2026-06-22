@@ -63,6 +63,13 @@ impl PoolDistrView {
         }
     }
 
+    /// The single epoch this view answers for. EPOCH-CONTINUITY-ACTIVATION ECA-3 (DC-EPOCH-14): the
+    /// authority's epoch-match guard compares this to the protocol epoch implied by a block/slot
+    /// context, so a wrong-epoch (missing / premature / mismatched) promotion is a structured halt.
+    pub fn epoch(&self) -> EpochNo {
+        self.epoch
+    }
+
     /// PHASE4-N-F-A A4: project the **recovered** seed-epoch
     /// consensus-input record into the leadership `PoolDistrView`.
     ///
