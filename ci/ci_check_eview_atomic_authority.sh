@@ -51,7 +51,8 @@ for t in \
     cross_consumer_identity_validation_and_forge_resolve_one_authority_view \
     seed_only_sole_view_cannot_validate_n1_header_rejects_before_acceptance \
     forge_continuity_required_missing_promotion_at_n1_is_terminal \
-    recover_at_boundary_round_trips_the_durable_record_and_rejects_a_tamper ; do
+    recover_at_boundary_round_trips_the_durable_record_and_rejects_a_tamper \
+    recover_at_boundary_wrong_cli_network_magic_is_terminal_no_partial_recovery ; do
     grep -qrF "fn $t" crates/ade_node/src/ || fail "the DC-EPOCH-14 proof '$t' is missing"
 done
 

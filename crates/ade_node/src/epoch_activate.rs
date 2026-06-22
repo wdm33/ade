@@ -418,6 +418,70 @@ mod tests {
     }
 
     #[test]
+    fn recover_at_boundary_wrong_cli_network_magic_is_terminal_no_partial_recovery() {
+        // ECA-4 (DC-EPOCH-14) -- the NETWORK-IDENTITY-DURABILITY precondition (user 2026-06-22):
+        // network_magic is currently sourced from the CLI, not yet the durable sidecar. This proves
+        // the CURRENT failure mode is DETERMINISTIC + FAIL-CLOSED, which is what lets network_magic
+        // persistence be a SEPARATE follow-on slice rather than part of this mechanism: a warm-start
+        // whose CLI-supplied network_magic DISAGREES with the durable record re-derives a candidate
+        // with the WRONG magic, which cannot reproduce the record -> a structured TERMINAL
+        // EpochViewPostPromotionMismatch. NO partial recovery, NO fallback, NO altered authority.
+        let (cp, _d, state) = checkpoint();
+
+        // 1. LIVE activate on network magic 2 -> the durable record binds network_magic = 2.
+        let sv0 = seed_view();
+        let mut live_auth = ActiveEpochAuthority::seed(&sv0);
+        let mut record: Option<WalEntry> = None;
+        activate_at_boundary(
+            &window(Hash32([0xab; 32])),
+            &window_blocks(),
+            &cp,
+            &state,
+            std::slice::from_ref(&conway_block()),
+            CardanoEra::Conway,
+            2,
+            Hash32([0x42; 32]),
+            &profile(),
+            &selected_point(),
+            true,
+            &mut live_auth,
+            |rec| {
+                record = Some(rec.clone());
+                true
+            },
+        )
+        .expect("live activate promotes");
+        let record = record.expect("a durable record was written");
+
+        // 2. WARM-START with a DIFFERENT CLI network magic (3): the re-derived candidate binds magic 3,
+        //    which cannot reproduce the record's magic 2 -> TERMINAL, the authority stays unpromoted.
+        let sv1 = seed_view();
+        let mut recovered_auth = ActiveEpochAuthority::seed(&sv1);
+        let r = recover_at_boundary(
+            &window(Hash32([0xab; 32])),
+            &window_blocks(),
+            &cp,
+            &state,
+            std::slice::from_ref(&conway_block()),
+            CardanoEra::Conway,
+            3,
+            Hash32([0x42; 32]),
+            &profile(),
+            &record,
+            &mut recovered_auth,
+        );
+        assert_eq!(
+            r,
+            Err(EpochViewActivationError::EpochViewPostPromotionMismatch),
+            "a wrong CLI network magic on warm-start must be a deterministic structured terminal error"
+        );
+        assert!(
+            !recovered_auth.is_promoted(),
+            "no partial recovery, no fallback, no altered authority on a wrong CLI network magic"
+        );
+    }
+
+    #[test]
     fn not_eligible_transition_is_not_yet_not_terminal() {
         let (cp, _d, state) = checkpoint();
         let sv = seed_view();
