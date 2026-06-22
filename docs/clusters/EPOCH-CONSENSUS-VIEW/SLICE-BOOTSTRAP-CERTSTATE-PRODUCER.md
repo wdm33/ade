@@ -1,5 +1,13 @@
 # SLICE — BOOTSTRAP-CERTSTATE-PRODUCER
 
+> **RECLASSIFIED 2026-06-22 → AUXILIARY TOOLING (CONSENSUS-CERTSTATE-EXPORT).** This cardano-cli
+> exporter is NOT the judge-facing bootstrap. Its 2.9GB UTxO query cannot be point-consistent with the
+> cert-state (138s; the immutable tip drifts 6 blocks during it), so it cannot produce an admission-ready
+> anchor. It remains useful as a **consensus/certstate export + compatibility-oracle / differential-check
+> tool**. The bounty-facing bootstrap is the native Mithril snapshot decode —
+> see `SLICE-MITHRIL-VERIFIED-ANCHOR-IMPORT.md`. (manifest v2's `utxo_seed_hash` is kept as the
+> foundation the Mithril path extends with a snapshot commitment.)
+
 ## Intent
 Produce a complete, manifest-bound, self-inspecting bootstrap package from a **pinned**
 Preview source point, in ONE deterministic command. The reconciliation audit (2026-06-22)

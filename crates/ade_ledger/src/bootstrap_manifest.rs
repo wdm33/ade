@@ -34,7 +34,8 @@ use ade_types::{CardanoEra, Hash32};
 use crate::delegation::CertState;
 use crate::snapshot::cert_state::decode_cert_state;
 
-const MANIFEST_DOMAIN: u8 = 0xB0; // version/domain tag for the canonical encoding
+const MANIFEST_DOMAIN: u8 = 0xB0; // version/domain tag for the canonical encoding (v1, 142 bytes)
+const MANIFEST_DOMAIN_V2: u8 = 0xB1; // v2 (174 bytes): adds the bound UTxO seed hash
 
 /// Binds the seed + cert-state artifacts of one bootstrap into a single canonical,
 /// self-describing package. Every field is a binding.
@@ -50,6 +51,10 @@ pub struct BootstrapManifest {
     pub cert_state_hash: Hash32,
     /// The source/checkpoint commitment (e.g. the oracle ledger-state / anchor hash).
     pub source_commitment: Hash32,
+    /// `blake2b_256` of the canonical UTxO/ledger seed (`query utxo --whole-utxo` JSON), bound in
+    /// manifest v2 (BOOTSTRAP-ANCHOR-PACKAGE). `None` for v1 manifests (the ECA recovery path stays
+    /// byte-identical). Some => the package is admission-ready (the seed sibling is bound).
+    pub utxo_seed_hash: Option<Hash32>,
 }
 
 /// Why a bootstrap package is rejected. Every variant is fail-closed BEFORE durability.
@@ -72,8 +77,14 @@ pub enum BootstrapManifestError {
 impl BootstrapManifest {
     /// The canonical, deterministic byte encoding (fixed field order + width). Injective.
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(1 + 4 + 1 + 8 + 32 * 4);
-        b.push(MANIFEST_DOMAIN);
+        let mut b = Vec::with_capacity(1 + 4 + 1 + 8 + 32 * 5);
+        // v2 (domain 0xB1) when the UTxO seed is bound; v1 (0xB0) otherwise -- the v1 encoding is
+        // byte-identical to the original 142-byte manifest (the ECA recovery path is unchanged).
+        b.push(if self.utxo_seed_hash.is_some() {
+            MANIFEST_DOMAIN_V2
+        } else {
+            MANIFEST_DOMAIN
+        });
         b.extend_from_slice(&self.network_magic.to_be_bytes());
         b.push(self.era as u8);
         b.extend_from_slice(&self.source_point.slot.0.to_be_bytes());
@@ -81,14 +92,22 @@ impl BootstrapManifest {
         b.extend_from_slice(&self.seed_hash.0);
         b.extend_from_slice(&self.cert_state_hash.0);
         b.extend_from_slice(&self.source_commitment.0);
+        if let Some(h) = &self.utxo_seed_hash {
+            b.extend_from_slice(&h.0);
+        }
         b
     }
 
     /// Decode a canonical manifest. Fail-closed on a wrong domain tag, wrong length, or
     /// an unknown era tag.
     pub fn decode(bytes: &[u8]) -> Result<BootstrapManifest, BootstrapManifestError> {
-        // 1 (domain) + 4 (net) + 1 (era) + 8 (slot) + 32*4 (hashes) = 142.
-        if bytes.len() != 142 || bytes[0] != MANIFEST_DOMAIN {
+        // v1 (0xB0): 1+4+1+8+32*4 = 142. v2 (0xB1): +32 (utxo_seed_hash) = 174.
+        let has_utxo = match bytes.first() {
+            Some(&MANIFEST_DOMAIN) => false,
+            Some(&MANIFEST_DOMAIN_V2) => true,
+            _ => return Err(BootstrapManifestError::MalformedManifest),
+        };
+        if bytes.len() != if has_utxo { 174 } else { 142 } {
             return Err(BootstrapManifestError::MalformedManifest);
         }
         let network_magic = u32::from_be_bytes(bytes[1..5].try_into().unwrap());
@@ -106,6 +125,7 @@ impl BootstrapManifest {
             seed_hash: h(46),
             cert_state_hash: h(78),
             source_commitment: h(110),
+            utxo_seed_hash: if has_utxo { Some(h(142)) } else { None },
         })
     }
 }
@@ -175,7 +195,24 @@ mod tests {
             seed_hash: blake2b_256(seed),
             cert_state_hash: blake2b_256(cert),
             source_commitment: Hash32([0xcc; 32]),
+            utxo_seed_hash: None,
         }
+    }
+
+    #[test]
+    fn v2_manifest_binds_utxo_seed_hash_backward_compatibly() {
+        let mut m = manifest_for(b"seed", b"cert");
+        // v1 (no UTxO seed): 142 bytes, byte-identical to the original manifest.
+        let v1 = m.canonical_bytes();
+        assert_eq!(v1.len(), 142);
+        assert_eq!(BootstrapManifest::decode(&v1).unwrap(), m);
+        // v2 (UTxO seed bound): 174 bytes, decodes back with the bound hash.
+        m.utxo_seed_hash = Some(Hash32([0x5e; 32]));
+        let v2 = m.canonical_bytes();
+        assert_eq!(v2.len(), 174);
+        let d = BootstrapManifest::decode(&v2).unwrap();
+        assert_eq!(d, m);
+        assert_eq!(d.utxo_seed_hash, Some(Hash32([0x5e; 32])));
     }
 
     #[test]

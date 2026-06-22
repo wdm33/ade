@@ -65,6 +65,10 @@ pub trait ImmutableLedgerSource {
     fn dstate_accounts(&self) -> Result<Value, CaptureError>;
     fn stake_snapshot(&self) -> Result<Value, CaptureError>;
     fn protocol_state(&self) -> Result<Value, CaptureError>;
+    /// Capture the UTxO/ledger seed (`query utxo --whole-utxo`) to `out_path` (the host generation
+    /// file) and return its blake2b hash. Captured INSIDE the pinned-point window (the same P), to
+    /// disk (the seed is ~2.9 GB — never held in memory).
+    fn capture_utxo_seed(&self, out_path: &std::path::Path) -> Result<Hash32, CaptureError>;
     /// The point a payload claims to be at, if it carries one (e.g. a ledger-state tip), for the
     /// "validate P where available" obligation. `None` if the payload carries no point.
     fn payload_point(&self, _payload: &Value) -> Option<CapturePoint> {
@@ -281,6 +285,41 @@ impl ImmutableLedgerSource for CardanoCliSource {
     fn protocol_state(&self) -> Result<Value, CaptureError> {
         self.parse(&self.run_query(&["protocol-state"])?, "protocol-state")
     }
+
+    fn capture_utxo_seed(&self, out_path: &std::path::Path) -> Result<Hash32, CaptureError> {
+        // Stream `query utxo --whole-utxo --immutable-tip` STDOUT (docker exec forwards it) straight
+        // to the host generation file -- the cli runs in the container, so `--out-file` would write
+        // in-container. No in-memory buffering of the ~2.9 GB seed.
+        let prog = self
+            .cli_prefix
+            .first()
+            .ok_or(CaptureError::Query("empty cli_prefix".into()))?;
+        let magic = self.network_magic.to_string();
+        let file = std::fs::File::create(out_path)
+            .map_err(|e| CaptureError::Query(format!("create seed file {out_path:?}: {e}")))?;
+        let mut cmd = std::process::Command::new(prog);
+        cmd.args(&self.cli_prefix[1..]).arg("query").arg("utxo").arg("--whole-utxo");
+        cmd.args(["--testnet-magic", &magic, "--socket-path", &self.socket_path, "--immutable-tip"]);
+        cmd.stdout(file);
+        let status = cmd
+            .status()
+            .map_err(|e| CaptureError::Query(format!("spawn query utxo: {e}")))?;
+        if !status.success() {
+            return Err(CaptureError::Query(format!(
+                "query utxo failed (exit {:?})",
+                status.code()
+            )));
+        }
+        blake2b_256_of_seed_file(out_path)
+    }
+}
+
+/// `blake2b_256` of a seed file (read-all), matching admission's `blake2b_256_of_file` so the
+/// producer's `utxo_seed_hash` equals the admission verification hash. A RED one-shot.
+fn blake2b_256_of_seed_file(path: &std::path::Path) -> Result<Hash32, CaptureError> {
+    let bytes =
+        std::fs::read(path).map_err(|e| CaptureError::Query(format!("read seed {path:?}: {e}")))?;
+    Ok(blake2b_256(&bytes))
 }
 
 // ===== Part 3: the manifest binding + the inspection report + the atomic 4-sibling emit. =====
@@ -305,6 +344,7 @@ pub fn build_manifest(
     bundle_bytes: &[u8],
     certstate_bytes: &[u8],
     profile_commitment: Hash32,
+    utxo_seed_hash: Option<Hash32>,
 ) -> BootstrapManifest {
     BootstrapManifest {
         network_magic,
@@ -313,6 +353,7 @@ pub fn build_manifest(
         seed_hash: blake2b_256(bundle_bytes),
         cert_state_hash: blake2b_256(certstate_bytes),
         source_commitment: profile_commitment,
+        utxo_seed_hash,
     }
 }
 
@@ -704,7 +745,16 @@ pub fn run_bootstrap_export<S: ImmutableLedgerSource>(
         &cap.protocol_state,
     )?;
     let certstate = ade_ledger::snapshot::cert_state::encode_cert_state(&cert_state);
-    let manifest = build_manifest(profile.network_magic, point.clone(), &bundle, &certstate, profile_commitment);
+    // utxo_seed_hash is wired by the BOOTSTRAP-ANCHOR-PACKAGE UTxO capture; None => v1 (consensus/
+    // certstate) manifest until the co-captured UTxO seed is added.
+    let manifest = build_manifest(
+        profile.network_magic,
+        point.clone(),
+        &bundle,
+        &certstate,
+        profile_commitment,
+        None,
+    );
     let manifest_bytes = manifest.canonical_bytes();
     let inspect = build_inspect_report(
         &cert_state,
@@ -847,6 +897,10 @@ mod tests {
         fn protocol_state(&self) -> Result<Value, CaptureError> {
             Ok(serde_json::json!({}))
         }
+        fn capture_utxo_seed(&self, out_path: &std::path::Path) -> Result<Hash32, CaptureError> {
+            std::fs::write(out_path, b"{}").map_err(|e| CaptureError::Query(format!("mock seed: {e}")))?;
+            blake2b_256_of_seed_file(out_path)
+        }
         fn payload_point(&self, _payload: &Value) -> Option<CapturePoint> {
             self.payload_point.clone()
         }
@@ -950,7 +1004,7 @@ mod tests {
         let certstate = encode_cert_state(&cs);
         let bundle = b"canonical-seed-bytes".to_vec(); // verify_and_import only HASHES the seed
         let profile = Hash32([0x9c; 32]);
-        let manifest = build_manifest(2, sample_point(), &bundle, &certstate, profile.clone());
+        let manifest = build_manifest(2, sample_point(), &bundle, &certstate, profile.clone(), None);
         let manifest_bytes = manifest.canonical_bytes();
 
         // verify the actual CANONICAL BYTES bind every required field (not merely the inspect report):
@@ -1100,6 +1154,10 @@ mod tests {
         }
         fn protocol_state(&self) -> Result<Value, CaptureError> {
             Ok(self.protocol_state.clone())
+        }
+        fn capture_utxo_seed(&self, out_path: &std::path::Path) -> Result<Hash32, CaptureError> {
+            std::fs::write(out_path, b"{}").map_err(|e| CaptureError::Query(format!("mock seed: {e}")))?;
+            blake2b_256_of_seed_file(out_path)
         }
     }
 

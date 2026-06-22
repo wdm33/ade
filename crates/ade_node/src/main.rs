@@ -161,7 +161,12 @@ async fn main() -> ExitCode {
                 cli.keep_raw_capture,
             ) {
                 Ok(r) => {
-                    println!("bootstrap-export OK (network {}):", cli.network);
+                    println!(
+                        "consensus/certstate export OK (network {}) — leadership/cert-state package, \
+                         NOT an admission-ready anchor (no co-captured UTxO seed; the anchor path is \
+                         the snapshot-sourced --bootstrap-package):",
+                        cli.network
+                    );
                     println!("  bundle:    {}  ({})", r.bundle_path, r.bundle_hash);
                     println!("  certstate: {}  ({})", r.certstate_path, r.certstate_hash);
                     println!("  manifest:  {}  ({})", r.manifest_path, r.manifest_hash);
