@@ -83,5 +83,18 @@ and prove the selected tip converges.
 6. Live: real Mithril snapshot → bootstrap → warm restart (no node/cli) → ChainSync convergence.
 
 ## Status
-SCOPED + PROBED (2026-06-22) — native decode viable; the boundary is the production NewEpochState parser
-(real VRF) + the tables reader. Implementation pending.
+**STAGE 1 DONE (2026-06-23) — all 5 gates green; plan steps 1–3 (the `state` decode).** The native
+NewEpochState decoder `crates/ade_ledger/src/ledgerdb_state.rs` `probe_ledgerdb_state` (DC-MITHRIL-01)
+decodes the Conway NewEpochState → canonical `CertState` (pools with REAL VRF, future, retiring,
+delegations, rewards) + pool distribution + Praos nonces — deterministic, fail-closed, NON-EMITTING (a
+structured probe report only; no LedgerState/UTxO/admission). Gates:
+- local Preview corpus — 704 pools all real-VRF, counts match the cardano-cli producer run;
+- determinism (same bytes + epoch → byte-identical canonical CertState + commitment);
+- canonical encode/decode round-trip self-check (in-probe);
+- 7 hermetic fail-closed — zero-VRF, wrong-era (no fallback to latest), PoolDistr-mismatch,
+  epoch-mismatch, malformed (`crates/ade_ledger/tests/ledgerdb_state_hermetic.rs`);
+- **verified Mithril snapshot** (preprod ancillary via `--include-ancillary`, epoch 296, 528 pools all
+  real-VRF, same verdict, deterministic — the NES epoch 296 == the certificate beacon, NOT the filename
+  slot 126400064) (`crates/ade_runtime/tests/ledgerdb_state_mithril.rs`).
+Gate: `ci/ci_check_ledgerdb_state_decode.sh`. **Stage 2 (plan steps 4–6: `tables`/UTxO reader → point +
+commitment binding → feed `bootstrap_from_mithril_snapshot` → warm-restart + ChainSync) is next.**

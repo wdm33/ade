@@ -31,6 +31,7 @@ pub mod gov_cert;
 pub mod governance;
 pub mod hfc;
 pub mod late_era_validation;
+pub mod ledgerdb_state;
 pub mod mary;
 pub mod mempool;
 pub mod phase;
