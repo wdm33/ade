@@ -196,7 +196,7 @@ fn make_shelley_state_at_hfc() -> LedgerState {
             treasury_growth: Rational::new(1, 5).unwrap(),
             protocol_major: 3,  // Allegra protocol version
             protocol_minor: 0,
-            min_utxo_value: Coin(1_000_000),
+            min_utxo_rule: ade_ledger::pparams::MinUtxoRule::LegacyAbsoluteMin(Coin(1_000_000)),
             min_pool_cost: Coin(340_000_000),
             decentralization: Rational::new(8, 25).unwrap(),
             collateral_percent: 150,

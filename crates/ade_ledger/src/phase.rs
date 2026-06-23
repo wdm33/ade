@@ -124,6 +124,10 @@ pub fn classify_failure_phase(err: &LedgerError) -> ValidationPhase {
         // in practice. Classified Phase1 (no collateral delta) for totality —
         // there is never a phase-2 collateral consequence to an env fault.
         LedgerError::ValidationEnvironment(_) => ValidationPhase::Phase1,
+
+        // A Conway per-byte min-UTxO rule reaching the legacy validator is a
+        // deterministic fail-closed reject (tx rejected, no state delta).
+        LedgerError::UnsupportedConwayMinUtxoRule(_) => ValidationPhase::Phase1,
     }
 }
 

@@ -102,7 +102,10 @@ pub fn parse_protocol_parameters_json(
         protocol_minor: cli.protocol_version.minor,
         // Conway has no `minUTxOValue` (replaced by `utxoCostPerByte`, outside
         // S2a's modeled surface); not consumed on the empty-block forge path.
-        min_utxo_value: Coin(0),
+        // The CLI path is a placeholder absolute floor of 0 (no min-UTxO check on
+        // the empty-block forge); the authoritative Conway per-byte rule is bound
+        // only by the native snapshot decoder.
+        min_utxo_rule: ade_ledger::pparams::MinUtxoRule::LegacyAbsoluteMin(Coin(0)),
         min_pool_cost: Coin(cli.min_pool_cost),
         // Definitionally 0 in Conway (the parameter was removed because it is
         // permanently 0). Not the Shelley-launch default of 1.

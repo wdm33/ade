@@ -397,7 +397,7 @@ mod tests {
         let pparams = ProtocolParameters {
             min_fee_a: Coin(44),
             min_fee_b: Coin(155381),
-            min_utxo_value: Coin(0),
+            min_utxo_rule: crate::pparams::MinUtxoRule::LegacyAbsoluteMin(Coin(0)),
             max_tx_size: 16384,
             ..ProtocolParameters::default()
         };

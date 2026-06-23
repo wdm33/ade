@@ -14,7 +14,8 @@ use ade_types::tx::{Coin, TxIn};
 use ade_types::{Hash32, SlotNo};
 
 use crate::error::{
-    ConservationError, FeeError, LedgerError, ValidityError, WitnessAlgorithm, WitnessError,
+    ConservationError, FeeError, LedgerError, UnsupportedConwayMinUtxoRuleError, ValidityError,
+    WitnessAlgorithm, WitnessError,
 };
 use crate::pparams::ProtocolParameters;
 use crate::state::LedgerState;
@@ -95,13 +96,26 @@ fn validate_shelley_tx(
     // 3. Compute produced value
     let produced_coin = compute_shelley_outputs_coin(tx_body)?;
 
-    // 4. Check outputs have minimum value
+    // 4. Check outputs have minimum value. Match on the era-faithful rule:
+    // Shelley/Mary carry the absolute floor; a per-byte (Conway) rule reaching a
+    // Shelley validator is a fail-closed terminal rather than an absolute floor.
     for output in &tx_body.outputs {
-        if output.coin.0 < pparams.min_utxo_value.0 && pparams.min_utxo_value.0 > 0 {
-            return Err(LedgerError::Conservation(ConservationError {
-                consumed_coin,
-                produced_coin: output.coin,
-            }));
+        match &pparams.min_utxo_rule {
+            crate::pparams::MinUtxoRule::LegacyAbsoluteMin(min) => {
+                if output.coin.0 < min.0 && min.0 > 0 {
+                    return Err(LedgerError::Conservation(ConservationError {
+                        consumed_coin,
+                        produced_coin: output.coin,
+                    }));
+                }
+            }
+            crate::pparams::MinUtxoRule::PerByte(coins_per_byte) => {
+                return Err(LedgerError::UnsupportedConwayMinUtxoRule(
+                    UnsupportedConwayMinUtxoRuleError {
+                        coins_per_utxo_byte: *coins_per_byte,
+                    },
+                ));
+            }
         }
     }
 
@@ -466,7 +480,7 @@ mod tests {
         let pparams = ProtocolParameters {
             min_fee_a: Coin(44),
             min_fee_b: Coin(155381),
-            min_utxo_value: Coin(1_000_000),
+            min_utxo_rule: crate::pparams::MinUtxoRule::LegacyAbsoluteMin(Coin(1_000_000)),
             max_tx_size: 16384,
             ..ProtocolParameters::default()
         };

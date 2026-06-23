@@ -11,7 +11,8 @@ use ade_types::{Hash28, SlotNo};
 use ade_types::mary::tx::{MaryTxBody, MaryTxOut};
 
 use crate::error::{
-    ConservationError, FeeError, LedgerError, MintError, ValidityError,
+    ConservationError, FeeError, LedgerError, MintError, UnsupportedConwayMinUtxoRuleError,
+    ValidityError,
 };
 use crate::pparams::ProtocolParameters;
 use crate::utxo::{utxo_delete, utxo_insert, TxOut, UTxOState};
@@ -63,12 +64,27 @@ pub fn validate_mary_tx(
     // Output asset quantities are the non-negative Word64 domain
     // (`OutputAssetQuantity`), so a negative output quantity is unrepresentable by
     // type — the former explicit non-negativity scan is no longer reachable.
+    //
+    // Match on the era-faithful min-UTxO rule: Mary carries the absolute floor; a
+    // per-byte (Conway) rule reaching a Mary validator is a fail-closed terminal
+    // rather than an absolute floor.
     for output in &tx_body.outputs {
-        if output.coin.0 < pparams.min_utxo_value.0 && pparams.min_utxo_value.0 > 0 {
-            return Err(LedgerError::Conservation(ConservationError {
-                consumed_coin: consumed_value.coin,
-                produced_coin: output.coin,
-            }));
+        match &pparams.min_utxo_rule {
+            crate::pparams::MinUtxoRule::LegacyAbsoluteMin(min) => {
+                if output.coin.0 < min.0 && min.0 > 0 {
+                    return Err(LedgerError::Conservation(ConservationError {
+                        consumed_coin: consumed_value.coin,
+                        produced_coin: output.coin,
+                    }));
+                }
+            }
+            crate::pparams::MinUtxoRule::PerByte(coins_per_byte) => {
+                return Err(LedgerError::UnsupportedConwayMinUtxoRule(
+                    UnsupportedConwayMinUtxoRuleError {
+                        coins_per_utxo_byte: *coins_per_byte,
+                    },
+                ));
+            }
         }
     }
 
@@ -289,7 +305,7 @@ mod tests {
         ProtocolParameters {
             min_fee_a: Coin(0),
             min_fee_b: Coin(0),
-            min_utxo_value: Coin(0),
+            min_utxo_rule: crate::pparams::MinUtxoRule::LegacyAbsoluteMin(Coin(0)),
             ..ProtocolParameters::default()
         }
     }
@@ -391,7 +407,7 @@ mod tests {
         let pparams = ProtocolParameters {
             min_fee_a: Coin(44),
             min_fee_b: Coin(155_381),
-            min_utxo_value: Coin(0),
+            min_utxo_rule: crate::pparams::MinUtxoRule::LegacyAbsoluteMin(Coin(0)),
             ..ProtocolParameters::default()
         };
 
@@ -403,6 +419,68 @@ mod tests {
             &pparams,
         );
         assert!(matches!(result, Err(LedgerError::InsufficientFee(_))));
+    }
+
+    /// A Conway per-byte min-UTxO rule reaching the Mary validator is a structured
+    /// TERMINAL `UnsupportedConwayMinUtxoRule` — NOT silently accepted under a false
+    /// absolute floor. The output coin here (>= the per-byte coefficient 4310) WOULD pass a
+    /// naive "treat coinsPerUTxOByte as an absolute floor" check, so an `Ok` (or a permissive
+    /// Conservation pass-through) would be the wrong, unsafe behavior. The rule kind alone is
+    /// terminal, before any fee/conservation accounting.
+    #[test]
+    fn mary_min_utxo_per_byte_rule_is_terminal_not_permissive() {
+        let (utxo, input) = seed_utxo(0xa1, 1_000_000);
+        // coin 800_000 >> 4310, so a permissive absolute-floor interpretation would ACCEPT it.
+        let outputs = vec![make_mary_tx_out(0x01, 800_000)];
+        let tx_body = make_mary_tx_body(&[input], outputs, 200_000);
+        let wire = vec![0xa0];
+
+        let pparams = ProtocolParameters {
+            min_utxo_rule: crate::pparams::MinUtxoRule::PerByte(Coin(4_310)),
+            ..default_pparams()
+        };
+
+        let result = validate_mary_tx(&utxo, &tx_body, &wire, SlotNo(100), &pparams);
+        match result {
+            Err(LedgerError::UnsupportedConwayMinUtxoRule(e)) => {
+                assert_eq!(e.coins_per_utxo_byte, Coin(4_310));
+            }
+            other => panic!(
+                "per-byte rule must be terminal (UnsupportedConwayMinUtxoRule), not {other:?}"
+            ),
+        }
+    }
+
+    /// Regression: the legacy absolute-floor (`LegacyAbsoluteMin`) min-UTxO path is unchanged
+    /// — an output below the floor still rejects with `Conservation`, and an output at/above
+    /// the floor still validates.
+    #[test]
+    fn mary_min_utxo_legacy_absolute_min_unchanged() {
+        // Below the absolute floor (500_000 < 1_000_000) -> Conservation reject (as before).
+        let (utxo, input) = seed_utxo(0xa2, 2_000_000);
+        let outputs = vec![make_mary_tx_out(0x01, 500_000)];
+        let tx_body = make_mary_tx_body(&[input], outputs, 1_500_000);
+        let wire = vec![0xa0];
+        let pparams = ProtocolParameters {
+            min_utxo_rule: crate::pparams::MinUtxoRule::LegacyAbsoluteMin(Coin(1_000_000)),
+            ..default_pparams()
+        };
+        let result = validate_mary_tx(&utxo, &tx_body, &wire, SlotNo(100), &pparams);
+        assert!(
+            matches!(result, Err(LedgerError::Conservation(_))),
+            "sub-floor output under LegacyAbsoluteMin must still reject with Conservation: {result:?}"
+        );
+
+        // At/above the floor (1_000_000 >= 1_000_000) -> the min-UTxO check passes (the tx
+        // then conserves: 1_000_000 output + 1_000_000 fee == 2_000_000 consumed).
+        let (utxo2, input2) = seed_utxo(0xa3, 2_000_000);
+        let outputs2 = vec![make_mary_tx_out(0x01, 1_000_000)];
+        let tx_body2 = make_mary_tx_body(&[input2], outputs2, 1_000_000);
+        let result2 = validate_mary_tx(&utxo2, &tx_body2, &wire, SlotNo(100), &pparams);
+        assert!(
+            result2.is_ok(),
+            "at-floor output under LegacyAbsoluteMin must validate: {result2:?}"
+        );
     }
 
     #[test]

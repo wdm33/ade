@@ -28,7 +28,7 @@ use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::Coin;
 use ade_types::{EpochNo, Hash28, Hash32};
 
-use crate::pparams::{ConwayOnlyDepositParams, ProtocolParameters};
+use crate::pparams::{ConwayOnlyDepositParams, MinUtxoRule, ProtocolParameters};
 use crate::rational::Rational;
 use crate::state::ConwayGovState;
 
@@ -60,7 +60,11 @@ pub fn encode_pparams(pp: &ProtocolParameters) -> Vec<u8> {
     write_rational(&mut buf, &pp.treasury_growth);
     write_uint_canonical(&mut buf, pp.protocol_major as u64);
     write_uint_canonical(&mut buf, pp.protocol_minor as u64);
-    write_uint_canonical(&mut buf, pp.min_utxo_value.0);
+    // The min-UTxO rule serializes as its coin payload only (byte-identical to
+    // the prior single-`Coin` field). This snapshot-persistence path serves
+    // legacy-era (`LegacyAbsoluteMin`) states only — the Conway per-byte native
+    // decode is not persisted (S1a scope fence).
+    write_uint_canonical(&mut buf, pp.min_utxo_rule.coin().0);
     write_uint_canonical(&mut buf, pp.min_pool_cost.0);
     write_rational(&mut buf, &pp.decentralization);
     write_uint_canonical(&mut buf, pp.collateral_percent as u64);
@@ -91,7 +95,9 @@ pub fn decode_pparams(bytes: &[u8]) -> Result<ProtocolParameters, SnapshotDecode
     let treasury_growth = read_rational(bytes, &mut o)?;
     let protocol_major = read_u64(bytes, &mut o)? as u32;
     let protocol_minor = read_u64(bytes, &mut o)? as u32;
-    let min_utxo_value = Coin(read_u64(bytes, &mut o)?);
+    // Reconstructs the absolute-floor rule: this persistence path serves
+    // legacy-era states only (the Conway per-byte native decode is not persisted).
+    let min_utxo_rule = MinUtxoRule::LegacyAbsoluteMin(Coin(read_u64(bytes, &mut o)?));
     let min_pool_cost = Coin(read_u64(bytes, &mut o)?);
     let decentralization = read_rational(bytes, &mut o)?;
     let collateral_percent = read_u64(bytes, &mut o)? as u16;
@@ -117,7 +123,7 @@ pub fn decode_pparams(bytes: &[u8]) -> Result<ProtocolParameters, SnapshotDecode
         treasury_growth,
         protocol_major,
         protocol_minor,
-        min_utxo_value,
+        min_utxo_rule,
         min_pool_cost,
         decentralization,
         collateral_percent,

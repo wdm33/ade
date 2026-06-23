@@ -458,7 +458,10 @@ fn fingerprint_pparams(
     write_rational(&mut buf, &pp.treasury_growth);
     write_uint_canonical(&mut buf, pp.protocol_major as u64);
     write_uint_canonical(&mut buf, pp.protocol_minor as u64);
-    write_coin(&mut buf, pp.min_utxo_value);
+    // The min-UTxO rule's coin payload only — byte-identical to the prior
+    // single-`Coin` field, so the pinned non-Conway pparams fingerprints are
+    // unchanged.
+    write_coin(&mut buf, pp.min_utxo_rule.coin());
     write_coin(&mut buf, pp.min_pool_cost);
     write_rational(&mut buf, &pp.decentralization);
     // Conway deposit-param migration (PHASE4-B3-S1): the two Conway-only

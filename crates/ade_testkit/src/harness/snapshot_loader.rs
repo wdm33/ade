@@ -217,7 +217,7 @@ impl LoadedSnapshot {
             treasury_growth: Rational::new(1, 5).unwrap_or_else(zero),
             protocol_major: 2,
             protocol_minor: 0,
-            min_utxo_value: Coin(1_000_000),
+            min_utxo_rule: ade_ledger::pparams::MinUtxoRule::LegacyAbsoluteMin(Coin(1_000_000)),
             min_pool_cost: Coin(340_000_000),
             decentralization: Rational::new(1, 1).unwrap_or_else(zero),
             collateral_percent: 150,

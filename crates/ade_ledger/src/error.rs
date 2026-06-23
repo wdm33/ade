@@ -116,6 +116,13 @@ pub enum LedgerError {
     // from every tx-validity reject class so a bad environment is never
     // reported as a bad transaction. Fails fast and deterministically.
     ValidationEnvironment(ValidationEnvironmentError),
+
+    // The min-UTxO check was reached with a Conway per-byte rule
+    // (`coinsPerUTxOByte`), whose era-correct per-byte minimum
+    // (`coins_per_utxo_byte * serialized output size`) Ade does not yet compute.
+    // A deterministic fail-closed refusal: the per-byte coefficient is NEVER used
+    // as an absolute floor (which would admit outputs under a false minimum).
+    UnsupportedConwayMinUtxoRule(UnsupportedConwayMinUtxoRuleError),
 }
 
 /// A fault in the validation *environment* rather than the transaction.
@@ -139,6 +146,14 @@ pub enum ValidationEnvironmentError {
     /// ill-formed environment). A deterministic halt, never a silent wrap to a
     /// wrong expiry (PHASE4-B5).
     DRepActivityOverflow,
+}
+
+/// The min-UTxO check was reached with a Conway per-byte rule. Carries the
+/// per-byte coefficient so the structured terminal is self-describing; it is
+/// NEVER consumed as an absolute floor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsupportedConwayMinUtxoRuleError {
+    pub coins_per_utxo_byte: Coin,
 }
 
 /// A Conway certificate carries a deposit/refund effect whose coin amount
@@ -732,6 +747,13 @@ impl core::fmt::Display for LedgerError {
                     write!(f, "validation environment: DRep expiry current_epoch + drep_activity overflowed u64")
                 }
             },
+            LedgerError::UnsupportedConwayMinUtxoRule(e) => {
+                write!(
+                    f,
+                    "unsupported Conway min-UTxO rule: per-byte coinsPerUTxOByte {} (era-correct per-byte minimum not yet computed; never used as an absolute floor)",
+                    e.coins_per_utxo_byte
+                )
+            }
         }
     }
 }

@@ -13,6 +13,36 @@ use crate::error::{
 };
 use crate::rational::Rational;
 
+/// The minimum-UTxO rule, preserved era-faithfully without cross-era semantic
+/// remapping.
+///
+/// Shelley/Mary express the minimum as an ABSOLUTE per-output floor
+/// (`minUTxOValue`): an output is valid iff `output.coin >= c`. Conway replaced
+/// it with a PER-BYTE rule (`coinsPerUTxOByte`): the minimum is
+/// `c * (serialized output size)` — `c` is NOT an absolute floor and treating it
+/// as one would accept outputs under a false minimum. The two are distinct
+/// semantics, so they are distinct variants; an imported parameter is bound into
+/// the variant matching its source era and never collapsed onto the other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MinUtxoRule {
+    /// Shelley/Mary `minUTxOValue`: an absolute per-output lovelace floor.
+    LegacyAbsoluteMin(Coin),
+    /// Conway `coinsPerUTxOByte`: a per-byte coefficient (NOT an absolute floor).
+    PerByte(Coin),
+}
+
+impl MinUtxoRule {
+    /// The inner coin payload (the absolute floor, or the per-byte coefficient).
+    /// Used by the canonical pparams encoders, which serialize the coin value
+    /// only (byte-identical to the prior single-`Coin` field for legacy states);
+    /// the rule KIND is bound separately where it must be distinguished.
+    pub fn coin(&self) -> Coin {
+        match self {
+            MinUtxoRule::LegacyAbsoluteMin(c) | MinUtxoRule::PerByte(c) => *c,
+        }
+    }
+}
+
 /// Full protocol parameters for Shelley through Mary eras.
 ///
 /// All monetary values in lovelace. All rationals use exact integer arithmetic.
@@ -65,8 +95,9 @@ pub struct ProtocolParameters {
 
     // -- UTxO parameters --
 
-    /// Minimum UTxO value (in lovelace).
-    pub min_utxo_value: Coin,
+    /// The minimum-UTxO rule, preserved era-faithfully (absolute floor in
+    /// Shelley/Mary, per-byte coefficient in Conway). Never cross-era remapped.
+    pub min_utxo_rule: MinUtxoRule,
 
     // -- Pool parameters --
 
@@ -128,7 +159,7 @@ impl Default for ProtocolParameters {
             treasury_growth: Rational::new(2, 10).unwrap_or_else(Rational::zero),
             protocol_major: 2,
             protocol_minor: 0,
-            min_utxo_value: Coin(1_000_000),
+            min_utxo_rule: MinUtxoRule::LegacyAbsoluteMin(Coin(1_000_000)),
             min_pool_cost: Coin(340_000_000),
             // d = 1 at Shelley launch (fully federated); decreases over time to 0
             decentralization: Rational::new(1, 1).unwrap_or_else(Rational::zero),
@@ -518,7 +549,9 @@ fn apply_update(
         pp.protocol_minor = v;
     }
     if let Some(v) = update.min_utxo_value {
-        pp.min_utxo_value = v;
+        // The genesis-delegate parameter-update channel is the Shelley-era
+        // mechanism; a min-UTxO update is an absolute-floor update.
+        pp.min_utxo_rule = MinUtxoRule::LegacyAbsoluteMin(v);
     }
     if let Some(v) = update.min_pool_cost {
         pp.min_pool_cost = v;
@@ -562,7 +595,10 @@ mod tests {
         assert_eq!(pp.e_max, 18);
         assert_eq!(pp.n_opt, 150);
         assert_eq!(pp.protocol_major, 2);
-        assert_eq!(pp.min_utxo_value, Coin(1_000_000));
+        assert_eq!(
+            pp.min_utxo_rule,
+            MinUtxoRule::LegacyAbsoluteMin(Coin(1_000_000))
+        );
         assert_eq!(pp.min_pool_cost, Coin(340_000_000));
     }
 
