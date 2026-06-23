@@ -25,6 +25,10 @@ pub enum LedgerError {
     Conservation(ConservationError),
     NegativeValue(NegativeValueError),
     InsufficientFee(FeeError),
+    // An output multi-asset subtraction would drive a Word64 asset quantity below
+    // zero. Output quantities are the non-negative domain, so this is a structured
+    // authoritative reject — never a silent wrap and never a negative entry.
+    AssetUnderflow(AssetUnderflowError),
 
     // Witness domain
     MissingWitness(WitnessError),
@@ -340,6 +344,15 @@ pub struct NegativeValueError {
     pub coin: Coin,
 }
 
+/// An output multi-asset subtraction underflowed: the subtrahend quantity for
+/// `(policy, name)` exceeded the minuend. `name` is the raw asset-name bytes
+/// (0..=32 bytes) of the offending asset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetUnderflowError {
+    pub policy: Hash28,
+    pub name: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct FeeError {
     pub required: Coin,
@@ -550,6 +563,13 @@ impl core::fmt::Display for LedgerError {
             }
             LedgerError::NegativeValue(e) => {
                 write!(f, "negative value: {}", e.coin)
+            }
+            LedgerError::AssetUnderflow(e) => {
+                write!(
+                    f,
+                    "output asset quantity underflow for policy {:?} asset {:?}",
+                    e.policy, e.name
+                )
             }
             LedgerError::InsufficientFee(e) => {
                 write!(

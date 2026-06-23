@@ -12,12 +12,46 @@ use crate::Hash28;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AssetName(pub Vec<u8>);
 
-/// Multi-asset bundle: PolicyId (Hash28) -> AssetName -> quantity.
+/// A UTxO OUTPUT asset quantity: the non-negative Cardano Word64 domain (0 ..= 2^64-1).
 ///
-/// Quantities are i64 to support minting (positive) and burning (negative)
-/// in the mint field. Output quantities must be non-negative.
+/// Non-negative BY CONSTRUCTION; the canonical output encoding is a CBOR unsigned
+/// integer (u64); only checked add/sub is offered, so an output quantity can never
+/// silently wrap or go negative; and a value of this type cannot be passed where a
+/// mint/burn delta ([`MintBurnQuantity`]) is expected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct OutputAssetQuantity(pub u64);
+
+impl OutputAssetQuantity {
+    pub const ZERO: Self = OutputAssetQuantity(0);
+
+    pub fn checked_add(self, o: Self) -> Option<Self> {
+        self.0.checked_add(o.0).map(OutputAssetQuantity)
+    }
+
+    pub fn checked_sub(self, o: Self) -> Option<Self> {
+        self.0.checked_sub(o.0).map(OutputAssetQuantity)
+    }
+
+    pub fn is_zero(self) -> bool {
+        self.0 == 0
+    }
+}
+
+/// A mint/burn DELTA: the signed domain. DORMANT until mint decoding (S-13).
+///
+/// Cannot enter UTxO output state (it is never placed in a [`MultiAsset`]). Defined
+/// here only to fix the future boundary so the non-negative-stored-output vs
+/// signed-mint/burn distinction is explicit in the type system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct MintBurnQuantity(pub i64);
+
+/// Multi-asset bundle: PolicyId (Hash28) -> AssetName -> output quantity.
+///
+/// Quantities are the non-negative Cardano Word64 domain ([`OutputAssetQuantity`]):
+/// this bundle is an OUTPUT representation, so a quantity cannot be negative by type.
+/// Mint/burn deltas are the distinct signed [`MintBurnQuantity`] and never appear here.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MultiAsset(pub BTreeMap<Hash28, BTreeMap<AssetName, i64>>);
+pub struct MultiAsset(pub BTreeMap<Hash28, BTreeMap<AssetName, OutputAssetQuantity>>);
 
 impl MultiAsset {
     pub fn new() -> Self {

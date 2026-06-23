@@ -50,6 +50,10 @@ pub enum StructuralReason {
     Hash32LengthMismatch,
     Hash28LengthMismatch,
     EraTagOutOfRange,
+    /// A multi-asset OUTPUT quantity decoded as a negative CBOR integer. Output
+    /// quantities are the non-negative Word64 domain; a signed quantity in an
+    /// output position is malformed (mint deltas are never persisted as outputs).
+    NegativeAssetQuantity,
 }
 
 #[cfg(test)]
@@ -112,6 +116,7 @@ mod tests {
             StructuralReason::Hash32LengthMismatch,
             StructuralReason::Hash28LengthMismatch,
             StructuralReason::EraTagOutOfRange,
+            StructuralReason::NegativeAssetQuantity,
         ];
         for r in reasons {
             match r {
@@ -124,6 +129,7 @@ mod tests {
                 StructuralReason::Hash32LengthMismatch => {}
                 StructuralReason::Hash28LengthMismatch => {}
                 StructuralReason::EraTagOutOfRange => {}
+                StructuralReason::NegativeAssetQuantity => {}
             }
         }
     }

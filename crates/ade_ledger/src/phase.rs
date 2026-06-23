@@ -75,6 +75,7 @@ pub fn classify_failure_phase(err: &LedgerError) -> ValidationPhase {
         LedgerError::DuplicateInput(_) => ValidationPhase::Phase1,
         LedgerError::Conservation(_) => ValidationPhase::Phase1,
         LedgerError::NegativeValue(_) => ValidationPhase::Phase1,
+        LedgerError::AssetUnderflow(_) => ValidationPhase::Phase1,
         LedgerError::InsufficientFee(_) => ValidationPhase::Phase1,
         LedgerError::MissingWitness(_) => ValidationPhase::Phase1,
         LedgerError::InvalidWitness(_) => ValidationPhase::Phase1,

@@ -11,8 +11,7 @@ use ade_types::{Hash28, SlotNo};
 use ade_types::mary::tx::{MaryTxBody, MaryTxOut};
 
 use crate::error::{
-    ConservationError, FeeError, LedgerError, MintError,
-    NegativeValueError, ValidityError,
+    ConservationError, FeeError, LedgerError, MintError, ValidityError,
 };
 use crate::pparams::ProtocolParameters;
 use crate::utxo::{utxo_delete, utxo_insert, TxOut, UTxOState};
@@ -59,16 +58,12 @@ pub fn validate_mary_tx(
     // 4. Compute produced value from outputs
     let produced_value = compute_mary_outputs_value(tx_body)?;
 
-    // 5. Check no output has negative asset quantities
-    for (i, output) in tx_body.outputs.iter().enumerate() {
-        let output_value = mary_tx_out_to_value(output);
-        value::check_non_negative(&output_value).map_err(|_| {
-            LedgerError::NegativeValue(NegativeValueError {
-                coin: Coin(i as u64),
-            })
-        })?;
-
-        // Minimum UTxO value check
+    // 5. Minimum UTxO value check.
+    //
+    // Output asset quantities are the non-negative Word64 domain
+    // (`OutputAssetQuantity`), so a negative output quantity is unrepresentable by
+    // type — the former explicit non-negativity scan is no longer reachable.
+    for output in &tx_body.outputs {
         if output.coin.0 < pparams.min_utxo_value.0 && pparams.min_utxo_value.0 > 0 {
             return Err(LedgerError::Conservation(ConservationError {
                 consumed_coin: consumed_value.coin,
@@ -165,7 +160,11 @@ fn mary_tx_out_to_value(output: &MaryTxOut) -> Value {
 /// The mint field is opaque CBOR in the current type representation.
 /// Returns an empty MultiAsset if no mint field is present.
 /// When mint bytes are present but not yet decoded, returns empty multi-asset.
-/// Full CBOR decoding of the mint field is a follow-on task.
+///
+/// Full CBOR decoding of the mint field is a follow-on task (S-13). When it lands,
+/// minted deltas decode into the SIGNED `ade_types::mary::value::MintBurnQuantity`
+/// (burns are negative); they are conserved against the output bundle but never
+/// stored as an output quantity (a `MultiAsset` holds only `OutputAssetQuantity`).
 fn parse_mint_field(tx_body: &MaryTxBody) -> Result<MultiAsset, LedgerError> {
     match &tx_body.mint {
         None => Ok(MultiAsset::new()),
@@ -248,6 +247,7 @@ pub fn check_mint_policies(
 mod tests {
     use super::*;
     use crate::value::AssetName;
+    use ade_types::mary::value::OutputAssetQuantity;
     use ade_types::Hash32;
     use std::collections::BTreeSet;
 
@@ -457,7 +457,7 @@ mod tests {
         // Produced has 100 tokens (from minting)
         let mut produced_ma = BTreeMap::new();
         let mut inner = BTreeMap::new();
-        inner.insert(name.clone(), 100i64);
+        inner.insert(name.clone(), OutputAssetQuantity(100));
         produced_ma.insert(policy.clone(), inner);
 
         let produced = Value {
@@ -468,7 +468,7 @@ mod tests {
         // Minted 100 tokens
         let mut minted_inner = BTreeMap::new();
         let mut mint_map = BTreeMap::new();
-        minted_inner.insert(name, 100i64);
+        minted_inner.insert(name, OutputAssetQuantity(100));
         mint_map.insert(policy, minted_inner);
         let minted = MultiAsset(mint_map);
 
@@ -489,7 +489,7 @@ mod tests {
         // Produced has tokens but no minting
         let mut produced_ma = BTreeMap::new();
         let mut inner = BTreeMap::new();
-        inner.insert(name, 50i64);
+        inner.insert(name, OutputAssetQuantity(50));
         produced_ma.insert(policy, inner);
 
         let produced = Value {
@@ -521,7 +521,7 @@ mod tests {
 
         let mut mint_map = BTreeMap::new();
         let mut inner = BTreeMap::new();
-        inner.insert(name, 10i64);
+        inner.insert(name, OutputAssetQuantity(10));
         mint_map.insert(policy.clone(), inner);
         let minted = MultiAsset(mint_map);
 
@@ -538,7 +538,7 @@ mod tests {
 
         let mut mint_map = BTreeMap::new();
         let mut inner = BTreeMap::new();
-        inner.insert(name, 10i64);
+        inner.insert(name, OutputAssetQuantity(10));
         mint_map.insert(policy.clone(), inner);
         let minted = MultiAsset(mint_map);
 

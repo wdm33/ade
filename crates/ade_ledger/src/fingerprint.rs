@@ -630,17 +630,6 @@ fn write_stake_credential(buf: &mut Vec<u8>, cred: &StakeCredential) {
     }
 }
 
-fn write_i64_cbor(buf: &mut Vec<u8>, value: i64) {
-    if value >= 0 {
-        write_uint_canonical(buf, value as u64);
-    } else {
-        // CBOR nint major 1 encodes -1 - n. For any i64 value (including MIN),
-        // -(value + 1) is representable in i64 and non-negative.
-        let n = (-(value + 1)) as u64;
-        write_argument(buf, MAJOR_NEGATIVE, n, canonical_width(n));
-    }
-}
-
 /// Encode an `i128` as CBOR major 0 / 1, clamping to `u64` range.
 ///
 /// All ledger-level Rationals (protocol parameter numerators/denominators)
@@ -716,7 +705,10 @@ fn write_multi_asset(buf: &mut Vec<u8>, ma: &MultiAsset) {
         write_map_canonical(buf, assets.len() as u64);
         for (asset_name, qty) in assets {
             write_bytes_canonical(buf, &asset_name.0);
-            write_i64_cbor(buf, *qty);
+            // Output quantity = CBOR unsigned int. For any representable value
+            // (≤ i64::MAX) this is byte-identical to the prior signed encoding,
+            // and a quantity > i64::MAX now fingerprints faithfully as a u64.
+            write_uint_canonical(buf, qty.0);
         }
     }
 }

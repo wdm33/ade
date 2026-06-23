@@ -22,7 +22,10 @@
 //! `address_array` (Byron-side) is array(2)[uint variant, bytes payload]
 //! where variant ∈ 0..=4 maps to (Base, Pointer, Enterprise, Byron, Reward).
 //!
-//! `encoded_multi_asset` = map(P) of bytes(28) policy → map(A) of bytes asset_name → int.
+//! `encoded_multi_asset` = map(P) of bytes(28) policy → map(A) of bytes asset_name →
+//! uint (the OUTPUT asset quantity, the non-negative Word64 domain). A quantity
+//! ≤ i64::MAX encodes identically to the prior signed form; a quantity > i64::MAX
+//! round-trips faithfully as a CBOR unsigned int.
 //!
 //! BTreeMap traversal everywhere — deterministic.
 
@@ -31,10 +34,11 @@ use std::collections::BTreeMap;
 use ade_codec::cbor::{
     canonical_width, read_any_int, read_array_header, read_bytes, read_map_header,
     write_array_header, write_bytes_canonical, write_map_header, write_uint_canonical,
-    ContainerEncoding, IntWidth, MAJOR_NEGATIVE,
+    ContainerEncoding, IntWidth,
 };
 use ade_codec::CodecError;
 use ade_types::address::Address;
+use ade_types::mary::value::OutputAssetQuantity;
 use ade_types::tx::{Coin, TxIn};
 use ade_types::{Hash28, Hash32};
 
@@ -249,7 +253,9 @@ fn write_multi_asset(buf: &mut Vec<u8>, ma: &MultiAsset) {
         );
         for (asset_name, qty) in assets {
             write_bytes_canonical(buf, &asset_name.0);
-            write_int_i64(buf, *qty);
+            // Output quantity = canonical CBOR unsigned int (Word64). Byte-identical
+            // to the prior signed encoding for any quantity ≤ i64::MAX.
+            write_uint_canonical(buf, qty.0);
         }
     }
 }
@@ -263,7 +269,7 @@ fn read_multi_asset(bytes: &[u8], o: &mut usize) -> Result<MultiAsset, SnapshotD
             })
         }
     };
-    let mut ma: BTreeMap<Hash28, BTreeMap<AssetName, i64>> = BTreeMap::new();
+    let mut ma: BTreeMap<Hash28, BTreeMap<AssetName, OutputAssetQuantity>> = BTreeMap::new();
     for _ in 0..n_policies {
         let (pol_bytes, _w) = read_bytes(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
         if pol_bytes.len() != 28 {
@@ -281,10 +287,10 @@ fn read_multi_asset(bytes: &[u8], o: &mut usize) -> Result<MultiAsset, SnapshotD
                 })
             }
         };
-        let mut assets: BTreeMap<AssetName, i64> = BTreeMap::new();
+        let mut assets: BTreeMap<AssetName, OutputAssetQuantity> = BTreeMap::new();
         for _ in 0..n_assets {
             let (name_bytes, _w) = read_bytes(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
-            let qty = read_int_i64(bytes, o)?;
+            let qty = read_output_quantity(bytes, o)?;
             assets.insert(AssetName(name_bytes), qty);
         }
         ma.insert(Hash28(pol), assets);
@@ -292,27 +298,21 @@ fn read_multi_asset(bytes: &[u8], o: &mut usize) -> Result<MultiAsset, SnapshotD
     Ok(MultiAsset(ma))
 }
 
-fn write_int_i64(buf: &mut Vec<u8>, v: i64) {
-    if v >= 0 {
-        write_uint_canonical(buf, v as u64);
-    } else {
-        // Negative integer: major type 1, encoded value = -1 - v.
-        // Compute in i128 to handle i64::MIN safely.
-        let positive: u64 = ((-1i128) - (v as i128)) as u64;
-        let width = ade_codec::cbor::canonical_width(positive);
-        ade_codec::cbor::write_argument(buf, MAJOR_NEGATIVE, positive, width);
-    }
-}
-
-fn read_int_i64(bytes: &[u8], o: &mut usize) -> Result<i64, SnapshotDecodeError> {
+/// Read one OUTPUT asset quantity (the non-negative Word64 domain) as a canonical
+/// CBOR unsigned int. A negative CBOR integer in an output position is malformed —
+/// outputs cannot carry a signed quantity — so it is a structured terminal error,
+/// never coerced to a wrapped or saturated value.
+fn read_output_quantity(
+    bytes: &[u8],
+    o: &mut usize,
+) -> Result<OutputAssetQuantity, SnapshotDecodeError> {
     let (v, is_neg, _w) = read_any_int(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
     if is_neg {
-        // signed value = -1 - encoded; compute in i128 to handle i64::MIN.
-        let signed = ((-1i128) - (v as i128)) as i64;
-        Ok(signed)
-    } else {
-        Ok(v as i64)
+        return Err(SnapshotDecodeError::Structural {
+            reason: StructuralReason::NegativeAssetQuantity,
+        });
     }
+    Ok(OutputAssetQuantity(v))
 }
 
 // ---------------------------------------------------------------------------
@@ -358,8 +358,8 @@ mod tests {
         let mut ma = MultiAsset::new();
         ma.0.insert(Hash28([b; 28]), {
             let mut a = BTreeMap::new();
-            a.insert(AssetName(vec![0x01, 0x02]), 42);
-            a.insert(AssetName(vec![0xFF]), -7);
+            a.insert(AssetName(vec![0x01, 0x02]), OutputAssetQuantity(42));
+            a.insert(AssetName(vec![0xFF]), OutputAssetQuantity(7));
             a
         });
         TxOut::ShelleyMary {
@@ -412,15 +412,18 @@ mod tests {
     }
 
     #[test]
-    fn utxo_state_negative_multi_asset_quantity_round_trips() {
+    fn utxo_state_word64_multi_asset_quantity_round_trips() {
+        // Output quantities are the full non-negative Word64 domain, including the
+        // upper half that i64 could not represent. Every boundary value round-trips
+        // exactly: 0, 1, i64::MAX, i64::MAX+1, u64::MAX.
         let mut ma = MultiAsset::new();
         ma.0.insert(Hash28([0xAA; 28]), {
             let mut a = BTreeMap::new();
-            a.insert(AssetName(vec![0x01]), i64::MIN);
-            a.insert(AssetName(vec![0x02]), -1);
-            a.insert(AssetName(vec![0x03]), 0);
-            a.insert(AssetName(vec![0x04]), 1);
-            a.insert(AssetName(vec![0x05]), i64::MAX);
+            a.insert(AssetName(vec![0x01]), OutputAssetQuantity(0));
+            a.insert(AssetName(vec![0x02]), OutputAssetQuantity(1));
+            a.insert(AssetName(vec![0x03]), OutputAssetQuantity(i64::MAX as u64));
+            a.insert(AssetName(vec![0x04]), OutputAssetQuantity(i64::MAX as u64 + 1));
+            a.insert(AssetName(vec![0x05]), OutputAssetQuantity(u64::MAX));
             a
         });
         let tx_out = TxOut::ShelleyMary {
@@ -435,6 +438,41 @@ mod tests {
         let bytes = encode_utxo_state(&s);
         let decoded = decode_utxo_state(&bytes).expect("decode");
         assert_eq!(decoded, s);
+    }
+
+    #[test]
+    fn utxo_state_negative_output_quantity_is_rejected() {
+        // A persisted snapshot whose multi-asset quantity is a NEGATIVE CBOR integer
+        // is malformed for an output position and must fail closed — never coerced.
+        // Hand-craft a state with one quantity == 1, then patch its encoding to a
+        // CBOR negative one (0x20 == nint 0 == -1).
+        let mut ma = MultiAsset::new();
+        let mut a = BTreeMap::new();
+        a.insert(AssetName(vec![0x01]), OutputAssetQuantity(1));
+        ma.0.insert(Hash28([0xAA; 28]), a);
+        let mut s = UTxOState::new();
+        s.utxos.insert(
+            tx_in(0xAA, 0),
+            TxOut::ShelleyMary {
+                address: vec![0xAA; 29],
+                value: Value {
+                    coin: Coin(0),
+                    multi_asset: ma,
+                },
+            },
+        );
+        let mut bytes = encode_utxo_state(&s);
+        // The sole 0x01 quantity byte (CBOR uint 1) is the last byte; flip it to a
+        // negative one (major-1, value 0 => -1).
+        let last = bytes.len() - 1;
+        assert_eq!(bytes[last], 0x01, "the quantity byte to patch");
+        bytes[last] = 0x20;
+        assert!(matches!(
+            decode_utxo_state(&bytes),
+            Err(SnapshotDecodeError::Structural {
+                reason: StructuralReason::NegativeAssetQuantity
+            })
+        ));
     }
 
     #[test]
@@ -481,5 +519,99 @@ mod tests {
             decode_tx_out_canonical(&trailing).is_err(),
             "a trailing byte must be rejected, never silently ignored"
         );
+    }
+
+    #[test]
+    fn representable_quantity_encodes_byte_identical_golden() {
+        // BYTE-IDENTITY: a representable output quantity (≤ i64::MAX) encodes as a
+        // canonical CBOR unsigned int — exactly what the prior signed encoding wrote
+        // for a non-negative value. This golden pins the multi-asset value bytes so a
+        // regression that changed the encoding for a representable value is caught.
+        let mut ma = MultiAsset::new();
+        let mut a = BTreeMap::new();
+        // 500_000 = 0x0007A120 → CBOR uint: 0x1a 00 07 a1 20.
+        a.insert(AssetName(vec![0xAB]), OutputAssetQuantity(500_000));
+        ma.0.insert(Hash28([0x11; 28]), a);
+        let mut buf = Vec::new();
+        write_multi_asset(&mut buf, &ma);
+        let mut expected = Vec::new();
+        expected.push(0xA1); // map(1) policies
+        expected.push(0x58); // bytes, 1-byte len follows
+        expected.push(28);
+        expected.extend_from_slice(&[0x11; 28]);
+        expected.push(0xA1); // map(1) assets
+        expected.push(0x41); // bytes(1)
+        expected.push(0xAB);
+        expected.extend_from_slice(&[0x1A, 0x00, 0x07, 0xA1, 0x20]); // uint 500_000
+        assert_eq!(buf, expected, "representable quantity must be byte-identical");
+
+        // And it round-trips through the reader.
+        let mut o = 0usize;
+        let decoded = read_multi_asset(&buf, &mut o).expect("decode");
+        assert_eq!(decoded, ma);
+        assert_eq!(o, buf.len());
+    }
+
+    #[test]
+    fn stage2_mempack_word64_output_survives_snapshot_recovery() {
+        // The real Stage-2 → value-model seam: a native MemPack TxOut whose multi-asset
+        // quantity is > i64::MAX is decoded (DC-MITHRIL-02, faithful u64), promoted into
+        // the authoritative ledger Value / UTxOState, persisted to a snapshot, recovered,
+        // and the quantity is preserved EXACTLY across the whole round-trip.
+        use crate::ledgerdb_tables::{read_txout, TxOutValue};
+
+        // Build a tag-0 MemPack TxOut: enterprise addr + multi-asset value with one
+        // asset of quantity u64::MAX.
+        let policy = [0x22u8; 28];
+        let name = b"BIG";
+        let mut rep = Vec::new();
+        rep.extend_from_slice(&u64::MAX.to_le_bytes()); // A: quantity @ 0
+        rep.extend_from_slice(&12u16.to_le_bytes()); // B: policy off @ 8 → D @ 12n=12
+        rep.extend_from_slice(&40u16.to_le_bytes()); // C: name off @ 10 → E @ 12+28=40
+        rep.extend_from_slice(&policy); // D @ 12
+        rep.extend_from_slice(name); // E @ 40
+        let mut value_blob = vec![0x01u8, 0x00, 0x01, rep.len() as u8]; // tag, coin=0, numMA=1, repLen
+        value_blob.extend_from_slice(&rep);
+
+        let mut addr = vec![0x60u8]; // enterprise, testnet
+        addr.extend_from_slice(&[0xcd; 28]);
+        let mut blob = vec![0x00u8, addr.len() as u8];
+        blob.extend_from_slice(&addr);
+        blob.extend_from_slice(&value_blob);
+
+        let decoded = read_txout(&blob).expect("mempack decode");
+        let tv: &TxOutValue = &decoded.value;
+        assert_eq!(tv.assets[&Hash28(policy)][&AssetName(name.to_vec())], u64::MAX);
+
+        // Promote the faithful u64 TxOutValue into the authoritative ledger MultiAsset.
+        let mut ledger_ma = MultiAsset::new();
+        for (pol, names) in &tv.assets {
+            let mut inner = BTreeMap::new();
+            for (nm, q) in names {
+                inner.insert(nm.clone(), OutputAssetQuantity(*q));
+            }
+            ledger_ma.0.insert(pol.clone(), inner);
+        }
+        let tx_out = TxOut::ShelleyMary {
+            address: decoded.address.clone(),
+            value: Value {
+                coin: tv.coin,
+                multi_asset: ledger_ma,
+            },
+        };
+        let mut state = UTxOState::new();
+        state.utxos.insert(tx_in(0x22, 0), tx_out);
+
+        // Persist → recover; the u64::MAX quantity must survive exactly.
+        let snapshot = encode_utxo_state(&state);
+        let recovered = decode_utxo_state(&snapshot).expect("snapshot recovery");
+        assert_eq!(recovered, state);
+        match recovered.utxos.get(&tx_in(0x22, 0)) {
+            Some(TxOut::ShelleyMary { value, .. }) => assert_eq!(
+                value.multi_asset.0[&Hash28(policy)][&AssetName(name.to_vec())],
+                OutputAssetQuantity(u64::MAX)
+            ),
+            other => panic!("expected ShelleyMary output, got {other:?}"),
+        }
     }
 }
