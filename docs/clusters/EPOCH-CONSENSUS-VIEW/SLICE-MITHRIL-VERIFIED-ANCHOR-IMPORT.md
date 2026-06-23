@@ -96,5 +96,26 @@ structured probe report only; no LedgerState/UTxO/admission). Gates:
 - **verified Mithril snapshot** (preprod ancillary via `--include-ancillary`, epoch 296, 528 pools all
   real-VRF, same verdict, deterministic — the NES epoch 296 == the certificate beacon, NOT the filename
   slot 126400064) (`crates/ade_runtime/tests/ledgerdb_state_mithril.rs`).
-Gate: `ci/ci_check_ledgerdb_state_decode.sh`. **Stage 2 (plan steps 4–6: `tables`/UTxO reader → point +
-commitment binding → feed `bootstrap_from_mithril_snapshot` → warm-restart + ChainSync) is next.**
+Gate: `ci/ci_check_ledgerdb_state_decode.sh`.
+
+**STAGE 2 DONE (2026-06-23) — the `tables` MemPack TxOut decoder (plan step 4).**
+`crates/ade_ledger/src/ledgerdb_tables.rs`: the compact (non-CBOR) TxOut values decode natively —
+`MemPackReader` (explicit-endian primitives) + CompactAddr / Addr28Extra (PO#1) + faithful-u64
+`TxOutValue` + datum/script (original bytes preserved) + the 6-tag `read_txout` +
+`decode_tables_commitment` (era-bound, canonically-sorted, deterministic). The boundary was MemPack,
+NOT CBOR — `decode_babbage_tx_out` did not apply (a grounded probe overturned that assumption). Gates:
+- 15 hermetic tests (primitives; PO#1 Addr28Extra round-trip; faithful u64 — i64::MAX / i64::MAX+1 /
+  u64::MAX preserved, VarLen overflow terminal; 6-tag dispatch; deterministic + era-bound commitment);
+- **300000 real preprod TxOuts decode faithfully** (all 6 tags, consume-exactly —
+  `crates/ade_runtime/tests/ledgerdb_tables_decode.rs`);
+- **cardano-cli oracle cross-check 10/10 MATCH** (6 tag-2 Addr28Extra base addresses + coins ==
+  `cardano-cli query utxo` via the live preview node — **PO#1 CLOSED** —
+  `crates/ade_runtime/tests/ledgerdb_tables_oracle.rs`);
+- deterministic whole-tables commitment + Conway-era binding (PO#2, from the Stage-1 `state` era,
+  never the tables file or a flag).
+DC-MITHRIL-02 (faithful Word64 quantity, tier=true); the **i64 ceiling is a downstream release blocker
+for full ledger validation** (Ade's i64 `MultiAsset` cannot validate UTxOs with quantities > i64::MAX
+— a separate ledger-value-model slice). Gate: `ci/ci_check_ledgerdb_tables_decode.sh`.
+
+**Stage 3 = native Mithril bootstrap WIRING (DecodedTxOut → Ade `UTxOState`, feed
+`bootstrap_from_mithril_snapshot`, warm-restart, ChainSync) is next.**

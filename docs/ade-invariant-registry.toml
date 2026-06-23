@@ -8830,6 +8830,39 @@ cross_ref = ["DC-CINPUT-06", "DC-EPOCH-14"]
 code_locus = "crates/ade_ledger/src/ledgerdb_state.rs: probe_ledgerdb_state (the entry; LedgerDbStateProbe the sole output), navigate_to_current_era (explicit era-tagged telescope nav -> UnsupportedEra), read_pool_params (ZeroVrf), read_cert_state/read_pool_map/read_dstate (CertState w/ real VRF + delegations/rewards), read_pool_distr + the PoolDistrVrfMismatch cross-check, extract_praos_nonces_v2 (the trailing-5 PraosState nonces), map_each (CBOR indefinite maps), the round-trip self-check (decode_cert_state), LedgerDbStateError (the closed terminal set). crates/ade_ledger/tests/ledgerdb_state_hermetic.rs (synthetic minimal-V2 fail-closed + round-trip + determinism). crates/ade_runtime/tests/ledgerdb_state_corpus.rs (local Preview corpus). crates/ade_runtime/tests/ledgerdb_state_mithril.rs (verified Mithril ancillary). ci/ci_check_ledgerdb_state_decode.sh."
 tests = ["happy_minimal_state_decodes_with_required_elements", "determinism_same_bytes_same_commitment", "zero_vrf_is_terminal", "wrong_era_is_terminal_no_fallback_to_latest", "pool_distr_vrf_mismatch_is_terminal", "epoch_mismatch_is_terminal", "malformed_cbor_is_terminal", "decode_local_preview_corpus", "decode_verified_mithril_ledger_state"]
 ci_scripts = ["ci/ci_check_ledgerdb_state_decode.sh"]
+
+[[rules]]
+id = "DC-MITHRIL-02"
+tier = "true"
+statement = """
+Faithful Word64 multi-asset quantity on the snapshot-import path. The native V2 LedgerDB `tables`
+MemPack TxOut decode keeps every multi-asset quantity as a full u64 (Word64) -- NEVER truncated,
+saturated, or cast to i64. A persisted/imported snapshot quantity is never lost: a real Cardano output
+can hold up to 2^64-1 of a token (i64::MAX is the common max-supply mint; some exceed it), so the
+decoder's `TxOutValue` holds `BTreeMap<PolicyId, BTreeMap<AssetName, u64>>` and the whole-tables
+canonical commitment serializes each quantity big-endian as u64. The surrounding decode is fail-closed
++ faithful: the compact (non-CBOR) TxOut value is decoded via the grounded MemPack layout (the 6-way
+constructor tag; CompactAddr / Addr28Extra base-address reconstruction with the explicit BE->LE hash
+double-flip and the payment/stake hash byte-order asymmetry; CompactValue ada-only + multi-asset rep;
+datum/script with the ORIGINAL inline-datum / script wire bytes PRESERVED, never a re-encode where
+Cardano hashes the wire bytes); endianness is explicit (no host-endianness contract); CONSUME-EXACTLY
+is enforced at every nesting boundary; every unknown tag / address form / script language / over-long
+VarLen is a structured TERMINAL error (no opaque keep-bytes); the tables decode is era-bound to Conway
+taken from the SAME snapshot's `state` (the Stage-1 NES), never the tables file or a CLI flag; and the
+whole-tables commitment is a deterministic blake2b chain over the canonically (ascending-TxIn) sorted
+UTxO (a non-sorted map is terminal). DERIVED: Cardano multi-asset quantities are Word64-compatible in
+this decode path. RELEASE BLOCKER (separate, downstream): Ade's i64 `MultiAsset` model cannot yet
+safely validate every real Cardano UTxO containing quantities > i64::MAX -- full ledger validation of
+such outputs is gated until the value-model quantity is widened (this is NOT cleanup). Validated:
+300000 real preprod TxOuts decode faithfully (all 6 tags, consume-exactly); a cardano-cli `query utxo`
+oracle cross-check matched 10/10 (6 tag-2 Addr28Extra base addresses + coins) -- closing PO#1; the
+i64::MAX / i64::MAX+1 / u64::MAX quantities round-trip exactly.
+"""
+source = "docs/clusters/EPOCH-CONSENSUS-VIEW/SLICE-MITHRIL-VERIFIED-ANCHOR-IMPORT.md; user directive 2026-06-23 (Stage 2 = the V2 LedgerDB tables + MemPack TxOut COMPATIBILITY decoder, NOT a CBOR reader; faithful u64 quantity with the i64 ceiling logged as a separate BLOCKING downstream validation obligation, never widen MultiAsset inside the snapshot-decoder slice -- different authority surface; preserve original script/inline-datum bytes where Cardano hash/identity rules require wire bytes; the meaningful oracle comparison is real TxIn -> native decode -> full TxOut vs cardano-cli query utxo; whole-tables proof = a deterministic commitment over sorted TxIn -> canonical TxOut, not just a count)"
+cross_ref = ["DC-MITHRIL-01"]
+code_locus = "crates/ade_ledger/src/ledgerdb_tables.rs: MemPackReader (explicit read_u16/u32/u64_le, read_varlen BE-7bit, expect_consumed); read_compact_addr/validate_address_form; read_staking_credential/read_addr28_base_address (PO#1 BE->LE double-flip + payment/stake hash asymmetry); read_compact_value/decode_multiasset_rep (faithful u64; rep regions A-E + nubOrd); read_compact_coin (tag-2/3 standalone CompactForm Coin = [0x00][VarLen]); read_datum_option/read_script (preserved bytes + Conway Plutus language byte); read_txout (6-tag dispatch); TxOutValue (u64 assets); canonical_txout_bytes + decode_tables_commitment (PO#2 era binding + deterministic sorted commitment); TablesDecodeError (closed terminal set). crates/ade_runtime/tests/ledgerdb_tables_decode.rs; crates/ade_runtime/tests/ledgerdb_tables_oracle.rs; ci/ci_check_ledgerdb_tables_decode.sh."
+tests = ["multiasset_quantities_preserved_exactly_as_u64_no_i64_cast", "coin_varlen_overflow_is_terminal", "addr28_base_address_reconstruction_round_trip", "staking_credential_tag_is_fail_closed", "compact_value_ada_only_and_multiasset", "txout_dispatch_tag0_tag5_and_fail_closed", "tables_commitment_deterministic_era_bound_and_sorted", "varlen_big_endian_7bit_matches_real_coin", "decode_real_preprod_tables_commitment"]
+ci_scripts = ["ci/ci_check_ledgerdb_tables_decode.sh"]
 status = "enforced"
 introduced_in = "EPOCH-CONTINUITY-ACTIVATION-ECA-2-3-4"
 strengthened_in = []
