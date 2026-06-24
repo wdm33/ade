@@ -213,7 +213,7 @@ sed "s/$CERTIFIED_HASH/$NEG_HASH/" "$MANIFEST" > "$NEG_MANIFEST"
 log "stopping throwaway node before ade_node import"
 docker stop "$CONTAINER" >/dev/null 2>&1 || true
 
-ADE_BIN="$REPO_ROOT/target/release/ade_node"
+ADE_BIN="$REPO_ROOT/target/release/ade"
 [[ -x "$ADE_BIN" ]] || { log "building ade_node --release"; cargo build -p ade_node --release >&2; }
 
 run_first_run() { # manifest snap wal log

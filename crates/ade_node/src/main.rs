@@ -234,5 +234,15 @@ fn print_cli_error(e: &CliError) {
                 "ade_node: --single-producer-venue and --participant-venue are mutually exclusive"
             );
         }
+        CliError::UnknownSubcommand(s) => {
+            eprintln!("ade: unknown subcommand `{}` (expected: ade node run …)", s);
+        }
+        CliError::ForbiddenOnBootstrapMithril(flag) => {
+            eprintln!(
+                "ade node run: {} is not allowed on the --bootstrap-mithril route \
+                 (genesis is resolved from --network; the cardano-cli seed path is a separate mode)",
+                flag
+            );
+        }
     }
 }

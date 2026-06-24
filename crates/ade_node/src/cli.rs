@@ -233,6 +233,10 @@ pub enum CliError {
     InvalidMaxSlots(String),
     // PHASE4-N-AI AI-S4b-i (OQ-5) — a venue is exactly one role; never both.
     ConflictingVenue,
+    // MITHRIL-FIRST-RUN-CONTINUITY S3 — the public `ade <group> <action>` subcommand entrypoint.
+    UnknownSubcommand(String),
+    // Native Mithril route: irrelevant legacy inputs are mechanically rejected, not ignored.
+    ForbiddenOnBootstrapMithril(&'static str),
 }
 
 /// Closed PHASE4-N-Q `produce` CLI bundle.
@@ -312,6 +316,30 @@ impl Cli {
         let mut convergence_evidence_path: Option<PathBuf> = None;
         let mut output_base: Option<PathBuf> = None;
         let mut keep_raw_capture = false;
+
+        // Public subcommand entrypoint: `ade node run [flags]` is the node entrypoint (sugar for
+        // `--mode node`). A leading flag (`--mode`, `--genesis-path`, …) keeps the legacy form
+        // valid; an unknown leading non-flag token is a structured terminal error.
+        let mut via_node_run = false;
+        if iter.peek().map(|s| !s.starts_with("--")).unwrap_or(false) {
+            match iter.next().as_deref() {
+                Some("node") => match iter.next().as_deref() {
+                    Some("run") => {
+                        mode = Mode::Node;
+                        via_node_run = true;
+                    }
+                    other => {
+                        return Err(CliError::UnknownSubcommand(format!(
+                            "node {}",
+                            other.unwrap_or("")
+                        )));
+                    }
+                },
+                other => {
+                    return Err(CliError::UnknownSubcommand(other.unwrap_or("").to_string()));
+                }
+            }
+        }
 
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -557,7 +585,33 @@ impl Cli {
         // context; --genesis-path is not relevant. We synthesize a
         // sentinel placeholder so the field stays non-optional for
         // downstream consumers.
-        let genesis_path = if mode == Mode::KeyGenKes || mode == Mode::Produce || mode == Mode::BootstrapExport {
+        // `ade node run` (bootstrap OR warm-start) + the --bootstrap-mithril native route resolve
+        // genesis from --network (bootstrap) or the durable store (warm-start), and keep the WAL
+        // under --data-dir -- so neither --genesis-path nor a separate --wal-dir is required here.
+        let native_run = via_node_run || bootstrap_mithril.is_some();
+        if native_run && wal_dir.is_none() {
+            if let Some(dd) = data_dir.as_ref() {
+                wal_dir = Some(dd.join("wal"));
+            }
+        }
+        // The native bootstrap route is additionally CLOSED to irrelevant legacy inputs (reject,
+        // never ignore): genesis is the committed --network profile, and the cardano-cli
+        // seed-extraction path is a different, closed route.
+        if bootstrap_mithril.is_some() {
+            if genesis_path.is_some() {
+                return Err(CliError::ForbiddenOnBootstrapMithril("--genesis-path"));
+            }
+            if json_seed_path.is_some() {
+                return Err(CliError::ForbiddenOnBootstrapMithril("--json-seed"));
+            }
+            if consensus_inputs_path.is_some() {
+                return Err(CliError::ForbiddenOnBootstrapMithril("--consensus-inputs-path"));
+            }
+        }
+        let genesis_path = if native_run {
+            // node run: genesis from --network (bootstrap) or the durable store (warm-start).
+            PathBuf::new()
+        } else if mode == Mode::KeyGenKes || mode == Mode::Produce || mode == Mode::BootstrapExport {
             // KeyGenKes: no chain context needed.
             // Produce: --genesis-file is the produce-mode-specific
             //          genesis path; --genesis-path stays optional.
@@ -750,6 +804,94 @@ mod tests {
     fn cli_requires_genesis_path() {
         let err = parse(&[]).expect_err("must require genesis-path");
         assert_eq!(err, CliError::MissingGenesisPath);
+    }
+
+    // ---- MITHRIL-FIRST-RUN-CONTINUITY S3: the `ade node run` native route contract ----
+
+    fn bootstrap_run_args() -> Vec<&'static str> {
+        vec![
+            "node",
+            "run",
+            "--network",
+            "preview",
+            "--bootstrap-mithril",
+            "/snap/manifest.json",
+            "--snapshot-dir",
+            "/snap",
+            "--data-dir",
+            "/ade-preview",
+            "--peer",
+            "127.0.0.1:3002",
+        ]
+    }
+
+    #[test]
+    fn node_run_subcommand_selects_node_mode_without_genesis() {
+        let cli = parse(&bootstrap_run_args()).expect("ade node run must parse");
+        assert_eq!(cli.mode, Mode::Node);
+        assert_eq!(
+            cli.bootstrap_mithril,
+            Some(PathBuf::from("/snap/manifest.json"))
+        );
+        // genesis is resolved from --network; no --genesis-path required (sentinel).
+        assert_eq!(cli.genesis_path, PathBuf::new());
+    }
+
+    #[test]
+    fn node_run_defaults_wal_dir_under_data_dir() {
+        let cli = parse(&bootstrap_run_args()).expect("parse");
+        assert_eq!(cli.wal_dir, Some(PathBuf::from("/ade-preview/wal")));
+    }
+
+    #[test]
+    fn bootstrap_route_forbids_genesis_path() {
+        let mut a = bootstrap_run_args();
+        a.extend(["--genesis-path", "/etc/genesis.json"]);
+        let err = parse(&a).expect_err("genesis-path must be forbidden on the native route");
+        assert_eq!(err, CliError::ForbiddenOnBootstrapMithril("--genesis-path"));
+    }
+
+    #[test]
+    fn bootstrap_route_forbids_legacy_seed_flags() {
+        for flag in ["--json-seed", "--consensus-inputs-path"] {
+            let mut a = bootstrap_run_args();
+            a.extend([flag, "/some/path"]);
+            let err = parse(&a).expect_err("legacy seed flag must be forbidden");
+            assert!(
+                matches!(err, CliError::ForbiddenOnBootstrapMithril(_)),
+                "flag {flag} => {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn node_run_warm_start_recovery_needs_no_bootstrap_or_genesis() {
+        // The recovery command: `ade node run --network preview --data-dir D --peer P`
+        // (no --bootstrap-mithril, no --snapshot-dir, no --genesis-path, no --wal-dir).
+        let cli = parse(&[
+            "node",
+            "run",
+            "--network",
+            "preview",
+            "--data-dir",
+            "/ade-preview",
+            "--peer",
+            "127.0.0.1:3002",
+        ])
+        .expect("warm-start recovery must parse");
+        assert_eq!(cli.mode, Mode::Node);
+        assert_eq!(cli.bootstrap_mithril, None);
+        assert_eq!(cli.genesis_path, PathBuf::new());
+        assert_eq!(cli.wal_dir, Some(PathBuf::from("/ade-preview/wal")));
+    }
+
+    #[test]
+    fn unknown_subcommand_is_terminal() {
+        let err = parse(&["node", "frobnicate"]).expect_err("unknown action must be terminal");
+        assert_eq!(
+            err,
+            CliError::UnknownSubcommand("node frobnicate".to_string())
+        );
     }
 
     #[test]

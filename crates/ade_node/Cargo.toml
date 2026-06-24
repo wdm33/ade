@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "ade_node"
+name = "ade"
 path = "src/main.rs"
 
 [dependencies]
