@@ -35,6 +35,7 @@ pub mod ledgerdb_state;
 pub mod ledgerdb_tables;
 pub mod mary;
 pub mod mempool;
+pub mod mithril_utxo_materialize;
 pub mod phase;
 pub mod plutus_eval;
 pub mod pointer_resolve;
