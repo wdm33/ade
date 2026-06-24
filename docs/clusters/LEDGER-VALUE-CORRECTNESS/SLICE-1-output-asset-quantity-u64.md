@@ -10,7 +10,7 @@ does NOT touch them beyond defining a dormant boundary type.
 
 ## Why (grounding)
 
-The Stage-2 MemPack decoder (`DC-MITHRIL-02`) decodes real preprod outputs with multi-asset
+The Stage-2 MemPack decoder (`DC-MITHRIL-05`) decodes real preprod outputs with multi-asset
 quantities at and above `i64::MAX` (one observed = 1.8e19 > i64::MAX). Ade's authoritative value
 model stores asset quantities as `i64`, so promoting a decoded snapshot UTxO into `UTxOState`
 currently crosses an authority boundary (loss/rejection of valid outputs). This slice fixes the
@@ -128,7 +128,7 @@ Add `DC-LEDGER-VALUE-01` (tier=true) to `docs/ade-invariant-registry.toml`: "Ade
 output asset quantity preserves the full Cardano Word64 domain (0..2^64-1) via the
 `OutputAssetQuantity(u64)` newtype; output arithmetic is checked (overflow/underflow → structured
 error, never wrap or negative); mint/burn is the distinct signed `MintBurnQuantity(i64)` and cannot
-enter outputs; representable values stay byte-identical." Cross-ref `DC-MITHRIL-02`.
+enter outputs; representable values stay byte-identical." Cross-ref `DC-MITHRIL-05`.
 
 ## Scope fence
 

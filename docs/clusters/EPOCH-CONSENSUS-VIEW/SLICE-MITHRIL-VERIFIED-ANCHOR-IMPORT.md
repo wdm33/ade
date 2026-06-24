@@ -84,7 +84,7 @@ and prove the selected tip converges.
 
 ## Status
 **STAGE 1 DONE (2026-06-23) — all 5 gates green; plan steps 1–3 (the `state` decode).** The native
-NewEpochState decoder `crates/ade_ledger/src/ledgerdb_state.rs` `probe_ledgerdb_state` (DC-MITHRIL-01)
+NewEpochState decoder `crates/ade_ledger/src/ledgerdb_state.rs` `probe_ledgerdb_state` (DC-MITHRIL-04)
 decodes the Conway NewEpochState → canonical `CertState` (pools with REAL VRF, future, retiring,
 delegations, rewards) + pool distribution + Praos nonces — deterministic, fail-closed, NON-EMITTING (a
 structured probe report only; no LedgerState/UTxO/admission). Gates:
@@ -113,7 +113,7 @@ NOT CBOR — `decode_babbage_tx_out` did not apply (a grounded probe overturned 
   `crates/ade_runtime/tests/ledgerdb_tables_oracle.rs`);
 - deterministic whole-tables commitment + Conway-era binding (PO#2, from the Stage-1 `state` era,
   never the tables file or a flag).
-DC-MITHRIL-02 (faithful Word64 quantity, tier=true); the **i64 ceiling is a downstream release blocker
+DC-MITHRIL-05 (faithful Word64 quantity, tier=true); the **i64 ceiling is a downstream release blocker
 for full ledger validation** (Ade's i64 `MultiAsset` cannot validate UTxOs with quantities > i64::MAX
 — a separate ledger-value-model slice). Gate: `ci/ci_check_ledgerdb_tables_decode.sh`.
 

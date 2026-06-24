@@ -6,7 +6,7 @@
 # (overflow/underflow -> a structured `LedgerError`, never a wrap and never a negative). Mint/burn is
 # the DISTINCT signed `MintBurnQuantity(i64)` and can never enter an output bundle. Representable
 # values (<= i64::MAX) stay byte-identical (a non-negative CBOR int and a u64 <= i64::MAX encode to
-# the same major-0 uint). Cross-ref DC-MITHRIL-02 (the snapshot decoder already yields faithful u64).
+# the same major-0 uint). Cross-ref DC-MITHRIL-05 (the snapshot decoder already yields faithful u64).
 set -euo pipefail
 
 TYPES="crates/ade_types/src/mary/value.rs"

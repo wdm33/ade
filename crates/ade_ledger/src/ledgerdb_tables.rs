@@ -320,7 +320,7 @@ fn rep_slice(rep: &[u8], off: usize, len: usize) -> R<&[u8]> {
 ///
 /// Cardano output multi-asset quantities are Word64 (0 ..= 2^64-1). They are kept as `u64` here with
 /// NO truncation, saturation, or i64 cast (a persisted/imported snapshot quantity is never lost —
-/// DC-MITHRIL-02, tier=true). Ade's i64 `MultiAsset` cannot hold the upper half; routing these
+/// DC-MITHRIL-05, tier=true). Ade's i64 `MultiAsset` cannot hold the upper half; routing these
 /// outputs through it is a RELEASE BLOCKER for full ledger validation, tracked as a downstream
 /// obligation, not handled in this snapshot-decoder slice.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -385,7 +385,7 @@ fn decode_multiasset_rep(rep: &[u8], n: usize) -> R<BTreeMap<Hash28, BTreeMap<As
     distinct.dedup();
     let mut ma: BTreeMap<Hash28, BTreeMap<AssetName, u64>> = BTreeMap::new();
     for i in 0..n {
-        // FAITHFUL Word64 -> u64: never truncated, saturated, or cast to i64 (DC-MITHRIL-02).
+        // FAITHFUL Word64 -> u64: never truncated, saturated, or cast to i64 (DC-MITHRIL-05).
         let qty = rd_u64_le(rep_slice(rep, 8 * i, 8)?);
         let pb = rep_slice(rep, 8 * n + 2 * i, 2)?;
         let policy_off = u16::from_le_bytes([pb[0], pb[1]]) as usize;

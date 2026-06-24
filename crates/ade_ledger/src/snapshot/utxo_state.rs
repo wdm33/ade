@@ -555,7 +555,7 @@ mod tests {
     #[test]
     fn stage2_mempack_word64_output_survives_snapshot_recovery() {
         // The real Stage-2 → value-model seam: a native MemPack TxOut whose multi-asset
-        // quantity is > i64::MAX is decoded (DC-MITHRIL-02, faithful u64), promoted into
+        // quantity is > i64::MAX is decoded (DC-MITHRIL-05, faithful u64), promoted into
         // the authoritative ledger Value / UTxOState, persisted to a snapshot, recovered,
         // and the quantity is preserved EXACTLY across the whole round-trip.
         use crate::ledgerdb_tables::{read_txout, TxOutValue};
