@@ -205,6 +205,8 @@ fn make_cli(peer_addr: std::net::SocketAddr, log_path: PathBuf, mode: Mode) -> C
         genesis_path: PathBuf::from("/dev/null"),
         network: "mainnet".to_string(),
         chain_db_path: None,
+        bootstrap_mithril: None,
+        data_dir: None,
         snapshot_store_path: None,
         listen_addr: None,
         peer_addrs: vec![peer_addr.to_string()],

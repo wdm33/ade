@@ -420,11 +420,9 @@ async fn run_node_lifecycle_inner(
     // 1. Required persistence paths. `--snapshot-dir` holds the
     //    persistent ChainDb (which is also the SnapshotStore);
     //    `--wal-dir` holds the FileWalStore. No defaults: a missing
-    //    path fails closed.
-    let snapshot_dir = cli
-        .snapshot_dir
-        .as_ref()
-        .ok_or(NodeLifecycleError::MissingFlag("--snapshot-dir"))?;
+    //    path fails closed. On the --bootstrap-mithril route the STORE is --data-dir
+    //    (--snapshot-dir there is the read-only Mithril snapshot); see resolve_store_dir.
+    let snapshot_dir = resolve_store_dir(cli)?;
     let wal_dir = cli
         .wal_dir
         .as_ref()
@@ -2766,6 +2764,23 @@ pub(crate) fn warm_start_recovery(
 /// On success: state is durably persisted. L2 does not sync (L4) or produce
 /// (L5), so the owner reports success honestly and exits 0 — no block is
 /// produced.
+/// Resolve Ade's durable STORE directory (chain.db, WAL, reduced-checkpoint.redb). On the
+/// `--bootstrap-mithril` route `--snapshot-dir` is the READ-ONLY Mithril snapshot, so the store is
+/// `--data-dir` (required). On the legacy routes the store is `--snapshot-dir`; `--data-dir` takes
+/// precedence when given. The two never overlap, so a judge cannot put Ade storage in the snapshot dir.
+fn resolve_store_dir(cli: &Cli) -> Result<&std::path::Path, NodeLifecycleError> {
+    if cli.bootstrap_mithril.is_some() {
+        cli.data_dir.as_deref().ok_or(NodeLifecycleError::MissingFlag(
+            "--data-dir (Ade's durable store, required with --bootstrap-mithril; --snapshot-dir is the Mithril snapshot)",
+        ))
+    } else {
+        cli.data_dir
+            .as_deref()
+            .or(cli.snapshot_dir.as_deref())
+            .ok_or(NodeLifecycleError::MissingFlag("--snapshot-dir"))
+    }
+}
+
 fn first_run_mithril_bootstrap(
     cli: &Cli,
     chaindb: &PersistentChainDb,
@@ -2777,7 +2792,9 @@ fn first_run_mithril_bootstrap(
     // (the snapshot IS the source) and the cardano-cli / JSON seed is
     // FORBIDDEN. This supersedes the CLI-seed body below; the two are NEVER a
     // fallback for one another.
-    if cli.mithril_state_path.is_some() && cli.mithril_tables_path.is_some() {
+    if cli.bootstrap_mithril.is_some()
+        || (cli.mithril_state_path.is_some() && cli.mithril_tables_path.is_some())
+    {
         return first_run_native_mithril_bootstrap(cli, chaindb, wal);
     }
 
@@ -2952,18 +2969,32 @@ fn first_run_native_mithril_bootstrap(
 
     // Require all native components (manifest + state + tables + shelley
     // genesis). A missing one is terminal before any decode (mixed-component).
-    let manifest_path = cli
-        .mithril_manifest_path
-        .as_ref()
-        .ok_or(NodeLifecycleError::MissingFlag("--mithril-manifest-path"))?;
-    let state_path = cli
-        .mithril_state_path
-        .as_ref()
-        .ok_or(NodeLifecycleError::MissingFlag("--mithril-state-path"))?;
-    let tables_path = cli
-        .mithril_tables_path
-        .as_ref()
-        .ok_or(NodeLifecycleError::MissingFlag("--mithril-tables-path"))?;
+    // Resolve the native inputs. STANDARD (--bootstrap-mithril): the manifest is the flag value and
+    // state/tables are read from --snapshot-dir (the Mithril snapshot dir). LEGACY: explicit
+    // --mithril-manifest/state/tables paths. (--snapshot-dir on the bootstrap route is the snapshot,
+    // never Ade storage -- that is --data-dir.)
+    let (manifest_path, state_path, tables_path): (
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) = if let Some(manifest) = cli.bootstrap_mithril.as_ref() {
+        let snap = cli.snapshot_dir.as_ref().ok_or(NodeLifecycleError::MissingFlag(
+            "--snapshot-dir (the Mithril snapshot dir, required with --bootstrap-mithril)",
+        ))?;
+        (manifest.clone(), snap.join("state"), snap.join("tables"))
+    } else {
+        (
+            cli.mithril_manifest_path
+                .clone()
+                .ok_or(NodeLifecycleError::MissingFlag("--mithril-manifest-path"))?,
+            cli.mithril_state_path
+                .clone()
+                .ok_or(NodeLifecycleError::MissingFlag("--mithril-state-path"))?,
+            cli.mithril_tables_path
+                .clone()
+                .ok_or(NodeLifecycleError::MissingFlag("--mithril-tables-path"))?,
+        )
+    };
     // Read the manifest + state + tables native components (terminal on a read failure — no path
     // bytes in the error). The Shelley genesis is resolved below from --network (committed
     // profile) or --shelley-genesis-path (advanced override), not as a required fourth file.
@@ -3005,11 +3036,9 @@ fn first_run_native_mithril_bootstrap(
     };
     let expected_network = profile.as_ref().map(|p| (p.network_magic, p.genesis_hash.clone()));
 
-    // Route through the unchanged native chain. The persistent ChainDb / WAL are REUSED.
-    let snapshot_dir = cli
-        .snapshot_dir
-        .as_ref()
-        .ok_or(NodeLifecycleError::MissingFlag("--snapshot-dir"))?;
+    // Route through the unchanged native chain. The persistent ChainDb / WAL + the reduced
+    // checkpoint live in the STORE (--data-dir on the --bootstrap-mithril route, NOT the snapshot).
+    let snapshot_dir = resolve_store_dir(cli)?;
     let out = crate::native_firstrun::native_first_run_bootstrap(
         &manifest_bytes,
         &state_cbor,
@@ -3024,10 +3053,38 @@ fn first_run_native_mithril_bootstrap(
     )
     .map_err(|e| NodeLifecycleError::NativeFirstRun(format!("{e:?}")))?;
 
+    // The canonical bootstrap RECEIPT — authority-relevant facts only, printed BEFORE ChainSync.
+    let reduced_cp = snapshot_dir.join("reduced-checkpoint.redb");
     eprintln!(
-        "ade_node --mode node: NATIVE first-run Mithril bootstrap complete \
-         (anchor initial_ledger_fingerprint={:?}, certified_point_slot={}).",
-        out.anchor.initial_ledger_fingerprint, out.anchor.seed_point.slot.0
+        "\n=== Ade native Mithril bootstrap receipt ===\n\
+         network / profile      : {} (magic {})\n\
+         shelley genesis hash   : {:?}\n\
+         certified anchor point : slot {} / block {:?}\n\
+         seed artifact commit   : {:?}\n\
+         UTxO commitment        : {:?}\n\
+         durable ledger lineage : {:?}\n\
+         reduced checkpoint     : {} ({})\n\
+         ChainSync              : {}\n\
+         ============================================",
+        cli.network,
+        out.anchor.network_magic,
+        out.anchor.genesis_hash,
+        out.anchor.seed_point.slot.0,
+        out.anchor.seed_point.block_hash,
+        out.anchor.seed_artifact_hash,
+        out.anchor.imported_utxo_fingerprint,
+        out.anchor.initial_ledger_fingerprint,
+        if reduced_cp.exists() {
+            "built"
+        } else {
+            "absent (no EVIEW package)"
+        },
+        reduced_cp.display(),
+        if cli.peer_addrs.is_empty() {
+            "no --peer configured (forge-capable, halts clean)".to_string()
+        } else {
+            format!("starting against {} peer(s)", cli.peer_addrs.len())
+        },
     );
     Ok(BootstrapState {
         ledger: out.ledger,
@@ -4988,6 +5045,8 @@ mod tests {
             genesis_path: base.join("genesis.json"),
             network: "preprod".to_string(),
             chain_db_path: None,
+            bootstrap_mithril: None,
+            data_dir: None,
             snapshot_store_path: None,
             listen_addr: None,
             peer_addrs: vec![],
@@ -5216,6 +5275,8 @@ mod tests {
             genesis_path: base.join("genesis.json"),
             network: "preprod".to_string(),
             chain_db_path: None,
+            bootstrap_mithril: None,
+            data_dir: None,
             snapshot_store_path: None,
             listen_addr: None,
             peer_addrs: vec![],
@@ -5260,6 +5321,28 @@ mod tests {
         "slotLength": 1,
         "systemStart": "2022-06-01T00:00:00Z"
     }"#;
+
+    #[tokio::test]
+    async fn native_first_run_bootstrap_mithril_requires_data_dir() {
+        // ROUTE DISTINCTION (the contract's safety): on the --bootstrap-mithril route --snapshot-dir
+        // is the READ-ONLY Mithril snapshot and --data-dir is Ade's store. Missing --data-dir is
+        // terminal — a judge cannot accidentally put Ade storage into the Mithril snapshot dir.
+        let mut f = native_fixture(
+            Some(&manifest_json(CERTIFIED_SLOT, NETWORK_MAGIC, GENESIS_HASH_HEX)),
+            true,
+            true,
+            Some(SHELLEY_GENESIS_JSON),
+            false,
+        );
+        f.cli.bootstrap_mithril = f.cli.mithril_manifest_path.clone();
+        f.cli.data_dir = None;
+        let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+        let r = run_node_lifecycle_inner(&f.cli, &mut sd_rx).await;
+        assert!(
+            matches!(r, Err(NodeLifecycleError::MissingFlag(m)) if m.contains("--data-dir")),
+            "--bootstrap-mithril without --data-dir must be terminal, got {r:?}"
+        );
+    }
 
     #[tokio::test]
     async fn native_first_run_forbidden_json_seed_is_terminal() {
@@ -6122,6 +6205,8 @@ mod tests {
             genesis_path: d._dir.path().join("genesis.json"),
             network: "preprod".to_string(),
             chain_db_path: None,
+            bootstrap_mithril: None,
+            data_dir: None,
             snapshot_store_path: None,
             listen_addr: None,
             peer_addrs: vec![],

@@ -119,6 +119,18 @@ pub struct Cli {
     /// and `epochLength` (-> the single-era Conway schedule for the snapshot
     /// epoch). Required on the native FirstRun route.
     pub shelley_genesis_path: Option<PathBuf>,
+    /// MITHRIL-FIRST-RUN-CONTINUITY S2 — the judge-facing native FirstRun selector: the verified
+    /// Mithril manifest path. When present, `--mode node` FirstRun takes the native route, REQUIRES
+    /// `--network` + `--snapshot-dir` (the Mithril snapshot dir; `state`/`tables` are read from it)
+    /// + `--data-dir` (Ade's durable store), and FORBIDS `--json-seed-path` /
+    /// `--consensus-inputs-path`. ROUTE DISTINCTION: on this route `--snapshot-dir` is the MITHRIL
+    /// SNAPSHOT (read-only inputs), NOT Ade storage; Ade storage is `--data-dir`.
+    pub bootstrap_mithril: Option<PathBuf>,
+    /// MITHRIL-FIRST-RUN-CONTINUITY S2 — Ade's durable state directory (chain.db, WAL,
+    /// reduced-checkpoint.redb). REQUIRED with `--bootstrap-mithril` (where `--snapshot-dir` is the
+    /// read-only Mithril snapshot). On the legacy routes the store is `--snapshot-dir`; `--data-dir`
+    /// takes precedence when given.
+    pub data_dir: Option<PathBuf>,
     // -------------------------------------------------------------------
     // PHASE4-N-O — KeyGenKes-mode flags. Each is parsed unconditionally
     // and validated only when `--mode key_gen_kes` is set (via
@@ -283,6 +295,8 @@ impl Cli {
         let mut mithril_state_path: Option<PathBuf> = None;
         let mut mithril_tables_path: Option<PathBuf> = None;
         let mut shelley_genesis_path: Option<PathBuf> = None;
+        let mut bootstrap_mithril: Option<PathBuf> = None;
+        let mut data_dir: Option<PathBuf> = None;
         let mut out_file: Option<PathBuf> = None;
         let mut period_idx: Option<u32> = None;
         let mut seed_file: Option<PathBuf> = None;
@@ -412,6 +426,18 @@ impl Cli {
                         CliError::FlagMissingValue("--snapshot-dir".to_string())
                     })?;
                     snapshot_dir = Some(PathBuf::from(v));
+                }
+                "--bootstrap-mithril" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--bootstrap-mithril".to_string())
+                    })?;
+                    bootstrap_mithril = Some(PathBuf::from(v));
+                }
+                "--data-dir" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--data-dir".to_string())
+                    })?;
+                    data_dir = Some(PathBuf::from(v));
                 }
                 "--network-magic" => {
                     let v = iter.next().ok_or_else(|| {
@@ -559,6 +585,8 @@ impl Cli {
             seed_block_hash_hex,
             wal_dir,
             snapshot_dir,
+            bootstrap_mithril,
+            data_dir,
             network_magic,
             genesis_hash_hex,
             consensus_inputs_path,
