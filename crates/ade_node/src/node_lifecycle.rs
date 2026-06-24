@@ -534,12 +534,21 @@ async fn run_node_lifecycle_inner(
             // the exact N-F-D relay behavior. Placeholders are PROVABLY UNCONSUMED
             // on the empty source (a feed-end halts the loop on iteration 1).
             let era_schedule = recovered_node_schedule(&state, !cli.peer_addrs.is_empty())?;
-            let ledger_view = PoolDistrView::new(
-                EpochNo(0),
-                0,
-                ActiveSlotsCoeff { numer: 0, denom: 1 },
-                BTreeMap::new(),
-            );
+            // CONTINUITY: a relay-only follow validates incoming headers against the recovered
+            // leadership view -- the SAME view the forge-ON path uses, from the seed-epoch sidecar.
+            // Empty placeholder only when there is neither a live feed nor recovered inputs.
+            let ledger_view = match state.seed_epoch_consensus_inputs.as_ref() {
+                Some(record) => PoolDistrView::from_seed_epoch_consensus_inputs(record),
+                None if !cli.peer_addrs.is_empty() => {
+                    return Err(NodeLifecycleError::FeedMissingRecoveredConsensusInputs)
+                }
+                None => PoolDistrView::new(
+                    EpochNo(epoch.unwrap_or(0)),
+                    0,
+                    ActiveSlotsCoeff { numer: 0, denom: 1 },
+                    BTreeMap::new(),
+                ),
+            };
             // PHASE4-N-AE.C (DC-WAL-02): the first followed AdmitBlock must chain
             // from the fingerprint of the ledger state the follow extends (the
             // recovered ledger tip = the WAL-tail post_fp), not from zero. Read it
@@ -550,6 +559,15 @@ async fn run_node_lifecycle_inner(
                 anchor_fp,
                 SnapshotCadence::DEFAULT,
             );
+            // CONTINUITY: thread the recovered anchor point + seed-epoch eta0 into the forward-sync
+            // state (the SAME values the forge-ON follow uses), so run_node_sync recognises the
+            // post-intersection RollBackward(anchor) as an idempotent boundary rewind and validates
+            // the header VRF against the recovered nonce, not the snapshot Nonce::ZERO placeholder.
+            fwd.recovered_anchor = state.tip.clone();
+            fwd.recovered_eta0 = state
+                .seed_epoch_consensus_inputs
+                .as_ref()
+                .map(|s| s.epoch_nonce.clone());
             // CONTINUITY / RO-LIVE-01: a relay-only (forge-OFF) node FOLLOWS the chain when an
             // upstream peer is configured (--peer) -- wire the same LIVE WirePump feed the forge-ON
             // branch uses. Empty --peer keeps the empty source (halts clean). Network magic comes
@@ -2955,7 +2973,15 @@ fn first_run_mithril_bootstrap(
     Ok(BootstrapState {
         ledger: out.ledger,
         chain_dep: out.chain_dep,
-        tip: out.tip,
+        tip: out.tip.or_else(|| {
+            // FirstRun cold-start has no chaindb tip, but the certified anchor IS the live-follow
+            // start. Seed it so the relay loop's recovered_anchor + the pump FindIntersect both
+            // anchor at the certified point (WarmStart resolves the same via resolve_live_follow_start).
+            Some(ChainTip {
+                hash: out.anchor.seed_point.block_hash.clone(),
+                slot: out.anchor.seed_point.slot,
+            })
+        }),
         // CONTINUITY (immediate follow): the SAME anchor-bound seed-epoch consensus inputs the
         // bootstrap bound + persisted, threaded in-memory so FirstRun ChainSync can project the
         // header-validation view without a restart (no sidecar read-back).
@@ -3114,7 +3140,15 @@ fn first_run_native_mithril_bootstrap(
     Ok(BootstrapState {
         ledger: out.ledger,
         chain_dep: out.chain_dep,
-        tip: out.tip,
+        tip: out.tip.or_else(|| {
+            // FirstRun cold-start has no chaindb tip, but the certified anchor IS the live-follow
+            // start. Seed it so the relay loop's recovered_anchor + the pump FindIntersect both
+            // anchor at the certified point (WarmStart resolves the same via resolve_live_follow_start).
+            Some(ChainTip {
+                hash: out.anchor.seed_point.block_hash.clone(),
+                slot: out.anchor.seed_point.slot,
+            })
+        }),
         // CONTINUITY (immediate follow): the SAME anchor-bound seed-epoch consensus inputs the
         // bootstrap bound + persisted, threaded in-memory so FirstRun ChainSync can project the
         // header-validation view without a restart (no sidecar read-back).
