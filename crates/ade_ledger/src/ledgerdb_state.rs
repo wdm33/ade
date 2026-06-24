@@ -377,10 +377,14 @@ fn extract_praos_nonces_v2(hs: &[u8]) -> R<PraosNonces> {
         b.copy_from_slice(&hs[o + 4..o + 36]);
         Nonce(b)
     };
+    // Nonce field order checked against the live preview node (cardano-cli query protocol-state,
+    // epoch 1338). The two epoch-FIXED nonces cross-check by value: epochNonce (the leader-VRF eta0)
+    // is tail[1] and lastEpochBlockNonce is tail[4]. The prior tail[2]=epoch mapping fed the wrong
+    // eta0 to forward header validation -> VrfCert(VerificationFailed) on the real chain.
     Ok(PraosNonces {
         evolving: nonce_at(tail[0]),
-        candidate: nonce_at(tail[1]),
-        epoch: nonce_at(tail[2]),
+        epoch: nonce_at(tail[1]),
+        candidate: nonce_at(tail[2]),
         lab: nonce_at(tail[3]),
         last_epoch_block: nonce_at(tail[4]),
     })
