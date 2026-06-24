@@ -18,6 +18,7 @@ pub mod forward_sync;
 pub mod genesis_bootstrap;
 pub mod mithril_bootstrap;
 pub mod mithril_import;
+pub mod mithril_native_assembly;
 pub mod network;
 pub mod orchestrator;
 pub mod producer;
