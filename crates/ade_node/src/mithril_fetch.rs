@@ -201,10 +201,23 @@ pub fn run_mithril_snapshot_fetch(
             "ade mithril snapshot fetch: reusing verified snapshot at {} (delete it to re-download)",
             db.display()
         );
-        ("reused (previously mithril-verified)".to_string(), "reused".to_string())
+        // The Mithril snapshot/cert digest from a prior download (.mithril-digest), else a zero
+        // placeholder. Recorded provenance only -- node-run binds on network/genesis/certified-point,
+        // NOT on this hash -- but the manifest field MUST be valid 64-hex (else BadHashHex terminal).
+        let digest = std::fs::read_to_string(output_dir.join(".mithril-digest"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            .unwrap_or_else(|| "0".repeat(64));
+        ("reused (previously mithril-verified)".to_string(), digest)
     } else {
         let d = download(&mithril, output_dir, certificate)?;
-        ("mithril-client verified the immutable files via the certificate; ancillary IOG-signed".to_string(), d)
+        let _ = std::fs::write(output_dir.join(".mithril-digest"), &d);
+        (
+            "mithril-client verified the immutable files via the certificate; ancillary IOG-signed"
+                .to_string(),
+            d,
+        )
     };
 
     // 2. Native certified point from the snapshot's ledger state (slot + header hash) — no frozen node.

@@ -550,7 +550,16 @@ async fn run_node_lifecycle_inner(
                 anchor_fp,
                 SnapshotCadence::DEFAULT,
             );
-            let mut source = NodeBlockSource::in_memory(Vec::new());
+            // CONTINUITY / RO-LIVE-01: a relay-only (forge-OFF) node FOLLOWS the chain when an
+            // upstream peer is configured (--peer) -- wire the same LIVE WirePump feed the forge-ON
+            // branch uses. Empty --peer keeps the empty source (halts clean). Network magic comes
+            // from --network-magic or the committed --network profile.
+            let mut source = if !cli.peer_addrs.is_empty() {
+                let network_magic = resolve_network_magic(cli)?;
+                spawn_live_wire_pump_source(&cli.peer_addrs, network_magic, state.tip.as_ref())
+            } else {
+                NodeBlockSource::in_memory(Vec::new())
+            };
             // PHASE4-N-AH S4a (CN-NODE-04 / DC-NODE-20): emit the closed feed/forge
             // sched transcript to the --log JSONL file (node-run.jsonl) — the canonical
             // evidence artifact (stderr fallback); emit-only, never alters scheduling.
@@ -576,10 +585,14 @@ async fn run_node_lifecycle_inner(
             )
             .await?;
             eprintln!(
-                "ade_node --mode node: relay run loop entered and halted cleanly \
+                "ade_node --mode node: relay run loop exited \
                  (recovered/bootstrapped epoch={epoch:?}, tip slot={tip_slot:?}; \
-                 forge OFF — no operator keys supplied; NO live peer source wired \
-                 — sync / idle / shutdown proven hermetically). NO block produced."
+                 forge OFF — no operator keys supplied; {}). NO block produced.",
+                if cli.peer_addrs.is_empty() {
+                    "NO live peer source wired — halts clean"
+                } else {
+                    "followed the live peer until shutdown / feed-end"
+                }
             );
         }
         ForgeIntent::On(paths) => {
@@ -715,9 +728,7 @@ async fn run_node_lifecycle_inner(
             // variant, no second tip-advance, no verdict; dial / parse failures
             // are logged-and-dropped (admission honest-scope C3), never fatal.
             let mut source = if live_feed_wired {
-                let network_magic = cli
-                    .network_magic
-                    .ok_or(NodeLifecycleError::MissingFlag("--network-magic"))?;
+                let network_magic = resolve_network_magic(cli)?;
                 spawn_live_wire_pump_source(&cli.peer_addrs, network_magic, state.tip.as_ref())
             } else {
                 NodeBlockSource::in_memory(Vec::new())
@@ -2781,6 +2792,19 @@ fn resolve_store_dir(cli: &Cli) -> Result<&std::path::Path, NodeLifecycleError> 
     }
 }
 
+/// Resolve the N2N network magic for the live wire pump: the explicit --network-magic, else the
+/// committed --network profile's magic (so `node run --network preview` needs no --network-magic).
+fn resolve_network_magic(cli: &Cli) -> Result<u32, NodeLifecycleError> {
+    if let Some(m) = cli.network_magic {
+        return Ok(m);
+    }
+    crate::bootstrap_export::resolve_network_profile(&cli.network)
+        .map(|p| p.network_magic)
+        .map_err(|_| {
+            NodeLifecycleError::MissingFlag("--network-magic (or a known --network: preview|preprod)")
+        })
+}
+
 fn first_run_mithril_bootstrap(
     cli: &Cli,
     chaindb: &PersistentChainDb,
@@ -2919,12 +2943,10 @@ fn first_run_mithril_bootstrap(
     )
     .map_err(|e| NodeLifecycleError::MithrilBootstrap(format!("{e:?}")))?;
 
-    // Honest success record. The dispatcher converges into the relay run
-    // loop; the bootstrapped BootstrapState is returned for it. The recovered
-    // seed-epoch consensus inputs are persisted (sidecar + WAL provenance) but
-    // not held in `MithrilBootstrapOutput`; on this binary path the empty
-    // source halts the loop before any sync consumes a leadership view, so
-    // `seed_epoch_consensus_inputs: None` here is provably unobserved.
+    // Honest success record. The dispatcher converges into the relay run loop; the bootstrapped
+    // BootstrapState is returned for it. CONTINUITY: the seed-epoch consensus inputs are persisted
+    // (sidecar + WAL provenance) AND threaded in-memory via `MithrilBootstrapOutput`, so the relay
+    // loop projects the leadership view immediately on this path too -- not deferred to a restart.
     eprintln!(
         "ade_node --mode node: first-run Mithril bootstrap complete \
          (anchor initial_ledger_fingerprint={:?}, epoch={}).",
@@ -2934,7 +2956,10 @@ fn first_run_mithril_bootstrap(
         ledger: out.ledger,
         chain_dep: out.chain_dep,
         tip: out.tip,
-        seed_epoch_consensus_inputs: None,
+        // CONTINUITY (immediate follow): the SAME anchor-bound seed-epoch consensus inputs the
+        // bootstrap bound + persisted, threaded in-memory so FirstRun ChainSync can project the
+        // header-validation view without a restart (no sidecar read-back).
+        seed_epoch_consensus_inputs: Some(out.seed_epoch_consensus_inputs),
         replayed_anchor_block_no: None,
     })
 }
@@ -3090,7 +3115,10 @@ fn first_run_native_mithril_bootstrap(
         ledger: out.ledger,
         chain_dep: out.chain_dep,
         tip: out.tip,
-        seed_epoch_consensus_inputs: None,
+        // CONTINUITY (immediate follow): the SAME anchor-bound seed-epoch consensus inputs the
+        // bootstrap bound + persisted, threaded in-memory so FirstRun ChainSync can project the
+        // header-validation view without a restart (no sidecar read-back).
+        seed_epoch_consensus_inputs: Some(out.seed_epoch_consensus_inputs),
         replayed_anchor_block_no: None,
     })
 }

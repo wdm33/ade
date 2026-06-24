@@ -89,6 +89,12 @@ pub enum MithrilBootstrapError {
     /// cannot be written the bootstrap fails rather than leave the
     /// sidecar without a provenance record.
     SeedConsensusProvenanceWal(WalError),
+    /// Encoding the initial bootstrap ledger snapshot failed (Conway-only at the encoder
+    /// boundary). A successful bootstrap MUST leave a warm-startable snapshot.
+    InitialSnapshotEncode(ade_ledger::snapshot::SnapshotEncodeError),
+    /// Persisting the initial bootstrap ledger snapshot failed. Without it the next invocation
+    /// classifies FirstRun, so fail closed rather than leave a non-warm-startable store.
+    InitialSnapshotPersist(ChainDbError),
 }
 
 /// The Mithril-bootstrap entry's typed output: the cold-start state
@@ -100,6 +106,9 @@ pub struct MithrilBootstrapOutput {
     pub chain_dep: PraosChainDepState,
     pub tip: Option<ChainTip>,
     pub anchor: BootstrapAnchor,
+    /// The anchor-bound seed-epoch consensus inputs -- the SAME value persisted to the sidecar,
+    /// threaded so the FirstRun BootstrapState carries them in-memory for immediate ChainSync.
+    pub seed_epoch_consensus_inputs: ade_ledger::seed_consensus_inputs::SeedEpochConsensusInputs,
 }
 
 /// SOLE Mithril-bootstrap routing entry. Composes the RED manifest
@@ -168,11 +177,36 @@ where
 
     persist_seed_epoch_consensus_inputs(snapshot_store, wal, &anchor, seed_consensus_inputs)?;
 
+    // CONTINUITY (operational warm-start): a successful bootstrap MUST leave a warm-startable
+    // durable artifact. bootstrap_initial_state's FirstRun branch persists NO snapshot/tip, so
+    // persist the initial ledger snapshot at the anchor slot here, atomically with the lineage
+    // above -- else the next `ade node run` classifies FirstRun (no tip/snapshot) and cannot
+    // recover. Conway-only at the encoder. A failure here fails the bootstrap closed (no
+    // partial, non-warm-startable store is left bootable).
+    let snapshot_bytes = ade_ledger::snapshot::encode_snapshot(&ledger, &chain_dep)
+        .map_err(MithrilBootstrapError::InitialSnapshotEncode)?;
+    snapshot_store
+        .put_snapshot(anchor.seed_point.slot, &snapshot_bytes)
+        .map_err(MithrilBootstrapError::InitialSnapshotPersist)?;
+
+    // CONTINUITY (immediate follow): thread the SAME anchor-bound seed-epoch consensus inputs
+    // that were just persisted (the deterministic merge of the canonical, anchor_fp + seed
+    // epoch) into the output, so the FirstRun BootstrapState carries them in-memory for ChainSync
+    // -- NOT a post-hoc sidecar read-back.
+    let seed_epoch_consensus_inputs =
+        crate::seed_consensus_merge::merge_seed_epoch_consensus_inputs(
+            anchor.initial_ledger_fingerprint.clone(),
+            seed_consensus_inputs.epoch_no,
+            seed_consensus_inputs,
+        )
+        .map_err(MithrilBootstrapError::SeedConsensusMerge)?;
+
     Ok(MithrilBootstrapOutput {
         ledger,
         chain_dep,
         tip,
         anchor,
+        seed_epoch_consensus_inputs,
     })
 }
 
@@ -456,6 +490,81 @@ mod tests {
     }
 
     #[test]
+    fn successful_bootstrap_leaves_warmstartable_snapshot() {
+        // CONTINUITY invariant: a successful bootstrap MUST leave a snapshot so the next
+        // invocation classifies WarmStart (classify_start checks tip || snapshots). A fresh
+        // store has none; after a successful bootstrap there is exactly one, at the anchor slot.
+        let db = InMemoryChainDb::new();
+        let mut wal = VecWal::new();
+        let sched = schedule();
+        let view = empty_view();
+        let (ledger, chain_dep) = seed_state();
+        let inputs = matching_seed_point_inputs();
+        let cinputs = seed_inputs();
+        assert!(
+            db.list_snapshot_slots().expect("list").is_empty(),
+            "precondition: no snapshot before bootstrap"
+        );
+        let out = bootstrap_from_mithril_snapshot(
+            &inputs,
+            ledger,
+            chain_dep,
+            MANIFEST.as_bytes(),
+            &cinputs,
+            &db,
+            &db,
+            &mut wal,
+            &sched,
+            &view,
+        )
+        .expect("bootstrap");
+        let slots = db.list_snapshot_slots().expect("list");
+        assert!(
+            slots.contains(&out.anchor.seed_point.slot),
+            "successful bootstrap must leave a warm-startable snapshot at the anchor slot {:?}; got {:?}",
+            out.anchor.seed_point.slot,
+            slots
+        );
+    }
+
+    #[test]
+    fn output_seed_epoch_inputs_equal_persisted_sidecar() {
+        use ade_ledger::seed_consensus_inputs::encode_seed_epoch_consensus_inputs;
+        // CONTINUITY: the SeedEpochConsensusInputs threaded into the output is the SAME value
+        // persisted to the sidecar (byte-identical) -- so the immediate FirstRun follow and a
+        // warm-start recover see identical authority, with no read-back drift.
+        let db = InMemoryChainDb::new();
+        let mut wal = VecWal::new();
+        let sched = schedule();
+        let view = empty_view();
+        let (ledger, chain_dep) = seed_state();
+        let inputs = matching_seed_point_inputs();
+        let cinputs = seed_inputs();
+        let out = bootstrap_from_mithril_snapshot(
+            &inputs,
+            ledger,
+            chain_dep,
+            MANIFEST.as_bytes(),
+            &cinputs,
+            &db,
+            &db,
+            &mut wal,
+            &sched,
+            &view,
+        )
+        .expect("bootstrap");
+        let stored = db
+            .get_seed_epoch_consensus_inputs(&out.anchor.initial_ledger_fingerprint)
+            .expect("get sidecar")
+            .expect("sidecar present");
+        assert_eq!(
+            encode_seed_epoch_consensus_inputs(&out.seed_epoch_consensus_inputs),
+            stored,
+            "the in-memory threaded seed-epoch inputs must encode byte-identically to the persisted sidecar"
+        );
+    }
+
+    #[test]
     fn bootstrap_persists_anchor_keyed_seed_consensus_inputs() {
         use ade_ledger::consensus_view::PoolEntry as BluePoolEntry;
         use ade_ledger::seed_consensus_inputs::{
@@ -524,8 +633,14 @@ mod tests {
         assert_eq!(decoded, expected);
         assert_eq!(decoded.anchor_fp, out.anchor.initial_ledger_fingerprint);
 
-        // The sidecar created no slot-keyed snapshot — disjoint namespace.
-        assert!(db.list_snapshot_slots().expect("list").is_empty());
+        // The sidecar is anchor-fp-keyed (disjoint from slot-keyed snapshots). The bootstrap now
+        // ALSO persists the warm-startable ledger snapshot at the anchor slot (CONTINUITY): exactly
+        // that one slot-keyed snapshot exists, distinct from the sidecar namespace.
+        assert_eq!(
+            db.list_snapshot_slots().expect("list"),
+            vec![out.anchor.seed_point.slot],
+            "bootstrap leaves exactly the anchor-slot warm-start snapshot"
+        );
 
         // A3a: the WAL recorded the provenance entry after the sidecar
         // put (commit point); replay surfaces the bound view.
