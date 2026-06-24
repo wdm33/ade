@@ -33,6 +33,7 @@ pub mod fork_switch;
 pub mod key_gen;
 pub mod lca_walk;
 pub mod live_log;
+pub mod mithril_fetch;
 pub mod mem_measure;
 pub mod native_firstrun;
 pub mod node;

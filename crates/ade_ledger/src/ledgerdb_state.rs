@@ -33,7 +33,7 @@ use ade_codec::cbor::{
 use ade_crypto::blake2b::blake2b_256;
 use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::{Coin, PoolId};
-use ade_types::{CardanoEra, EpochNo, Hash28, Hash32};
+use ade_types::{CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
 
 use crate::bootstrap_anchor::SeedPoint;
 use crate::consensus_input_extract::{Nonce, PraosNonces};
@@ -282,6 +282,67 @@ fn headerstate_slice(d: &[u8]) -> R<&[u8]> {
     let start = *o;
     skip_item(d, o)?; // the headerState
     Ok(&d[start..*o])
+}
+
+/// The chain tip (slot + header hash) the snapshot's `headerState` AnnTip carries -- the point Ade
+/// must ChainSync-follow from after a native Mithril bootstrap, and the native source for a
+/// manifest's `certified_point` (replacing any out-of-band frozen-node extraction).
+///
+/// `headerState` = `array(2)[WithOrigin(AnnTip), chainDepState]`. The `WithOrigin "At"` wrapper is
+/// `array(1)[ [eraIndex, [slotNo, headerHash(32B), blockNo]] ]` (the HardFork era discriminator wraps
+/// the inner AnnTip). `Origin` (`array(0)`) means a genesis-tip snapshot with no block -> fail-closed.
+pub fn decode_ledgerdb_tip(state_cbor: &[u8]) -> R<(SlotNo, Hash32)> {
+    let hs = headerstate_slice(state_cbor)?;
+    let o = &mut 0usize;
+    expect_array(hs, o, 2, "headerState")?; // [tip, chainDepState]
+    match array_len(hs, o, "headerState.tip(WithOrigin)")? {
+        0 => Err(malformed(
+            "headerState tip is Origin: snapshot has no block to follow from",
+        )),
+        1 => {
+            expect_array(hs, o, 2, "tip.hardforkAnnTip")?; // [eraIndex, annTip]
+            skip_item(hs, o)?; // eraIndex (HardFork era discriminator; not needed for the point)
+            expect_array(hs, o, 3, "tip.annTip")?; // [slotNo, headerHash, blockNo]
+            let slot = read_u64(hs, o, "tip.slotNo")?;
+            let hash = hash32(read_fixed_bytes(hs, o, 32, "tip.headerHash")?);
+            Ok((SlotNo(slot), hash))
+        }
+        n => Err(malformed(format!(
+            "headerState tip WithOrigin arity {n} (expected 0 = Origin | 1 = At)"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tip_tests {
+    use super::*;
+
+    #[test]
+    fn decode_ledgerdb_tip_reads_anntip_slot_and_hash() {
+        // [version, [ledgerState=a(0), headerState]] where
+        // headerState = [ At[ [era6, [slot=100, hash, blockNo=50]] ], chainDep=a(0) ].
+        let mut s: Vec<u8> = vec![0x82, 0x01, 0x82, 0x80];
+        s.push(0x82); // headerState a(2)
+        s.push(0x81); // WithOrigin At: a(1)
+        s.push(0x82); // hardfork annTip a(2)
+        s.push(0x06); // eraIndex = 6 (Conway)
+        s.push(0x83); // annTip a(3)
+        s.extend_from_slice(&[0x18, 0x64]); // slotNo = 100
+        s.extend_from_slice(&[0x58, 0x20]); // bytes(32)
+        s.extend_from_slice(&[0xAB; 32]); // headerHash
+        s.extend_from_slice(&[0x18, 0x32]); // blockNo = 50
+        s.push(0x80); // chainDepState a(0)
+        let (slot, hash) = decode_ledgerdb_tip(&s).expect("tip parse");
+        assert_eq!(slot, SlotNo(100));
+        assert_eq!(hash, Hash32([0xAB; 32]));
+    }
+
+    #[test]
+    fn decode_ledgerdb_tip_origin_is_fail_closed() {
+        // headerState = [ Origin=a(0), chainDep=a(0) ]
+        let s: Vec<u8> = vec![0x82, 0x01, 0x82, 0x80, 0x82, 0x80, 0x80];
+        assert!(decode_ledgerdb_tip(&s).is_err());
+    }
 }
 
 /// Extract the five PraosState nonces from the headerState bytes: the TRAILING five contiguous

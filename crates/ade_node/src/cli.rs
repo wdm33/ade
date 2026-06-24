@@ -52,6 +52,9 @@ pub enum Mode {
     /// four mutually-bound `<output>.json{,.certstate,.manifest,.inspect.json}`
     /// artifacts. Required flags: `--network`, `--output`.
     BootstrapExport,
+    /// MITHRIL-FIRST-RUN-CONTINUITY S4 — `ade mithril snapshot fetch`: the judge-facing snapshot
+    /// acquisition + verification (download/verify -> manifest.json + receipt). One-shot.
+    MithrilSnapshotFetch,
 }
 
 impl Mode {
@@ -63,6 +66,7 @@ impl Mode {
             "produce" => Some(Self::Produce),
             "node" => Some(Self::Node),
             "bootstrap_export" => Some(Self::BootstrapExport),
+            "mithril_snapshot_fetch" => Some(Self::MithrilSnapshotFetch),
             _ => None,
         }
     }
@@ -335,6 +339,20 @@ impl Cli {
                         )));
                     }
                 },
+                Some("mithril") => {
+                    let sub = iter.next();
+                    let act = iter.next();
+                    match (sub.as_deref(), act.as_deref()) {
+                        (Some("snapshot"), Some("fetch")) => mode = Mode::MithrilSnapshotFetch,
+                        (s, a) => {
+                            return Err(CliError::UnknownSubcommand(format!(
+                                "mithril {} {}",
+                                s.unwrap_or(""),
+                                a.unwrap_or("")
+                            )));
+                        }
+                    }
+                }
                 other => {
                     return Err(CliError::UnknownSubcommand(other.unwrap_or("").to_string()));
                 }
@@ -466,6 +484,20 @@ impl Cli {
                         CliError::FlagMissingValue("--data-dir".to_string())
                     })?;
                     data_dir = Some(PathBuf::from(v));
+                }
+                // `ade mithril snapshot fetch`: --output-dir reuses output_base; --certificate
+                // (pinned snapshot/cert reference) reuses mithril_manifest_path (free on this route).
+                "--output-dir" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--output-dir".to_string())
+                    })?;
+                    output_base = Some(PathBuf::from(v));
+                }
+                "--certificate" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--certificate".to_string())
+                    })?;
+                    mithril_manifest_path = Some(PathBuf::from(v));
                 }
                 "--network-magic" => {
                     let v = iter.next().ok_or_else(|| {
@@ -611,7 +643,11 @@ impl Cli {
         let genesis_path = if native_run {
             // node run: genesis from --network (bootstrap) or the durable store (warm-start).
             PathBuf::new()
-        } else if mode == Mode::KeyGenKes || mode == Mode::Produce || mode == Mode::BootstrapExport {
+        } else if mode == Mode::KeyGenKes
+            || mode == Mode::Produce
+            || mode == Mode::BootstrapExport
+            || mode == Mode::MithrilSnapshotFetch
+        {
             // KeyGenKes: no chain context needed.
             // Produce: --genesis-file is the produce-mode-specific
             //          genesis path; --genesis-path stays optional.
@@ -892,6 +928,51 @@ mod tests {
             err,
             CliError::UnknownSubcommand("node frobnicate".to_string())
         );
+    }
+
+    // ---- MITHRIL-FIRST-RUN-CONTINUITY S4: `ade mithril snapshot fetch` ----
+
+    #[test]
+    fn mithril_snapshot_fetch_subcommand_parses() {
+        let cli = parse(&[
+            "mithril",
+            "snapshot",
+            "fetch",
+            "--network",
+            "preview",
+            "--output-dir",
+            "/preview-snapshot",
+        ])
+        .expect("ade mithril snapshot fetch must parse");
+        assert_eq!(cli.mode, Mode::MithrilSnapshotFetch);
+        assert_eq!(cli.network, "preview");
+        assert_eq!(cli.output_base, Some(PathBuf::from("/preview-snapshot")));
+        // no --genesis-path required on the fetch route.
+        assert_eq!(cli.genesis_path, PathBuf::new());
+    }
+
+    #[test]
+    fn mithril_snapshot_fetch_certificate_pins() {
+        let cli = parse(&[
+            "mithril",
+            "snapshot",
+            "fetch",
+            "--network",
+            "preview",
+            "--output-dir",
+            "/s",
+            "--certificate",
+            "/cert.json",
+        ])
+        .expect("parse");
+        assert_eq!(cli.mode, Mode::MithrilSnapshotFetch);
+        assert_eq!(cli.mithril_manifest_path, Some(PathBuf::from("/cert.json")));
+    }
+
+    #[test]
+    fn mithril_unknown_action_is_terminal() {
+        let err = parse(&["mithril", "snapshot", "frobnicate"]).expect_err("unknown");
+        assert!(matches!(err, CliError::UnknownSubcommand(_)));
     }
 
     #[test]

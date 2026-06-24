@@ -179,6 +179,29 @@ async fn main() -> ExitCode {
                 }
             }
         }
+        Mode::MithrilSnapshotFetch => {
+            // One-shot acquisition command; drop the wire-only writer + its stray log.
+            drop(writer);
+            let _ = std::fs::remove_file(&cli.log_path);
+            let output_dir = match cli.output_base.clone() {
+                Some(p) => p,
+                None => {
+                    eprintln!("ade mithril snapshot fetch requires --output-dir <dir>");
+                    return ExitCode::from(ade_node::EXIT_GENERIC_STARTUP as u8);
+                }
+            };
+            match ade_node::mithril_fetch::run_mithril_snapshot_fetch(
+                &cli.network,
+                &output_dir,
+                cli.mithril_manifest_path.as_deref(),
+            ) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("ade mithril snapshot fetch FAILED: {e}");
+                    ExitCode::from(ade_node::EXIT_GENERIC_STARTUP as u8)
+                }
+            }
+        }
     }
 }
 
