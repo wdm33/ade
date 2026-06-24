@@ -471,7 +471,7 @@ source = "Project constitution §3, T-DET-01, T-ERR-01"
 cross_ref = ["CN-LEDGER-03"]
 code_locus = "crates/ade_ledger/src/byron.rs, crates/ade_ledger/src/rules.rs, crates/ade_ledger/src/plutus_eval.rs"
 tests = ["check_duplicate_inputs_catches_dupes", "resolve_inputs_missing_input", "missing_witnesses_rejected", "all_eras_replay_summary", "all_plutus_boundaries_aggregate_zero_rejections", "plutus_era_contiguous_smoke", "under_declared_ex_units_must_reject", "failing_validator_must_reject", "extraneous_redeemer_must_reject"]
-ci_script = "ci/ci_check_differential_divergence.sh, ci/ci_check_plutus_budget_cap.sh"
+ci_script = "ci/ci_check_differential_divergence.sh, ci/ci_check_plutus_budget_cap.sh, ci/ci_check_plutus_oracle_no_false_accept.sh"
 status = "partial"
 authority_surface = "non-Plutus block/tx acceptance verdicts across 10,500 blocks (all 7 eras); Phase 3 lands: (a) state-backed composer for Alonzo+ with 0 false positives across 2,400 boundary-set txs, (b) Plutus evaluator wired end-to-end (mem=747528 matches aiken oracle on fixture), (c) 72+ mainnet Plutus txs reach the dispatch on 20-block windows, contiguous-corpus harness exists but full 9,436-tx oracle diff (CE-88) deferred to release-gate work"
 cluster = "CL-LEDGER-VERDICT"
@@ -6890,7 +6890,7 @@ k, relay ImmutableDB settlement, follow-link liveness, or forge-loop continuatio
 source = "docs/planning/single-producer-extend-own-spine-invariants.md"
 cross_ref = ["DC-NODE-15", "DC-NODE-17", "DC-CONS-03", "DC-NODE-10", "DC-CONS-24", "DC-NODE-12", "T-REC-05"]
 code_locus = "crates/ade_node/src/node_sync.rs: ForgeMode enum (InitialCatchupRequired -> CaughtUpToPeerTip -> FirstOwnBlockServed -> SingleProducerExtendOwnDurableSpine; no booleans) + VenueRole + VenueAdoptionCertificate + SingleProducerFenceReason + SingleProducerForgeDecision + single_producer_forge_decision + forge_mode_on_caughtup/_on_first_own_block_served/_on_extend + forge_mode_after_admit (advances ONLY on an actual admit, never on a not_leader tick) + ForgeRefused::SingleProducerFenceViolation. crates/ade_node/src/node_lifecycle.rs: the mode-aware ForgeTick gate in run_relay_loop_with_sched (behind VenueRole::SingleProducer; default Unknown == the verbatim prior DC-NODE-15 path) + read_adoption_cert + dc_node_15_refusal + ForgeActivation.{forge_mode,venue_role,adoption_cert_path} + declare_single_producer_venue. crates/ade_node/src/cli.rs: --single-producer-venue + --adoption-cert-path."
-tests = ["forge_mode_transitions_are_total_and_deterministic", "extend_own_spine_promotion_requires_adoption_certificate", "extend_own_spine_forges_on_durable_tip_without_followed_equality", "single_producer_fence_fails_closed", "extend_own_spine_two_runs_byte_identical", "forge_mode_after_admit_only_advances_on_real_admit"]
+tests = ["forge_mode_transitions_are_total_and_deterministic", "extend_own_spine_forges_on_durable_tip_without_followed_equality", "single_producer_fence_fails_closed", "extend_own_spine_two_runs_byte_identical", "forge_mode_after_admit_only_advances_on_real_admit"]
 ci_script = "ci/ci_check_single_producer_extend_own_spine.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AF"
