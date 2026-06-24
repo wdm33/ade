@@ -107,6 +107,11 @@ pub enum NativeFirstRunError {
     /// it is consumed. Carries the closed `ReducedCheckpointError` debug. Fail
     /// closed — a build failure aborts bootstrap; NO bootable partial state.
     ReducedCheckpoint(String),
+    /// The verified Mithril manifest does NOT bind to the selected `--network` profile (its
+    /// network magic or Shelley genesis hash differs from the committed NetworkProfile) -- the
+    /// snapshot is for a different network than selected. Fail closed. (Skipped on the advanced
+    /// custom path, where `--shelley-genesis-path` supplies the constants directly.)
+    NetworkMismatch(String),
 }
 
 /// Closed Shelley-genesis parse error surface for the native route. The
@@ -364,7 +369,8 @@ pub fn native_first_run_bootstrap<D, S, FView>(
     manifest_bytes: &[u8],
     state_cbor: &[u8],
     tables_bytes: &[u8],
-    shelley_genesis_bytes: &[u8],
+    genesis_facts: NativeGenesisFacts,
+    expected_network: Option<(u32, ade_types::Hash32)>,
     snapshot_dir: &std::path::Path,
     chaindb: &D,
     snapshot_store: &S,
@@ -388,9 +394,20 @@ where
         immutable_range: report.immutable_range,
     };
 
-    // 2. Shelley genesis -> the native constants + the epoch length.
-    let genesis_facts = parse_native_shelley_genesis(shelley_genesis_bytes)
-        .map_err(NativeFirstRunError::GenesisParse)?;
+    // 2. The verified manifest MUST bind to the selected network profile (--network): the
+    //    committed network magic + Shelley genesis hash must equal the manifest's, else the
+    //    snapshot is for a different network than selected -> terminal. `None` skips this on the
+    //    advanced custom path (where --shelley-genesis-path supplies the constants directly).
+    if let Some((expected_magic, expected_genesis_hash)) = expected_network.as_ref() {
+        if binding.network_magic != *expected_magic
+            || binding.genesis_hash != *expected_genesis_hash
+        {
+            return Err(NativeFirstRunError::NetworkMismatch(format!(
+                "manifest network (magic {}, genesis hash {:?}) does not match the selected --network profile (magic {}, genesis hash {:?})",
+                binding.network_magic, binding.genesis_hash, expected_magic, expected_genesis_hash
+            )));
+        }
+    }
 
     // 3. The network Shelley boundary (closed per-magic constant) + the
     //    certified slot's epoch -> the `manifest_epoch` S1a cross-checks.

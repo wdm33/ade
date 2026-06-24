@@ -603,19 +603,23 @@ pub struct NetworkProfile {
     pub genesis_hash: Hash32,
     pub active_slots_coeff: (u32, u32),
     pub epoch_length: u64,
+    /// The immutable Shelley `maxLovelaceSupply` (the reward-formula denominator). 45e15 for every
+    /// current Cardano network; committed per network here, never operator-supplied.
+    pub max_lovelace_supply: u64,
 }
 
 /// Resolve the committed profile for a network identity. CLOSED + enumerated — an unknown identity
 /// FAILS CLOSED (never a loose config default). Adding a network = a reviewed entry here + a test.
 pub fn resolve_network_profile(network: &str) -> Result<NetworkProfile, CaptureError> {
     // reviewed Shelley-genesis hashes (extracted from each network's node config, 2026-06-22).
-    let (id, network_magic, genesis_hex, active_slots_coeff, epoch_length) = match network {
+    let (id, network_magic, genesis_hex, active_slots_coeff, epoch_length, max_lovelace_supply) = match network {
         "preview" => (
             "preview",
             2u32,
             "363498d1024f84bb39d3fa9593ce391483cb40d479b87233f868d6e57c3a400d",
             (1u32, 20u32),
             86_400u64,
+            45_000_000_000_000_000u64,
         ),
         "preprod" => (
             "preprod",
@@ -623,6 +627,7 @@ pub fn resolve_network_profile(network: &str) -> Result<NetworkProfile, CaptureE
             "162d29c4e1cf6b8a84f2d692e67a3ac6bc7851bc3e6e4afe64d15778bed8bd86",
             (1u32, 20u32),
             432_000u64,
+            45_000_000_000_000_000u64,
         ),
         other => {
             return Err(CaptureError::Query(format!(
@@ -636,6 +641,7 @@ pub fn resolve_network_profile(network: &str) -> Result<NetworkProfile, CaptureE
         genesis_hash: hex_decode_32(genesis_hex)?,
         active_slots_coeff,
         epoch_length,
+        max_lovelace_supply,
     })
 }
 

@@ -2964,13 +2964,9 @@ fn first_run_native_mithril_bootstrap(
         .mithril_tables_path
         .as_ref()
         .ok_or(NodeLifecycleError::MissingFlag("--mithril-tables-path"))?;
-    let shelley_genesis_path = cli
-        .shelley_genesis_path
-        .as_ref()
-        .ok_or(NodeLifecycleError::MissingFlag("--shelley-genesis-path"))?;
-
-    // Read the four native components (terminal on a read failure — no path
-    // bytes in the error).
+    // Read the manifest + state + tables native components (terminal on a read failure — no path
+    // bytes in the error). The Shelley genesis is resolved below from --network (committed
+    // profile) or --shelley-genesis-path (advanced override), not as a required fourth file.
     let manifest_bytes = std::fs::read(manifest_path)
         .map_err(|e| NodeLifecycleError::ExtractionRead(format!("manifest: {:?}", e.kind())))?;
     let state_cbor = std::fs::read(state_path)
@@ -2978,13 +2974,38 @@ fn first_run_native_mithril_bootstrap(
     let tables_bytes = std::fs::read(tables_path).map_err(|e| {
         NodeLifecycleError::ExtractionRead(format!("mithril tables: {:?}", e.kind()))
     })?;
-    let shelley_genesis_bytes = std::fs::read(shelley_genesis_path).map_err(|e| {
-        NodeLifecycleError::ExtractionRead(format!("shelley genesis: {:?}", e.kind()))
-    })?;
+    // Resolve the genesis facts + the expected-network binding. STANDARD path: the committed
+    // NetworkProfile for --network (no genesis file). ADVANCED override: --shelley-genesis-path
+    // (a custom network). Network selection picks immutable constants + an expected genesis hash;
+    // the native chain then proves the manifest binds to that profile.
+    let profile = crate::bootstrap_export::resolve_network_profile(&cli.network).ok();
+    let genesis_facts = match (cli.shelley_genesis_path.as_ref(), profile.as_ref()) {
+        (Some(path), _) => {
+            let bytes = std::fs::read(path).map_err(|e| {
+                NodeLifecycleError::ExtractionRead(format!("shelley genesis: {:?}", e.kind()))
+            })?;
+            crate::native_firstrun::parse_native_shelley_genesis(&bytes)
+                .map_err(|e| NodeLifecycleError::NativeFirstRun(format!("{e:?}")))?
+        }
+        (None, Some(p)) => crate::native_firstrun::NativeGenesisFacts {
+            constants: ade_runtime::mithril_native_assembly::NativeGenesisConstants {
+                max_lovelace_supply: p.max_lovelace_supply,
+                active_slots_coeff: ade_core::consensus::vrf_cert::ActiveSlotsCoeff {
+                    numer: p.active_slots_coeff.0,
+                    denom: p.active_slots_coeff.1,
+                },
+            },
+            epoch_length_slots: p.epoch_length as u32,
+        },
+        (None, None) => {
+            return Err(NodeLifecycleError::MissingFlag(
+                "--shelley-genesis-path (or a known --network: preview|preprod)",
+            ))
+        }
+    };
+    let expected_network = profile.as_ref().map(|p| (p.network_magic, p.genesis_hash.clone()));
 
-    // Route through the unchanged native chain. The leadership view is built
-    // faithfully from the assembled consensus inputs (the cold-start
-    // composition never consumes it). The persistent ChainDb / WAL are REUSED.
+    // Route through the unchanged native chain. The persistent ChainDb / WAL are REUSED.
     let snapshot_dir = cli
         .snapshot_dir
         .as_ref()
@@ -2993,7 +3014,8 @@ fn first_run_native_mithril_bootstrap(
         &manifest_bytes,
         &state_cbor,
         &tables_bytes,
-        &shelley_genesis_bytes,
+        genesis_facts,
+        expected_network,
         snapshot_dir,
         chaindb,
         chaindb,
@@ -5307,22 +5329,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_first_run_missing_shelley_genesis_is_terminal() {
-        // The native route requires the Shelley genesis (the metadata file);
-        // absent it => a missing-component terminal.
-        let f = native_fixture(
+    async fn native_first_run_missing_genesis_and_unknown_network_is_terminal() {
+        // The Shelley genesis is resolved from --network (a committed profile) OR
+        // --shelley-genesis-path. With NEITHER a known --network NOR the genesis file there is no
+        // genesis source => terminal. (A known --network supplies it; an unknown one cannot.)
+        let mut f = native_fixture(
             Some(&manifest_json(CERTIFIED_SLOT, NETWORK_MAGIC, GENESIS_HASH_HEX)),
             true,
             true,
             None, // no --shelley-genesis-path
             false,
         );
+        f.cli.network = "an-unsupported-network".to_string();
         let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
         let r = run_node_lifecycle_inner(&f.cli, &mut sd_rx).await;
         assert_eq!(
             r,
-            Err(NodeLifecycleError::MissingFlag("--shelley-genesis-path")),
-            "native route with no shelley genesis must be terminal, got {r:?}"
+            Err(NodeLifecycleError::MissingFlag(
+                "--shelley-genesis-path (or a known --network: preview|preprod)"
+            )),
+            "no genesis file + an unknown --network must be terminal, got {r:?}"
         );
     }
 

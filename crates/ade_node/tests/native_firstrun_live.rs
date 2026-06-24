@@ -171,11 +171,14 @@ fn native_first_run_real_snapshot_invokes_bootstrap_and_persists() {
     };
     let snapshot_dir = tempfile::tempdir().expect("snapshot dir");
 
+    let genesis_facts = ade_node::native_firstrun::parse_native_shelley_genesis(&shelley_genesis)
+        .expect("parse preprod shelley genesis");
     let out = native_first_run_bootstrap(
         manifest.as_bytes(),
         &state_cbor,
         &tables_bytes,
-        &shelley_genesis,
+        genesis_facts,
+        None,
         snapshot_dir.path(),
         &db,
         &db,
@@ -270,11 +273,14 @@ fn native_first_run_real_snapshot_wrong_network_is_terminal() {
         entries: Vec::new(),
     };
     let snapshot_dir = tempfile::tempdir().expect("snapshot dir");
+    let genesis_facts2 = ade_node::native_firstrun::parse_native_shelley_genesis(&shelley_genesis)
+        .expect("parse preprod shelley genesis");
     let r = native_first_run_bootstrap(
         mainnet_manifest.as_bytes(),
         &state_cbor,
         &tables_bytes,
-        &shelley_genesis,
+        genesis_facts2,
+        None,
         snapshot_dir.path(),
         &db,
         &db,
@@ -289,5 +295,52 @@ fn native_first_run_real_snapshot_wrong_network_is_terminal() {
     assert!(
         wal.read_all().expect("read_all").is_empty(),
         "no WAL provenance on a fail-closed coherence path (no bootable partial state)"
+    );
+}
+
+/// S2 (DC-MITHRIL-08 safety rule): selecting `--network preview` but handing a PREPROD
+/// snapshot/manifest is terminal — the manifest's network magic + Shelley genesis hash MUST bind to
+/// the committed profile. Fails at the network cross-check BEFORE any state/tables decode (empty
+/// inputs suffice), so a verified snapshot only bootstraps on the network it actually belongs to.
+#[test]
+fn native_first_run_network_profile_mismatch_is_terminal() {
+    let genesis = match shelley_genesis_bytes() {
+        Some(g) => g,
+        None => return,
+    };
+    let genesis_facts = ade_node::native_firstrun::parse_native_shelley_genesis(&genesis)
+        .expect("parse shelley genesis");
+    // The operator SELECTED preview; coherent_manifest is PREPROD (magic 1 / preprod genesis hash).
+    let preview = ade_node::bootstrap_export::resolve_network_profile("preview")
+        .expect("preview profile");
+    let expected_network = Some((preview.network_magic, preview.genesis_hash.clone()));
+    let manifest = coherent_manifest(126_400_064);
+    let db = InMemoryChainDb::new();
+    let mut wal = VecWal {
+        entries: Vec::new(),
+    };
+    let snapshot_dir = tempfile::tempdir().expect("snapshot dir");
+    let r = native_first_run_bootstrap(
+        manifest.as_bytes(),
+        &[],
+        &[],
+        genesis_facts,
+        expected_network,
+        snapshot_dir.path(),
+        &db,
+        &db,
+        &mut wal,
+        view_builder,
+    );
+    assert!(
+        matches!(
+            r,
+            Err(ade_node::native_firstrun::NativeFirstRunError::NetworkMismatch(_))
+        ),
+        "a preprod manifest under --network preview must be a terminal NetworkMismatch"
+    );
+    assert!(
+        wal.read_all().expect("read_all").is_empty(),
+        "no WAL provenance on a network-mismatch path (no bootable partial state)"
     );
 }
