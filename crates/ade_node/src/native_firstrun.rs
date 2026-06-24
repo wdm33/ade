@@ -102,6 +102,11 @@ pub enum NativeFirstRunError {
     /// Carries the closed `NativeMithrilBootstrapError` debug. Fail closed — NO
     /// fallback, NO bootable partial state.
     NativeBootstrap(String),
+    /// The inline EVIEW reduced-checkpoint build (S2 / DC-MITHRIL-08) fail-closed
+    /// — `open` / `build_from` / `seal_bootstrap` over the materialized UTxO before
+    /// it is consumed. Carries the closed `ReducedCheckpointError` debug. Fail
+    /// closed — a build failure aborts bootstrap; NO bootable partial state.
+    ReducedCheckpoint(String),
 }
 
 /// Closed Shelley-genesis parse error surface for the native route. The
@@ -360,6 +365,7 @@ pub fn native_first_run_bootstrap<D, S, FView>(
     state_cbor: &[u8],
     tables_bytes: &[u8],
     shelley_genesis_bytes: &[u8],
+    snapshot_dir: &std::path::Path,
     chaindb: &D,
     snapshot_store: &S,
     wal: &mut dyn ade_ledger::wal::WalStore,
@@ -421,6 +427,33 @@ where
     //    (Conway-bound, whole file — no sample cap on the live route).
     let utxo = materialize_tables_to_utxo(tables_bytes, CONWAY_ERA_INDEX, None)
         .map_err(|e: TxOutMaterializeError| NativeFirstRunError::UtxoMaterialize(format!("{e:?}")))?;
+
+    // 5b. S2 (DC-MITHRIL-08): when the decoded cert-state carries delegations (the EVIEW
+    //     package), build the live reduced checkpoint INLINE from the materialized UTxO
+    //     BEFORE it is consumed by the bootstrap, so a Mithril-started node is boundary-usable
+    //     (ECA derives + promotes the next-epoch authority from it). Sealed at the certified
+    //     slot; gated on delegations so a no-EVIEW snapshot is byte-identical. Fail-closed: a
+    //     build failure aborts before authority visibility.
+    if !s1a.cert_state.delegation.delegations.is_empty() {
+        use ade_ledger::reduced_utxo::{reduce_txout, ReducedStakeRef};
+        let mut reduced: std::collections::BTreeMap<
+            ade_types::tx::TxIn,
+            (ade_types::tx::Coin, ReducedStakeRef),
+        > = std::collections::BTreeMap::new();
+        for (txin, txout) in utxo.utxos.iter() {
+            reduced.insert(txin.clone(), reduce_txout(txout));
+        }
+        let checkpoint = ade_runtime::chaindb::ReducedUtxoCheckpoint::open(
+            &snapshot_dir.join("reduced-checkpoint.redb"),
+        )
+        .map_err(|e| NativeFirstRunError::ReducedCheckpoint(format!("{e:?}")))?;
+        checkpoint
+            .build_from(&reduced)
+            .map_err(|e| NativeFirstRunError::ReducedCheckpoint(format!("{e:?}")))?;
+        checkpoint
+            .seal_bootstrap(binding.certified_point.slot)
+            .map_err(|e| NativeFirstRunError::ReducedCheckpoint(format!("{e:?}")))?;
+    }
 
     // 6. Build the single-era Conway schedule anchored at the snapshot epoch's
     //    absolute geometry (the network boundary + the genesis epoch length).

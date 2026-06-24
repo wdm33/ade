@@ -169,18 +169,28 @@ fn native_first_run_real_snapshot_invokes_bootstrap_and_persists() {
     let mut wal = VecWal {
         entries: Vec::new(),
     };
+    let snapshot_dir = tempfile::tempdir().expect("snapshot dir");
 
     let out = native_first_run_bootstrap(
         manifest.as_bytes(),
         &state_cbor,
         &tables_bytes,
         &shelley_genesis,
+        snapshot_dir.path(),
         &db,
         &db,
         &mut wal,
         view_builder,
     )
     .expect("native FirstRun must invoke the native bootstrap and persist over real bytes");
+
+    // S2 (DC-MITHRIL-08): the preprod snapshot's cert-state carries delegations, so the native
+    // FirstRun built the live reduced checkpoint INLINE — a Mithril-started node is
+    // boundary-usable (ECA derives the next-epoch view from it), not inert at the wall.
+    let cp_path = snapshot_dir.path().join("reduced-checkpoint.redb");
+    assert!(cp_path.exists(), "native FirstRun must build the reduced checkpoint inline");
+    ade_runtime::chaindb::ReducedUtxoCheckpoint::open(&cp_path)
+        .expect("the inline-built reduced checkpoint must open");
 
     // The native bootstrap produced a MithrilBootstrapOutput with a Mithril
     // anchor whose seed_point IS the snapshot point.
@@ -259,11 +269,13 @@ fn native_first_run_real_snapshot_wrong_network_is_terminal() {
     let mut wal = VecWal {
         entries: Vec::new(),
     };
+    let snapshot_dir = tempfile::tempdir().expect("snapshot dir");
     let r = native_first_run_bootstrap(
         mainnet_manifest.as_bytes(),
         &state_cbor,
         &tables_bytes,
         &shelley_genesis,
+        snapshot_dir.path(),
         &db,
         &db,
         &mut wal,

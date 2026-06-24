@@ -2985,11 +2985,16 @@ fn first_run_native_mithril_bootstrap(
     // Route through the unchanged native chain. The leadership view is built
     // faithfully from the assembled consensus inputs (the cold-start
     // composition never consumes it). The persistent ChainDb / WAL are REUSED.
+    let snapshot_dir = cli
+        .snapshot_dir
+        .as_ref()
+        .ok_or(NodeLifecycleError::MissingFlag("--snapshot-dir"))?;
     let out = crate::native_firstrun::native_first_run_bootstrap(
         &manifest_bytes,
         &state_cbor,
         &tables_bytes,
         &shelley_genesis_bytes,
+        snapshot_dir,
         chaindb,
         chaindb,
         wal,
