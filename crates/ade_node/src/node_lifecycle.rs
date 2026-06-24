@@ -326,6 +326,21 @@ pub enum NodeLifecycleError {
         sidecar_epoch_length: u32,
         genesis_epoch_length: u64,
     },
+    /// MITHRIL-VERIFIED-ANCHOR-INTEGRATION S1d: a FORBIDDEN flag
+    /// (`--json-seed-path` / `--consensus-inputs-path`, the cardano-cli / JSON
+    /// seed) was supplied ALONGSIDE the native Mithril FirstRun inputs
+    /// (`--mithril-state-path` + `--mithril-tables-path`). The native route is
+    /// the snapshot-authoritative path; mixing it with an operator seed is a
+    /// structured terminal error (no ambiguous, half-authoritative bootstrap;
+    /// no fallback, no silent ignore). Fail closed BEFORE any decode.
+    NativeRouteForbiddenFlag(&'static str),
+    /// MITHRIL-VERIFIED-ANCHOR-INTEGRATION S1d: the NATIVE FirstRun route
+    /// fail-closed — a missing / mixed snapshot component, a manifest / point /
+    /// network / era mismatch, or a decode / materialize / assemble / persist
+    /// failure. Carries the closed `NativeFirstRunError` debug. Fail closed —
+    /// TERMINAL before the WAL commit-point (authority visibility); NO bootable
+    /// partial state, NO fallback to the cardano-cli / JSON seed.
+    NativeFirstRun(String),
 }
 
 /// Pure first-run-vs-warm-start classifier. A function of on-disk state
@@ -375,9 +390,11 @@ fn exit_code_for(e: &NodeLifecycleError) -> i32 {
         | NodeLifecycleError::OnDiskRead(_)
         | NodeLifecycleError::BadHashHex(_)
         | NodeLifecycleError::ExtractionRead(_)
+        | NodeLifecycleError::NativeRouteForbiddenFlag(_)
         | NodeLifecycleError::ServeStart(_) => EXIT_GENERIC_STARTUP,
         NodeLifecycleError::ManifestImport(_)
         | NodeLifecycleError::EpochMismatch { .. }
+        | NodeLifecycleError::NativeFirstRun(_)
         | NodeLifecycleError::MithrilBootstrap(_) => EXIT_NODE_MITHRIL_BOOTSTRAP_FAILED,
         NodeLifecycleError::WarmStartNoAnchorLineage
         | NodeLifecycleError::WarmStartMultipleAnchorLineages { .. }
@@ -2754,6 +2771,16 @@ fn first_run_mithril_bootstrap(
     chaindb: &PersistentChainDb,
     wal: &mut FileWalStore,
 ) -> Result<BootstrapState, NodeLifecycleError> {
+    // MITHRIL-VERIFIED-ANCHOR-INTEGRATION S1d: the NATIVE route. When the V2
+    // LedgerDB `state` + the Stage-2 `tables` are BOTH supplied, the FirstRun
+    // arm routes the verified snapshot through the unchanged S1a/S1b/S1c chain
+    // (the snapshot IS the source) and the cardano-cli / JSON seed is
+    // FORBIDDEN. This supersedes the CLI-seed body below; the two are NEVER a
+    // fallback for one another.
+    if cli.mithril_state_path.is_some() && cli.mithril_tables_path.is_some() {
+        return first_run_native_mithril_bootstrap(cli, chaindb, wal);
+    }
+
     // --- First-run inputs (documented extraction, Mithril-bound). ---
     let manifest_path = cli
         .mithril_manifest_path
@@ -2885,6 +2912,95 @@ fn first_run_mithril_bootstrap(
         "ade_node --mode node: first-run Mithril bootstrap complete \
          (anchor initial_ledger_fingerprint={:?}, epoch={}).",
         out.anchor.initial_ledger_fingerprint, canonical.epoch_no.0
+    );
+    Ok(BootstrapState {
+        ledger: out.ledger,
+        chain_dep: out.chain_dep,
+        tip: out.tip,
+        seed_epoch_consensus_inputs: None,
+        replayed_anchor_block_no: None,
+    })
+}
+
+/// MITHRIL-VERIFIED-ANCHOR-INTEGRATION S1d: the NATIVE FirstRun route. Routes
+/// the verified Mithril manifest + the V2 LedgerDB `state` + the Stage-2
+/// `tables` + the Cardano Shelley genesis through the unchanged S1a/S1b/S1c
+/// native chain (`native_firstrun::native_first_run_bootstrap`) and persists
+/// the durable artifacts ATOMICALLY through the single closed Mithril
+/// composition. The cardano-cli / JSON seed is FORBIDDEN; the snapshot IS the
+/// source.
+///
+/// Failure semantics (TERMINAL before authority visibility): a forbidden flag,
+/// a missing / mixed component, a manifest / point / network / era mismatch, or
+/// a decode / materialize / assemble / persist failure all halt before the WAL
+/// commit-point, leaving NO bootable partial state and NO fallback.
+fn first_run_native_mithril_bootstrap(
+    cli: &Cli,
+    chaindb: &PersistentChainDb,
+    wal: &mut FileWalStore,
+) -> Result<BootstrapState, NodeLifecycleError> {
+    // FORBID the cardano-cli / JSON seed alongside the native inputs (no
+    // ambiguous / half-authoritative path). Terminal BEFORE any decode.
+    if cli.json_seed_path.is_some() {
+        return Err(NodeLifecycleError::NativeRouteForbiddenFlag("--json-seed-path"));
+    }
+    if cli.consensus_inputs_path.is_some() {
+        return Err(NodeLifecycleError::NativeRouteForbiddenFlag(
+            "--consensus-inputs-path",
+        ));
+    }
+
+    // Require all native components (manifest + state + tables + shelley
+    // genesis). A missing one is terminal before any decode (mixed-component).
+    let manifest_path = cli
+        .mithril_manifest_path
+        .as_ref()
+        .ok_or(NodeLifecycleError::MissingFlag("--mithril-manifest-path"))?;
+    let state_path = cli
+        .mithril_state_path
+        .as_ref()
+        .ok_or(NodeLifecycleError::MissingFlag("--mithril-state-path"))?;
+    let tables_path = cli
+        .mithril_tables_path
+        .as_ref()
+        .ok_or(NodeLifecycleError::MissingFlag("--mithril-tables-path"))?;
+    let shelley_genesis_path = cli
+        .shelley_genesis_path
+        .as_ref()
+        .ok_or(NodeLifecycleError::MissingFlag("--shelley-genesis-path"))?;
+
+    // Read the four native components (terminal on a read failure — no path
+    // bytes in the error).
+    let manifest_bytes = std::fs::read(manifest_path)
+        .map_err(|e| NodeLifecycleError::ExtractionRead(format!("manifest: {:?}", e.kind())))?;
+    let state_cbor = std::fs::read(state_path)
+        .map_err(|e| NodeLifecycleError::ExtractionRead(format!("mithril state: {:?}", e.kind())))?;
+    let tables_bytes = std::fs::read(tables_path).map_err(|e| {
+        NodeLifecycleError::ExtractionRead(format!("mithril tables: {:?}", e.kind()))
+    })?;
+    let shelley_genesis_bytes = std::fs::read(shelley_genesis_path).map_err(|e| {
+        NodeLifecycleError::ExtractionRead(format!("shelley genesis: {:?}", e.kind()))
+    })?;
+
+    // Route through the unchanged native chain. The leadership view is built
+    // faithfully from the assembled consensus inputs (the cold-start
+    // composition never consumes it). The persistent ChainDb / WAL are REUSED.
+    let out = crate::native_firstrun::native_first_run_bootstrap(
+        &manifest_bytes,
+        &state_cbor,
+        &tables_bytes,
+        &shelley_genesis_bytes,
+        chaindb,
+        chaindb,
+        wal,
+        |canonical| Box::new(pool_distr_view_from_canonical(canonical)),
+    )
+    .map_err(|e| NodeLifecycleError::NativeFirstRun(format!("{e:?}")))?;
+
+    eprintln!(
+        "ade_node --mode node: NATIVE first-run Mithril bootstrap complete \
+         (anchor initial_ledger_fingerprint={:?}, certified_point_slot={}).",
+        out.anchor.initial_ledger_fingerprint, out.anchor.seed_point.slot.0
     );
     Ok(BootstrapState {
         ledger: out.ledger,
@@ -3198,6 +3314,24 @@ fn report(e: &NodeLifecycleError) {
                  closed. The --listen address must parse and be bindable; the node \
                  does not proceed claiming live-serve capability while serving is \
                  disabled."
+            );
+        }
+        NodeLifecycleError::NativeRouteForbiddenFlag(flag) => {
+            eprintln!(
+                "ade_node --mode node: NATIVE Mithril FirstRun route FAIL-CLOSED -- the \
+                 forbidden flag {flag} (the cardano-cli / JSON seed) was supplied \
+                 alongside --mithril-state-path + --mithril-tables-path. The native route \
+                 is snapshot-authoritative; mixing it with an operator seed is rejected \
+                 (no ambiguous / half-authoritative bootstrap, no fallback)."
+            );
+        }
+        NodeLifecycleError::NativeFirstRun(d) => {
+            eprintln!(
+                "ade_node --mode node: NATIVE Mithril FirstRun bootstrap failed ({d}); \
+                 failing closed. The manifest + state + tables + Shelley genesis must \
+                 cohere (point / network / era) and decode/materialize/assemble/persist \
+                 cleanly; TERMINAL before the WAL commit-point, no bootable partial state, \
+                 no fallback to the cardano-cli / JSON seed."
             );
         }
     }
@@ -4842,6 +4976,9 @@ mod tests {
             genesis_hash_hex: Some(genesis_hash_hex.to_string()),
             consensus_inputs_path: Some(cinputs_path),
             mithril_manifest_path: manifest_path,
+            mithril_state_path: None,
+            mithril_tables_path: None,
+            shelley_genesis_path: None,
             out_file: None,
             period_idx: None,
             seed_file: None,
@@ -5000,6 +5137,232 @@ mod tests {
         assert!(
             matches!(r, Err(NodeLifecycleError::ExtractionRead(_))),
             "malformed extraction must fail closed, got {r:?}"
+        );
+    }
+
+    // ===== MITHRIL-VERIFIED-ANCHOR-INTEGRATION S1d: NATIVE FirstRun route =====
+    //
+    // These dispatch-level tests exercise the NATIVE route gate (state + tables
+    // present) and its fail-closed guards (forbidden flag, missing component)
+    // through the real run_node_lifecycle_inner. They halt BEFORE any decode,
+    // so the state/tables file CONTENTS are irrelevant (the files need not even
+    // exist for the forbidden-flag / missing-flag guards). The positive native
+    // bootstrap (real snapshot -> MithrilBootstrapOutput + anchor recoverable +
+    // equals function-level S1b) is proven in crates/ade_node/tests/
+    // native_firstrun_live.rs against the real preprod snapshot.
+
+    /// A Node-mode Cli over a fresh tempdir carrying the NATIVE FirstRun inputs
+    /// (manifest + state + tables + shelley genesis as paths). `forbidden`
+    /// optionally adds a `--json-seed-path` to exercise the forbidden-flag
+    /// terminal. Any path may be absent (`None`) to exercise a missing
+    /// component.
+    fn native_fixture(
+        manifest: Option<&str>,
+        state_present: bool,
+        tables_present: bool,
+        shelley_genesis: Option<&str>,
+        forbidden_json_seed: bool,
+    ) -> Fixture {
+        let dir = TempDir::new().unwrap();
+        let base = dir.path();
+        let snap = base.join("snap");
+        let wal = base.join("wal");
+        let manifest_path = manifest.map(|m| write_file(base, "manifest.json", m));
+        let state_path = if state_present {
+            Some(write_file(base, "state", "synthetic-state-bytes"))
+        } else {
+            None
+        };
+        let tables_path = if tables_present {
+            Some(write_file(base, "tables", "synthetic-tables-bytes"))
+        } else {
+            None
+        };
+        let shelley_path = shelley_genesis.map(|g| write_file(base, "shelley-genesis.json", g));
+        let json_seed_path = if forbidden_json_seed {
+            Some(write_file(base, "utxo.json", UTXO_JSON))
+        } else {
+            None
+        };
+
+        let cli = Cli {
+            genesis_path: base.join("genesis.json"),
+            network: "preprod".to_string(),
+            chain_db_path: None,
+            snapshot_store_path: None,
+            listen_addr: None,
+            peer_addrs: vec![],
+            mode: crate::cli::Mode::Node,
+            log_path: base.join("node.jsonl"),
+            tip_read_timeout_secs: 5,
+            json_seed_path,
+            seed_point_slot: None,
+            seed_block_hash_hex: None,
+            wal_dir: Some(wal),
+            snapshot_dir: Some(snap),
+            network_magic: None,
+            genesis_hash_hex: None,
+            consensus_inputs_path: None,
+            mithril_manifest_path: manifest_path,
+            mithril_state_path: state_path,
+            mithril_tables_path: tables_path,
+            shelley_genesis_path: shelley_path,
+            out_file: None,
+            period_idx: None,
+            seed_file: None,
+            cold_skey: None,
+            kes_skey: None,
+            vrf_skey: None,
+            opcert: None,
+            genesis_file: None,
+            evidence_log: None,
+            max_slots: None,
+            single_producer_venue: false,
+            participant_venue: false,
+            convergence_evidence_path: None,
+            output_base: None,
+            keep_raw_capture: false,
+        };
+        Fixture { _dir: dir, cli }
+    }
+
+    const SHELLEY_GENESIS_JSON: &str = r#"{
+        "maxLovelaceSupply": 45000000000000000,
+        "activeSlotsCoeff": 0.05,
+        "epochLength": 432000,
+        "slotLength": 1,
+        "systemStart": "2022-06-01T00:00:00Z"
+    }"#;
+
+    #[tokio::test]
+    async fn native_first_run_forbidden_json_seed_is_terminal() {
+        // --json-seed-path supplied ALONGSIDE the native inputs => a structured
+        // terminal error before any decode (no fallback, no silent ignore).
+        let f = native_fixture(
+            Some(&manifest_json(CERTIFIED_SLOT, NETWORK_MAGIC, GENESIS_HASH_HEX)),
+            true,
+            true,
+            Some(SHELLEY_GENESIS_JSON),
+            true, // the forbidden --json-seed-path
+        );
+        let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+        let r = run_node_lifecycle_inner(&f.cli, &mut sd_rx).await;
+        assert_eq!(
+            r,
+            Err(NodeLifecycleError::NativeRouteForbiddenFlag("--json-seed-path")),
+            "a forbidden flag with the native inputs must be terminal, got {r:?}"
+        );
+        // Nothing persisted (terminal before any decode/admit).
+        let snapshot_dir = f.cli.snapshot_dir.as_ref().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(snapshot_dir.join("chain.db")))
+                .unwrap();
+        assert!(SnapshotStore::list_snapshot_slots(&chaindb)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn native_first_run_forbidden_consensus_inputs_is_terminal() {
+        // --consensus-inputs-path supplied alongside the native inputs =>
+        // terminal (the second forbidden flag).
+        let mut f = native_fixture(
+            Some(&manifest_json(CERTIFIED_SLOT, NETWORK_MAGIC, GENESIS_HASH_HEX)),
+            true,
+            true,
+            Some(SHELLEY_GENESIS_JSON),
+            false,
+        );
+        // Attach the forbidden --consensus-inputs-path directly.
+        let cpath = write_file(f._dir.path(), "cinputs.json", "{}");
+        f.cli.consensus_inputs_path = Some(cpath);
+        let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+        let r = run_node_lifecycle_inner(&f.cli, &mut sd_rx).await;
+        assert_eq!(
+            r,
+            Err(NodeLifecycleError::NativeRouteForbiddenFlag(
+                "--consensus-inputs-path"
+            )),
+            "a forbidden --consensus-inputs-path with the native inputs must be terminal, got {r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn native_first_run_missing_manifest_is_terminal() {
+        // state + tables present (native route taken) but the manifest absent
+        // => a missing-component terminal before any decode.
+        let f = native_fixture(None, true, true, Some(SHELLEY_GENESIS_JSON), false);
+        let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+        let r = run_node_lifecycle_inner(&f.cli, &mut sd_rx).await;
+        assert_eq!(
+            r,
+            Err(NodeLifecycleError::MissingFlag("--mithril-manifest-path")),
+            "native route with no manifest must be terminal, got {r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn native_first_run_missing_shelley_genesis_is_terminal() {
+        // The native route requires the Shelley genesis (the metadata file);
+        // absent it => a missing-component terminal.
+        let f = native_fixture(
+            Some(&manifest_json(CERTIFIED_SLOT, NETWORK_MAGIC, GENESIS_HASH_HEX)),
+            true,
+            true,
+            None, // no --shelley-genesis-path
+            false,
+        );
+        let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+        let r = run_node_lifecycle_inner(&f.cli, &mut sd_rx).await;
+        assert_eq!(
+            r,
+            Err(NodeLifecycleError::MissingFlag("--shelley-genesis-path")),
+            "native route with no shelley genesis must be terminal, got {r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn native_first_run_malformed_manifest_is_terminal() {
+        // A malformed manifest is fail-closed inside import_mithril_manifest
+        // (terminal before any state decode).
+        let f = native_fixture(
+            Some("{ not valid manifest json"),
+            true,
+            true,
+            Some(SHELLEY_GENESIS_JSON),
+            false,
+        );
+        let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+        let r = run_node_lifecycle_inner(&f.cli, &mut sd_rx).await;
+        assert!(
+            matches!(r, Err(NodeLifecycleError::NativeFirstRun(_))),
+            "a malformed manifest on the native route must be terminal, got {r:?}"
+        );
+        // Nothing persisted.
+        let snapshot_dir = f.cli.snapshot_dir.as_ref().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(snapshot_dir.join("chain.db")))
+                .unwrap();
+        assert!(SnapshotStore::list_snapshot_slots(&chaindb)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn native_first_run_malformed_shelley_genesis_is_terminal() {
+        // A shelley genesis missing maxLovelaceSupply => GenesisParse terminal.
+        let f = native_fixture(
+            Some(&manifest_json(CERTIFIED_SLOT, NETWORK_MAGIC, GENESIS_HASH_HEX)),
+            true,
+            true,
+            Some(r#"{ "activeSlotsCoeff": 0.05, "epochLength": 432000 }"#),
+            false,
+        );
+        let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+        let r = run_node_lifecycle_inner(&f.cli, &mut sd_rx).await;
+        assert!(
+            matches!(r, Err(NodeLifecycleError::NativeFirstRun(_))),
+            "a malformed shelley genesis on the native route must be terminal, got {r:?}"
         );
     }
 
@@ -5743,6 +6106,9 @@ mod tests {
             genesis_hash_hex: None,
             consensus_inputs_path: None,
             mithril_manifest_path: None,
+            mithril_state_path: None,
+            mithril_tables_path: None,
+            shelley_genesis_path: None,
             out_file: None,
             period_idx: None,
             seed_file: None,

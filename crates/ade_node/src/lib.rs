@@ -34,6 +34,7 @@ pub mod key_gen;
 pub mod lca_walk;
 pub mod live_log;
 pub mod mem_measure;
+pub mod native_firstrun;
 pub mod node;
 pub mod node_lifecycle;
 pub mod node_sync;

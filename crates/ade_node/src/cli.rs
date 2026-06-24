@@ -104,6 +104,21 @@ pub struct Cli {
     /// first-run bootstrap extraction inputs, Mithril-bound by this
     /// manifest — not forge inputs.
     pub mithril_manifest_path: Option<PathBuf>,
+    /// MITHRIL-VERIFIED-ANCHOR-INTEGRATION S1d — the NATIVE `--mode node`
+    /// FirstRun snapshot inputs. When `--mithril-state-path` AND
+    /// `--mithril-tables-path` are both present, the FirstRun arm takes the
+    /// native Mithril bootstrap route (S1a/S1b/S1c), and the cardano-cli /
+    /// JSON seed (`--json-seed` / `--consensus-inputs-path`) is FORBIDDEN
+    /// (a forbidden flag supplied alongside is a structured terminal error).
+    /// `--mithril-state-path` is the V2 LedgerDB `state` file (S1a input);
+    /// `--mithril-tables-path` is the Stage-2 `tables` MemPack (S1c input).
+    pub mithril_state_path: Option<PathBuf>,
+    pub mithril_tables_path: Option<PathBuf>,
+    /// The Cardano Shelley genesis JSON (the native route's required metadata
+    /// file): `maxLovelaceSupply` + `activeSlotsCoeff` (-> NativeGenesisConstants)
+    /// and `epochLength` (-> the single-era Conway schedule for the snapshot
+    /// epoch). Required on the native FirstRun route.
+    pub shelley_genesis_path: Option<PathBuf>,
     // -------------------------------------------------------------------
     // PHASE4-N-O — KeyGenKes-mode flags. Each is parsed unconditionally
     // and validated only when `--mode key_gen_kes` is set (via
@@ -265,6 +280,9 @@ impl Cli {
         let mut genesis_hash_hex: Option<String> = None;
         let mut consensus_inputs_path: Option<PathBuf> = None;
         let mut mithril_manifest_path: Option<PathBuf> = None;
+        let mut mithril_state_path: Option<PathBuf> = None;
+        let mut mithril_tables_path: Option<PathBuf> = None;
+        let mut shelley_genesis_path: Option<PathBuf> = None;
         let mut out_file: Option<PathBuf> = None;
         let mut period_idx: Option<u32> = None;
         let mut seed_file: Option<PathBuf> = None;
@@ -422,6 +440,24 @@ impl Cli {
                     })?;
                     mithril_manifest_path = Some(PathBuf::from(v));
                 }
+                "--mithril-state-path" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--mithril-state-path".to_string())
+                    })?;
+                    mithril_state_path = Some(PathBuf::from(v));
+                }
+                "--mithril-tables-path" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--mithril-tables-path".to_string())
+                    })?;
+                    mithril_tables_path = Some(PathBuf::from(v));
+                }
+                "--shelley-genesis-path" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--shelley-genesis-path".to_string())
+                    })?;
+                    shelley_genesis_path = Some(PathBuf::from(v));
+                }
                 "--out-file" => {
                     let v = iter.next().ok_or_else(|| {
                         CliError::FlagMissingValue("--out-file".to_string())
@@ -527,6 +563,9 @@ impl Cli {
             genesis_hash_hex,
             consensus_inputs_path,
             mithril_manifest_path,
+            mithril_state_path,
+            mithril_tables_path,
+            shelley_genesis_path,
             out_file,
             period_idx,
             seed_file,
@@ -830,6 +869,57 @@ mod tests {
             err,
             CliError::FlagMissingValue("--mithril-manifest-path".to_string())
         );
+    }
+
+    #[test]
+    fn node_cli_parses_native_mithril_flags_from_argv() {
+        // MITHRIL-VERIFIED-ANCHOR-INTEGRATION S1d: the native FirstRun flags
+        // (--mithril-state-path / --mithril-tables-path / --shelley-genesis-path)
+        // parse from real argv and populate their fields.
+        let cli = parse(&[
+            "--genesis-path",
+            "/g",
+            "--mode",
+            "node",
+            "--snapshot-dir",
+            "/snap",
+            "--wal-dir",
+            "/wal",
+            "--mithril-manifest-path",
+            "/manifest.json",
+            "--mithril-state-path",
+            "/ledger/state",
+            "--mithril-tables-path",
+            "/ledger/tables",
+            "--shelley-genesis-path",
+            "/shelley-genesis.json",
+        ])
+        .expect("parse");
+        assert_eq!(cli.mode, Mode::Node);
+        assert_eq!(cli.mithril_state_path, Some(PathBuf::from("/ledger/state")));
+        assert_eq!(
+            cli.mithril_tables_path,
+            Some(PathBuf::from("/ledger/tables"))
+        );
+        assert_eq!(
+            cli.shelley_genesis_path,
+            Some(PathBuf::from("/shelley-genesis.json"))
+        );
+    }
+
+    #[test]
+    fn node_cli_native_mithril_flags_require_values() {
+        // Each native flag's value is required — a trailing flag with no value
+        // fails closed rather than swallowing the next token.
+        for flag in [
+            "--mithril-state-path",
+            "--mithril-tables-path",
+            "--shelley-genesis-path",
+        ] {
+            let err = parse(&["--genesis-path", "/g", "--mode", "node", flag])
+                .expect_err("must reject missing value");
+            assert_eq!(err, CliError::FlagMissingValue(flag.to_string()));
+        }
     }
 
     fn parse_admission(extra: &[&str]) -> Result<AdmissionCli, CliError> {
