@@ -668,6 +668,7 @@ mod tests {
             BootstrapAnchorHash(Hash32([0u8; 32])),
             0,
             vec![EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Conway,
                 start_slot: SlotNo(ERA_START_SLOT),
                 start_epoch: EpochNo(ERA_START_EPOCH),

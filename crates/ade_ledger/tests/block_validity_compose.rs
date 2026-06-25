@@ -36,6 +36,7 @@ const MAINNET_EPOCH_LENGTH: u64 = 432_000;
 fn schedule() -> EraSchedule {
     let start_576 = EPOCH_577_START - MAINNET_EPOCH_LENGTH;
     let eras = vec![EraSummary {
+        randomness_stabilisation_window_slots: None,
         era: CardanoEra::Conway,
         start_slot: SlotNo(start_576),
         start_epoch: EPOCH_576,

@@ -118,6 +118,7 @@ fn build_schedule(v: &Value) -> EraSchedule {
         .expect("expected_eras array")
         .iter()
         .map(|e| EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: parse_era(e["era"].as_str().expect("era name")),
             start_slot: SlotNo(e["start_slot"].as_u64().expect("start_slot")),
             start_epoch: EpochNo(e["start_epoch"].as_u64().expect("start_epoch")),

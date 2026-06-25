@@ -603,6 +603,11 @@ pub struct NetworkProfile {
     pub genesis_hash: Hash32,
     pub active_slots_coeff: (u32, u32),
     pub epoch_length: u64,
+    /// The Shelley `securityParam` (k) for the venue -- the Praos randomness-
+    /// stabilisation window `RSW = ceil(4k/f)` numerator factor. A reviewed
+    /// per-network constant (preview 432, preprod 2160), never operator-supplied
+    /// (DC-EPOCH-16).
+    pub security_param: u64,
     /// The immutable Shelley `maxLovelaceSupply` (the reward-formula denominator). 45e15 for every
     /// current Cardano network; committed per network here, never operator-supplied.
     pub max_lovelace_supply: u64,
@@ -612,7 +617,7 @@ pub struct NetworkProfile {
 /// FAILS CLOSED (never a loose config default). Adding a network = a reviewed entry here + a test.
 pub fn resolve_network_profile(network: &str) -> Result<NetworkProfile, CaptureError> {
     // reviewed Shelley-genesis hashes (extracted from each network's node config, 2026-06-22).
-    let (id, network_magic, genesis_hex, active_slots_coeff, epoch_length, max_lovelace_supply) = match network {
+    let (id, network_magic, genesis_hex, active_slots_coeff, epoch_length, max_lovelace_supply, security_param) = match network {
         "preview" => (
             "preview",
             2u32,
@@ -620,6 +625,7 @@ pub fn resolve_network_profile(network: &str) -> Result<NetworkProfile, CaptureE
             (1u32, 20u32),
             86_400u64,
             45_000_000_000_000_000u64,
+            432u64,
         ),
         "preprod" => (
             "preprod",
@@ -628,6 +634,7 @@ pub fn resolve_network_profile(network: &str) -> Result<NetworkProfile, CaptureE
             (1u32, 20u32),
             432_000u64,
             45_000_000_000_000_000u64,
+            2160u64,
         ),
         other => {
             return Err(CaptureError::Query(format!(
@@ -641,6 +648,7 @@ pub fn resolve_network_profile(network: &str) -> Result<NetworkProfile, CaptureE
         genesis_hash: hex_decode_32(genesis_hex)?,
         active_slots_coeff,
         epoch_length,
+        security_param,
         max_lovelace_supply,
     })
 }

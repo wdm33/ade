@@ -141,6 +141,10 @@ pub enum NativeGenesisParseError {
 pub struct NativeGenesisFacts {
     pub constants: NativeGenesisConstants,
     pub epoch_length_slots: u32,
+    /// Shelley `securityParam` (k) — used to derive the Praos randomness-
+    /// stabilisation window `RSW = ceil(4k/f)` for the candidate-nonce freeze
+    /// (DC-EPOCH-16). From the venue genesis, never operator-supplied.
+    pub security_param: u64,
 }
 
 /// Parse a real Cardano `shelley-genesis.json` into the native genesis facts.
@@ -170,6 +174,7 @@ pub fn parse_native_shelley_genesis(
     }
 
     let active_slots_coeff = parse_active_slots_coeff(obj)?;
+    let security_param = require_u64(obj, "securityParam")?;
 
     Ok(NativeGenesisFacts {
         constants: NativeGenesisConstants {
@@ -177,6 +182,7 @@ pub fn parse_native_shelley_genesis(
             active_slots_coeff,
         },
         epoch_length_slots,
+        security_param,
     })
 }
 
@@ -343,6 +349,7 @@ pub fn build_native_schedule(
         BootstrapAnchorHash(Hash32([0u8; 32])),
         epoch_start_slot,
         vec![EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: CardanoEra::Conway,
             start_slot: SlotNo(epoch_start_slot),
             start_epoch: snapshot_epoch,
@@ -651,6 +658,7 @@ mod tests {
             "maxLovelaceSupply": 45000000000000000,
             "activeSlotsCoeff": 0.05,
             "epochLength": 432000,
+            "securityParam": 2160,
             "slotLength": 1,
             "systemStart": "2022-06-01T00:00:00Z"
         }"#;
@@ -661,6 +669,7 @@ mod tests {
             ActiveSlotsCoeff { numer: 1, denom: 20 }
         );
         assert_eq!(facts.epoch_length_slots, 432_000);
+        assert_eq!(facts.security_param, 2160);
 
         // Missing field -> fail closed.
         let missing = r#"{ "activeSlotsCoeff": 0.05, "epochLength": 432000 }"#;

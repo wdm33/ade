@@ -1671,6 +1671,7 @@ pub(crate) fn extend_schedule_to_epoch(era_schedule: &mut EraSchedule, target: E
         for e in (last_epoch.0 + 1)..=target.0 {
             let offset = e - seed.start_epoch.0;
             new_eras.push(EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: seed.era,
                 start_slot: SlotNo(seed.start_slot.0 + offset * l),
                 start_epoch: EpochNo(e),
@@ -3195,6 +3196,7 @@ fn first_run_native_mithril_bootstrap(
                 },
             },
             epoch_length_slots: p.epoch_length as u32,
+            security_param: p.security_param,
         },
         (None, None) => {
             return Err(NodeLifecycleError::MissingFlag(
@@ -3293,6 +3295,7 @@ fn make_node_schedule(
         BootstrapAnchorHash(Hash32([0u8; 32])),
         epoch_start_slot.0,
         vec![EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: CardanoEra::Conway,
             start_slot: epoch_start_slot,
             start_epoch: epoch_no,
@@ -3310,6 +3313,7 @@ fn make_node_schedule(
             BootstrapAnchorHash(Hash32([0u8; 32])),
             epoch_start_slot.0,
             vec![EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Conway,
                 start_slot: epoch_start_slot,
                 start_epoch: epoch_no,

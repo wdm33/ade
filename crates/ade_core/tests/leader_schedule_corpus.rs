@@ -108,6 +108,7 @@ fn build_schedule(corpus: &Value) -> EraSchedule {
             other => panic!("unknown era {other}"),
         };
         eras.push(EraSummary {
+            randomness_stabilisation_window_slots: None,
             era,
             start_slot: SlotNo(e["start_slot"].as_u64().expect("start_slot")),
             start_epoch: EpochNo(e["start_epoch"].as_u64().expect("start_epoch")),

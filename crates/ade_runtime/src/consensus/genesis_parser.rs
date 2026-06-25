@@ -173,6 +173,27 @@ pub fn parse_genesis(
         }
     })?;
 
+    // RSW = ceil(4 * k / f) -- the Praos candidate-nonce freeze latitude
+    // (DC-EPOCH-16), mirroring safe_zone_slots = ceil(3 * k / f).
+    let rsw_slots = ceil_div(
+        shelley_security_param
+            .checked_mul(4)
+            .ok_or(GenesisParseError::InvalidValue {
+                which: GenesisBlob::Shelley,
+                field: "securityParam",
+            })?
+            .checked_mul(active_denom)
+            .ok_or(GenesisParseError::InvalidValue {
+                which: GenesisBlob::Shelley,
+                field: "activeSlotsCoeff.denominator",
+            })?,
+        active_numer,
+    );
+    let rsw_slots = u32::try_from(rsw_slots).map_err(|_| GenesisParseError::InvalidValue {
+        which: GenesisBlob::Shelley,
+        field: "securityParam",
+    })?;
+
     let shelley_slot_length_ms = shelley_slot_length_seconds
         .checked_mul(1000)
         .ok_or(GenesisParseError::InvalidValue {
@@ -231,6 +252,7 @@ pub fn parse_genesis(
         slot_length_ms: byron_slot_length_ms,
         epoch_length_slots: byron_epoch_length_slots,
         safe_zone_slots,
+        randomness_stabilisation_window_slots: Some(rsw_slots),
     });
     let later_eras = [
         ("shelley", CardanoEra::Shelley),
@@ -251,6 +273,7 @@ pub fn parse_genesis(
             slot_length_ms: shelley_slot_length_ms,
             epoch_length_slots: shelley_epoch_length_slots,
             safe_zone_slots,
+            randomness_stabilisation_window_slots: Some(rsw_slots),
         });
     }
 

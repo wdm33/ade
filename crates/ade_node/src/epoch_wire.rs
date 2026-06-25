@@ -903,6 +903,7 @@ mod tests {
     fn compute_first_window_bounds_spans_the_seed_epoch() {
         use ade_core::consensus::era_schedule::{BootstrapAnchorHash, EraSchedule, EraSummary};
         let eras = vec![EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: CardanoEra::Conway,
             start_slot: SlotNo(8_640_000),
             start_epoch: EpochNo(100),
@@ -938,6 +939,7 @@ mod tests {
         live.seal_bootstrap(SlotNo(8_640_000 + 50_000)).unwrap();
         let db = InMemoryChainDb::new();
         let eras = vec![EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: CardanoEra::Conway,
             start_slot: SlotNo(8_640_000),
             start_epoch: EpochNo(100),

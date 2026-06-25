@@ -652,6 +652,7 @@ fn make_schedule_for_imported_window(
         ade_core::consensus::BootstrapAnchorHash(Hash32([0u8; 32])),
         epoch_start_slot.0,
         vec![ade_core::consensus::EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: CardanoEra::Conway,
             start_slot: *epoch_start_slot,
             // PHASE4-N-M-NONCE: the imported window starts at

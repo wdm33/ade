@@ -31,6 +31,7 @@ use cardano_crypto::vrf::VrfDraft03;
 
 fn schedule() -> EraSchedule {
     let eras = vec![EraSummary {
+        randomness_stabilisation_window_slots: None,
         era: CardanoEra::Shelley,
         start_slot: SlotNo(0),
         start_epoch: EpochNo(0),

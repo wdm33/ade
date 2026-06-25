@@ -126,6 +126,7 @@ fn era_schedule(epoch: EpochNo) -> EraSchedule {
         BootstrapAnchorHash(Hash32([0u8; 32])),
         0,
         vec![EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: CardanoEra::Conway,
             start_slot: ade_types::SlotNo(0),
             start_epoch: epoch,
@@ -523,6 +524,7 @@ fn tpraos_producer_forge_fails_closed_with_unsupported_era() {
         BootstrapAnchorHash(Hash32([0u8; 32])),
         0,
         vec![EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: CardanoEra::Shelley,
             start_slot: ade_types::SlotNo(0),
             start_epoch: epoch,

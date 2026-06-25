@@ -463,6 +463,7 @@ fn make_schedule_for_imported_window(
         ade_core::consensus::BootstrapAnchorHash(Hash32([0u8; 32])),
         epoch_start_slot.0,
         vec![ade_core::consensus::EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: ade_types::CardanoEra::Conway,
             start_slot: *epoch_start_slot,
             start_epoch: epoch_no,
@@ -1640,6 +1641,7 @@ mod tests {
             BootstrapAnchorHash(Hash32([0u8; 32])),
             0,
             vec![EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: ade_types::CardanoEra::Conway,
                 start_slot: SlotNo(start_576),
                 start_epoch: T4_EPOCH_576,

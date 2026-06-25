@@ -30,6 +30,13 @@ pub struct EraSummary {
     pub slot_length_ms: u32,
     pub epoch_length_slots: u32,
     pub safe_zone_slots: u32,
+    /// `RSW = ceil(4·k / f)` in slots — the Praos candidate-nonce freeze latitude
+    /// (`freeze_boundary = firstSlotNextEpoch − RSW`), derived by the RED parser
+    /// from the venue genesis `(k, f)`. `None` = not supplied: a warm-start
+    /// schedule rebuilt from the durable sidecar (which carries no `k`) — the
+    /// candidate freeze is INERT and the boundary tick fails closed until B4
+    /// persists it. `Some` on the FirstRun path (genesis `k` available). DC-EPOCH-16.
+    pub randomness_stabilisation_window_slots: Option<u32>,
 }
 
 /// Pure result of `EraSchedule::locate(slot)`.
@@ -220,6 +227,7 @@ mod tests {
     fn mainnet_like_eras() -> Vec<EraSummary> {
         vec![
             EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::ByronRegular,
                 start_slot: SlotNo(0),
                 start_epoch: EpochNo(0),
@@ -228,6 +236,7 @@ mod tests {
                 safe_zone_slots: 129_600,
             },
             EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Shelley,
                 start_slot: SlotNo(4_492_800),
                 start_epoch: EpochNo(208),
@@ -236,6 +245,7 @@ mod tests {
                 safe_zone_slots: 129_600,
             },
             EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Allegra,
                 start_slot: SlotNo(16_588_800),
                 start_epoch: EpochNo(236),
@@ -244,6 +254,7 @@ mod tests {
                 safe_zone_slots: 129_600,
             },
             EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Mary,
                 start_slot: SlotNo(23_068_800),
                 start_epoch: EpochNo(251),
@@ -252,6 +263,7 @@ mod tests {
                 safe_zone_slots: 129_600,
             },
             EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Alonzo,
                 start_slot: SlotNo(39_916_800),
                 start_epoch: EpochNo(290),
@@ -260,6 +272,7 @@ mod tests {
                 safe_zone_slots: 129_600,
             },
             EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Babbage,
                 start_slot: SlotNo(72_316_796),
                 start_epoch: EpochNo(365),
@@ -268,6 +281,7 @@ mod tests {
                 safe_zone_slots: 129_600,
             },
             EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Conway,
                 start_slot: SlotNo(133_660_800),
                 start_epoch: EpochNo(507),
@@ -324,6 +338,7 @@ mod tests {
     fn locate_before_system_start_errors() {
         let anchor = BootstrapAnchorHash(Hash32([0u8; 32]));
         let eras = vec![EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: CardanoEra::Shelley,
             start_slot: SlotNo(100),
             start_epoch: EpochNo(0),
@@ -374,6 +389,7 @@ mod tests {
     fn slot_to_time_overflow_returns_structured_error() {
         let anchor = BootstrapAnchorHash(Hash32([0u8; 32]));
         let eras = vec![EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: CardanoEra::Shelley,
             start_slot: SlotNo(0),
             start_epoch: EpochNo(0),
@@ -413,6 +429,7 @@ mod tests {
         let anchor = BootstrapAnchorHash(Hash32([0u8; 32]));
         let bad = vec![
             EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::ByronRegular,
                 start_slot: SlotNo(100),
                 start_epoch: EpochNo(0),
@@ -421,6 +438,7 @@ mod tests {
                 safe_zone_slots: 129_600,
             },
             EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Shelley,
                 start_slot: SlotNo(100),
                 start_epoch: EpochNo(1),
@@ -450,6 +468,7 @@ mod tests {
     fn eraschedule_constructor_rejects_zero_slot_length() {
         let anchor = BootstrapAnchorHash(Hash32([0u8; 32]));
         let bad = vec![EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: CardanoEra::ByronRegular,
             start_slot: SlotNo(0),
             start_epoch: EpochNo(0),
@@ -465,6 +484,7 @@ mod tests {
     fn eraschedule_constructor_rejects_zero_epoch_length() {
         let anchor = BootstrapAnchorHash(Hash32([0u8; 32]));
         let bad = vec![EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: CardanoEra::ByronRegular,
             start_slot: SlotNo(0),
             start_epoch: EpochNo(0),

@@ -105,6 +105,7 @@ fn era_schedule() -> EraSchedule {
         BootstrapAnchorHash(Hash32([0u8; 32])),
         0,
         vec![EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: CardanoEra::Conway,
             start_slot: ade_types::SlotNo(0),
             start_epoch: EpochNo(0),

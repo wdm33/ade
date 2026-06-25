@@ -2052,6 +2052,7 @@ mod tests {
             BootstrapAnchorHash(Hash32([0u8; 32])),
             0,
             vec![EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Conway,
                 start_slot: SlotNo(start_576),
                 start_epoch: EPOCH_576,
@@ -3373,6 +3374,7 @@ mod tests {
             BootstrapAnchorHash(Hash32([0u8; 32])),
             0,
             vec![EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Conway,
                 start_slot: SlotNo(0),
                 start_epoch: L5_EPOCH,
@@ -3642,6 +3644,7 @@ mod tests {
             BootstrapAnchorHash(Hash32([0u8; 32])),
             0,
             vec![EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Conway,
                 start_slot: SlotNo(0),
                 start_epoch: EpochNo(0),
@@ -3808,6 +3811,7 @@ mod tests {
             BootstrapAnchorHash(Hash32([0u8; 32])),
             0,
             vec![EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Conway,
                 start_slot: SlotNo(0),
                 start_epoch: EpochNo(0),
@@ -4022,6 +4026,7 @@ mod tests {
             BootstrapAnchorHash(Hash32([0u8; 32])),
             0,
             vec![EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Conway,
                 start_slot: SlotNo(0),
                 start_epoch: EpochNo(0),
@@ -5257,6 +5262,7 @@ mod tests {
             BootstrapAnchorHash(Hash32([0u8; 32])),
             1_000,
             vec![EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Conway,
                 start_slot: SlotNo(1_000),
                 start_epoch: EpochNo(7),
@@ -6590,6 +6596,7 @@ mod tests {
             BootstrapAnchorHash(Hash32([0u8; 32])),
             0,
             vec![EraSummary {
+                randomness_stabilisation_window_slots: None,
                 era: CardanoEra::Conway,
                 start_slot: SlotNo(0),
                 start_epoch: EpochNo(0),

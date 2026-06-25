@@ -72,6 +72,7 @@ fn min_schedule() -> EraSchedule {
         BootstrapAnchorHash(Hash32([0u8; 32])),
         0,
         vec![EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: CardanoEra::Conway,
             start_slot: SlotNo(0),
             start_epoch: EpochNo(0),
@@ -481,6 +482,7 @@ fn corpus_schedule() -> EraSchedule {
         BootstrapAnchorHash(Hash32([0u8; 32])),
         0,
         vec![EraSummary {
+            randomness_stabilisation_window_slots: None,
             era: CardanoEra::Conway,
             start_slot: SlotNo(EPOCH_577_START - MAINNET_EPOCH_LENGTH),
             start_epoch: EpochNo(576),
