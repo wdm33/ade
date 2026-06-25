@@ -8804,6 +8804,35 @@ ci_scripts = ["ci/ci_check_eview_atomic_authority.sh"]
 status = "enforced"
 
 [[rules]]
+id = "DC-EPOCH-15"
+tier = "true"
+statement = """
+Forecast horizon <=> durable N+1 authority promotion. The relay loop's EraSchedule forecast horizon
+extends past an epoch boundary N->N+1 IF AND ONLY IF the ActiveEpochAuthority has durably promoted the
+N+1 view (DC-EPOCH-14). (a) NO PRE-EXTENSION: the horizon never reaches into an epoch whose view is not
+promoted -- a header at an unpromoted N+1 slot fails closed OutsideForecastRange before the leader view
+is consulted, never accepted on a stale horizon. (b) ATOMIC ORDERING: the extension is the second half
+of the SAME transition as the promotion -- promotion durable -> rebuild the immutable schedule including
+the N+1 summary -> atomically replace the relay-loop-owned schedule -> only THEN is post-boundary
+validation/forging permitted; no mutable shared reference may leave validation using the old horizon
+after the authority has promoted. (c) DERIVED, NEVER PERSISTED: the extended schedule is derived state.
+Its authoritative inputs are the durable activation record + the recovered promoted EpochConsensusView +
+the v4 sidecar venue geometry (DC-CINPUT-05) + the committed network profile. Warm-start RECONSTRUCTS the
+schedule deterministically from those inputs and requires byte-identical schedule identity to the
+pre-restart one; a second WAL field for the schedule is forbidden (redundant authority + a new mismatch
+class). (d) NO AMBIENT INPUT: no flag, no wall-clock, no peer/CLI datum influences the extension
+(DC-EPOCH-13). Warm-start in BOTH states (before and after promotion) reconstructs a forecast boundary
+that exactly matches the live one.
+"""
+source = "Slice ECA-5 (EPOCH-CONSENSUS-VIEW). Operational detail (venues, timing, commands, live-capture) is kept in an untracked competition-secret working doc; this registry entry + docs/clusters/EPOCH-CONSENSUS-VIEW/SLICE-ECA-5-summary.md are the committed normative record. User directive 2026-06-25 (derive-not-persist; atomic-swap ordering; warm-start byte-identical reconstruction in both pre- and post-promotion states). Live finding: a native-Mithril following node caught up WITHIN an epoch but failed Header(OutsideForecastRange) at the boundary because the leadership view promoted (DC-EPOCH-14) while the forecast horizon did not."
+cross_ref = ["DC-EPOCH-14", "DC-EPOCH-13", "DC-CINPUT-05", "DC-EPOCH-12", "DC-EPOCH-08", "DC-EVIEW-12", "DC-CINPUT-06"]
+code_locus = "PLANNED (slice ECA-5): crates/ade_node/src/node_lifecycle.rs run_relay_loop_with_sched (own the EraSchedule by value; rebuild + atomic-replace with the N+1 EraSummary at the DC-EPOCH-14 promotion site AND the warm-start recovery re-fire; resolve_network_magic for the EVIEW inputs on both forge branches; forge-OFF constructs eview_inputs). crates/ade_core/src/consensus/era_schedule.rs (EraSchedule::new/locate over adjacent same-era Conway summaries -- proof obligation, verify before relying). ci/ci_check_eview_forecast_crossing.sh (planned)."
+tests = []
+ci_scripts = []
+status = "declared"
+introduced_in = "EPOCH-CONTINUITY-ACTIVATION-ECA-5"
+
+[[rules]]
 id = "DC-MITHRIL-04"
 tier = "derived"
 statement = """
