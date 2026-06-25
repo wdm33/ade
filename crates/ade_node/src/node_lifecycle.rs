@@ -549,6 +549,33 @@ async fn run_node_lifecycle_inner(
                     BTreeMap::new(),
                 ),
             };
+            // ECA-5 step 1: wire the cross-epoch EVIEW activation into the relay-only (forge-OFF) path
+            // so a no-keys node can cross the epoch boundary -- the SAME construction as the forge-ON
+            // branch, built BEFORE state.ledger moves into the spine. The replay-scratch lives under the
+            // durable store dir (--data-dir), never the snapshot dir (which may be deleted post-bootstrap).
+            let eview_inputs: Option<crate::epoch_wire::EviewActivationInputs> = match (
+                reduced_checkpoint.as_ref(),
+                state.seed_epoch_consensus_inputs.as_ref(),
+                state.tip.as_ref(),
+            ) {
+                (Some(_live), Some(sidecar), Some(tip)) => {
+                    let network_magic = resolve_network_magic(cli)?;
+                    Some(crate::epoch_wire::EviewActivationInputs {
+                        seed_bootstrap_state: state.ledger.clone(),
+                        seed_point_slot: tip.slot,
+                        seed_point_hash: tip.hash.clone(),
+                        seed_epoch: sidecar.epoch_no,
+                        network_magic,
+                        nonce: sidecar.epoch_nonce.0.clone(),
+                        genesis_hash: sidecar.genesis_hash.clone(),
+                        protocol_params_hash: sidecar.protocol_params_hash.clone(),
+                        asc: sidecar.active_slots_coeff,
+                        replay_scratch_path: resolve_store_dir(cli)?
+                            .join("eview-replay-scratch.redb"),
+                    })
+                }
+                _ => None,
+            };
             // PHASE4-N-AE.C (DC-WAL-02): the first followed AdmitBlock must chain
             // from the fingerprint of the ledger state the follow extends (the
             // recovered ledger tip = the WAL-tail post_fp), not from zero. Read it
@@ -599,7 +626,7 @@ async fn run_node_lifecycle_inner(
                 Some(&mut sched_log),
                 None,
                 reduced_checkpoint.as_ref(),
-                None, // forge-off: no EVIEW activation
+                eview_inputs.as_ref(), // ECA-5: cross-epoch EVIEW activation wired into the relay-only path
             )
             .await?;
             eprintln!(
@@ -718,9 +745,7 @@ async fn run_node_lifecycle_inner(
                 state.tip.as_ref(),
             ) {
                 (Some(_live), Some(sidecar), Some(tip)) => {
-                    let network_magic = cli
-                        .network_magic
-                        .ok_or(NodeLifecycleError::MissingFlag("--network-magic"))?;
+                    let network_magic = resolve_network_magic(cli)?;
                     Some(crate::epoch_wire::EviewActivationInputs {
                         seed_bootstrap_state: state.ledger.clone(),
                         seed_point_slot: tip.slot,
@@ -774,9 +799,7 @@ async fn run_node_lifecycle_inner(
                     // Serving a peer requires the network's magic (the serve
                     // listener advertises it via n2n_supported_for_magic, S2b);
                     // fail-fast if absent (no silent live-serve claim).
-                    let serve_magic = cli
-                        .network_magic
-                        .ok_or(NodeLifecycleError::MissingFlag("--network-magic"))?;
+                    let serve_magic = resolve_network_magic(cli)?;
                     let listener = bind_serve_listener(listen)
                         .await
                         .map_err(|e| NodeLifecycleError::ServeStart(format!("{e:?}")))?;
@@ -1555,7 +1578,7 @@ fn maybe_activate_epoch_boundary(
     eview_activation: Option<&crate::epoch_wire::EviewActivationInputs>,
     reduced_checkpoint: Option<&ade_runtime::chaindb::ReducedUtxoCheckpoint>,
     chaindb: &PersistentChainDb,
-    era_schedule: &EraSchedule,
+    era_schedule: &mut EraSchedule,
     wal: &mut FileWalStore,
     authority: &mut crate::epoch_activation::ActiveEpochAuthority,
 ) -> Result<(), NodeLifecycleError> {
@@ -1588,8 +1611,50 @@ fn maybe_activate_epoch_boundary(
     // ECA-3 (DC-EPOCH-14): the authority is promoted IN PLACE (the atomic Seed->Promoted swap) — both
     // header validation AND leadership now resolve the promoted N+1 view from this ONE holder. The
     // outcome (Promoted / NotYet) is evidence only; the mutation of `authority` is the effect.
+    // ECA-5 (DC-EPOCH-15): same transition -- the authority just promoted in place; atomically extend the
+    // owned forecast schedule to cover its epoch so downstream header validation admits the post-boundary slot.
+    extend_schedule_to_epoch(era_schedule, authority.epoch());
     let _ = outcome;
     Ok(())
+}
+
+/// ECA-5 (DC-EPOCH-15): extend the forecast horizon to match the promoted authority's epoch. DERIVED
+/// state -- each appended EraSummary for epoch e is a pure function of the seed-epoch geometry (the
+/// schedule's FIRST summary): start_slot = seed.start_slot + (e - seed.start_epoch) * epoch_length, with
+/// the same era/slot_length/epoch_length/safe_zone. Idempotent (a no-op unless the authority's epoch
+/// exceeds the schedule's last summary) and gap-filling (appends every intermediate epoch), so a live
+/// per-boundary append and a warm-start single reconstruction yield byte-identical summaries. No
+/// flag/clock/peer input -- the horizon extends ONLY after (and to match) a durable authority promotion.
+fn extend_schedule_to_epoch(era_schedule: &mut EraSchedule, target: EpochNo) {
+    let (anchor, system_start, new_eras) = {
+        let eras = era_schedule.eras();
+        let seed = &eras[0];
+        let last_epoch = eras[eras.len() - 1].start_epoch;
+        if target.0 <= last_epoch.0 {
+            return;
+        }
+        let l = u64::from(seed.epoch_length_slots);
+        let mut new_eras: Vec<EraSummary> = eras.to_vec();
+        for e in (last_epoch.0 + 1)..=target.0 {
+            let offset = e - seed.start_epoch.0;
+            new_eras.push(EraSummary {
+                era: seed.era,
+                start_slot: SlotNo(seed.start_slot.0 + offset * l),
+                start_epoch: EpochNo(e),
+                slot_length_ms: seed.slot_length_ms,
+                epoch_length_slots: seed.epoch_length_slots,
+                safe_zone_slots: seed.epoch_length_slots,
+            });
+        }
+        (
+            era_schedule.anchor().clone(),
+            era_schedule.system_start_unix_ms(),
+            new_eras,
+        )
+    };
+    if let Ok(extended) = EraSchedule::new(anchor, system_start, new_eras) {
+        *era_schedule = extended;
+    }
 }
 
 /// Relay loop with an optional emit-only CN-NODE-04 diagnostic sink
@@ -1636,6 +1701,11 @@ pub async fn run_relay_loop_with_sched(
     // are bound durably) => ContinuityRequired (a missing N+1 promotion is terminal); otherwise
     // SeedOnly (a limited producer that no-forges past its seed epoch but KEEPS FOLLOWING). The mode
     // is the SAME on warm-start (the inputs are recovered from the store, never CLI/genesis).
+    // ECA-5 (DC-EPOCH-15): own the forecast schedule so it can be extended in place at a boundary and
+    // atomically replace the loop's owned copy -- no shared mutable reference can leave validation on
+    // the old horizon after promotion. The caller passes the seed-epoch schedule by ref; the loop holds
+    // the authoritative owned copy, extended ONLY when the authority promotes (+ on warm-start recovery).
+    let mut era_schedule = era_schedule.clone();
     let mut authority = match eview_activation {
         Some(inputs) => crate::epoch_activation::ActiveEpochAuthority::continuity(
             seed_view,
@@ -1668,7 +1738,7 @@ pub async fn run_relay_loop_with_sched(
             .map_err(|e| NodeLifecycleError::RelaySync(format!("eview recovery resolve: {e:?}")))?;
         crate::epoch_wire::maybe_recover_promoted_authority(
             resolved.as_ref(),
-            era_schedule,
+            &era_schedule,
             inputs.seed_epoch,
             inputs.seed_point_slot,
             inputs.seed_point_hash.clone(),
@@ -1685,6 +1755,10 @@ pub async fn run_relay_loop_with_sched(
         )
         .map_err(|e| NodeLifecycleError::RelaySync(format!("eview recovery: {e:?}")))?;
     }
+    // ECA-5 (DC-EPOCH-15): warm-start forecast reconstruction. If the recovery promoted the authority
+    // to N+1 (or beyond), extend the owned schedule to match -- deriving the SAME summaries the live
+    // per-boundary append produced (byte-identical). A no-op when the recovery kept the seed.
+    extend_schedule_to_epoch(&mut era_schedule, authority.epoch());
     loop {
         let shutdown_status = if *shutdown.borrow() {
             ShutdownStatus::ShutdownRequested
@@ -1778,7 +1852,7 @@ pub async fn run_relay_loop_with_sched(
                         state,
                         chaindb,
                         wal,
-                        era_schedule,
+                        &era_schedule,
                         authority.ledger_view(),
                         &mut act.pending_reselection,
                         act.security_param,
@@ -1846,7 +1920,7 @@ pub async fn run_relay_loop_with_sched(
                             &mut act.pending_reselection,
                             &mut act.last_fork_switch_failure,
                             body_source.as_ref(),
-                            era_schedule,
+                            &era_schedule,
                             authority.ledger_view(),
                             act.security_param,
                             &mut act.rollback_retention,
@@ -1980,7 +2054,7 @@ pub async fn run_relay_loop_with_sched(
                                     wal,
                                     &prefetched,
                                     &req,
-                                    era_schedule,
+                                    &era_schedule,
                                     authority.ledger_view(),
                                     source,
                                     convergence.as_deref_mut(),
@@ -2033,7 +2107,7 @@ pub async fn run_relay_loop_with_sched(
                         act.pending_reselection = false;
                     }
                 } else {
-                    run_node_sync(source, state, chaindb, wal, era_schedule, authority.ledger_view())
+                    run_node_sync(source, state, chaindb, wal, &era_schedule, authority.ledger_view())
                         .await
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
                     // S3f-4d-mat-2c (DC-EPOCH-11): after the durable admit, advance the live
@@ -2049,7 +2123,7 @@ pub async fn run_relay_loop_with_sched(
                         eview_activation,
                         reduced_checkpoint,
                         chaindb,
-                        era_schedule,
+                        &mut era_schedule,
                         wal,
                         &mut authority,
                     )?;
@@ -2357,7 +2431,7 @@ pub async fn run_relay_loop_with_sched(
                             act.shell,
                             &act.pool_id,
                             &act.pparams,
-                            era_schedule,
+                            &era_schedule,
                             slot.0,
                             kes_period,
                             act.protocol_version,
@@ -2406,7 +2480,7 @@ pub async fn run_relay_loop_with_sched(
                                         state,
                                         chaindb,
                                         wal,
-                                        era_schedule,
+                                        &era_schedule,
                                         authority.ledger_view(),
                                     )
                                     .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
@@ -4736,6 +4810,69 @@ pub async fn prefetch_branch_bodies(
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+
+    // ECA-5 (DC-EPOCH-15): forecast-horizon extension coupled to authority promotion.
+    mod eca5_forecast_crossing {
+        use super::super::*;
+
+        const L: u32 = 86_400;
+        const N: u64 = 1338;
+        fn seed_sched() -> EraSchedule {
+            make_node_schedule(SlotNo(N * u64::from(L)), EpochNo(N), L)
+        }
+        fn slot_in(epoch: u64) -> SlotNo {
+            SlotNo(epoch * u64::from(L) + 30)
+        }
+
+        #[test]
+        fn forecast_extends_only_on_promotion() {
+            let mut sched = seed_sched();
+            // Before promotion: an N+1 slot is OUTSIDE the forecast horizon (= the boundary).
+            assert!(sched.check_forecast_horizon(slot_in(N + 1)).is_err());
+            // Idempotent no-op for the seed epoch itself.
+            extend_schedule_to_epoch(&mut sched, EpochNo(N));
+            assert_eq!(sched.eras().len(), 1);
+            assert!(sched.check_forecast_horizon(slot_in(N + 1)).is_err());
+            // After promotion to N+1: the horizon extends; the N+1 slot validates + locates to N+1.
+            extend_schedule_to_epoch(&mut sched, EpochNo(N + 1));
+            assert_eq!(sched.eras().len(), 2);
+            assert!(sched.check_forecast_horizon(slot_in(N + 1)).is_ok());
+            assert_eq!(sched.locate(slot_in(N + 1)).unwrap().epoch, EpochNo(N + 1));
+            assert_eq!(sched.locate(slot_in(N)).unwrap().epoch, EpochNo(N));
+            // N+2 is still out -- the horizon never reaches an unpromoted epoch.
+            assert!(sched.check_forecast_horizon(slot_in(N + 2)).is_err());
+        }
+
+        #[test]
+        fn warmstart_reconstruction_is_byte_identical_to_live_append() {
+            // Live: append per boundary (N -> N+1 -> N+2).
+            let mut live = seed_sched();
+            extend_schedule_to_epoch(&mut live, EpochNo(N + 1));
+            extend_schedule_to_epoch(&mut live, EpochNo(N + 2));
+            // Warm-start: reconstruct to N+2 in one shot from the seed.
+            let mut warm = seed_sched();
+            extend_schedule_to_epoch(&mut warm, EpochNo(N + 2));
+            assert_eq!(live.eras(), warm.eras());
+            assert_eq!(live, warm);
+            // Deterministic across rebuilds.
+            let mut warm2 = seed_sched();
+            extend_schedule_to_epoch(&mut warm2, EpochNo(N + 2));
+            assert_eq!(warm, warm2);
+        }
+
+        #[test]
+        fn eraschedule_supports_adjacent_same_era_summaries() {
+            // Proof obligation 1: EraSchedule::new/locate handle adjacent same-era consecutive epochs.
+            let mut sched = seed_sched();
+            extend_schedule_to_epoch(&mut sched, EpochNo(N + 2));
+            assert_eq!(sched.eras().len(), 3);
+            for off in 0..=2u64 {
+                let loc = sched.locate(slot_in(N + off)).unwrap();
+                assert_eq!(loc.epoch, EpochNo(N + off));
+                assert!(matches!(loc.era, CardanoEra::Conway));
+            }
+        }
+    }
 
     // ===== PHASE4-N-AO S3 (DC-NODE-36): live selector dispatch decision =====
     // Unit tests of `decide_fork_switch` — the SOLE-selector verdict-to-decision
