@@ -37,6 +37,8 @@ const SNAPSHOTS_BY_SLOT: TableDefinition<u64, &[u8]> =
 /// created lazily on first write / read like every other table here).
 const SEED_CINPUTS_BY_ANCHOR_FP: TableDefinition<&[u8; 32], &[u8]> =
     TableDefinition::new("seed_cinputs_by_anchor_fp");
+const BRIDGE_BY_ANCHOR_FP: TableDefinition<&[u8; 32], &[u8]> =
+    TableDefinition::new("bootstrap_bridge_by_anchor_fp");
 /// Anchor-fp-keyed recovered anchor-point provenance table (AK-S1,
 /// DC-NODE-31). Keyed by the 32-byte anchor fingerprint; disjoint from both
 /// the slot-keyed `snapshots_by_slot` and the `seed_cinputs_by_anchor_fp`
@@ -711,6 +713,57 @@ impl SnapshotStore for PersistentChainDb {
     ) -> Result<Option<Vec<u8>>, ChainDbError> {
         let txn = self.db.begin_read().map_err(map_txn_err)?;
         let table = match txn.open_table(SEED_CINPUTS_BY_ANCHOR_FP) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(map_table_err(e)),
+        };
+        let bytes = table.get(&anchor_fp.0).map_err(map_storage_err)?;
+        Ok(bytes.map(|v| v.value().to_vec()))
+    }
+
+    fn put_bootstrap_next_epoch_authority(
+        &self,
+        anchor_fp: &Hash32,
+        bytes: &[u8],
+    ) -> Result<(), ChainDbError> {
+        let _guard = self.write_lock.lock().map_err(lock_poisoned)?;
+        let txn = self.begin_write()?;
+        let conflict = {
+            let table = txn.open_table(BRIDGE_BY_ANCHOR_FP).map_err(map_table_err)?;
+            let existing = table
+                .get(&anchor_fp.0)
+                .map_err(map_storage_err)?
+                .map(|v| v.value().to_vec());
+            existing
+        };
+        match conflict {
+            Some(existing) if existing == bytes => {
+                txn.commit().map_err(map_commit_err)?;
+                return Ok(());
+            }
+            Some(_) => {
+                return Err(ChainDbError::InvalidOperation(format!(
+                    "bootstrap bridge for anchor_fp {anchor_fp} already occupied by different bytes",
+                )));
+            }
+            None => {}
+        }
+        {
+            let mut table = txn.open_table(BRIDGE_BY_ANCHOR_FP).map_err(map_table_err)?;
+            table
+                .insert(&anchor_fp.0, bytes)
+                .map_err(map_storage_err)?;
+        }
+        txn.commit().map_err(map_commit_err)?;
+        Ok(())
+    }
+
+    fn get_bootstrap_next_epoch_authority(
+        &self,
+        anchor_fp: &Hash32,
+    ) -> Result<Option<Vec<u8>>, ChainDbError> {
+        let txn = self.db.begin_read().map_err(map_txn_err)?;
+        let table = match txn.open_table(BRIDGE_BY_ANCHOR_FP) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
             Err(e) => return Err(map_table_err(e)),

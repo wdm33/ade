@@ -41,6 +41,8 @@ struct Inner {
     // disjoint from `snapshots` above, keyed by the 32-byte anchor
     // fingerprint — never a reserved sentinel slot.
     seed_consensus_inputs: BTreeMap<Hash32, Vec<u8>>,
+    // ECA-5: anchor-fp-keyed bootstrap bridge authority (the seed+1 leadership). Disjoint map.
+    bootstrap_bridge: BTreeMap<Hash32, Vec<u8>>,
     // Anchor-fp-keyed recovered anchor-point provenance record (AK-S1,
     // DC-NODE-31). Disjoint from both `snapshots` and
     // `seed_consensus_inputs`; keyed by the same 32-byte anchor fingerprint.
@@ -243,6 +245,34 @@ impl SnapshotStore for InMemoryChainDb {
     ) -> Result<Option<Vec<u8>>, ChainDbError> {
         let inner = self.inner.lock().map_err(lock_poisoned)?;
         Ok(inner.seed_consensus_inputs.get(anchor_fp).cloned())
+    }
+
+    fn put_bootstrap_next_epoch_authority(
+        &self,
+        anchor_fp: &Hash32,
+        bytes: &[u8],
+    ) -> Result<(), ChainDbError> {
+        let mut inner = self.inner.lock().map_err(lock_poisoned)?;
+        if let Some(existing) = inner.bootstrap_bridge.get(anchor_fp) {
+            if existing.as_slice() != bytes {
+                return Err(ChainDbError::InvalidOperation(format!(
+                    "bootstrap bridge for anchor_fp {anchor_fp} already occupied by different bytes",
+                )));
+            }
+            return Ok(());
+        }
+        inner
+            .bootstrap_bridge
+            .insert(anchor_fp.clone(), bytes.to_vec());
+        Ok(())
+    }
+
+    fn get_bootstrap_next_epoch_authority(
+        &self,
+        anchor_fp: &Hash32,
+    ) -> Result<Option<Vec<u8>>, ChainDbError> {
+        let inner = self.inner.lock().map_err(lock_poisoned)?;
+        Ok(inner.bootstrap_bridge.get(anchor_fp).cloned())
     }
 
     fn list_seed_epoch_consensus_anchor_fps(&self) -> Result<Vec<Hash32>, ChainDbError> {

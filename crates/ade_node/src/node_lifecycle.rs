@@ -459,7 +459,7 @@ async fn run_node_lifecycle_inner(
     // loop's follow/forge path is byte-identical). When present, the loop advances it to the
     // durable ChainDB tip after each admit.
     let reduced_checkpoint_path = snapshot_dir.join("reduced-checkpoint.redb");
-    let reduced_checkpoint = if reduced_checkpoint_path.exists() {
+    let mut reduced_checkpoint = if reduced_checkpoint_path.exists() {
         Some(
             ade_runtime::chaindb::ReducedUtxoCheckpoint::open(&reduced_checkpoint_path)
                 .map_err(|e| NodeLifecycleError::ChainDbOpen(format!("reduced checkpoint: {e:?}")))?,
@@ -485,6 +485,19 @@ async fn run_node_lifecycle_inner(
         NodeStart::FirstRun => first_run_mithril_bootstrap(cli, &chaindb, &mut wal)?,
         NodeStart::WarmStart => warm_start_recovery(&chaindb, &wal)?,
     };
+
+    // ECA-5: on a true FirstRun the line-461 binding ran against an empty store dir (the bootstrap had
+    // not run yet) -> None. first_run_mithril_bootstrap (above) has now built the live reduced checkpoint
+    // at store_dir/reduced-checkpoint.redb. Re-open it so the EVIEW authority-preparation seam is armed --
+    // without this, a FirstRun that catches up across an epoch boundary sees a None reduced_checkpoint in
+    // the seam's (eview, reduced_checkpoint, authority) gate, no-ops, and fails OutsideForecastRange.
+    if reduced_checkpoint.is_none() && reduced_checkpoint_path.exists() {
+        reduced_checkpoint = Some(
+            ade_runtime::chaindb::ReducedUtxoCheckpoint::open(&reduced_checkpoint_path).map_err(|e| {
+                NodeLifecycleError::ChainDbOpen(format!("reduced checkpoint (post-bootstrap): {e:?}"))
+            })?,
+        );
+    }
 
     // 6. Both arms CONVERGE here into the one relay run loop (CN-NODE-02): no
     //    arm prints-and-exits any more.
@@ -572,6 +585,16 @@ async fn run_node_lifecycle_inner(
                         asc: sidecar.active_slots_coeff,
                         replay_scratch_path: resolve_store_dir(cli)?
                             .join("eview-replay-scratch.redb"),
+                        next_epoch_bridge: chaindb
+                            .get_bootstrap_next_epoch_authority(&sidecar.anchor_fp)
+                            .ok()
+                            .flatten()
+                            .and_then(|b| {
+                                ade_ledger::bootstrap_bridge::decode_bootstrap_next_epoch_authority(
+                                    &b,
+                                )
+                                .ok()
+                            }),
                     })
                 }
                 _ => None,
@@ -757,6 +780,16 @@ async fn run_node_lifecycle_inner(
                         protocol_params_hash: sidecar.protocol_params_hash.clone(),
                         asc: sidecar.active_slots_coeff,
                         replay_scratch_path: snapshot_dir.join("eview-replay-scratch.redb"),
+                        next_epoch_bridge: chaindb
+                            .get_bootstrap_next_epoch_authority(&sidecar.anchor_fp)
+                            .ok()
+                            .flatten()
+                            .and_then(|b| {
+                                ade_ledger::bootstrap_bridge::decode_bootstrap_next_epoch_authority(
+                                    &b,
+                                )
+                                .ok()
+                            }),
                     })
                 }
                 _ => None,
@@ -1625,7 +1658,7 @@ fn maybe_activate_epoch_boundary(
 /// exceeds the schedule's last summary) and gap-filling (appends every intermediate epoch), so a live
 /// per-boundary append and a warm-start single reconstruction yield byte-identical summaries. No
 /// flag/clock/peer input -- the horizon extends ONLY after (and to match) a durable authority promotion.
-fn extend_schedule_to_epoch(era_schedule: &mut EraSchedule, target: EpochNo) {
+pub(crate) fn extend_schedule_to_epoch(era_schedule: &mut EraSchedule, target: EpochNo) {
     let (anchor, system_start, new_eras) = {
         let eras = era_schedule.eras();
         let seed = &eras[0];
@@ -2107,7 +2140,17 @@ pub async fn run_relay_loop_with_sched(
                         act.pending_reselection = false;
                     }
                 } else {
-                    run_node_sync(source, state, chaindb, wal, &era_schedule, authority.ledger_view())
+                    run_node_sync(
+                        source,
+                        state,
+                        chaindb,
+                        wal,
+                        &mut era_schedule,
+                        None,
+                        Some(&mut authority),
+                        eview_activation,
+                        reduced_checkpoint,
+                    )
                         .await
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
                     // S3f-4d-mat-2c (DC-EPOCH-11): after the durable admit, advance the live

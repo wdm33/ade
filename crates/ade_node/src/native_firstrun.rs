@@ -498,7 +498,7 @@ where
     // 8. S1b: assemble + atomically persist through the single closed
     //    composition. The WAL commit-point inside is the SOLE discovery gate;
     //    any failure before it leaves NO bootable partial authority state.
-    bootstrap_from_native_mithril_snapshot(
+    let output = bootstrap_from_native_mithril_snapshot(
         &s1a,
         s1a_commitment,
         utxo,
@@ -513,7 +513,63 @@ where
     )
     .map_err(|e: NativeMithrilBootstrapError| {
         NativeFirstRunError::NativeBootstrap(format!("{e:?}"))
-    })
+    })?;
+
+    // 9. ECA-5 (DC-EPOCH-15): build + persist the one-time bootstrap BRIDGE -- the seed+1 leadership
+    //    projected from the imported MARK snapshot (`s1a.mark_pool_distr`), bound to the SAME `anchor_fp`
+    //    as the seed sidecar. The selector promotes it for the FIRST boundary (seed -> seed+1); the +2
+    //    window-replay is the authority for seed+2 and later. Persisted now so warm-start recovers the
+    //    SAME selector decision from durable bytes. VRFs come from the durable cert-state registrations
+    //    (already validated by the mark<->nesPd cross-check); the leadership nonce is the candidate nonce
+    //    (the next epoch's frozen eta0).
+    {
+        use ade_ledger::bootstrap_bridge as bb;
+        let mut pool_distribution: std::collections::BTreeMap<
+            ade_types::Hash28,
+            ade_ledger::consensus_view::PoolEntry,
+        > = std::collections::BTreeMap::new();
+        let mut total: u64 = 0;
+        for (pid, (stake, vrf)) in &s1a.mark_pool_distr {
+            pool_distribution.insert(
+                pid.0.clone(),
+                ade_ledger::consensus_view::PoolEntry {
+                    active_stake: *stake,
+                    vrf_keyhash: vrf.clone(),
+                },
+            );
+            total = total.saturating_add(*stake);
+        }
+        // The seed+1 epoch nonce (eta0) is the Praos epoch-boundary COMBINATION of the candidate nonce
+        // and the previous-epoch (last-epoch-block / prev-hash) nonce: eta0(N+1) = candidate (XOR-hash)
+        // last_epoch_block, where the combine is blake2b_256(a || b) over the two 32-byte nonces;
+        // extraEntropy is Neutral on preview. The bare candidate is the WRONG input -- it omits the
+        // prev-hash entropy the real chain folds in, so the N+1 header leader-VRF checks would fail.
+        let eta0_next = {
+            let mut buf = [0u8; 64];
+            buf[0..32].copy_from_slice(&s1a.praos_nonces.candidate.0);
+            buf[32..64].copy_from_slice(&s1a.praos_nonces.last_epoch_block.0);
+            ade_crypto::blake2b_256(&buf)
+        };
+        let bridge = bb::build_bootstrap_next_epoch_authority(
+            output.seed_epoch_consensus_inputs.anchor_fp.clone(),
+            ade_types::EpochNo(s1a.epoch.0 + 1),
+            bb::BridgeSourceKind::ImportedMarkSnapshot,
+            binding.certified_point.slot,
+            binding.certified_point.block_hash.clone(),
+            output.seed_epoch_consensus_inputs.genesis_hash.clone(),
+            output.seed_epoch_consensus_inputs.protocol_params_hash.clone(),
+            output.seed_epoch_consensus_inputs.active_slots_coeff,
+            ade_core::consensus::praos_state::Nonce(eta0_next),
+            total,
+            pool_distribution,
+        );
+        let bytes = bb::encode_bootstrap_next_epoch_authority(&bridge);
+        snapshot_store
+            .put_bootstrap_next_epoch_authority(&bridge.anchor_fp, &bytes)
+            .map_err(|e| NativeFirstRunError::NativeBootstrap(format!("bridge persist: {e:?}")))?;
+    }
+
+    Ok(output)
 }
 
 #[cfg(test)]

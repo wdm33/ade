@@ -564,6 +564,12 @@ mod tests {
         pool_distr.insert(pool(0x01), (1_000u64, Hash32([0x07; 32])));
         pool_distr.insert(pool(0x05), (2_500u64, Hash32([0x08; 32])));
 
+        // ECA-5: the MARK (seed+1) leadership — same pools/VRFs as nesPd (so the VRF cross-check passes),
+        // distinct next-epoch stakes.
+        let mut mark_pool_distr: BTreeMap<PoolId, (u64, Hash32)> = BTreeMap::new();
+        mark_pool_distr.insert(pool(0x01), (1_100u64, Hash32([0x07; 32])));
+        mark_pool_distr.insert(pool(0x05), (2_700u64, Hash32([0x08; 32])));
+
         let mut block_production: BTreeMap<PoolId, u64> = BTreeMap::new();
         block_production.insert(pool(0x01), 3);
 
@@ -584,6 +590,7 @@ mod tests {
                 last_epoch_block: nonce(0x55),
             },
             pool_distr,
+            mark_pool_distr,
             protocol_params: pp,
             reserves: Coin(13_000_000_000_000_000),
             treasury: Coin(1_000_000_000_000),

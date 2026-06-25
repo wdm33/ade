@@ -377,14 +377,17 @@ fn extract_praos_nonces_v2(hs: &[u8]) -> R<PraosNonces> {
         b.copy_from_slice(&hs[o + 4..o + 36]);
         Nonce(b)
     };
-    // Nonce field order checked against the live preview node (cardano-cli query protocol-state,
-    // epoch 1338). The two epoch-FIXED nonces cross-check by value: epochNonce (the leader-VRF eta0)
-    // is tail[1] and lastEpochBlockNonce is tail[4]. The prior tail[2]=epoch mapping fed the wrong
-    // eta0 to forward header validation -> VrfCert(VerificationFailed) on the real chain.
+    // Nonce field order checked against the live preview node (cardano-cli query protocol-state).
+    // Record order is [candidate, epoch, evolving, lab, lastEpochBlock]: epochNonce (the leader-VRF
+    // eta0) is tail[1] and lastEpochBlockNonce is tail[4] (both cross-checked by value), and the
+    // CANDIDATE is tail[0] -- PROVEN by value: eta0(N+1) = blake2b(tail[0] || tail[4]) reproduces the
+    // live node's epoch nonce for the next epoch. The prior candidate=tail[2] mapping (evolving and
+    // candidate swapped) fed the wrong candidate into the seed+1 eta0 combination ->
+    // VrfCert(VerificationFailed) on the first post-boundary block.
     Ok(PraosNonces {
-        evolving: nonce_at(tail[0]),
+        candidate: nonce_at(tail[0]),
         epoch: nonce_at(tail[1]),
-        candidate: nonce_at(tail[2]),
+        evolving: nonce_at(tail[2]),
         lab: nonce_at(tail[3]),
         last_epoch_block: nonce_at(tail[4]),
     })
@@ -723,6 +726,9 @@ pub struct NativeSnapshotNonUtxoState {
     pub praos_nonces: PraosNonces,
     /// `nesPd` (PoolDistr): pool -> (active stake, VRF) — the VRF bindings.
     pub pool_distr: BTreeMap<PoolId, (u64, Hash32)>,
+    /// ECA-5 (DC-EPOCH-15): the MARK stake snapshot's PoolDistr — the seed+1 (next-epoch) leadership,
+    /// the BOOTSTRAP BRIDGE authority. `calculatePoolDistr(ssStakeMark)`: pool -> (active stake, VRF).
+    pub mark_pool_distr: BTreeMap<PoolId, (u64, Hash32)>,
     /// The Conway current protocol parameters (`utxosGovState.curPParams`).
     pub protocol_params: ProtocolParameters,
     /// `esAccountState.reserves`.
@@ -734,6 +740,78 @@ pub struct NativeSnapshotNonUtxoState {
     /// DIAGNOSTIC evidence only (never a verdict): the pool reward-account network-nibble
     /// distribution. `network_id` above (manifest-derived) is the sole network authority.
     pub reward_nibble_observation: RewardNibbleObservation,
+}
+
+/// ECA-5 piece (a): decode the MARK stake snapshot (`ssStakeMark`, the seed+1 leadership) and compute
+/// its PoolDistr. In this ledger version `SnapShot = array(2)[ssStake: map(StakeCredential -> [Coin,
+/// PoolId]), ssPoolParams: map(PoolId -> PoolParams)]` -- stake + delegation are COMBINED in ssStake.
+/// Active stake per pool is `calculatePoolDistr`: sum the coin of every credential delegated to the
+/// pool. The per-pool VRF is taken from the durable cert-state registrations (`cert_pool_vrf`) because
+/// this version's ssPoolParams is not vrf-first like the cert-state encoding; that coherence is the
+/// mark<->nesPd VRF cross-check. Pools with zero stake (or no cert-state registration) are dropped.
+/// Derived from the MARK snapshot + the durable cert-state ALONE -- never nesPd / window-replay / an oracle.
+fn read_mark_snapshot_pool_distr(
+    d: &[u8],
+    o: &mut usize,
+    cert_pool_vrf: &BTreeMap<PoolId, Hash32>,
+) -> R<BTreeMap<PoolId, (u64, Hash32)>> {
+    let sn = array_len(d, o, "mark.SnapShot")?;
+    // This ledger version's SnapShot = array(2)[ssStake, ssPoolParams] (stake + delegation COMBINED).
+    if sn < 2 {
+        return Err(malformed(format!("mark.SnapShot arity {sn} < 2")));
+    }
+    // map0 = ssStake: map(StakeCredential -> [Coin, PoolId]) -- stake + delegation in one entry.
+    // `calculatePoolDistr`: sum each delegated credential's coin into its pool.
+    let mut pool_stake: BTreeMap<PoolId, u64> = BTreeMap::new();
+    map_each(d, o, "mark.stake", |o| {
+        let _cred = read_stake_cred(d, o)?; // key: array(2)[variant, hash28]
+        expect_array(d, o, 2, "mark.stake.val")?; // value: [coin, pool]
+        let coin = read_u64(d, o, "mark.stake.coin")?;
+        let pool = PoolId(hash28(read_fixed_bytes(d, o, 28, "mark.stake.pool")?));
+        let e = pool_stake.entry(pool).or_insert(0u64);
+        *e = e.saturating_add(coin);
+        Ok(())
+    })?;
+    // map1 = ssPoolParams: this ledger version encodes it differently (NOT vrf-first like the cert-state
+    // pool registrations), so the VRF is taken from the durable cert-state registrations -- which decode
+    // correctly and whose coherence with this PoolDistr is the mark<->nesPd VRF cross-check. Skip map1.
+    for _ in 1..sn {
+        skip_item(d, o)?;
+    }
+    // build pool -> (active_stake, vrf). A staked pool with no cert-state registration (retired between the
+    // mark snapshot and the seed point) cannot lead in seed+1 -> omit it (never fabricate a VRF).
+    let mut out: BTreeMap<PoolId, (u64, Hash32)> = BTreeMap::new();
+    for (pool, st) in pool_stake {
+        if st == 0 {
+            continue;
+        }
+        if let Some(vrf) = cert_pool_vrf.get(&pool) {
+            out.insert(pool, (st, vrf.clone()));
+        }
+    }
+    Ok(out)
+}
+
+/// StakeCredential = `array(2)[variant(0=Key,1=Script), bytes(28)]`. The (variant, hash) tuple is the
+/// aggregation key -- a key-hash cred and a script-hash cred sharing the same 28 bytes are DISTINCT.
+fn read_stake_cred(d: &[u8], o: &mut usize) -> R<(u64, Vec<u8>)> {
+    expect_array(d, o, 2, "stakeCred")?;
+    let variant = read_u64(d, o, "stakeCred.variant")?;
+    let hash = read_fixed_bytes(d, o, 28, "stakeCred.hash")?;
+    Ok((variant, hash))
+}
+
+/// `nn`-error wrapper for [`read_mark_snapshot_pool_distr`] (mirrors `read_pool_distr_nn`).
+fn read_mark_snapshot_pool_distr_nn(
+    d: &[u8],
+    o: &mut usize,
+    cert_pool_vrf: &BTreeMap<PoolId, Hash32>,
+) -> Rn<BTreeMap<PoolId, (u64, Hash32)>> {
+    read_mark_snapshot_pool_distr(d, o, cert_pool_vrf).map_err(|e| match e {
+        LedgerDbStateError::ZeroVrf(p) => NativeNonUtxoError::ZeroVrf(p),
+        LedgerDbStateError::MalformedCbor(s) => NativeNonUtxoError::MalformedCbor(s),
+        other => nn_malformed(format!("mark snapshot: {other:?}")),
+    })
 }
 
 /// Decode the V2 LedgerDB `state` CBOR into the COMPLETE native non-UTxO ledger state +
@@ -791,7 +869,21 @@ pub fn decode_native_nonutxo_state(
     let (pool, delegation) = nn_read_cert_state(d, o)?;
     // UTxOState = array(6)[utxo, deposited, fees, govState, incrStake, donation]
     let protocol_params = read_conway_pparams_from_utxo_state(d, o, network_id)?;
-    skip_item(d, o)?; // EpochState.snapshots
+    // EpochState.snapshots = SnapShots = array(4)[ssStakeMark, ssStakeSet, ssStakeGo, ssFee] (this ledger
+    // version caches NO mark PoolDistr). ECA-5 piece (a): decode ssStakeMark -> the seed+1 leadership
+    // bridge (calculatePoolDistr); skip set/go/fee.
+    // SnapShots = array(4)[ssStakeMark, ssStakeSet, ssStakeGo, ssFee]; ssStakeMark -> the seed+1 bridge.
+    // The seed+1 leadership VRFs come from the durable cert-state pool registrations.
+    let cert_pool_vrf: BTreeMap<PoolId, Hash32> = pool
+        .pools
+        .iter()
+        .map(|(p, pp)| (p.clone(), pp.vrf_hash.clone()))
+        .collect();
+    nn_expect_array(d, o, 4, "EpochState.snapshots")?;
+    let mark_pool_distr = read_mark_snapshot_pool_distr_nn(d, o, &cert_pool_vrf)?;
+    skip_item(d, o)?; // ssStakeSet
+    skip_item(d, o)?; // ssStakeGo
+    skip_item(d, o)?; // ssFee
     skip_item(d, o)?; // EpochState.nonMyopic
     skip_item(d, o)?; // nes.rewardUpdate
     // nes[5] = [PoolDistr, totalActiveStake]
@@ -808,6 +900,16 @@ pub fn decode_native_nonutxo_state(
     for (pid, (_, vrf)) in &pool_distr {
         if let Some(pp) = cert_state.pool.pools.get(pid) {
             if &pp.vrf_hash != vrf {
+                return Err(NativeNonUtxoError::PoolDistrVrfMismatch(pid.clone()));
+            }
+        }
+    }
+    // ECA-5 cross-check: every pool present in BOTH the MARK PoolDistr and nesPd must share the SAME VRF
+    // (a pool's VRF is stable across the one-epoch gap unless it re-registered; a mismatch means the MARK
+    // decode drifted). TERMINAL on mismatch — the bridge authority is only as trustworthy as this.
+    for (pid, (_, mark_vrf)) in &mark_pool_distr {
+        if let Some((_, nes_vrf)) = pool_distr.get(pid) {
+            if mark_vrf != nes_vrf {
                 return Err(NativeNonUtxoError::PoolDistrVrfMismatch(pid.clone()));
             }
         }
@@ -847,6 +949,7 @@ pub fn decode_native_nonutxo_state(
         cert_state,
         praos_nonces,
         pool_distr,
+        mark_pool_distr,
         protocol_params,
         reserves,
         treasury,

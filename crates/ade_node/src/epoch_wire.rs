@@ -15,7 +15,7 @@
 //! `derive_stake_by_pool` (the live cross-check), and `activate_at_boundary` (`epoch_activate`).
 
 use ade_ledger::block_validity::header_input::decode_block;
-use ade_ledger::reduced_epoch_view::EpochConsensusView;
+use ade_ledger::reduced_epoch_view::{consensus_profile_commitment, EpochConsensusView};
 use ade_ledger::reduced_snapshot::SnapshotPhase;
 use ade_ledger::state::LedgerState;
 use ade_runtime::chaindb::{
@@ -27,10 +27,14 @@ use ade_types::{CardanoEra, EpochNo, Hash32, SlotNo};
 use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::events::Point;
 use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
+use ade_ledger::bootstrap_bridge::BootstrapNextEpochAuthority;
 use ade_ledger::wal::WalEntry;
+use ade_types::tx::{Coin, PoolId};
 
 use crate::epoch_activate::{activate_at_boundary, recover_at_boundary, BoundaryActivationOutcome};
-use crate::epoch_activation::{ActiveEpochAuthority, EpochViewActivationError};
+use crate::epoch_activation::{
+    activation_record_for, ActiveEpochAuthority, EpochViewActivationError,
+};
 use crate::epoch_candidate::{derive_candidate, CandidateDeriveError, CandidateProfile};
 use crate::epoch_source_window::{
     target_epoch_for_source, validate_source_window, ActivationSourceWindow, SourceWindowBlock,
@@ -59,6 +63,10 @@ pub struct EviewActivationInputs {
     /// The durable path for the FRESH replay checkpoint the authoritative window replay
     /// materializes (a separate redb -- never the live checkpoint).
     pub replay_scratch_path: std::path::PathBuf,
+    /// ECA-5 (DC-EPOCH-15): the one-time bootstrap BRIDGE -- the seed+1 leadership projected from the
+    /// imported MARK snapshot, recovered from durable storage at relay-loop start (first-run OR warm-
+    /// start). `Some` for a native-Mithril-started node; the seam REQUIRES it for the first boundary.
+    pub next_epoch_bridge: Option<BootstrapNextEpochAuthority>,
 }
 
 impl EviewActivationInputs {
@@ -329,6 +337,27 @@ pub enum ActivationError {
     /// The atomic activation (derive -> predicate -> WAL -> promote) failed after the predicate
     /// passed -- a terminal halt.
     Activate(EpochViewActivationError),
+    /// ECA-5: the first post-boundary candidate's slot skips BEYOND the seed epoch's immediate
+    /// successor (N+2 or later) -- a far-future candidate must never force promotion; terminal.
+    CandidateSlotSkipsBoundary { candidate_epoch: EpochNo, seed_epoch: EpochNo },
+    /// ECA-5: the first post-boundary candidate's parent does NOT bind to the durable selected tip --
+    /// a forked / non-extending candidate must not force promotion; terminal.
+    CandidateParentNotDurableTip { candidate_parent: Hash32, durable_tip: Hash32 },
+    /// ECA-5: catching the live reduced checkpoint up to the durable tip (the seed-epoch window the
+    /// readiness witness needs) failed -- terminal.
+    LiveCheckpointAdvance(String),
+    /// ECA-5 (DC-EPOCH-15): the first boundary needs the bootstrap bridge (seed+1) but none was
+    /// recovered -- a native-Mithril node MUST have persisted it at bootstrap; terminal (no fallback).
+    BridgeMissing { target_epoch: EpochNo },
+    /// ECA-5: the recovered bridge answers for a DIFFERENT epoch than the first-boundary candidate --
+    /// terminal (the bridge is bound to seed+1 alone).
+    BridgeEpochMismatch {
+        bridge_epoch: EpochNo,
+        candidate_epoch: EpochNo,
+    },
+    /// ECA-5: projecting the bridge view to a `PoolDistrView` (or the WAL activation-record write)
+    /// failed -- terminal.
+    BridgeProjection(String),
 }
 
 /// S3f-4d-wire-3 (DC-EPOCH-11): the live boundary-activation orchestration -- the SINGLE entry
@@ -454,6 +483,134 @@ pub fn maybe_activate_first_boundary(
         wal_write,
     )?;
     Ok(Some(outcome))
+}
+
+/// ECA-5 authority-preparation seam: prepare the N+1 epoch authority for the FIRST post-boundary
+/// candidate, BEFORE that candidate's forecast/leader validation. The incoming header supplies ONLY its
+/// slot + parent (which durable transition to prepare) -- never stake/nonce/authority. The promotion
+/// derives EXCLUSIVELY from durable state (compute_first_window_bounds + try_activate_at_boundary over
+/// the N reduced checkpoint + canonical N window blocks + v4 sidecar geometry + cert-state/lineage), so
+/// it is replay-deterministic. Returns Ok(true) if it promoted (the caller MUST then extend the forecast
+/// schedule), Ok(false) for a no-op (not at the boundary / already promoted), or a TERMINAL
+/// ActivationError on a guard violation (parent not binding the durable tip, candidate skipping N+1).
+/// Replaces the deadlocked durable-tip-in-N+1 trigger for the FOLLOWER (a follower must validate the
+/// first N+1 header before it can admit it, so the tip can never enter N+1 on its own).
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_authority_for_candidate_slot(
+    inputs: &EviewActivationInputs,
+    era_schedule: &EraSchedule,
+    durable_tip_slot: SlotNo,
+    durable_tip_hash: &Hash32,
+    candidate_slot: SlotNo,
+    candidate_parent: &Hash32,
+    live: &ReducedUtxoCheckpoint,
+    chaindb: &dyn ChainDb,
+    active_view: &mut ActiveEpochAuthority,
+    wal_write: impl FnOnce(&WalEntry) -> bool,
+) -> Result<bool, ActivationError> {
+    // idempotent: once a view is promoted, nothing to prepare.
+    if active_view.is_promoted() {
+        return Ok(false);
+    }
+    let seed_epoch = inputs.seed_epoch;
+    // (a) the durable SELECTED tip must be in the seed epoch N -- the N window is complete only at N's end.
+    let tip_epoch = match era_schedule.locate(durable_tip_slot) {
+        Ok(loc) => loc.epoch,
+        Err(_) => return Ok(false),
+    };
+    if tip_epoch.0 != seed_epoch.0 {
+        return Ok(false);
+    }
+    // (b) the candidate slot must belong to EXACTLY epoch N+1 (extrapolated from the seed geometry).
+    let candidate_epoch = match era_schedule.locate(candidate_slot) {
+        Ok(loc) => loc.epoch,
+        Err(_) => return Ok(false),
+    };
+    if candidate_epoch.0 <= seed_epoch.0 {
+        return Ok(false); // still in N -- not a boundary candidate.
+    }
+    if candidate_epoch.0 != seed_epoch.0 + 1 {
+        return Err(ActivationError::CandidateSlotSkipsBoundary {
+            candidate_epoch,
+            seed_epoch,
+        });
+    }
+    // (c) the candidate parent must bind to the durable selected tip -- no fork can force promotion.
+    if candidate_parent != durable_tip_hash {
+        return Err(ActivationError::CandidateParentNotDurableTip {
+            candidate_parent: candidate_parent.clone(),
+            durable_tip: durable_tip_hash.clone(),
+        });
+    }
+    // (a)+(b)+(c) => the durable tip IS the last N block; the canonical N window is COMPLETE. Promote the
+    // N+1 authority from the durable BRIDGE -- the seed+1 leadership projected from the imported MARK
+    // snapshot at bootstrap (DC-EPOCH-15). The bridge is REQUIRED here; there is NO fallback to the +2
+    // window-replay (the leadership snapshot lag makes that derive seed+2, not seed+1). The live reduced
+    // checkpoint is NOT advanced here -- the first N+1 block's txs validate against the durable-tip UTxO,
+    // and the relay loop advances the checkpoint as it admits, so no pre-seal is needed.
+    let _ = (live, chaindb);
+    let bridge = match inputs.next_epoch_bridge.as_ref() {
+        Some(b) => b,
+        None => {
+            return Err(ActivationError::BridgeMissing {
+                target_epoch: candidate_epoch,
+            })
+        }
+    };
+    if bridge.target_epoch.0 != candidate_epoch.0 {
+        return Err(ActivationError::BridgeEpochMismatch {
+            bridge_epoch: bridge.target_epoch,
+            candidate_epoch,
+        });
+    }
+    // Bind the N+1 view from the bridge (phase = Mark: the seed+1 leadership IS the MARK snapshot).
+    let mut stake_by_pool: std::collections::BTreeMap<PoolId, Coin> = std::collections::BTreeMap::new();
+    let mut pool_vrf_keyhashes: std::collections::BTreeMap<PoolId, Hash32> =
+        std::collections::BTreeMap::new();
+    for (keyhash, entry) in &bridge.pool_distribution {
+        let pool = PoolId(keyhash.clone());
+        stake_by_pool.insert(pool.clone(), Coin(entry.active_stake));
+        pool_vrf_keyhashes.insert(pool, entry.vrf_keyhash.clone());
+    }
+    let profile_commitment = consensus_profile_commitment(
+        &bridge.genesis_hash,
+        &bridge.protocol_params_hash,
+        bridge.active_slots_coeff,
+    );
+    let source = EpochConsensusView::bind(
+        inputs.network_magic,
+        CardanoEra::Conway,
+        bridge.target_epoch,
+        Point {
+            slot: bridge.source_point_slot,
+            hash: bridge.source_point_hash.clone(),
+        },
+        bridge.canonical_commitment.clone(),
+        bridge.epoch_nonce.0.clone(),
+        SnapshotPhase::Mark,
+        stake_by_pool,
+        pool_vrf_keyhashes,
+        Coin(bridge.total_active_stake),
+        profile_commitment,
+    );
+    let projected = source
+        .to_pool_distr_view(
+            &bridge.genesis_hash,
+            &bridge.protocol_params_hash,
+            bridge.active_slots_coeff,
+        )
+        .map_err(|e| ActivationError::BridgeProjection(format!("{e:?}")))?;
+    // Durable-before-visible: write the WAL activation record BEFORE publishing the active view.
+    let record = activation_record_for(&source);
+    if !wal_write(&record) {
+        return Err(ActivationError::BridgeProjection(
+            "wal activation-record write rejected".to_string(),
+        ));
+    }
+    active_view
+        .promote(source, projected)
+        .map_err(ActivationError::Activate)?;
+    Ok(active_view.is_promoted())
 }
 
 /// EPOCH-CONTINUITY-ACTIVATION ECA-4 (DC-EPOCH-06): the WARM-START recovery twin of

@@ -260,6 +260,29 @@ impl ReducedUtxoCheckpoint {
         Ok(())
     }
 
+    /// ECA-5 (DC-EPOCH-15): seal the block-free TAIL of a completed source epoch -- advance the
+    /// last-advanced marker to `window_end` WITHOUT applying a block. The authority-preparation seam
+    /// calls this when the first post-boundary candidate (epoch N+1) proves epoch N is COMPLETE: the
+    /// slots between the last N block (the durable tip) and the seed-epoch end carry no blocks (the next
+    /// block is N+1), so there is no reduced delta -- only the readiness marker advances, satisfying
+    /// `verify_advanced_through(window_end)` without a block AT the boundary (a follower never admits an
+    /// N+1 block before promoting). A no-op if already advanced through `window_end` (never rewinds).
+    pub fn seal_window_tail(&self, window_end: SlotNo) -> Result<(), ReducedCheckpointError> {
+        if let Some(current) = self.last_advanced_slot()? {
+            if window_end.0 <= current.0 {
+                return Ok(());
+            }
+        }
+        let txn = self.db.begin_write().map_err(rerr)?;
+        {
+            let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            meta.insert(LAST_SLOT_KEY, window_end.0.to_be_bytes().as_slice())
+                .map_err(rerr)?;
+        }
+        txn.commit().map_err(rerr)?;
+        Ok(())
+    }
+
     /// S3f-4d-mat-3 (DC-EPOCH-11): re-materialize the live checkpoint to the sealed bootstrap
     /// baseline after a reorg rollback. Clears the live reduced table, copies the immutable
     /// bootstrap records back, and resets LAST_SLOT to SEED_SLOT -- so the advancer then replays

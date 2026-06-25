@@ -471,13 +471,36 @@ pub enum NodeSyncError {
 /// What this is NOT: not a verdict flow (no `derive_verdict` /
 /// `run_admission`), not a follower (`ade_core_interop::follow` is not
 /// validating sync), no forge, no produce. The tip is a durable-apply fact.
-pub async fn run_node_sync<D>(
+/// ECA-5 test shim: the pre-seam 6-arg run_node_sync shape (no eview seam; the supplied ledger_view
+/// drives validation). Lets the existing follow / rollback / re-announce tests exercise run_node_sync
+/// unchanged across the authority-preparation seam rewire.
+#[cfg(test)]
+async fn run_node_sync_no_eview<D>(
     source: &mut NodeBlockSource,
     state: &mut ForwardSyncState,
     chaindb: &D,
     wal: &mut dyn WalStore,
     era_schedule: &EraSchedule,
     ledger_view: &dyn LedgerView,
+) -> Result<Option<PumpTip>, NodeSyncError>
+where
+    D: ChainDb + SnapshotStore,
+{
+    let mut sched = era_schedule.clone();
+    run_node_sync(source, state, chaindb, wal, &mut sched, Some(ledger_view), None, None, None).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_node_sync<D>(
+    source: &mut NodeBlockSource,
+    state: &mut ForwardSyncState,
+    chaindb: &D,
+    wal: &mut dyn WalStore,
+    era_schedule: &mut EraSchedule,
+    ledger_view: Option<&dyn LedgerView>,
+    mut authority: Option<&mut crate::epoch_activation::ActiveEpochAuthority<'_>>,
+    eview: Option<&crate::epoch_wire::EviewActivationInputs>,
+    reduced_checkpoint: Option<&ade_runtime::chaindb::ReducedUtxoCheckpoint>,
 ) -> Result<Option<PumpTip>, NodeSyncError>
 where
     D: ChainDb + SnapshotStore,
@@ -516,6 +539,63 @@ where
         // The block bytes arrive already bare `[era, block]`: the wire feed
         // strips the BlockFetch tag-24 wrapper at the receive boundary
         // (CN-WIRE-12), and the in-memory feed yields bare directly.
+        // ECA-5 authority-preparation seam (DC-EPOCH-15): for the FIRST post-boundary candidate, derive +
+        // promote the N+1 authority from durable state + extend the forecast schedule BEFORE validating
+        // that candidate -- breaking the deadlock where the durable tip cannot enter N+1 because the first
+        // N+1 header fails the forecast. A no-op off the boundary; terminal on a guard violation (parent
+        // not binding the durable tip, candidate slot skipping N+1).
+        if let (Some(inputs), Some(live), Some(auth)) =
+            (eview, reduced_checkpoint, authority.as_deref_mut())
+        {
+            let decoded = ade_ledger::block_validity::decode_block(&block_bytes)
+                .map_err(|e| NodeSyncError::Pump(format!("eview decode: {e:?}")))?;
+            let candidate_parent = decoded
+                .prev_hash
+                .block_hash()
+                .cloned()
+                .unwrap_or(ade_types::Hash32([0; 32]));
+            if let Some(durable_tip) = chaindb
+                .tip()
+                .map_err(|e| NodeSyncError::Pump(format!("eview tip: {e:?}")))?
+            {
+                let promoted = crate::epoch_wire::prepare_authority_for_candidate_slot(
+                    inputs,
+                    era_schedule,
+                    durable_tip.slot,
+                    &durable_tip.hash,
+                    decoded.header_input.slot,
+                    &candidate_parent,
+                    live,
+                    chaindb,
+                    auth,
+                    |entry| wal.append(entry.clone()).is_ok(),
+                )
+                .map_err(|e| NodeSyncError::Pump(format!("eview prepare: {e:?}")))?;
+                if promoted {
+                    crate::node_lifecycle::extend_schedule_to_epoch(era_schedule, auth.epoch());
+                    // The followed-header leader-VRF check reads `state.receive.chain_dep.epoch_nonce`;
+                    // the follow path never advances it, so it stays the seed (N) eta0. At the boundary
+                    // promotion, sync it to the promoted view's eta0 (the bridge's seed+1 nonce) so N+1
+                    // header VRF inputs use the N+1 nonce -- else the first N+1 block fails VrfCert against
+                    // the stale N nonce.
+                    let eta0 = auth.promoted_source().map(|s| s.nonce.clone());
+                    if let Some(eta0) = eta0 {
+                        state.receive.chain_dep.epoch_nonce =
+                            ade_core::consensus::praos_state::Nonce(eta0.clone());
+                        state.receive.chain_dep.evolving_nonce =
+                            ade_core::consensus::praos_state::Nonce(eta0);
+                    }
+                }
+            }
+        }
+        // the validation view: the (possibly just-promoted) authority's view on the eview path, else the
+        // supplied ledger_view (the test / no-eview path).
+        let pump_view: &dyn LedgerView = match authority.as_deref() {
+            Some(auth) => auth.ledger_view(),
+            None => ledger_view.ok_or_else(|| {
+                NodeSyncError::Pump("run_node_sync: neither authority nor ledger_view supplied".into())
+            })?,
+        };
         let tip = pump_block(
             state,
             chaindb,
@@ -523,7 +603,7 @@ where
             &NoCheckpointSink,
             &block_bytes,
             era_schedule,
-            ledger_view,
+            pump_view,
         )
         .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?;
         if let Some(t) = tip {
@@ -1918,7 +1998,7 @@ mod tests {
             bytes: bytes.clone(),
         }]);
 
-        let tip = run_node_sync(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
+        let tip = run_node_sync_no_eview(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
             .await
             .expect("single-peer follow admits")
             .expect("tip advanced via pump_block");
@@ -2070,7 +2150,7 @@ mod tests {
         let mut state = fresh_state(c.epoch_nonce);
         let mut source = NodeBlockSource::in_memory(vec![bytes.clone()]);
 
-        let tip = run_node_sync(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
+        let tip = run_node_sync_no_eview(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
             .await
             .expect("sync ok")
             .expect("tip advanced");
@@ -2143,7 +2223,7 @@ mod tests {
             },
         ]);
 
-        let tip = run_node_sync(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
+        let tip = run_node_sync_no_eview(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
             .await
             .expect("sync ok (anchor rollback no-op, then forward admit)")
             .expect("tip advanced through pump_block after the no-op");
@@ -2183,7 +2263,7 @@ mod tests {
         // The SAME block twice: apply, then the echo.
         let mut source = NodeBlockSource::in_memory(vec![bytes.clone(), bytes.clone()]);
 
-        let tip = run_node_sync(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
+        let tip = run_node_sync_no_eview(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
             .await
             .expect("sync survives the re-announced block (no fail-close)")
             .expect("tip advanced once");
@@ -2275,7 +2355,7 @@ mod tests {
             // L4b durable apply over one ordered source.
             let mut state = fresh_state(c.epoch_nonce);
             let mut source = NodeBlockSource::in_memory(vec![bytes.clone()]);
-            run_node_sync(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
+            run_node_sync_no_eview(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
                 .await
                 .expect("sync ok")
                 .expect("tip advanced")
@@ -2319,7 +2399,7 @@ mod tests {
         let mut state = fresh_state([0xEE; 32]);
         let mut source = NodeBlockSource::in_memory(vec![vec![0xDE, 0xAD, 0xBE, 0xEF]]);
 
-        let r = run_node_sync(&mut source, &mut state, &chaindb, &mut wal, &sched, &view).await;
+        let r = run_node_sync_no_eview(&mut source, &mut state, &chaindb, &mut wal, &sched, &view).await;
         assert!(
             matches!(r, Err(NodeSyncError::Pump(_))),
             "undecodable block must fail closed, got {r:?}"

@@ -237,7 +237,20 @@ fn build_state(k: &Knobs) -> Vec<u8> {
         .clone()
         .unwrap_or_else(|| concat(&[arr(2), uint(k.treasury), uint(k.reserves)]));
     // EpochState = [acct, LedgerState, snaps, nonmyopic]
-    let es = concat(&[arr(4), acct, ls, arr(0), arr(0)]);
+    // SnapShots = array(4)[ssStakeMark, ssStakeSet, ssStakeGo, ssFee]; the MARK = array(2)[ssStake:
+    // map(StakeCredential -> [Coin, PoolId]), ssPoolParams]. The decode reads the mark's ssStake (the
+    // seed+1 leadership, here one credential delegating COIN to POOL_ID) and skips set/go/fee.
+    let mark = concat(&[
+        arr(2),
+        concat(&[
+            map(1),
+            concat(&[arr(2), uint(0), bytes(&[0x33; 28])]),
+            concat(&[arr(2), uint(1_000_000), bytes(&POOL_ID)]),
+        ]),
+        map(0), // ssPoolParams (skipped; the VRF comes from the cert-state registration)
+    ]);
+    let snaps = concat(&[arr(4), mark, map(0), map(0), uint(0)]);
+    let es = concat(&[arr(4), acct, ls, snaps, arr(0)]);
 
     // PoolDistr wrapper = [poolDistr_map(1), totalActiveStake]
     let pd = concat(&[
@@ -301,10 +314,11 @@ fn happy_minimal_state_decodes_all_fields() {
     assert_eq!(s.cert_state.pool.pools.len(), 1, "the FULL CertState carries the pool");
     assert_eq!(s.cert_state.delegation.delegations.len(), 1);
     assert_eq!(s.pool_distr.len(), 1);
-    // all five nonces present (record order 1..=5 from the fixture).
-    assert_eq!(s.praos_nonces.evolving.0, [1u8; 32]);
-    assert_eq!(s.praos_nonces.candidate.0, [2u8; 32]);
-    assert_eq!(s.praos_nonces.epoch.0, [3u8; 32]);
+    // Record order [candidate, epoch, evolving, lab, lastEpochBlock] (tail[0..5]). candidate=tail[0]
+    // and epoch=tail[1] are value-proven against the live node: eta0(N+1) = blake2b(candidate || leb).
+    assert_eq!(s.praos_nonces.candidate.0, [1u8; 32]);
+    assert_eq!(s.praos_nonces.epoch.0, [2u8; 32]);
+    assert_eq!(s.praos_nonces.evolving.0, [3u8; 32]);
     assert_eq!(s.praos_nonces.lab.0, [4u8; 32]);
     assert_eq!(s.praos_nonces.last_epoch_block.0, [5u8; 32]);
     // protocol params decoded natively (not defaulted).

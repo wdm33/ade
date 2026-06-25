@@ -312,7 +312,7 @@ async fn singleproducer_rollback_refused_by_run_node_sync() {
     let mut wal = VecWal::default();
     // run_node_sync is the SP/Unknown path -- a RollBack item fails closed.
     let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(100, 0xF0)]);
-    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &min_schedule(), &view_stub())
+    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None)
         .await
         .expect_err("SP/Unknown do not follow peer rollbacks");
     assert!(matches!(err, NodeSyncError::UnexpectedRollback), "got {err:?}");
@@ -339,7 +339,7 @@ async fn ak_s2_rollback_to_recovered_anchor_is_idempotent_noop() {
     let ledger_fp_before = fingerprint(&fwd.receive.ledger).combined;
     let chain_dep_before = fwd.receive.chain_dep.clone();
     let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(188, 0x2e)]);
-    let out = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &min_schedule(), &view_stub())
+    let out = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None)
         .await
         .expect("rollback-to-recovered-anchor is an accepted no-op");
     assert!(out.is_none(), "a no-op rollback advances no tip");
@@ -359,7 +359,7 @@ async fn ak_s2_rollback_to_origin_fails_closed_even_with_anchor() {
     fwd.recovered_anchor = Some(anchor_tip(188, 0x2e));
     let mut wal = VecWal::default();
     let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::RollBack { peer: "peer-1".to_string(), point: WirePoint::Origin }]);
-    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &min_schedule(), &view_stub())
+    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None)
         .await
         .expect_err("Origin rollback must fail closed");
     assert!(matches!(err, NodeSyncError::UnexpectedRollback), "got {err:?}");
@@ -381,7 +381,7 @@ async fn ak_s2_non_anchor_rollback_fails_closed_slot_and_hash_bound() {
         fwd.recovered_anchor = Some(anchor.clone());
         let mut wal = VecWal::default();
         let mut src = NodeBlockSource::in_memory_items(vec![item]);
-        let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &min_schedule(), &view_stub())
+        let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None)
             .await
             .unwrap_err();
         assert!(
@@ -400,7 +400,7 @@ async fn ak_s2_no_recovered_anchor_still_fails_closed() {
     assert!(fwd.recovered_anchor.is_none());
     let mut wal = VecWal::default();
     let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(188, 0x2e)]);
-    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &min_schedule(), &view_stub())
+    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None)
         .await
         .expect_err("no recovered anchor => any rollback fails closed");
     assert!(matches!(err, NodeSyncError::UnexpectedRollback), "got {err:?}");
@@ -421,7 +421,7 @@ async fn ak_s2_after_anchor_noop_forward_block_reaches_pump_block_validation_hol
         rollback_item(188, 0x2e),                          // anchor no-op
         NodeSyncItem::Block { peer: "peer-1".to_string(), bytes: vec![0xDE, 0xAD, 0xBE, 0xEF] }, // malformed -> pump_block rejects
     ]);
-    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &min_schedule(), &view_stub())
+    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None)
         .await
         .expect_err("the forward block reaches pump_block, which rejects the malformed bytes");
     assert!(

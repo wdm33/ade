@@ -188,6 +188,26 @@ pub trait SnapshotStore: Send + Sync {
         anchor_fp: &Hash32,
     ) -> Result<Option<Vec<u8>>, ChainDbError>;
 
+    /// ECA-5 (DC-EPOCH-15): persist the one-time bootstrap bridge authority (the seed+1 leadership
+    /// projected from the imported MARK snapshot), keyed by the SAME `anchor_fp` as the seed sidecar,
+    /// in its OWN disjoint anchor-fp space. Idempotent on identical bytes; conflicting bytes ->
+    /// InvalidOperation. Default: no-op (non-persisting impls carry no bridge).
+    fn put_bootstrap_next_epoch_authority(
+        &self,
+        _anchor_fp: &Hash32,
+        _bytes: &[u8],
+    ) -> Result<(), ChainDbError> {
+        Ok(())
+    }
+
+    /// Look up the bootstrap bridge authority by `anchor_fp`. `Ok(None)` if absent. Default: absent.
+    fn get_bootstrap_next_epoch_authority(
+        &self,
+        _anchor_fp: &Hash32,
+    ) -> Result<Option<Vec<u8>>, ChainDbError> {
+        Ok(None)
+    }
+
     /// All anchor fingerprints with a stored seed-epoch consensus-inputs
     /// sidecar, ascending. PHASE4-N-F-C L3 (W2): a read-only **discovery**
     /// surface for warm-start recovery — it locates the persisted bootstrap
