@@ -2,7 +2,7 @@
 
 A Cardano block-producing node written in Rust.
 
-> **Status**: Early stage — scaffolding and core type definitions in progress.
+> **Status**: Follows the Cardano **preview** testnet — bootstraps from a verified Mithril snapshot, follows the chain, and recovers across restarts. See **[Getting Started on Preview](docs/getting-started-preview.md)**.
 
 ## Crate Structure
 
@@ -24,6 +24,11 @@ cargo test
 cargo clippy
 cargo fmt
 ```
+
+## Getting started
+
+To run a node on the Cardano preview testnet — fetch a verified Mithril snapshot, bootstrap, and
+follow the chain in three commands — see **[Getting Started on Preview](docs/getting-started-preview.md)**.
 
 ## License
 
