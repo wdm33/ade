@@ -108,6 +108,7 @@ mod tests {
         HeaderInput {
             slot: SlotNo(slot),
             block_no: BlockNo(block_no),
+            prev_hash: Hash32([0u8; 32]),
             body_hash: Hash32([0x55; 32]),
             issuer_pool: Hash28([0xAA; 28]),
             op_cert_kes_period: 0,
@@ -148,6 +149,7 @@ mod tests {
         let h = HeaderInput {
             slot: SlotNo(7),
             block_no: BlockNo(51),
+            prev_hash: Hash32([0u8; 32]),
             body_hash: Hash32([0x55; 32]),
             issuer_pool: Hash28([0xAA; 28]),
             op_cert_kes_period: 0,

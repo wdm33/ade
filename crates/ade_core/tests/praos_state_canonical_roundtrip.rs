@@ -33,6 +33,7 @@ fn layout_fixture() -> PraosChainDepState {
     counters.upsert_strict(pool(0x10), 9, 33).unwrap();
 
     PraosChainDepState {
+        last_epoch_block_nonce: None,
         evolving_nonce: nonce(0x01),
         candidate_nonce: nonce(0x02),
         epoch_nonce: nonce(0x03),
@@ -47,8 +48,8 @@ fn layout_fixture() -> PraosChainDepState {
 
 /// Hex of the canonical CBOR encoding of `layout_fixture()`.
 ///
-/// Layout (CBOR array of 9 elements, definite-length):
-///   89                                  # array(9)
+/// Layout (CBOR array of 10 elements, definite-length):
+///   8a                                  # array(10)
 ///   5820 01..(32 bytes)..               # evolving_nonce  (bytes 32)
 ///   5820 02..(32 bytes)..               # candidate_nonce (bytes 32)
 ///   5820 03..(32 bytes)..               # epoch_nonce     (bytes 32)
@@ -61,8 +62,9 @@ fn layout_fixture() -> PraosChainDepState {
 ///     83 581c 10..(28 bytes).. 07 0b    # entry: pool 0x10*28, kes 7,  ctr 11
 ///     83 581c 10..(28 bytes).. 09 1821  # entry: pool 0x10*28, kes 9,  ctr 33
 ///     83 581c 20..(28 bytes).. 03 16    # entry: pool 0x20*28, kes 3,  ctr 22
+///   f6                                  # last_epoch_block_nonce = null (None)
 const LAYOUT_FIXTURE_HEX: &str = "\
-89\
+8a\
 5820 0101010101010101010101010101010101010101010101010101010101010101 \
 5820 0202020202020202020202020202020202020202020202020202020202020202 \
 5820 0303030303030303030303030303030303030303030303030303030303030303 \
@@ -74,7 +76,8 @@ const LAYOUT_FIXTURE_HEX: &str = "\
 83 \
 83 581c 10101010101010101010101010101010101010101010101010101010 07 0b \
 83 581c 10101010101010101010101010101010101010101010101010101010 09 1821 \
-83 581c 20202020202020202020202020202020202020202020202020202020 03 16";
+83 581c 20202020202020202020202020202020202020202020202020202020 03 16 \
+f6";
 
 fn hex_decode(s: &str) -> Vec<u8> {
     let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
@@ -167,6 +170,7 @@ fn roundtrip_populated_state() {
     counters.upsert_strict(pool(4), 0, 4).unwrap();
     counters.upsert_strict(pool(5), 0, 5).unwrap();
     let s = PraosChainDepState {
+        last_epoch_block_nonce: None,
         evolving_nonce: nonce(0xaa),
         candidate_nonce: nonce(0xbb),
         epoch_nonce: nonce(0xcc),
@@ -284,14 +288,14 @@ fn decode_rejects_unknown_discriminant() {
 #[test]
 fn decode_rejects_short_array() {
     // CBOR array(3) of three uint(0): 0x83 0x00 0x00 0x00 — has 3 elements,
-    // not 9 as expected for PraosChainDepState.
+    // not 10 as expected for PraosChainDepState.
     let bytes = [0x83u8, 0x00, 0x00, 0x00];
     let result = decode_chain_dep_state(&bytes);
     assert!(
         matches!(
             result,
             Err(DecodeError::FieldCountMismatch {
-                expected: 9,
+                expected: 10,
                 actual: 3,
             })
         ),
@@ -317,6 +321,7 @@ fn op_cert_counter_map_iteration_is_deterministic() {
     b.upsert_strict(pool(0x05), 2, 1).unwrap();
 
     let sa = PraosChainDepState {
+        last_epoch_block_nonce: None,
         evolving_nonce: Nonce::ZERO,
         candidate_nonce: Nonce::ZERO,
         epoch_nonce: Nonce::ZERO,
@@ -328,6 +333,7 @@ fn op_cert_counter_map_iteration_is_deterministic() {
         op_cert_counters: a,
     };
     let sb = PraosChainDepState {
+        last_epoch_block_nonce: None,
         op_cert_counters: b,
         ..sa.clone()
     };

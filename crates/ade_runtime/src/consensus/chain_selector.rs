@@ -244,14 +244,13 @@ fn process_rollback(state: &mut OrchestratorState, req: &RollBackRequest) -> Cha
 fn process_epoch_boundary(
     state: &mut OrchestratorState,
     new_epoch: EpochNo,
-    last_block_of_prev_epoch: Option<EpochNo>,
+    _last_block_of_prev_epoch: Option<EpochNo>,
 ) -> Result<(), OrchestratorError> {
+    // The nonce transition derives the bookkeeping `last_epoch_block` from
+    // `new_epoch`; the explicit operand is no longer threaded (DC-EPOCH-16).
     let new_chain_dep = apply_nonce_input(
         &state.chain_dep,
-        &NonceInput::EpochBoundary {
-            new_epoch,
-            last_block_of_prev_epoch,
-        },
+        &NonceInput::EpochBoundary { new_epoch },
     )
     .map_err(OrchestratorError::NonceEvolution)?;
     state.chain_dep = new_chain_dep;
@@ -353,6 +352,7 @@ mod tests {
         s.epoch_nonce = Nonce(Hash32([0xCD; 32]));
         s.evolving_nonce = Nonce(Hash32([0xEE; 32]));
         s.candidate_nonce = Nonce(Hash32([0xCD; 32]));
+        s.last_epoch_block_nonce = Some(Nonce(Hash32([0xAB; 32])));
         s
     }
 
@@ -389,6 +389,7 @@ mod tests {
         HeaderInput {
             slot,
             block_no,
+            prev_hash: Hash32([0u8; 32]),
             body_hash: Hash32([0x55; 32]),
             issuer_pool: pool(),
             op_cert_kes_period: 0,
@@ -507,6 +508,11 @@ mod tests {
         process_stream_input(&mut state, &StreamInput::HeaderArrival(h), &ldg, &sched).unwrap();
         let prior_epoch_nonce = state.chain_dep.epoch_nonce.clone();
         let prior_candidate = state.chain_dep.candidate_nonce.clone();
+        let leb = state
+            .chain_dep
+            .last_epoch_block_nonce
+            .clone()
+            .expect("seeded operand");
 
         let evt = process_stream_input(
             &mut state,
@@ -519,9 +525,15 @@ mod tests {
         )
         .expect("epoch boundary");
         assert_eq!(evt, None);
-        // Internal state evolved: epoch_nonce now equals prior candidate;
-        // previous_epoch_nonce equals prior epoch_nonce.
-        assert_eq!(state.chain_dep.epoch_nonce, prior_candidate);
+        // DC-EPOCH-16: epoch_nonce' = candidate ⭒ last_epoch_block_nonce;
+        // previous_epoch_nonce' = the prior epoch_nonce; candidate carries through.
+        let mut buf = [0u8; 64];
+        buf[0..32].copy_from_slice(prior_candidate.as_bytes());
+        buf[32..64].copy_from_slice(leb.as_bytes());
+        assert_eq!(
+            state.chain_dep.epoch_nonce,
+            Nonce(ade_crypto::blake2b::blake2b_256(&buf))
+        );
         assert_eq!(state.chain_dep.previous_epoch_nonce, prior_epoch_nonce);
         // Selector unchanged on epoch boundary.
         assert_eq!(state.selector.current_tip_block_no, BlockNo(1));

@@ -119,6 +119,13 @@ pub struct PraosChainDepState {
     pub previous_epoch_nonce: Nonce,
     pub lab_nonce: Nonce,
     pub last_epoch_block: Option<EpochNo>,
+    /// The Praos boundary-combine operand: the `lab` nonce of the last
+    /// block of the PREVIOUS epoch (`praosStateLastEpochBlockNonce`).
+    /// `None` = explicit *unset* — a legacy `array(9)` store or a
+    /// pre-seed state. The rolling epoch-boundary combine fails closed
+    /// (`MissingLastEpochBlockNonce`) on `None` rather than fabricate a
+    /// nonce (DC-EPOCH-16).
+    pub last_epoch_block_nonce: Option<Nonce>,
     pub last_slot: Option<SlotNo>,
     pub last_block_no: Option<BlockNo>,
     pub op_cert_counters: OpCertCounterMap,
@@ -137,6 +144,7 @@ impl PraosChainDepState {
             previous_epoch_nonce: initial_nonce.clone(),
             lab_nonce: initial_nonce,
             last_epoch_block: None,
+            last_epoch_block_nonce: None,
             last_slot: None,
             last_block_no: None,
             op_cert_counters: OpCertCounterMap::new(),
@@ -168,6 +176,7 @@ impl PraosChainDepState {
             previous_epoch_nonce: Nonce::ZERO,
             lab_nonce: Nonce::ZERO,
             last_epoch_block: None,
+            last_epoch_block_nonce: None,
             last_slot: None,
             last_block_no: None,
             op_cert_counters: OpCertCounterMap::new(),
@@ -233,6 +242,7 @@ mod tests {
         assert_eq!(s.previous_epoch_nonce, nonce);
         assert_eq!(s.lab_nonce, nonce);
         assert_eq!(s.last_epoch_block, None);
+        assert_eq!(s.last_epoch_block_nonce, None);
         assert_eq!(s.last_slot, None);
         assert_eq!(s.last_block_no, None);
         assert!(s.op_cert_counters.is_empty());

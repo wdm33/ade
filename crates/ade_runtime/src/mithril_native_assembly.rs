@@ -171,6 +171,11 @@ fn chain_dep_from_nonces(n: &PraosNonces) -> PraosChainDepState {
         previous_epoch_nonce: to_core(&n.last_epoch_block),
         lab_nonce: to_core(&n.lab),
         last_epoch_block: None,
+        // The seed→seed+1 boundary combine operand (DC-EPOCH-16):
+        // eta0(seed+1) = candidate ⭒ last_epoch_block_nonce. Seeded from the
+        // imported snapshot's last-epoch-block nonce so the general epoch tick
+        // reproduces the ECA-5 bridge value exactly.
+        last_epoch_block_nonce: Some(to_core(&n.last_epoch_block)),
         last_slot: None,
         last_block_no: None,
         op_cert_counters: ade_core::consensus::praos_state::OpCertCounterMap::new(),
@@ -471,6 +476,39 @@ mod tests {
     use ade_ledger::wal::{replay_from_anchor, WalEntry, WalError, WalStore};
     use ade_types::tx::{Coin, PoolId};
     use ade_types::Hash28;
+
+    #[test]
+    fn seeded_chain_dep_tick_reproduces_bridge_eta0() {
+        // DC-EPOCH-16 bridge equivalence (hermetic): seeding the chain-dep from
+        // the imported snapshot nonces and applying the BLUE epoch tick reproduces
+        // the ECA-5 bridge precompute eta0(seed+1) = blake2b(candidate || lastEpochBlock).
+        use ade_core::consensus::{apply_nonce_input, NonceInput};
+        let n = PraosNonces {
+            evolving: LedgerNonce([0x11; 32]),
+            candidate: LedgerNonce([0x22; 32]),
+            epoch: LedgerNonce([0x33; 32]),
+            lab: LedgerNonce([0x44; 32]),
+            last_epoch_block: LedgerNonce([0x55; 32]),
+        };
+        let seeded = chain_dep_from_nonces(&n);
+        // The combine operand is the imported last-epoch-block nonce.
+        assert_eq!(
+            seeded.last_epoch_block_nonce,
+            Some(CoreNonce(Hash32([0x55; 32])))
+        );
+        let after = apply_nonce_input(
+            &seeded,
+            &NonceInput::EpochBoundary {
+                new_epoch: EpochNo(1),
+            },
+        )
+        .expect("epoch tick");
+        // Independently compute the bridge formula blake2b(candidate || lastEpochBlock).
+        let mut buf = [0u8; 64];
+        buf[0..32].copy_from_slice(&[0x22; 32]);
+        buf[32..64].copy_from_slice(&[0x55; 32]);
+        assert_eq!(after.epoch_nonce, CoreNonce(blake2b_256(&buf)));
+    }
 
     use crate::chaindb::{InMemoryChainDb, SnapshotStore};
     use crate::recovered_anchor::load_recovered_anchor_point;

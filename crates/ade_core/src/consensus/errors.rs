@@ -119,6 +119,11 @@ pub enum OpCertCounterError {
 pub enum NonceEvolutionError {
     SlotBeforeLast { last: SlotNo, attempted: SlotNo },
     UninitialisedEpochNonce,
+    /// The epoch-boundary combine was attempted with no
+    /// `last_epoch_block_nonce` operand — a legacy `array(9)` chain-dep
+    /// store or a pre-seed state. Fail closed; never fabricate the operand
+    /// (DC-EPOCH-16).
+    MissingLastEpochBlockNonce,
 }
 
 /// Leader-schedule query errors.

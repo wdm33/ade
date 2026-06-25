@@ -66,6 +66,10 @@ pub struct HeaderKes {
 pub struct HeaderInput {
     pub slot: SlotNo,
     pub block_no: BlockNo,
+    /// The header's previous-block (parent header) hash. On the follow
+    /// path `lab' = Nonce(prev_hash)` feeds the Praos nonce rotation
+    /// (DC-EPOCH-16).
+    pub prev_hash: Hash32,
     pub body_hash: Hash32,
     pub issuer_pool: Hash28,
     pub op_cert_kes_period: u64,

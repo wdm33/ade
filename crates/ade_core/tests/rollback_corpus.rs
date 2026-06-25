@@ -383,6 +383,7 @@ fn header_at(
     op_cert_counter: u64,
 ) -> HeaderInput {
     HeaderInput {
+        prev_hash: Hash32([0u8; 32]),
         slot,
         block_no,
         body_hash: Hash32([0x55; 32]),

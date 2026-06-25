@@ -94,6 +94,7 @@ fn header_at(
     op_cert_counter: u64,
 ) -> HeaderInput {
     HeaderInput {
+        prev_hash: Hash32([0u8; 32]),
         slot,
         block_no,
         body_hash: Hash32([0x55; 32]),
@@ -197,6 +198,7 @@ fn header_with_invalid_vrf_proof_rejected() {
     let bad_proof = prove(&sk, SlotNo(999), &state.epoch_nonce, VrfRole::NonceContribution);
     let leader_proof = prove(&sk, SlotNo(1), &state.epoch_nonce, VrfRole::LeaderEligibility);
     let header = HeaderInput {
+        prev_hash: Hash32([0u8; 32]),
         slot: SlotNo(1),
         block_no: BlockNo(1),
         body_hash: Hash32([0x55; 32]),

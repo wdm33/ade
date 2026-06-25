@@ -201,3 +201,12 @@ seed+2 authority); live restart-identical-across-a-boundary is **B4**; the full 
 B2 (seam fires at every boundary), B3 (replay-derived seed+2 stake authority), B4 (live restart
 recovery across a boundary), B5 (live forge-off crossing proof). B1 makes the **nonce** roll correctly
 and proves it equals ground truth; it does not generalize the authority/forecast machinery.
+
+**B2 must also pick up (from the B1 IDD review):** (1) supply the production `RSW = ceil(4k/f)` in the
+live `LiveLedgerView`/`PoolDistrView` (threaded from the genesis geometry) so the candidate freeze is
+live-correct — wired together with the boundary tick that consumes the candidate (the B1 CI gate fails
+if RSW is supplied without the tick). (2) The **symmetric** coupling gate the review flagged: no live
+`StreamInput::EpochBoundary` emitter may exist while `freeze_boundary` can resolve to
+`CANDIDATE_FREEZE_INERT`; broaden the production-view check to *any* non-test `impl LedgerView` that
+overrides `randomness_stabilisation_window` (the B1 gate enumerates two view files). (3) Retire the
+vestigial `StreamInput::EpochBoundary.last_block_of_prev_epoch` field when the tick is wired.

@@ -112,6 +112,9 @@ fn build_initial_state(v: &Value) -> PraosChainDepState {
             .expect("previous_epoch_nonce"),
     );
     state.lab_nonce = nonce_from_hex(init["lab_nonce"].as_str().expect("lab_nonce"));
+    if let Some(s) = init.get("last_epoch_block_nonce").and_then(|x| x.as_str()) {
+        state.last_epoch_block_nonce = Some(nonce_from_hex(s));
+    }
     if let Some(n) = init.get("last_epoch_block").and_then(|x| x.as_u64()) {
         state.last_epoch_block = Some(EpochNo(n));
     }
@@ -129,18 +132,16 @@ fn parse_input(v: &Value) -> NonceInput {
     match kind {
         "HeaderContribution" => NonceInput::HeaderContribution {
             slot: SlotNo(v["slot"].as_u64().expect("slot")),
-            vrf_output: vrf_from_hex(v["vrf_output_hex"].as_str().expect("vrf_output_hex")),
-        },
-        "CandidateFreeze" => NonceInput::CandidateFreeze {
-            at_slot: SlotNo(v["at_slot"].as_u64().expect("at_slot")),
-            epoch: EpochNo(v["epoch"].as_u64().expect("epoch")),
+            prev_block_hash: hash32_from_hex(
+                v["prev_block_hash_hex"]
+                    .as_str()
+                    .expect("prev_block_hash_hex"),
+            ),
+            vrf_nonce_output: vrf_from_hex(v["vrf_output_hex"].as_str().expect("vrf_output_hex")),
+            freeze_boundary: SlotNo(v["freeze_boundary"].as_u64().expect("freeze_boundary")),
         },
         "EpochBoundary" => NonceInput::EpochBoundary {
             new_epoch: EpochNo(v["new_epoch"].as_u64().expect("new_epoch")),
-            last_block_of_prev_epoch: v
-                .get("last_block_of_prev_epoch")
-                .and_then(|x| x.as_u64())
-                .map(EpochNo),
         },
         other => panic!("unknown input kind: {other}"),
     }
@@ -207,6 +208,11 @@ fn epoch_boundary_freezes_and_rotates_correctly() {
             .as_str()
             .expect("expected_final_lab_nonce"),
     );
+    let expected_leb_nonce = nonce_from_hex(
+        corpus["expected_final_last_epoch_block_nonce"]
+            .as_str()
+            .expect("expected_final_last_epoch_block_nonce"),
+    );
 
     assert_eq!(final_state.epoch_nonce, expected_epoch);
     assert_eq!(final_state.previous_epoch_nonce, expected_prev);
@@ -214,6 +220,7 @@ fn epoch_boundary_freezes_and_rotates_correctly() {
     assert_eq!(final_state.candidate_nonce, expected_candidate);
     assert_eq!(final_state.last_epoch_block, Some(expected_last_epoch_block));
     assert_eq!(final_state.lab_nonce, expected_lab);
+    assert_eq!(final_state.last_epoch_block_nonce, Some(expected_leb_nonce));
 }
 
 #[test]

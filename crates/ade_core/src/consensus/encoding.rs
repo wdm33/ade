@@ -78,6 +78,28 @@ fn decode_nonce(dec: &mut Decoder<'_>) -> Result<Nonce, DecodeError> {
     Ok(Nonce(Hash32(buf)))
 }
 
+fn encode_opt_nonce(enc: &mut Encoder<&mut Vec<u8>>, v: &Option<Nonce>) -> Result<(), DecodeError> {
+    match v {
+        Some(n) => {
+            encode_nonce(enc, n)?;
+        }
+        None => {
+            enc.null().map_err(enc_err)?;
+        }
+    }
+    Ok(())
+}
+
+fn decode_opt_nonce(dec: &mut Decoder<'_>) -> Result<Option<Nonce>, DecodeError> {
+    match dec.datatype()? {
+        Type::Null => {
+            dec.null()?;
+            Ok(None)
+        }
+        _ => Ok(Some(decode_nonce(dec)?)),
+    }
+}
+
 fn encode_hash32(enc: &mut Encoder<&mut Vec<u8>>, h: &Hash32) -> Result<(), DecodeError> {
     enc.bytes(&h.0).map_err(enc_err)?;
     Ok(())
@@ -208,7 +230,7 @@ fn decode_op_cert_counters(dec: &mut Decoder<'_>) -> Result<OpCertCounterMap, De
 // PraosChainDepState
 // =============================================================================
 
-const CHAIN_DEP_STATE_FIELDS: u32 = 9;
+const CHAIN_DEP_STATE_FIELDS: u32 = 10;
 
 pub fn encode_chain_dep_state(s: &PraosChainDepState) -> Vec<u8> {
     let mut buf: Vec<u8> = Vec::new();
@@ -238,6 +260,7 @@ fn encode_chain_dep_state_into(
     encode_opt_u64(&mut enc, s.last_slot.map(|s| s.0))?;
     encode_opt_u64(&mut enc, s.last_block_no.map(|b| b.0))?;
     encode_op_cert_counters(&mut enc, &s.op_cert_counters)?;
+    encode_opt_nonce(&mut enc, &s.last_epoch_block_nonce)?;
     Ok(())
 }
 
@@ -253,6 +276,7 @@ pub fn decode_chain_dep_state(bytes: &[u8]) -> Result<PraosChainDepState, Decode
     let last_slot = decode_opt_u64(&mut dec)?.map(SlotNo);
     let last_block_no = decode_opt_u64(&mut dec)?.map(BlockNo);
     let op_cert_counters = decode_op_cert_counters(&mut dec)?;
+    let last_epoch_block_nonce = decode_opt_nonce(&mut dec)?;
     Ok(PraosChainDepState {
         evolving_nonce,
         candidate_nonce,
@@ -260,6 +284,7 @@ pub fn decode_chain_dep_state(bytes: &[u8]) -> Result<PraosChainDepState, Decode
         previous_epoch_nonce,
         lab_nonce,
         last_epoch_block,
+        last_epoch_block_nonce,
         last_slot,
         last_block_no,
         op_cert_counters,
@@ -506,6 +531,7 @@ fn decode_op_cert_error(dec: &mut Decoder<'_>) -> Result<OpCertCounterError, Dec
 
 const NONCE_SLOT_BEFORE_LAST: u32 = 0;
 const NONCE_UNINITIALISED_EPOCH_NONCE: u32 = 1;
+const NONCE_MISSING_LAST_EPOCH_BLOCK_NONCE: u32 = 2;
 
 fn encode_nonce_evolution_error(
     enc: &mut Encoder<&mut Vec<u8>>,
@@ -521,6 +547,11 @@ fn encode_nonce_evolution_error(
         }
         NonceEvolutionError::UninitialisedEpochNonce => {
             enc.u32(NONCE_UNINITIALISED_EPOCH_NONCE).map_err(enc_err)?;
+            enc.array(0).map_err(enc_err)?;
+        }
+        NonceEvolutionError::MissingLastEpochBlockNonce => {
+            enc.u32(NONCE_MISSING_LAST_EPOCH_BLOCK_NONCE)
+                .map_err(enc_err)?;
             enc.array(0).map_err(enc_err)?;
         }
     }
@@ -540,6 +571,10 @@ fn decode_nonce_evolution_error(dec: &mut Decoder<'_>) -> Result<NonceEvolutionE
         NONCE_UNINITIALISED_EPOCH_NONCE => {
             expect_array_len(dec, 0)?;
             Ok(NonceEvolutionError::UninitialisedEpochNonce)
+        }
+        NONCE_MISSING_LAST_EPOCH_BLOCK_NONCE => {
+            expect_array_len(dec, 0)?;
+            Ok(NonceEvolutionError::MissingLastEpochBlockNonce)
         }
         other => Err(DecodeError::UnknownDiscriminant {
             for_enum: "NonceEvolutionError",

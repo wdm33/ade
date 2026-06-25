@@ -191,6 +191,14 @@ fn praos_header_input(
     Ok(HeaderInput {
         slot: SlotNo(hb.slot),
         block_no: BlockNo(hb.block_number),
+        // lab' = Nonce(prev_hash) on the follow path. A Conway successor
+        // always carries Block(hash32); the Genesis predecessor (from-genesis
+        // block 0, out of B1 scope) maps to the zero hash.
+        prev_hash: hb
+            .prev_hash
+            .block_hash()
+            .cloned()
+            .unwrap_or(Hash32([0u8; 32])),
         body_hash: hb.body_hash.clone(),
         issuer_pool,
         op_cert_kes_period: hb.operational_cert.kes_period,

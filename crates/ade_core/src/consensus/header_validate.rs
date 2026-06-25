@@ -37,7 +37,7 @@
 
 use ade_crypto::blake2b::blake2b_256;
 use ade_crypto::vrf::VrfOutput;
-use ade_types::Hash32;
+use ade_types::{Hash32, SlotNo};
 
 use crate::consensus::era_schedule::EraSchedule;
 use crate::consensus::errors::{HeaderValidationError, VrfCertError};
@@ -244,11 +244,37 @@ pub fn validate_and_apply_header(
     // Step 9: apply nonce contribution using the nonce-role output (TPraos)
     // or the derived nonce value (Praos). Mixing the leader output here would
     // silently desynchronise the evolving nonce from cardano-node.
+    // freeze_boundary = firstSlotNextEpoch − RandomnessStabilisationWindow, from
+    // canonical era geometry. When the ledger view supplies no RSW the candidate
+    // freeze is INERT (deferred): the candidate tracks the whole epoch but is not
+    // consumed by any live boundary combine until the boundary-tick follow-up
+    // supplies RSW + wires the tick together (see
+    // `LedgerView::randomness_stabilisation_window`). The sentinel is explicitly
+    // NOT a correctness value -- it must never silently stand in for a forgotten
+    // production RSW (coupled by ci_check_praos_nonce_follow_evolution.sh).
+    const CANDIDATE_FREEZE_INERT: SlotNo = SlotNo(u64::MAX);
+    let freeze_boundary = match (
+        era_schedule.eras().get(location.era_index as usize),
+        ledger_view.randomness_stabilisation_window(epoch),
+    ) {
+        (Some(era), Some(rsw)) => {
+            let epoch_start = header
+                .slot
+                .0
+                .saturating_sub(u64::from(location.relative_slot_in_epoch));
+            let first_slot_next_epoch =
+                epoch_start.saturating_add(u64::from(era.epoch_length_slots));
+            SlotNo(first_slot_next_epoch.saturating_sub(rsw))
+        }
+        _ => CANDIDATE_FREEZE_INERT,
+    };
     let after_nonce = apply_nonce_input(
         &after_op_cert,
         &NonceInput::HeaderContribution {
             slot: header.slot,
-            vrf_output: nonce_output,
+            prev_block_hash: header.prev_hash.clone(),
+            vrf_nonce_output: nonce_output,
+            freeze_boundary,
         },
     )
     .map_err(HeaderValidationError::Nonce)?;
@@ -373,6 +399,7 @@ mod tests {
     ) -> HeaderInput {
         let slot = SlotNo(1);
         HeaderInput {
+            prev_hash: Hash32([0u8; 32]),
             slot,
             block_no: BlockNo(1),
             body_hash: Hash32([0x55; 32]),
@@ -406,6 +433,7 @@ mod tests {
         let bogus_proof = prove_nonce(&sk, SlotNo(999), &state.epoch_nonce);
         let bogus_leader = prove_leader(&sk, SlotNo(999), &state.epoch_nonce);
         let header = HeaderInput {
+            prev_hash: Hash32([0u8; 32]),
             slot: SlotNo(5),
             block_no: BlockNo(1),
             body_hash: Hash32([0u8; 32]),

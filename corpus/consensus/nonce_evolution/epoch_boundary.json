@@ -1,23 +1,41 @@
 {
-  "scenario": "candidate_freeze_then_epoch_boundary",
+  "scenario": "track_freeze_then_epoch_boundary_combine",
   "initial_state": {
-    "evolving_nonce":       "4444444444444444444444444444444444444444444444444444444444444444",
-    "candidate_nonce":      "0000000000000000000000000000000000000000000000000000000000000000",
-    "epoch_nonce":          "5555555555555555555555555555555555555555555555555555555555555555",
+    "evolving_nonce": "4444444444444444444444444444444444444444444444444444444444444444",
+    "candidate_nonce": "0000000000000000000000000000000000000000000000000000000000000000",
+    "epoch_nonce": "5555555555555555555555555555555555555555555555555555555555555555",
     "previous_epoch_nonce": "6666666666666666666666666666666666666666666666666666666666666666",
-    "lab_nonce":            "7777777777777777777777777777777777777777777777777777777777777777",
-    "last_epoch_block":     207,
-    "last_slot":            4924879,
-    "last_block_no":        7900000
+    "lab_nonce": "7777777777777777777777777777777777777777777777777777777777777777",
+    "last_epoch_block_nonce": "8888888888888888888888888888888888888888888888888888888888888888",
+    "last_epoch_block": 207,
+    "last_slot": 4924879,
+    "last_block_no": 7900000
   },
   "inputs": [
-    { "kind": "CandidateFreeze", "at_slot": 4924880, "epoch": 208 },
-    { "kind": "EpochBoundary",   "new_epoch": 209, "last_block_of_prev_epoch": 208 }
+    {
+      "kind": "HeaderContribution",
+      "slot": 4924880,
+      "prev_block_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "vrf_output_hex": "10111213141516171011121314151617101112131415161710111213141516171011121314151617101112131415161710111213141516171011121314151617",
+      "freeze_boundary": 4924881
+    },
+    {
+      "kind": "HeaderContribution",
+      "slot": 4924881,
+      "prev_block_hash_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "vrf_output_hex": "20212223242526272021222324252627202122232425262720212223242526272021222324252627202122232425262720212223242526272021222324252627",
+      "freeze_boundary": 4924881
+    },
+    {
+      "kind": "EpochBoundary",
+      "new_epoch": 209
+    }
   ],
-  "expected_final_epoch_nonce":     "4444444444444444444444444444444444444444444444444444444444444444",
-  "expected_final_previous_epoch":  "5555555555555555555555555555555555555555555555555555555555555555",
-  "expected_final_evolving":        "4444444444444444444444444444444444444444444444444444444444444444",
-  "expected_final_candidate":       "4444444444444444444444444444444444444444444444444444444444444444",
+  "expected_final_epoch_nonce": "f62d0af4848ba4afdd7ee9456ad78c1c56d78083bab65f802a857c5170dea693",
+  "expected_final_previous_epoch": "5555555555555555555555555555555555555555555555555555555555555555",
+  "expected_final_evolving": "4e390b34ce244d74b5878442eeba105f8b1558e52b8ebd95559917d80eba2dc6",
+  "expected_final_candidate": "69d77d5e6ebe2a1d3277537ce1561bec6130060bf6424c1598f149c5e3cbd923",
   "expected_final_last_epoch_block": 208,
-  "expected_final_lab_nonce":       "7777777777777777777777777777777777777777777777777777777777777777"
+  "expected_final_lab_nonce": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "expected_final_last_epoch_block_nonce": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 }

@@ -103,6 +103,7 @@ fn corpus_header(corpus: &ConwayValidityCorpus, i: usize) -> CorpusHeader {
     };
 
     let input = HeaderInput {
+        prev_hash: Hash32([0u8; 32]),
         slot: SlotNo(hb.slot),
         block_no: BlockNo(hb.block_number),
         body_hash: hb.body_hash.clone(),

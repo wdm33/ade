@@ -252,6 +252,7 @@ mod tests {
         HeaderInput {
             slot,
             block_no,
+            prev_hash: Hash32([0u8; 32]),
             body_hash: Hash32([0x55; 32]),
             issuer_pool: pool(),
             op_cert_kes_period: 0,
