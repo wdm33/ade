@@ -173,10 +173,16 @@ fn download(profile: &MithrilProfile, output_dir: &Path, certificate: Option<&Pa
 /// reads them) as symlinks into the canonical `db/ledger/<slot>/` (no 640 MB copy; the snapshot dir
 /// is the durable acquisition artifact).
 fn layout(output_dir: &Path, ledger_dir: &Path) -> Result<(), FetchError> {
+    // The symlink target MUST be absolute. A relative ledger_dir (from a relative --output-dir, e.g.
+    // the judge's `--output-dir ./preview-snapshot`) is resolved relative to the LINK's own directory
+    // (inside output_dir), double-counting the prefix: `./snap/state -> ./snap/db/…` reads as
+    // `./snap/snap/db/…` and dangles. Canonicalize to an absolute target once.
+    let abs_ledger = std::fs::canonicalize(ledger_dir)
+        .map_err(|e| FetchError::Io(format!("canonicalize {}: {e}", ledger_dir.display())))?;
     for f in ["state", "tables"] {
         let link = output_dir.join(f);
         let _ = std::fs::remove_file(&link);
-        std::os::unix::fs::symlink(ledger_dir.join(f), &link)
+        std::os::unix::fs::symlink(abs_ledger.join(f), &link)
             .map_err(|e| FetchError::Io(format!("symlink {f}: {e}")))?;
     }
     Ok(())
