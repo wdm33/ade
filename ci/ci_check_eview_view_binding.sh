@@ -41,14 +41,12 @@ for t in bind_is_deterministic_and_self_verifies matches_exact_bindings_and_reje
     grep -qE "fn $t" "$V" || fail "the $t proof is missing"
 done
 
-# (6) observe-only: no live wiring of the view.
-if grep -rqE 'EpochConsensusView' \
-    crates/ade_node/src/node_lifecycle.rs crates/ade_node/src/node_sync.rs \
-    crates/ade_runtime/src/admission/ crates/ade_runtime/src/forward_sync/ 2>/dev/null; then
-    fail "EpochConsensusView is referenced on the live path -- S3e is observe-only (activation is DC-EVIEW-08)"
-fi
+# (6) The ECA activation (the named DC-EVIEW-08 successor) took the view LIVE -- the observe-only phase
+#     ended. The view is consulted on the live path ONLY via the promotion-gated ActiveEpochAuthority
+#     (DC-EPOCH-14) / the bootstrap bridge (DC-EPOCH-15); that wiring is governed by those gates. The
+#     binding / canonical-identity / inert-unless-verified invariants above are the enduring DC-EVIEW-07.
 
 if (( FAILED == 0 )); then
-    echo "OK: EpochConsensusView binding (DC-EVIEW-07; 8-binding immutable view, canonical-hash identity, inert-unless-bound+verified, round-trippable; observe-only)"
+    echo "OK: EpochConsensusView binding (DC-EVIEW-07; 8-binding immutable view, canonical-hash identity, inert-unless-bound+verified, round-trippable; live use promotion-gated by DC-EPOCH-14/15)"
 fi
 exit $FAILED

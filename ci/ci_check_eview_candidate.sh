@@ -16,7 +16,7 @@ test -f "$C" || fail "the candidate module ($C) is missing"
 
 # (1) it composes the proven pieces (the driver + bind).
 grep -qE 'pub fn derive_candidate' "$C" || fail "derive_candidate missing"
-grep -qF 'drive_window_aggregate(checkpoint, bootstrap_state, blocks, era)' "$C" \
+grep -qE 'drive_window_consensus_inputs\(' "$C" \
     || fail "derive_candidate does not drive the window (DC-EVIEW-10)"
 grep -qF 'EpochConsensusView::bind(' "$C" || fail "derive_candidate does not bind the view (DC-EVIEW-07)"
 

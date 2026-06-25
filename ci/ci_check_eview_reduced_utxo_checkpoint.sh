@@ -42,26 +42,25 @@ grep -qE 'fn replay_equivalent_two_builds_byte_identical' "$CP" \
 grep -qE 'fn durable_across_reopen' "$CP" || fail "the durable-across-reopen proof is missing"
 grep -qE 'fn fresh_store_is_incomplete' "$CP" || fail "the fresh-store-incomplete proof is missing"
 
-# (5) S3b-1 boundary: NO live wiring / track_utxo. The pure reduction ($RED) reaches
-#     into no aggregation/leader. The checkpoint ($CP) legitimately HOSTS the S3c
-#     per-credential fold (sum_base_credential_stake) + the S3b-2 advance primitives,
-#     but must NOT emit an EpochConsensusView (S3e) or feed leadership (DC-EVIEW-08).
+# (5) Module scope (post-activation): the pure reduction ($RED) reaches into no aggregation/leader; the
+#     checkpoint ($CP) HOSTS the S3c per-credential fold (sum_base_credential_stake) + the S3b-2 advance
+#     primitives + the DC-EPOCH-11-mat live cross-check, and may be DESCRIBED (doc comments) as composing
+#     into the candidate view -- but the STORE module must not itself CONSTRUCT a view or call leadership.
 if grep -qiE 'aggregate|new_mark|EpochConsensusView|leader|pool_distr' "$RED"; then
     fail "the reduced-UTxO record/reduction reaches into aggregation / leader -- out of scope"
 fi
-if grep -qE 'EpochConsensusView|query_leader_schedule' "$CP"; then
-    fail "the checkpoint emits a view / feeds leadership -- that is S3e / DC-EVIEW-08, not S3b-1"
+if grep -vE '^[[:space:]]*//' "$CP" | grep -qE 'EpochConsensusView::|query_leader_schedule\('; then
+    fail "the checkpoint module itself constructs a view / calls leadership -- that is the activation slice, not the store"
 fi
-if grep -rqE 'ReducedUtxoCheckpoint|reduce_txout' \
-    crates/ade_node/src/node_lifecycle.rs crates/ade_node/src/node_sync.rs \
-    crates/ade_runtime/src/admission/ crates/ade_runtime/src/forward_sync/ 2>/dev/null; then
-    fail "the reduced-UTxO checkpoint is referenced on the live producer/follow path -- S3b-1 has no live wiring"
-fi
+# The ECA activation (the named DC-EVIEW-08 successor) wired the live reduced checkpoint
+# (DC-EPOCH-11-mat): it IS now referenced on the live follow path as the promotion-gated cross-check,
+# so the prior "no live wiring" prohibition is retired. The enduring constraint -- track_utxo=false --
+# is asserted below.
 if grep -qE '\.track_utxo *= *true|track_utxo: *true' "$RED" "$CP"; then
     fail "S3b-1 enables track_utxo=true -- the checkpoint is built off the per-block path"
 fi
 
 if (( FAILED == 0 )); then
-    echo "OK: reduced-UTxO checkpoint (DC-EVIEW-04; durable disk-backed, crash-safe completeness, replay-equivalent, Conway-specialized Base|NonContributing, GREEN cache; no live wiring)"
+    echo "OK: reduced-UTxO checkpoint (DC-EVIEW-04; durable disk-backed, crash-safe completeness, replay-equivalent, Conway-specialized Base|NonContributing, GREEN cache; live use promotion-gated, track_utxo=false)"
 fi
 exit $FAILED
