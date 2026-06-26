@@ -413,6 +413,7 @@ pub fn try_activate_at_boundary(
         nonce,
         profile,
         selected_point,
+        chaindb,
         transition_eligible,
         active_view,
         wal_write,
@@ -603,7 +604,10 @@ pub fn prepare_authority_for_candidate_slot(
             &inputs.replay_scratch_path,
             wal_write,
         )?;
-        return Ok(active_view.is_promoted());
+        // B3b (DC-EPOCH-17): return DID-THIS-CALL-ADVANCE (not is_promoted). A window-replay that
+        // declines (NotYet -- e.g. the source is not yet ancestor-or-equal of the selected tip)
+        // leaves the authority at the current epoch and MUST NOT be reported as a boundary crossing.
+        return Ok(active_view.epoch().0 > current_epoch.0);
     }
 
     // (a)+(b)+(c) => the durable tip IS the last N block; the canonical N window is COMPLETE. Promote the
@@ -674,7 +678,8 @@ pub fn prepare_authority_for_candidate_slot(
     active_view
         .advance(source, projected)
         .map_err(ActivationError::Activate)?;
-    Ok(active_view.is_promoted())
+    // B3b (DC-EPOCH-17): DID-THIS-CALL-ADVANCE (the bridge always advances Seed -> seed+1 here).
+    Ok(active_view.epoch().0 > current_epoch.0)
 }
 
 /// EPOCH-CONTINUITY-ACTIVATION ECA-4 (DC-EPOCH-06): the WARM-START recovery twin of

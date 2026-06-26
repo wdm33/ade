@@ -54,6 +54,39 @@ pub(crate) fn candidate_bindings(c: &EpochConsensusView) -> ViewBindings {
     }
 }
 
+/// DC-EPOCH-17 (B3, follower lag-aware): is `source_point` an ancestor-or-equal of `selected_tip` on
+/// the DURABLE canonical chain? NOTE: a candidate's `source_point.slot` binds the source-window END
+/// (an epoch boundary, typically an EMPTY slot — `epoch_candidate.rs` sets `slot: source_window_end`);
+/// the point's identity is its lineage-pin HASH, whose real block sits at an earlier slot. So resolve
+/// BOTH points to their real durable blocks BY HASH (absent ⇒ fork / missing evidence ⇒ fail closed),
+/// then require the source to be at-or-before the tip's REAL slot AND each to be THE canonical block at
+/// its real slot (a stored-but-non-canonical fork fails the by-slot check). Deterministic, indexed
+/// reads only — no walk. The ChainDb's by-slot index IS the durable selected chain.
+pub(crate) fn source_point_on_selected_chain(
+    chaindb: &dyn ade_runtime::chaindb::ChainDb,
+    source_point: &Point,
+    selected_tip: &Point,
+) -> bool {
+    let (Ok(Some(source_block)), Ok(Some(tip_block))) = (
+        chaindb.get_block_by_hash(&source_point.hash),
+        chaindb.get_block_by_hash(&selected_tip.hash),
+    ) else {
+        return false; // not on the durable store (fork / missing) ⇒ fail closed.
+    };
+    if source_block.slot.0 > tip_block.slot.0 {
+        return false; // source is after the tip on the chain ⇒ not an ancestor.
+    }
+    let source_canonical = matches!(
+        chaindb.get_block_by_slot(source_block.slot),
+        Ok(Some(c)) if c.hash == source_block.hash
+    );
+    let tip_canonical = matches!(
+        chaindb.get_block_by_slot(tip_block.slot),
+        Ok(Some(c)) if c.hash == tip_block.hash
+    );
+    source_canonical && tip_canonical
+}
+
 /// Orchestrate the boundary activation. `wal_write` writes the activation record durably and
 /// returns whether it is durable (the ONLY durability gate — publication follows ONLY a
 /// durable write). `active_view` is atomically promoted on success. Returns `Promoted` /
@@ -71,6 +104,7 @@ pub fn activate_at_boundary(
     nonce: Hash32,
     profile: &CandidateProfile,
     selected_point: &Point,
+    chaindb: &dyn ade_runtime::chaindb::ChainDb,
     transition_eligible: bool,
     authority: &mut ActiveEpochAuthority,
     wal_write: impl FnOnce(&WalEntry) -> bool,
@@ -86,12 +120,15 @@ pub fn activate_at_boundary(
     )
     .map_err(|_| EpochViewActivationError::EpochViewActivationFailed)?;
 
-    // 3. the activation predicate (DC-EPOCH-05/07), BEFORE the WAL: transition eligible +
-    //    bindings verify + the candidate's point IS the selected-chain point. `wal_durable`
-    //    is passed `true` here (the intent); the REAL durability gate is step 5. A decline is
-    //    NotYet (seed stays), NOT terminal.
+    // 3. the activation predicate (DC-EPOCH-05/07), BEFORE the WAL: transition eligible + bindings
+    //    verify + the candidate's source is ancestor-or-equal of the selected tip on the durable
+    //    canonical chain (DC-EPOCH-17 lag-aware: the follower candidate anchors at the C-2 window
+    //    while activation is at the C-1 tip). `wal_durable` is passed `true` here (the intent); the
+    //    REAL durability gate is step 5. A decline is NotYet (seed stays), NOT terminal.
     let bindings = candidate_bindings(&candidate);
-    match activation_predicate(&candidate, &bindings, selected_point, transition_eligible, true) {
+    let source_on_chain =
+        source_point_on_selected_chain(chaindb, &candidate.source_point, selected_point);
+    match activation_predicate(&candidate, &bindings, source_on_chain, transition_eligible, true) {
         ActivationOutcome::Promote => {}
         ActivationOutcome::NoPromotion(reject) => {
             return Ok(BoundaryActivationOutcome::NotYet(reject))
@@ -261,6 +298,83 @@ mod tests {
         )
     }
 
+    /// A minimal canonical-chain stub: `get_block_by_hash` / `get_block_by_slot` over a fixed
+    /// (slot, hash) set (the durable selected chain). Only those two reads are exercised by
+    /// `source_point_on_selected_chain`; the rest are unreachable on this path.
+    struct CanonicalStub {
+        blocks: Vec<ade_runtime::chaindb::StoredBlock>,
+    }
+    impl ade_runtime::chaindb::ChainDb for CanonicalStub {
+        fn put_block(
+            &self,
+            _: &ade_runtime::chaindb::StoredBlock,
+        ) -> Result<(), ade_runtime::chaindb::ChainDbError> {
+            unimplemented!()
+        }
+        fn get_block_by_hash(
+            &self,
+            hash: &Hash32,
+        ) -> Result<Option<ade_runtime::chaindb::StoredBlock>, ade_runtime::chaindb::ChainDbError>
+        {
+            Ok(self.blocks.iter().find(|b| b.hash == *hash).cloned())
+        }
+        fn get_block_by_slot(
+            &self,
+            slot: SlotNo,
+        ) -> Result<Option<ade_runtime::chaindb::StoredBlock>, ade_runtime::chaindb::ChainDbError>
+        {
+            Ok(self.blocks.iter().find(|b| b.slot == slot).cloned())
+        }
+        fn tip(
+            &self,
+        ) -> Result<Option<ade_runtime::chaindb::ChainTip>, ade_runtime::chaindb::ChainDbError>
+        {
+            Ok(None)
+        }
+        fn iter_from_slot(
+            &self,
+            _: SlotNo,
+        ) -> Result<ade_runtime::chaindb::BlockIter<'_>, ade_runtime::chaindb::ChainDbError>
+        {
+            unimplemented!()
+        }
+        fn range_bytes_capped(
+            &self,
+            _: SlotNo,
+            _: SlotNo,
+            _: usize,
+        ) -> Result<ade_runtime::chaindb::CappedSlotRange, ade_runtime::chaindb::ChainDbError>
+        {
+            unimplemented!()
+        }
+        fn last_block_bytes(
+            &self,
+        ) -> Result<Option<(SlotNo, Vec<u8>)>, ade_runtime::chaindb::ChainDbError> {
+            Ok(None)
+        }
+        fn rollback_to_slot(&self, _: SlotNo) -> Result<(), ade_runtime::chaindb::ChainDbError> {
+            unimplemented!()
+        }
+    }
+    fn stub(blocks: &[(u64, Hash32)]) -> CanonicalStub {
+        CanonicalStub {
+            blocks: blocks
+                .iter()
+                .map(|(slot, hash)| ade_runtime::chaindb::StoredBlock {
+                    hash: hash.clone(),
+                    slot: SlotNo(*slot),
+                    bytes: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+    /// The activate tests' candidate `source_point` and `selected_point` both carry hash `0xab`,
+    /// which resolves to the canonical block at slot 190 (`window_blocks`' last block) -> the source
+    /// is ancestor-or-equal of itself -> `source_on_selected_chain` is true.
+    fn chaindb() -> CanonicalStub {
+        stub(&[(190, Hash32([0xab; 32]))])
+    }
+
     #[test]
     fn happy_path_promotes_after_durable_wal() {
         let (cp, _d, state) = checkpoint();
@@ -278,6 +392,7 @@ mod tests {
             Hash32([0x42; 32]),
             &profile(),
             &selected_point(),
+            &chaindb(),
             true,
             &mut authority,
             |rec| {
@@ -307,6 +422,7 @@ mod tests {
             Hash32([0x42; 32]),
             &profile(),
             &selected_point(),
+            &chaindb(),
             true,
             &mut authority,
             |_rec| false, // NOT durable
@@ -338,6 +454,7 @@ mod tests {
             Hash32([0x42; 32]),
             &profile(),
             &selected_point(),
+            &chaindb(),
             true,
             &mut live_auth,
             |rec| {
@@ -444,6 +561,7 @@ mod tests {
             Hash32([0x42; 32]),
             &profile(),
             &selected_point(),
+            &chaindb(),
             true,
             &mut live_auth,
             |rec| {
@@ -499,6 +617,7 @@ mod tests {
             Hash32([0x42; 32]),
             &profile(),
             &selected_point(),
+            &chaindb(),
             false, // transition NOT eligible
             &mut authority,
             |_rec| {
@@ -530,6 +649,7 @@ mod tests {
             Hash32([0x42; 32]),
             &profile(),
             &Point { slot: SlotNo(1000), hash: Hash32([0x99; 32]) },
+            &chaindb(),
             true,
             &mut authority,
             |_rec| {
@@ -559,6 +679,7 @@ mod tests {
             Hash32([0x42; 32]),
             &profile(),
             &Point { slot: SlotNo(7), hash: Hash32([0xee; 32]) }, // not the candidate's point
+            &chaindb(),
             true,
             &mut authority,
             |_rec| true,
@@ -566,5 +687,46 @@ mod tests {
         .expect("not terminal");
         assert_eq!(out, BoundaryActivationOutcome::NotYet(ActivationReject::WrongSelectedPoint));
         assert!(!authority.is_promoted());
+    }
+
+    // --- DC-EPOCH-17 lag-aware ancestor proof: source_point_on_selected_chain ---
+    fn pt(slot: u64, h: u8) -> Point {
+        Point { slot: SlotNo(slot), hash: Hash32([h; 32]) }
+    }
+
+    #[test]
+    fn ancestor_producer_case_source_equals_tip_passes() {
+        // producer: the candidate source point == the selected tip (same pin). The source slot binds
+        // an empty epoch-boundary slot (1000); the pin (0xab) resolves by HASH to its real block at 190.
+        let db = stub(&[(190, Hash32([0xab; 32]))]);
+        assert!(source_point_on_selected_chain(&db, &pt(1000, 0xab), &pt(1000, 0xab)));
+    }
+
+    #[test]
+    fn ancestor_follower_lag_source_ancestor_of_tip_passes() {
+        // follower: the C-2 pin (real block 190) is an ancestor of the C-1 tip (real block 900).
+        let db = stub(&[(190, Hash32([0xab; 32])), (900, Hash32([0xcd; 32]))]);
+        assert!(source_point_on_selected_chain(&db, &pt(1000, 0xab), &pt(900, 0xcd)));
+    }
+
+    #[test]
+    fn ancestor_unrelated_fork_point_fails() {
+        // 0xfe is STORED (at slot 190) but is NOT the canonical block at its slot (0xab is) -> fork.
+        let db = stub(&[(190, Hash32([0xab; 32])), (190, Hash32([0xfe; 32])), (900, Hash32([0xcd; 32]))]);
+        assert!(!source_point_on_selected_chain(&db, &pt(1000, 0xfe), &pt(900, 0xcd)));
+    }
+
+    #[test]
+    fn ancestor_descendant_or_future_source_fails() {
+        // the source's real block (slot 900) is AFTER the tip's real block (slot 190) -> not an ancestor.
+        let db = stub(&[(190, Hash32([0xab; 32])), (900, Hash32([0xcd; 32]))]);
+        assert!(!source_point_on_selected_chain(&db, &pt(1000, 0xcd), &pt(1000, 0xab)));
+    }
+
+    #[test]
+    fn ancestor_missing_evidence_fails() {
+        // the pin (0xde) is not on the durable store at all -> fail closed.
+        let db = stub(&[(190, Hash32([0xab; 32])), (900, Hash32([0xcd; 32]))]);
+        assert!(!source_point_on_selected_chain(&db, &pt(1000, 0xde), &pt(900, 0xcd)));
     }
 }

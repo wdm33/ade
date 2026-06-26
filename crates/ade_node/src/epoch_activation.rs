@@ -48,14 +48,21 @@ pub enum ActivationReject {
 }
 
 /// The activation predicate (DC-EPOCH-06 ordering). `Promote` requires, in order: the
-/// transition is eligible, the candidate matches the N+1 bindings (incl.
-/// `verify_canonical_hash`), the candidate's transition point IS the selected-chain point,
-/// and the activation WAL record is durable. Any failure ⇒ `NoPromotion` (no flag, no
-/// fallback — the seed view simply stays authoritative until a later eligible transition).
+/// transition is eligible, the candidate matches the N+1 bindings (incl. `verify_canonical_hash`),
+/// the candidate's source point is ancestor-or-equal of the selected tip on the durable canonical
+/// chain (`source_on_selected_chain`), and the activation WAL record is durable. Any failure ⇒
+/// `NoPromotion` (no flag, no fallback — the seed view simply stays authoritative).
+///
+/// DC-EPOCH-17 (B3, follower lag-aware): the binding-point check is NO LONGER exact equality. On the
+/// follower path the candidate is correctly anchored at the C-2 source-window pin while activation
+/// happens at the C-1 selected tip (the MARK/SET/GO leadership lag = 2), so equality is the wrong
+/// model. The real safety property is that the candidate's source remains on the chain Ade is about
+/// to keep validating — an ANCESTOR-OR-EQUAL relation the caller proves against the ChainDb, distinct
+/// from `validate_source_window`'s proof that the candidate derives from the correct bounded C-2 window.
 pub fn activation_predicate(
     candidate: &EpochConsensusView,
     n1_bindings: &ViewBindings,
-    selected_point: &Point,
+    source_on_selected_chain: bool,
     transition_eligible: bool,
     wal_durable: bool,
 ) -> ActivationOutcome {
@@ -65,7 +72,7 @@ pub fn activation_predicate(
     if !candidate.matches(n1_bindings) {
         return ActivationOutcome::NoPromotion(ActivationReject::BindingsUnverified);
     }
-    if candidate.source_point != *selected_point {
+    if !source_on_selected_chain {
         return ActivationOutcome::NoPromotion(ActivationReject::WrongSelectedPoint);
     }
     if !wal_durable {
@@ -551,7 +558,7 @@ mod tests {
     fn predicate_promotes_only_when_every_precondition_holds() {
         let v = view(1000);
         assert_eq!(
-            activation_predicate(&v, &bindings(), &point(), true, true),
+            activation_predicate(&v, &bindings(), true, true, true),
             ActivationOutcome::Promote
         );
     }
@@ -559,23 +566,24 @@ mod tests {
     #[test]
     fn predicate_rejects_each_failed_precondition() {
         let v = view(1000);
+        // transition ineligible (source_on_selected_chain = true so it reaches this check).
         assert_eq!(
-            activation_predicate(&v, &bindings(), &point(), false, true),
+            activation_predicate(&v, &bindings(), true, false, true),
             ActivationOutcome::NoPromotion(ActivationReject::TransitionIneligible)
         );
         let mut wrong = bindings();
         wrong.nonce = Hash32([0xff; 32]);
         assert_eq!(
-            activation_predicate(&v, &wrong, &point(), true, true),
+            activation_predicate(&v, &wrong, true, true, true),
             ActivationOutcome::NoPromotion(ActivationReject::BindingsUnverified)
         );
-        let other_point = Point { slot: SlotNo(999), hash: Hash32([0x00; 32]) };
+        // source NOT ancestor-or-equal of the selected tip (the caller's ChainDb proof returned false).
         assert_eq!(
-            activation_predicate(&v, &bindings(), &other_point, true, true),
+            activation_predicate(&v, &bindings(), false, true, true),
             ActivationOutcome::NoPromotion(ActivationReject::WrongSelectedPoint)
         );
         assert_eq!(
-            activation_predicate(&v, &bindings(), &point(), true, false),
+            activation_predicate(&v, &bindings(), true, true, false),
             ActivationOutcome::NoPromotion(ActivationReject::WalNotDurable)
         );
     }
