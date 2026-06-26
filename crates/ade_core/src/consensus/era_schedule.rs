@@ -39,6 +39,21 @@ pub struct EraSummary {
     pub randomness_stabilisation_window_slots: Option<u32>,
 }
 
+/// `RSW = ceil(4·k / f)` in slots, where `f = asc_numer / asc_denom` — the Praos
+/// candidate-nonce freeze latitude (`freeze_boundary = firstSlotNextEpoch − RSW`),
+/// mirroring `safe_zone_slots = ceil(3·k / f)`. The ONE source of truth: both the
+/// RED genesis parser (FirstRun) and the live `--network` schedule builder derive
+/// RSW here, so the genesis-parsed freeze and the live-follow freeze can never
+/// desync (DC-EPOCH-16). Total — a zero numerator (degenerate `f`) or a product /
+/// window that overflows `u64`/`u32` yields `None`, and the caller fails closed.
+pub fn praos_rsw_slots(security_param: u64, asc_numer: u64, asc_denom: u64) -> Option<u32> {
+    if asc_numer == 0 {
+        return None;
+    }
+    let num = security_param.checked_mul(4)?.checked_mul(asc_denom)?;
+    u32::try_from(num.div_ceil(asc_numer)).ok()
+}
+
 /// Pure result of `EraSchedule::locate(slot)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EraLocation {

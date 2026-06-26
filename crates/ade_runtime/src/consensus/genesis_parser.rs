@@ -174,22 +174,15 @@ pub fn parse_genesis(
     })?;
 
     // RSW = ceil(4 * k / f) -- the Praos candidate-nonce freeze latitude
-    // (DC-EPOCH-16), mirroring safe_zone_slots = ceil(3 * k / f).
-    let rsw_slots = ceil_div(
-        shelley_security_param
-            .checked_mul(4)
-            .ok_or(GenesisParseError::InvalidValue {
-                which: GenesisBlob::Shelley,
-                field: "securityParam",
-            })?
-            .checked_mul(active_denom)
-            .ok_or(GenesisParseError::InvalidValue {
-                which: GenesisBlob::Shelley,
-                field: "activeSlotsCoeff.denominator",
-            })?,
+    // (DC-EPOCH-16), mirroring safe_zone_slots = ceil(3 * k / f). The single
+    // source of truth lives in ade_core so the genesis-parsed freeze and the
+    // live --network freeze can never desync.
+    let rsw_slots = ade_core::consensus::era_schedule::praos_rsw_slots(
+        shelley_security_param,
         active_numer,
-    );
-    let rsw_slots = u32::try_from(rsw_slots).map_err(|_| GenesisParseError::InvalidValue {
+        active_denom,
+    )
+    .ok_or(GenesisParseError::InvalidValue {
         which: GenesisBlob::Shelley,
         field: "securityParam",
     })?;

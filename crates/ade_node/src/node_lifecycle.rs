@@ -546,7 +546,7 @@ async fn run_node_lifecycle_inner(
             // chain_dep into the spine (no clone); `None` reduces the planner to
             // the exact N-F-D relay behavior. Placeholders are PROVABLY UNCONSUMED
             // on the empty source (a feed-end halts the loop on iteration 1).
-            let era_schedule = recovered_node_schedule(&state, !cli.peer_addrs.is_empty())?;
+            let era_schedule = recovered_node_schedule(&state, !cli.peer_addrs.is_empty(), rsw_for_cli(cli))?;
             // CONTINUITY: a relay-only follow validates incoming headers against the recovered
             // leadership view -- the SAME view the forge-ON path uses, from the seed-epoch sidecar.
             // Empty placeholder only when there is neither a live feed nor recovered inputs.
@@ -696,7 +696,7 @@ async fn run_node_lifecycle_inner(
             });
             // Real era schedule from the recovered epoch (consumed only when a
             // live feed lands; unconsumed on the empty source this cluster).
-            let era_schedule = recovered_node_schedule(&state, !cli.peer_addrs.is_empty())?;
+            let era_schedule = recovered_node_schedule(&state, !cli.peer_addrs.is_empty(), rsw_for_cli(cli))?;
             // DC-CINPUT-04 (PHASE4-N-F-G-P): the feed header-validation view MUST be
             // the recovered consensus surface — the SAME projection the forge uses
             // (`forge_one_from_recovered` / DC-CINPUT-02b) — so Step 5 (VRF-keyhash
@@ -1671,7 +1671,7 @@ pub(crate) fn extend_schedule_to_epoch(era_schedule: &mut EraSchedule, target: E
         for e in (last_epoch.0 + 1)..=target.0 {
             let offset = e - seed.start_epoch.0;
             new_eras.push(EraSummary {
-                randomness_stabilisation_window_slots: None,
+                randomness_stabilisation_window_slots: seed.randomness_stabilisation_window_slots,
                 era: seed.era,
                 start_slot: SlotNo(seed.start_slot.0 + offset * l),
                 start_epoch: EpochNo(e),
@@ -2802,10 +2802,15 @@ pub(crate) fn warm_start_recovery(
     // 432000, ...), NOT re-derived as epoch_no * a hardcoded length. This is the
     // SAME geometry the import used, so forward-replay is venue-correct and
     // replay-equivalent (the recovered store, not a restart CLI, is authority).
+    // RSW None: the durable sidecar carries no k (DC-CINPUT-05 sidecar authority),
+    // so the warm-start candidate freeze is inert until B4 persists it. The live
+    // forge-OFF relay (recovered_node_schedule) supplies it from --network for the
+    // within-run gate.
     let era_schedule = make_node_schedule(
         sidecar.epoch_start_slot,
         sidecar.epoch_no,
         sidecar.epoch_length_slots,
+        None,
     );
 
     // 4. PHASE4-N-U S2 (DC-WAL-04 no-orphan): reconcile the chaindb to the WAL
@@ -3023,6 +3028,7 @@ fn first_run_mithril_bootstrap(
         canonical.epoch_start_slot,
         canonical.epoch_no,
         canonical_epoch_length,
+        None,
     );
 
     // --- Epoch-consistency check (L2 §9.4), BEFORE the composer. ---
@@ -3290,12 +3296,13 @@ fn make_node_schedule(
     epoch_start_slot: SlotNo,
     epoch_no: EpochNo,
     epoch_length_slots: u32,
+    rsw: Option<u32>,
 ) -> EraSchedule {
     EraSchedule::new(
         BootstrapAnchorHash(Hash32([0u8; 32])),
         epoch_start_slot.0,
         vec![EraSummary {
-            randomness_stabilisation_window_slots: None,
+            randomness_stabilisation_window_slots: rsw,
             era: CardanoEra::Conway,
             start_slot: epoch_start_slot,
             start_epoch: epoch_no,
@@ -3313,7 +3320,7 @@ fn make_node_schedule(
             BootstrapAnchorHash(Hash32([0u8; 32])),
             epoch_start_slot.0,
             vec![EraSummary {
-                randomness_stabilisation_window_slots: None,
+                randomness_stabilisation_window_slots: rsw,
                 era: CardanoEra::Conway,
                 start_slot: epoch_start_slot,
                 start_epoch: epoch_no,
@@ -3326,6 +3333,23 @@ fn make_node_schedule(
     })
 }
 
+/// The Praos randomness-stabilisation window `RSW = ceil(4k/f)` in slots for the
+/// relay loop's venue, resolved from the committed `--network` profile
+/// (`k = securityParam`, `f = active_slots_coeff`). `None` when the network is
+/// unknown (e.g. a bare `--shelley-genesis-path` start with no `--network`): the
+/// candidate freeze then stays INERT and the boundary tick fails closed until B4
+/// persists `k` in the sidecar (DC-EPOCH-16).
+fn rsw_for_cli(cli: &Cli) -> Option<u32> {
+    let p = crate::bootstrap_export::resolve_network_profile(&cli.network).ok()?;
+    let (numer, denom) = p.active_slots_coeff;
+    // RSW from the single BLUE source of truth (shared with the genesis parser).
+    ade_core::consensus::era_schedule::praos_rsw_slots(
+        p.security_param,
+        u64::from(numer),
+        u64::from(denom),
+    )
+}
+
 /// WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05): build the live-follow / forge
 /// era-schedule from the DURABLE recovered sidecar geometry -- never re-derived
 /// from the restart CLI/genesis. Mirrors the recovered `ledger_view` fail-closed
@@ -3336,15 +3360,17 @@ fn make_node_schedule(
 fn recovered_node_schedule(
     state: &BootstrapState,
     live_feed_wired: bool,
+    rsw: Option<u32>,
 ) -> Result<EraSchedule, NodeLifecycleError> {
     match state.seed_epoch_consensus_inputs.as_ref() {
         Some(s) => Ok(make_node_schedule(
             s.epoch_start_slot,
             s.epoch_no,
             s.epoch_length_slots,
+            rsw,
         )),
         None if live_feed_wired => Err(NodeLifecycleError::FeedMissingRecoveredConsensusInputs),
-        None => Ok(make_node_schedule(SlotNo(0), EpochNo(0), 1)),
+        None => Ok(make_node_schedule(SlotNo(0), EpochNo(0), 1, None)),
     }
 }
 
@@ -4865,7 +4891,7 @@ mod tests {
         const L: u32 = 86_400;
         const N: u64 = 1338;
         fn seed_sched() -> EraSchedule {
-            make_node_schedule(SlotNo(N * u64::from(L)), EpochNo(N), L)
+            make_node_schedule(SlotNo(N * u64::from(L)), EpochNo(N), L, None)
         }
         fn slot_in(epoch: u64) -> SlotNo {
             SlotNo(epoch * u64::from(L) + 30)
@@ -6329,7 +6355,7 @@ mod tests {
         // PREVIEW (epoch_length 86400): epoch 1331 starts at 114_998_400. A
         // followed block at slot 115_030_409 (~77 slots past the seed) is WITHIN
         // epoch 1331, so the venue schedule LOCATES it (no SlotBeforeSystemStart).
-        let preview = make_node_schedule(SlotNo(114_998_400), EpochNo(1331), 86_400);
+        let preview = make_node_schedule(SlotNo(114_998_400), EpochNo(1331), 86_400, None);
         assert!(
             preview.locate(SlotNo(115_030_409)).is_ok(),
             "preview venue geometry must locate the followed block, got {:?}",
@@ -6339,7 +6365,7 @@ mod tests {
         // The PRE-FIX hardcoded behavior placed the era start at epoch_no*432000 =
         // 574_992_000 -- AFTER the block. locate() then fails SlotBeforeSystemStart,
         // the EXACT live failure: wrong geometry rejects deterministically.
-        let wrong = make_node_schedule(SlotNo(1331 * 432_000), EpochNo(1331), 432_000);
+        let wrong = make_node_schedule(SlotNo(1331 * 432_000), EpochNo(1331), 432_000, None);
         let err = wrong
             .locate(SlotNo(115_030_409))
             .expect_err("wrong (preprod-length) geometry must reject the preview block");
@@ -6351,7 +6377,7 @@ mod tests {
 
         // PREPROD (epoch_length 432000): the SAME code path is venue-correct for
         // preprod -- epoch 580 starts at 250_560_000; a block 500 slots in locates.
-        let preprod = make_node_schedule(SlotNo(580 * 432_000), EpochNo(580), 432_000);
+        let preprod = make_node_schedule(SlotNo(580 * 432_000), EpochNo(580), 432_000, None);
         assert!(
             preprod.locate(SlotNo(580 * 432_000 + 500)).is_ok(),
             "preprod venue geometry must locate its block"

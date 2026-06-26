@@ -73,22 +73,39 @@ for t in \
     grep -rqF "fn $t" crates/ || fail "the DC-EPOCH-16 proof '$t' is missing"
 done
 
-# (9) DEFERRAL COUPLING: the candidate-freeze ships INERT -- no production view supplies RSW yet
-#     (the boundary tick that consumes the candidate is deferred). The per-header candidate tracks
-#     without a freeze and MUST NOT be consumed by any live boundary tick. The boundary-tick
-#     follow-up has to supply RSW in the production views AND wire the tick together; this gate
-#     forces that coupling -- it FAILS the moment a production view supplies RSW, requiring the tick
-#     wiring + this gate to be updated in the same change.
+# (9) LIVE WIRING (B2): RSW = ceil(4k/f) lives in the canonical era geometry (derived by the parser
+#     from the venue k), header_validate READS it from there (not a LedgerView method, which is
+#     retired), and the boundary tick is DRIVEN on the follow path with a fail-closed bridge eta0
+#     cross-check. The warm-start (no-k) path stays inert via CANDIDATE_FREEZE_INERT until B4.
 HV=crates/ade_core/src/consensus/header_validate.rs
-LIVE_VIEW=crates/ade_runtime/src/consensus_inputs/view.rs
-POOL_VIEW=crates/ade_ledger/src/consensus_view.rs
+ERA=crates/ade_core/src/consensus/era_schedule.rs
+SYNC=crates/ade_node/src/node_sync.rs
+LIFECYCLE=crates/ade_node/src/node_lifecycle.rs
+GENESIS=crates/ade_runtime/src/consensus/genesis_parser.rs
+PROFILE=crates/ade_node/src/bootstrap_export.rs
+grep -qF 'randomness_stabilisation_window_slots' "$ERA" \
+    || fail "EraSummary must carry the RSW field (randomness_stabilisation_window_slots)"
+grep -qF 'security_param' "$PROFILE" \
+    || fail "NetworkProfile must carry the venue securityParam (k) for RSW = ceil(4k/f)"
+grep -qF 'pub fn praos_rsw_slots' "$ERA" \
+    || fail "the single RSW source of truth (praos_rsw_slots) must live in ade_core"
+grep -qF 'praos_rsw_slots' "$GENESIS" \
+    || fail "the genesis parser must derive RSW via the shared praos_rsw_slots helper"
+grep -qF 'praos_rsw_slots' "$LIFECYCLE" \
+    || fail "the live --network schedule builder must derive RSW via the shared praos_rsw_slots helper"
+grep -qF 'randomness_stabilisation_window_slots' "$HV" \
+    || fail "header_validate must read RSW from the era geometry"
 grep -qF 'CANDIDATE_FREEZE_INERT' "$HV" \
-    || fail "the freeze fallback must use the explicit CANDIDATE_FREEZE_INERT sentinel, not a bare u64::MAX"
-if grep -qF 'fn randomness_stabilisation_window' "$LIVE_VIEW" || grep -qF 'fn randomness_stabilisation_window' "$POOL_VIEW"; then
-    fail "a production view now supplies RSW: the candidate freeze is no longer inert -- the boundary tick MUST be wired and this coupling gate updated in the same change (DC-EPOCH-16)"
+    || fail "the warm-start (no-k) inert sentinel CANDIDATE_FREEZE_INERT is missing"
+if grep -rqF 'fn randomness_stabilisation_window' crates/; then
+    fail "the deferred LedgerView::randomness_stabilisation_window method must be retired (RSW now lives in the era geometry)"
 fi
+grep -qF 'NonceInput::EpochBoundary' "$SYNC" \
+    || fail "the boundary tick is not driven on the live follow path (node_sync)"
+grep -qF 'bridge eta0' "$SYNC" \
+    || fail "the boundary tick does not cross-check the ECA-5 bridge eta0 (fail-closed)"
 
 if (( FAILED == 0 )); then
-    echo "OK: rolling Praos nonce evolution on the follow path (DC-EPOCH-16; indivisible per-header step, combine + rotation no-reset, fail-closed operand, backward-compat snapshot, bridge-equivalence proven; CandidateFreeze retired)"
+    echo "OK: rolling Praos nonce evolution on the follow path (DC-EPOCH-16; indivisible per-header step, combine + rotation no-reset, fail-closed operand, backward-compat snapshot, bridge-equivalence proven; live RSW freeze from the era geometry + boundary tick driven with a fail-closed bridge cross-check; CandidateFreeze + the deferred LedgerView RSW method retired)"
 fi
 exit $FAILED

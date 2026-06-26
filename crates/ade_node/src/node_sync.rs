@@ -573,18 +573,44 @@ where
                 .map_err(|e| NodeSyncError::Pump(format!("eview prepare: {e:?}")))?;
                 if promoted {
                     crate::node_lifecycle::extend_schedule_to_epoch(era_schedule, auth.epoch());
-                    // The followed-header leader-VRF check reads `state.receive.chain_dep.epoch_nonce`;
-                    // the follow path never advances it, so it stays the seed (N) eta0. At the boundary
-                    // promotion, sync it to the promoted view's eta0 (the bridge's seed+1 nonce) so N+1
-                    // header VRF inputs use the N+1 nonce -- else the first N+1 block fails VrfCert against
-                    // the stale N nonce.
-                    let eta0 = auth.promoted_source().map(|s| s.nonce.clone());
-                    if let Some(eta0) = eta0 {
-                        state.receive.chain_dep.epoch_nonce =
-                            ade_core::consensus::praos_state::Nonce(eta0.clone());
-                        state.receive.chain_dep.evolving_nonce =
-                            ade_core::consensus::praos_state::Nonce(eta0);
+                    // DC-EPOCH-16: advance the chain-dep nonce via the BLUE epoch tick
+                    // (epoch_nonce' = candidate (X) last_epoch_block_nonce; previous +
+                    // last-epoch-block rotation; evolving AND candidate carried UNCHANGED).
+                    // This is the GENERAL combine that survives boundary 2+ (the ECA-5
+                    // bridge eta0 is welded to seed+1), and it replaces the bridge overlay:
+                    // the followed-header leader-VRF check reads the resulting N+1
+                    // epoch_nonce, and -- crucially -- evolving is NO LONGER reset, so the
+                    // N+1 candidate evolves from the continuous nonce (a reset corrupts
+                    // eta0(N+2)). At this FIRST boundary the tick must reproduce the bridge
+                    // eta0 byte-for-byte (B1-proven: seeded snapshot -> tick == the bridge
+                    // formula blake2b(candidate || lastEpochBlock)); a mismatch is terminal.
+                    let ticked = ade_core::consensus::apply_nonce_input(
+                        &state.receive.chain_dep,
+                        &ade_core::consensus::NonceInput::EpochBoundary {
+                            new_epoch: auth.epoch(),
+                        },
+                    )
+                    .map_err(|e| NodeSyncError::Pump(format!("DC-EPOCH-16 epoch tick: {e:?}")))?;
+                    // The bridge source is provably Some at this first boundary
+                    // (prepare_authority_for_candidate_slot promotes only after
+                    // promote() records it); require it explicitly so a future
+                    // boundary-2+ promotion path cannot silently adopt an
+                    // un-cross-checked tick. boundary 2+ is not yet on this path.
+                    let bridge_eta0 = auth
+                        .promoted_source()
+                        .map(|s| s.nonce.clone())
+                        .ok_or_else(|| {
+                            NodeSyncError::Pump(
+                                "DC-EPOCH-16: boundary promotion without a bridge source -- the first-boundary tick cross-check requires it".into(),
+                            )
+                        })?;
+                    if ticked.epoch_nonce.0 != bridge_eta0 {
+                        return Err(NodeSyncError::Pump(format!(
+                            "DC-EPOCH-16 epoch-tick eta0 {:?} != bridge eta0 {:?} at epoch {:?}",
+                            ticked.epoch_nonce.0, bridge_eta0, auth.epoch()
+                        )));
                     }
+                    state.receive.chain_dep = ticked;
                 }
             }
         }

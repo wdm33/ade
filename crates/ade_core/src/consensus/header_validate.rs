@@ -244,29 +244,30 @@ pub fn validate_and_apply_header(
     // Step 9: apply nonce contribution using the nonce-role output (TPraos)
     // or the derived nonce value (Praos). Mixing the leader output here would
     // silently desynchronise the evolving nonce from cardano-node.
-    // freeze_boundary = firstSlotNextEpoch − RandomnessStabilisationWindow, from
-    // canonical era geometry. When the ledger view supplies no RSW the candidate
-    // freeze is INERT (deferred): the candidate tracks the whole epoch but is not
-    // consumed by any live boundary combine until the boundary-tick follow-up
-    // supplies RSW + wires the tick together (see
-    // `LedgerView::randomness_stabilisation_window`). The sentinel is explicitly
-    // NOT a correctness value -- it must never silently stand in for a forgotten
-    // production RSW (coupled by ci_check_praos_nonce_follow_evolution.sh).
+    // freeze_boundary = firstSlotNextEpoch − RSW, read from the canonical era
+    // geometry (DC-EPOCH-16). RSW (= ceil(4k/f)) is present on the live follow
+    // path (derived from the venue genesis k). It is `None` only on a warm-start
+    // schedule rebuilt from the durable sidecar (which carries no k): the
+    // candidate freeze is then INERT and the boundary tick fails closed until B4
+    // persists it. The sentinel is explicitly NOT a correctness value -- it must
+    // never silently stand in for a forgotten RSW.
     const CANDIDATE_FREEZE_INERT: SlotNo = SlotNo(u64::MAX);
-    let freeze_boundary = match (
-        era_schedule.eras().get(location.era_index as usize),
-        ledger_view.randomness_stabilisation_window(epoch),
-    ) {
-        (Some(era), Some(rsw)) => {
+    let freeze_boundary = match era_schedule
+        .eras()
+        .get(location.era_index as usize)
+        .and_then(|era| {
+            era.randomness_stabilisation_window_slots
+                .map(|rsw| (era.epoch_length_slots, rsw))
+        }) {
+        Some((epoch_length_slots, rsw)) => {
             let epoch_start = header
                 .slot
                 .0
                 .saturating_sub(u64::from(location.relative_slot_in_epoch));
-            let first_slot_next_epoch =
-                epoch_start.saturating_add(u64::from(era.epoch_length_slots));
-            SlotNo(first_slot_next_epoch.saturating_sub(rsw))
+            let first_slot_next_epoch = epoch_start.saturating_add(u64::from(epoch_length_slots));
+            SlotNo(first_slot_next_epoch.saturating_sub(u64::from(rsw)))
         }
-        _ => CANDIDATE_FREEZE_INERT,
+        None => CANDIDATE_FREEZE_INERT,
     };
     let after_nonce = apply_nonce_input(
         &after_op_cert,

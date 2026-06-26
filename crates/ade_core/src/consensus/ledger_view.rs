@@ -50,22 +50,4 @@ pub trait LedgerView {
     /// from the era's protocol parameters; ledger surfaces it so
     /// BLUE has one canonical source for `f`.
     fn active_slots_coeff(&self, epoch: EpochNo) -> Option<ActiveSlotsCoeff>;
-
-    /// Randomness-stabilisation window `RSW = ceil(4·k / f)` in slots for the
-    /// operating epoch — the Praos candidate-nonce freeze latitude
-    /// (`freeze_boundary = firstSlotNextEpoch − RSW`), same `(k, f)` provenance
-    /// as the era `safe_zone_slots`.
-    ///
-    /// Returns `None` by default and NO production view supplies it yet, so on
-    /// the follow path the candidate-nonce freeze is INERT: the candidate tracks
-    /// the evolving nonce but is NOT consumed by any live boundary combine. The
-    /// epoch tick that would consume the candidate is wired in the boundary-tick
-    /// follow-up (DC-EPOCH-16 stays `declared`), which MUST supply a finite RSW
-    /// here AND wire the tick together — coupled mechanically by
-    /// `ci/ci_check_praos_nonce_follow_evolution.sh`. `None` therefore means
-    /// "freeze not yet supplied", NOT a correctness claim; it must never silently
-    /// stand in for a forgotten production RSW.
-    fn randomness_stabilisation_window(&self, _epoch: EpochNo) -> Option<u64> {
-        None
-    }
 }
