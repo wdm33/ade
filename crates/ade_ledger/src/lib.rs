@@ -22,6 +22,7 @@ pub mod cert_classify;
 pub mod consensus_input_extract;
 pub mod consensus_view;
 pub mod conway;
+pub mod cred;
 pub mod delegation;
 pub mod epoch;
 pub mod error;

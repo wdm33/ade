@@ -127,6 +127,35 @@ if [ -f "$RULESLOGIC" ] && ! grep -qE 'apply_committee_enactment' "$RULESLOGIC";
     FAIL=1
 fi
 
+# 8. NATIVE-STATE-CRED-CONVENTION (strengthens DC-LEDGER-10 — the read_credential VALUE-flip
+#    regression). The checks above defend that the tag is PRESERVED (mapped to a variant) and only
+#    cover ade_codec. They did NOT check the tag's VALUE (0=Key vs 0=Script) and did NOT cover the
+#    ade_ledger native-bootstrap decoders — so a flipped tag (1=Key,0=Script) in
+#    `ledgerdb_state::read_credential` shipped: it mislabeled ~every delegator (key<->script), the
+#    delegation map stopped joining the UTxO, and the cross-epoch leader schedule collapsed (seed+2
+#    stake fell to ~10% of real -> the node VrfCert-rejected valid blocks). Close it: the
+#    cardano-ledger Credential tag->variant mapping for ALL native-state decoders (LedgerDB state,
+#    snapshot cert-state + governance) must live in EXACTLY ONE place, crate::cred, with the canonical
+#    value (0=KeyHash, 1=ScriptHash). No other ade_ledger file may carry its own numeric-tag mapping
+#    (a second convention can drift); they must call crate::cred::stake_credential_from_ledger_tag.
+CRED="$REPO_ROOT/crates/ade_ledger/src/cred.rs"
+if [ ! -f "$CRED" ]; then
+    echo "FAIL: crates/ade_ledger/src/cred.rs (the single credential-tag convention) is missing"
+    FAIL=1
+elif ! grep -qE '0 => Some\(StakeCredential::KeyHash' "$CRED" \
+    || ! grep -qE '1 => Some\(StakeCredential::ScriptHash' "$CRED"; then
+    echo "FAIL: cred.rs convention is not 0=>KeyHash, 1=>ScriptHash (the cardano-ledger Credential tags)"
+    FAIL=1
+fi
+STRAY_CRED_TAG=$(grep -rnE '[0-9]+ =>[[:space:]]*(Ok|Some)?\(?[[:space:]]*StakeCredential::(KeyHash|ScriptHash)' \
+    "$REPO_ROOT/crates/ade_ledger/src" --include=*.rs 2>/dev/null | grep -v '/cred.rs:')
+if [ -n "$STRAY_CRED_TAG" ]; then
+    echo "FAIL: a numeric tag -> StakeCredential mapping exists OUTSIDE crate::cred (a second, driftable"
+    echo "      credential convention — route it through crate::cred::stake_credential_from_ledger_tag):"
+    echo "$STRAY_CRED_TAG"
+    FAIL=1
+fi
+
 if [ "$FAIL" -eq 0 ]; then
     echo "PASS: DC-LEDGER-10 credential discriminant is closed and faithful (committee + DRep-vote + enactment + committee-write-back surfaces)"
 fi

@@ -44,9 +44,8 @@ use crate::snapshot::cert_state::{decode_cert_state, encode_cert_state};
 
 /// The Conway era index in the HardFork telescope (Byron=0 … Conway=6).
 const CONWAY_TELESCOPE_INDEX: usize = 6;
-/// cardano-ledger `Credential` tag: 1 = KeyHash, 0 = ScriptHash.
-const CRED_KEYHASH: u64 = 1;
-const CRED_SCRIPTHASH: u64 = 0;
+// The stake-credential CBOR discriminant (0=KeyHash, 1=ScriptHash) lives in `crate::cred` — the
+// SINGLE source of truth shared by every native-state decoder; `read_credential` routes through it.
 /// CBOR tag for a rational number (`margin`).
 const TAG_RATIONAL: u64 = 30;
 
@@ -176,11 +175,8 @@ fn read_credential(d: &[u8], o: &mut usize) -> R<StakeCredential> {
     expect_array(d, o, 2, "credential")?;
     let tag = read_u64(d, o, "credential.tag")?;
     let h = hash28(read_fixed_bytes(d, o, 28, "credential.hash")?);
-    match tag {
-        CRED_KEYHASH => Ok(StakeCredential::KeyHash(h)),
-        CRED_SCRIPTHASH => Ok(StakeCredential::ScriptHash(h)),
-        other => Err(malformed(format!("credential tag {other}"))),
-    }
+    crate::cred::stake_credential_from_ledger_tag(tag, h)
+        .ok_or_else(|| malformed(format!("credential tag {tag}")))
 }
 
 /// Decode one `PoolParams` value (the map VALUE; the pool id is the map key). The on-wire array is
@@ -316,6 +312,30 @@ pub fn decode_ledgerdb_tip(state_cbor: &[u8]) -> R<(SlotNo, Hash32)> {
 #[cfg(test)]
 mod tip_tests {
     use super::*;
+
+    #[test]
+    fn read_credential_uses_canonical_ledger_tags() {
+        // cardano-ledger Credential CBOR: tag 0 = KeyHash, tag 1 = ScriptHash. A flip mislabels every
+        // delegator (key<->script) so the delegation map no longer joins the UTxO and the cross-epoch
+        // leader schedule collapses (the seed+2 stake came out ~10% of real). This is the SINGLE
+        // stake-credential decoder on the native-bootstrap path; pin its convention.
+        let mut key_cred = vec![0x82u8, 0x00, 0x58, 0x1c]; // array(2)[tag=0, bytes(28)]
+        key_cred.extend_from_slice(&[0xaa; 28]);
+        let mut o = 0;
+        assert_eq!(
+            read_credential(&key_cred, &mut o).expect("decode"),
+            StakeCredential::KeyHash(Hash28([0xaa; 28])),
+            "tag 0 must decode to KeyHash"
+        );
+        let mut script_cred = vec![0x82u8, 0x01, 0x58, 0x1c]; // array(2)[tag=1, bytes(28)]
+        script_cred.extend_from_slice(&[0xbb; 28]);
+        let mut o = 0;
+        assert_eq!(
+            read_credential(&script_cred, &mut o).expect("decode"),
+            StakeCredential::ScriptHash(Hash28([0xbb; 28])),
+            "tag 1 must decode to ScriptHash"
+        );
+    }
 
     #[test]
     fn decode_ledgerdb_tip_reads_anntip_slot_and_hash() {
@@ -766,7 +786,7 @@ fn read_mark_snapshot_pool_distr(
     // `calculatePoolDistr`: sum each delegated credential's coin into its pool.
     let mut pool_stake: BTreeMap<PoolId, u64> = BTreeMap::new();
     map_each(d, o, "mark.stake", |o| {
-        let _cred = read_stake_cred(d, o)?; // key: array(2)[variant, hash28]
+        let _cred = read_credential(d, o)?; // key: array(2)[tag, hash28] (skipped; pool is in the value)
         expect_array(d, o, 2, "mark.stake.val")?; // value: [coin, pool]
         let coin = read_u64(d, o, "mark.stake.coin")?;
         let pool = PoolId(hash28(read_fixed_bytes(d, o, 28, "mark.stake.pool")?));
@@ -794,14 +814,6 @@ fn read_mark_snapshot_pool_distr(
     Ok(out)
 }
 
-/// StakeCredential = `array(2)[variant(0=Key,1=Script), bytes(28)]`. The (variant, hash) tuple is the
-/// aggregation key -- a key-hash cred and a script-hash cred sharing the same 28 bytes are DISTINCT.
-fn read_stake_cred(d: &[u8], o: &mut usize) -> R<(u64, Vec<u8>)> {
-    expect_array(d, o, 2, "stakeCred")?;
-    let variant = read_u64(d, o, "stakeCred.variant")?;
-    let hash = read_fixed_bytes(d, o, 28, "stakeCred.hash")?;
-    Ok((variant, hash))
-}
 
 /// `nn`-error wrapper for [`read_mark_snapshot_pool_distr`] (mirrors `read_pool_distr_nn`).
 fn read_mark_snapshot_pool_distr_nn(

@@ -32,6 +32,7 @@ use crate::pparams::{ConwayOnlyDepositParams, MinUtxoRule, ProtocolParameters};
 use crate::rational::Rational;
 use crate::state::ConwayGovState;
 
+use super::cert_state::read_stake_credential;
 use super::error::{SnapshotDecodeError, StructuralReason};
 
 // ---------------------------------------------------------------------------
@@ -782,29 +783,6 @@ fn write_stake_credential(buf: &mut Vec<u8>, c: &StakeCredential) {
     };
     write_uint_canonical(buf, variant);
     write_bytes_canonical(buf, &hash.0);
-}
-
-fn read_stake_credential(
-    bytes: &[u8],
-    o: &mut usize,
-) -> Result<StakeCredential, SnapshotDecodeError> {
-    expect_array(bytes, o, 2)?;
-    let variant = read_u64(bytes, o)?;
-    let (h, _) = read_bytes(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
-    if h.len() != 28 {
-        return Err(SnapshotDecodeError::Structural {
-            reason: StructuralReason::Hash28LengthMismatch,
-        });
-    }
-    let mut arr = [0u8; 28];
-    arr.copy_from_slice(&h);
-    match variant {
-        0 => Ok(StakeCredential::KeyHash(Hash28(arr))),
-        1 => Ok(StakeCredential::ScriptHash(Hash28(arr))),
-        _ => Err(SnapshotDecodeError::Structural {
-            reason: StructuralReason::EraTagOutOfRange,
-        }),
-    }
 }
 
 fn write_drep(buf: &mut Vec<u8>, d: &DRep) {

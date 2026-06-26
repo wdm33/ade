@@ -200,7 +200,10 @@ fn write_stake_credential(buf: &mut Vec<u8>, cred: &StakeCredential) {
     write_bytes_canonical(buf, &hash.0);
 }
 
-fn read_stake_credential(
+/// The ONE stake-credential reader for Ade's snapshot format (`array(2)[tag, hash28]`), shared by the
+/// cert-state and governance decoders. The tag->variant convention lives in `crate::cred` (the
+/// codebase-wide single source of truth); this reads the surrounding CBOR.
+pub(crate) fn read_stake_credential(
     bytes: &[u8],
     o: &mut usize,
 ) -> Result<StakeCredential, SnapshotDecodeError> {
@@ -214,13 +217,11 @@ fn read_stake_credential(
     }
     let mut arr = [0u8; 28];
     arr.copy_from_slice(&h);
-    match variant {
-        0 => Ok(StakeCredential::KeyHash(Hash28(arr))),
-        1 => Ok(StakeCredential::ScriptHash(Hash28(arr))),
-        _ => Err(SnapshotDecodeError::Structural {
+    crate::cred::stake_credential_from_ledger_tag(variant, Hash28(arr)).ok_or(
+        SnapshotDecodeError::Structural {
             reason: StructuralReason::EraTagOutOfRange,
-        }),
-    }
+        },
+    )
 }
 
 fn write_pool_id(buf: &mut Vec<u8>, pool: &PoolId) {
