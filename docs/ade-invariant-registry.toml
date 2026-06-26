@@ -8867,6 +8867,37 @@ introduced_in = "EPOCH-CONTINUITY-ACTIVATION-ECA-B1"
 strengthened_in = ["EPOCH-CONTINUITY-ACTIVATION-ECA-B2", "EPOCH-CONTINUITY-ACTIVATION-ECA-B2c"]
 
 [[rules]]
+id = "DC-EPOCH-17"
+tier = "derived"
+statement = """
+Replay-derived per-boundary leadership authority on the live follow path. The activation seam
+(prepare_authority_for_candidate_slot) ADVANCES the promoted epoch authority at EVERY boundary it
+crosses, not once: for a candidate slot in epoch C with the currently-promoted authority for epoch P,
+it promotes the C authority IFF C == P+1 (C > P+1 is terminal CandidateSlotSkipsBoundary; the candidate
+parent must bind the durable selected tip). The authority SOURCE is chosen deterministically by
+boundary index: C == seed_epoch+1 uses the ECA-5 MARK bridge (DC-EPOCH-15); C >= seed_epoch+2 uses the
+WINDOW-REPLAY over the durable C-2 epoch window (try_activate_at_boundary over the reduced checkpoint +
+canonical C-2 window blocks + v4 sidecar geometry), reflecting the MARK/SET/GO leadership snapshot lag
+= 2 (authority(E) = replay(E-2)). (a) the bound view's epoch_nonce is the EVOLVED chain-dep epoch_nonce
+at the boundary (DC-EPOCH-16, live-proven), never a recomputed/bridge nonce. (b) DURABLE-BEFORE-VISIBLE:
+the WAL activation record is written before the active view is advanced. (c) REPLAY-DETERMINISTIC: the
+promoted authority is a pure function of the durable window (blocks + reduced checkpoint + sidecar) --
+same durable state => byte-identical bound view + WAL record. (d) FAIL-CLOSED: a missing/short C-2
+window, a boundary-skipping candidate, or a parent not binding the durable tip is TERMINAL -- no silent
+bridge fallback past seed+1, no Origin fallback. AUTOMATIC + DETERMINISTIC: the sole gate is the
+candidate-slot/tip predicate over canonical durable state (no arming flag). LIVE GROUND TRUTH: Ade
+validates + admits seed+2 blocks against the replay-derived seed+2 authority + eta0(seed+2), crossing
+N+1->N+2 in the relay loop with no OutsideForecastRange / VrfCert / fail-close.
+"""
+source = "docs/clusters/EPOCH-CONSENSUS-VIEW/SLICE-ECA-B3-replay-derived-seed2-authority.md. Generalizes the DC-EPOCH-15 first-boundary bridge seam to a per-boundary advance; builds on DC-EPOCH-16 (the self-evolved eta0(seed+2), enforced live 2026-06-26). Pinned canonical leadership lag from cardano-ledger NewEpochState (psStakeMark/Set/Go = 2). Operational venue detail (snapshot, slots, commands) kept in the untracked competition-secret runbook."
+cross_ref = ["DC-EPOCH-16", "DC-EPOCH-15", "DC-EPOCH-14", "DC-EPOCH-13", "DC-MITHRIL-04"]
+code_locus = "crates/ade_node/src/epoch_wire.rs prepare_authority_for_candidate_slot (generalize the boundary detection + the per-boundary source branch) + try_activate_at_boundary (the window-replay source, reused); crates/ade_node/src/epoch_activation.rs ActiveEpochAuthority.advance (in-place P -> P+1, durable-before-visible); crates/ade_node/src/node_sync.rs (drive the seam at every boundary + extend the forecast). TBD at implementation."
+tests = []
+ci_scripts = []
+status = "declared"
+introduced_in = "EPOCH-CONTINUITY-ACTIVATION-ECA-B3"
+
+[[rules]]
 id = "DC-MITHRIL-04"
 tier = "derived"
 statement = """
