@@ -358,6 +358,10 @@ pub enum ActivationError {
     /// ECA-5: projecting the bridge view to a `PoolDistrView` (or the WAL activation-record write)
     /// failed -- terminal.
     BridgeProjection(String),
+    /// DC-EPOCH-17 (B3): the boundary-2+ window-replay preparation failed -- the eta0 boundary tick
+    /// over the live chain-dep, the C-2 window bounds, or the (not-yet-wired) beyond-seed+2 case.
+    /// Terminal: there is no silent bridge fallback past seed+1.
+    WindowReplayPrepare(String),
 }
 
 /// S3f-4d-wire-3 (DC-EPOCH-11): the live boundary-activation orchestration -- the SINGLE entry
@@ -505,34 +509,37 @@ pub fn prepare_authority_for_candidate_slot(
     candidate_parent: &Hash32,
     live: &ReducedUtxoCheckpoint,
     chaindb: &dyn ChainDb,
+    chain_dep: &ade_core::consensus::praos_state::PraosChainDepState,
     active_view: &mut ActiveEpochAuthority,
     wal_write: impl FnOnce(&WalEntry) -> bool,
 ) -> Result<bool, ActivationError> {
-    // idempotent: once a view is promoted, nothing to prepare.
-    if active_view.is_promoted() {
-        return Ok(false);
-    }
     let seed_epoch = inputs.seed_epoch;
-    // (a) the durable SELECTED tip must be in the seed epoch N -- the N window is complete only at N's end.
+    // The epoch the CURRENT authority answers for: the seed epoch N before any promotion, else the
+    // promoted epoch P. The seam ADVANCES ONE boundary per call (DC-EPOCH-17), so the boundary-1 weld
+    // (tip/candidate == seed) generalizes to (tip/candidate == the current authority's epoch).
+    let current_epoch = active_view.epoch();
+    // (a) the durable SELECTED tip must be in epoch C-1 (= the current authority's epoch); the C-1
+    // window is complete only at its end (boundary 1: C-1 == seed; boundary 2: C-1 == seed+1).
     let tip_epoch = match era_schedule.locate(durable_tip_slot) {
         Ok(loc) => loc.epoch,
         Err(_) => return Ok(false),
     };
-    if tip_epoch.0 != seed_epoch.0 {
+    if tip_epoch.0 != current_epoch.0 {
         return Ok(false);
     }
-    // (b) the candidate slot must belong to EXACTLY epoch N+1 (extrapolated from the seed geometry).
+    // (b) the candidate slot's epoch C.
     let candidate_epoch = match era_schedule.locate(candidate_slot) {
         Ok(loc) => loc.epoch,
         Err(_) => return Ok(false),
     };
-    if candidate_epoch.0 <= seed_epoch.0 {
-        return Ok(false); // still in N -- not a boundary candidate.
+    if candidate_epoch.0 <= current_epoch.0 {
+        return Ok(false); // still in the current authority's epoch -- not a boundary candidate.
     }
-    if candidate_epoch.0 != seed_epoch.0 + 1 {
+    // the boundary must advance EXACTLY one epoch (P -> P+1) -- a skip is terminal.
+    if candidate_epoch.0 != current_epoch.0 + 1 {
         return Err(ActivationError::CandidateSlotSkipsBoundary {
             candidate_epoch,
-            seed_epoch,
+            seed_epoch: current_epoch,
         });
     }
     // (c) the candidate parent must bind to the durable selected tip -- no fork can force promotion.
@@ -542,6 +549,63 @@ pub fn prepare_authority_for_candidate_slot(
             durable_tip: durable_tip_hash.clone(),
         });
     }
+
+    // WINDOW-REPLAY (DC-EPOCH-17, boundary 2+): for a candidate past seed+1 the seed+C authority is
+    // replay(C-2). For boundary 2 (C == seed+2) that is the seed (N) window Ade followed from bootstrap.
+    // eta0(C) is the chain-dep epoch tick over the LIVE chain-dep (candidate (X) last_epoch_block_nonce
+    // -- the value the boundary-2 live gate proved, DC-EPOCH-16); node_sync applies the SAME tick to the
+    // chain-dep after, so the bound view's nonce and the live chain-dep agree by construction. Boundary
+    // 3+ (the general C-2 window) is the continuous-crossing refinement -- fail closed here.
+    if candidate_epoch.0 >= seed_epoch.0 + 2 {
+        if candidate_epoch.0 != seed_epoch.0 + 2 {
+            return Err(ActivationError::WindowReplayPrepare(format!(
+                "window-replay beyond seed+2 not yet wired (candidate {candidate_epoch:?}, seed {seed_epoch:?})"
+            )));
+        }
+        let ticked = ade_core::consensus::apply_nonce_input(
+            chain_dep,
+            &ade_core::consensus::NonceInput::EpochBoundary {
+                new_epoch: candidate_epoch,
+            },
+        )
+        .map_err(|e| ActivationError::WindowReplayPrepare(format!("eta0 boundary tick: {e:?}")))?;
+        let eta0 = ticked.epoch_nonce.0.clone();
+        let bounds = compute_first_window_bounds(
+            era_schedule,
+            inputs.seed_point_slot,
+            inputs.seed_point_hash.clone(),
+            seed_epoch,
+        )
+        .ok_or_else(|| {
+            ActivationError::WindowReplayPrepare("seed window bounds unavailable".to_string())
+        })?;
+        let profile = CandidateProfile {
+            slots_per_epoch: bounds.slots_per_epoch,
+            genesis_hash: inputs.genesis_hash.clone(),
+            protocol_params_hash: inputs.protocol_params_hash.clone(),
+            asc: inputs.asc,
+        };
+        let selected_point = Point {
+            slot: durable_tip_slot,
+            hash: durable_tip_hash.clone(),
+        };
+        try_activate_at_boundary(
+            live,
+            chaindb,
+            &bounds,
+            &inputs.seed_bootstrap_state,
+            inputs.network_magic,
+            eta0,
+            &profile,
+            &selected_point,
+            true,
+            active_view,
+            &inputs.replay_scratch_path,
+            wal_write,
+        )?;
+        return Ok(active_view.is_promoted());
+    }
+
     // (a)+(b)+(c) => the durable tip IS the last N block; the canonical N window is COMPLETE. Promote the
     // N+1 authority from the durable BRIDGE -- the seed+1 leadership projected from the imported MARK
     // snapshot at bootstrap (DC-EPOCH-15). The bridge is REQUIRED here; there is NO fallback to the +2
@@ -608,7 +672,7 @@ pub fn prepare_authority_for_candidate_slot(
         ));
     }
     active_view
-        .promote(source, projected)
+        .advance(source, projected)
         .map_err(ActivationError::Activate)?;
     Ok(active_view.is_promoted())
 }

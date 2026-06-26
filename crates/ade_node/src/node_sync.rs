@@ -567,6 +567,7 @@ where
                     &candidate_parent,
                     live,
                     chaindb,
+                    &state.receive.chain_dep,
                     auth,
                     |entry| wal.append(entry.clone()).is_ok(),
                 )

@@ -111,14 +111,15 @@ pub fn activate_at_boundary(
     };
 
     // 6. project the published candidate to the leadership PoolDistrView (DC-EPOCH-12, using the
-    //    SAME bound profile -- a commitment mismatch / incomplete view is TERMINAL), then atomically
-    //    promote the ONE authority (a differing already-active view -> TERMINAL conflict; the same
-    //    view is idempotent). Both consumers (header validation + leadership) read the promoted view
-    //    thereafter -- there is no separate active-view holder.
+    //    SAME bound profile -- a commitment mismatch / incomplete view is TERMINAL), then ADVANCE the
+    //    ONE authority by one boundary (DC-EPOCH-17: Seed -> seed+1 at the first boundary,
+    //    Promoted(P) -> P+1 at boundary 2+; a boundary skip / same-epoch conflict is TERMINAL; the
+    //    same view is idempotent). Both consumers (header validation + leadership) read the advanced
+    //    view thereafter -- there is no separate active-view holder.
     let projected = view
         .to_pool_distr_view(&profile.genesis_hash, &profile.protocol_params_hash, profile.asc)
         .map_err(|_| EpochViewActivationError::EpochViewActivationFailed)?;
-    authority.promote(view, projected)?;
+    authority.advance(view, projected)?;
     Ok(BoundaryActivationOutcome::Promoted)
 }
 

@@ -305,11 +305,12 @@ impl<'a> ActiveEpochAuthority<'a> {
     }
 
     /// Advance the authority to the NEXT epoch's bound view (DC-EPOCH-17 / B3): the per-boundary
-    /// generalization of `promote`. The new view must answer for EXACTLY one epoch past the current
-    /// authoritative view (Seed's seed epoch N -> N+1 at boundary 1; Promoted(P) -> P+1 at boundary
-    /// k>=2); re-advancing to the SAME promoted source is an idempotent replay; any other view -- a
-    /// boundary skip, a regression, or a same-epoch conflict -- is a terminal
-    /// `EpochViewActivationConflict`. The projected `PoolDistrView` (the caller's
+    /// generalization of `promote`. From an ALREADY-promoted authority the new view must answer for
+    /// EXACTLY one epoch past the current (Promoted(P) -> P+1 at boundary k>=2); the FIRST promotion
+    /// from `Seed` is unconstrained -- the ECA-5 bridge derives seed+1, the window-replay derives
+    /// seed+2 from the seed authority (the leadership lag = 2). Re-advancing to the SAME promoted
+    /// source is an idempotent replay; from a promotion, a boundary skip / regression / same-epoch
+    /// view is a terminal `EpochViewActivationConflict`. The projected `PoolDistrView` (the caller's
     /// `source.to_pool_distr_view(...)`) is installed as the active view in lockstep. Durable-before-
     /// visible is the caller's contract (the WAL activation record precedes this), exactly as `promote`.
     pub fn advance(
@@ -321,11 +322,17 @@ impl<'a> ActiveEpochAuthority<'a> {
         if self.activation.promoted().is_some_and(|p| *p == source) {
             return Ok(());
         }
-        // The new view must be EXACTLY one epoch ahead of the current authoritative view.
-        let current = self.epoch().0;
-        let next = projected.epoch().0;
-        if Some(next) != current.checked_add(1) {
-            return Err(EpochViewActivationError::EpochViewActivationConflict);
+        // From an ALREADY-promoted authority the new view must be EXACTLY one epoch ahead -- the
+        // per-boundary advance (P -> P+1). From `Seed` the first promotion is unconstrained: the
+        // window-replay legitimately derives seed+2 from a seed-epoch authority (the MARK/SET/GO
+        // leadership snapshot lag = 2), and the ECA-5 bridge derives seed+1 -- both are first
+        // promotions, never an advance.
+        if self.activation.is_promoted() {
+            let current = self.epoch().0;
+            let next = projected.epoch().0;
+            if Some(next) != current.checked_add(1) {
+                return Err(EpochViewActivationError::EpochViewActivationConflict);
+            }
         }
         self.activation = ActiveEpochView::Promoted(source);
         self.promoted_view = Some(projected);
