@@ -2141,7 +2141,7 @@ pub async fn run_relay_loop_with_sched(
                         act.pending_reselection = false;
                     }
                 } else {
-                    run_node_sync(
+                    let sync_outcome = run_node_sync(
                         source,
                         state,
                         chaindb,
@@ -2154,6 +2154,25 @@ pub async fn run_relay_loop_with_sched(
                     )
                         .await
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                    // B3b yield-at-boundary (DC-EPOCH-17): if the pass YIELDED on a durable boundary
+                    // promotion, surface the structured crossing (never a bare bool). Whether it yielded
+                    // or the feed ended, the next steps are identical AND deliberate -- advance the
+                    // reduced checkpoint to the durable tip (so the NEXT boundary's window-replay reads a
+                    // CURRENT stake view; this is precisely why the yield exists), then run the idempotent
+                    // first-boundary fallback. The authority is NOT re-created here (it persists across
+                    // iterations) -- a boundary is a clean in-process re-entry, never a reconnect.
+                    if let crate::node_sync::SyncOutcome::BoundaryPromoted {
+                        from_epoch,
+                        to_epoch,
+                        promotion_commitment,
+                        ..
+                    } = &sync_outcome
+                    {
+                        eprintln!(
+                            "epoch-boundary yield: {} -> {} (eta0 {:?})",
+                            from_epoch.0, to_epoch.0, promotion_commitment
+                        );
+                    }
                     // S3f-4d-mat-2c (DC-EPOCH-11): after the durable admit, advance the live
                     // reduced checkpoint to the ChainDB tip (EVIEW only; None elsewhere ->
                     // no-op, byte-identical). Reads only the durable ChainDB; fail-closed.

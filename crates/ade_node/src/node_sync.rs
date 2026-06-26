@@ -487,7 +487,52 @@ where
     D: ChainDb + SnapshotStore,
 {
     let mut sched = era_schedule.clone();
-    run_node_sync(source, state, chaindb, wal, &mut sched, Some(ledger_view), None, None, None).await
+    // No eview => the seam never promotes => always SourceEnded; surface its tip for the legacy
+    // follow / rollback / re-announce tests (unchanged across the B3b SyncOutcome rewire).
+    match run_node_sync(source, state, chaindb, wal, &mut sched, Some(ledger_view), None, None, None)
+        .await?
+    {
+        SyncOutcome::SourceEnded { selected_tip } => Ok(selected_tip),
+        SyncOutcome::BoundaryPromoted { .. } => Err(NodeSyncError::Pump(
+            "run_node_sync_no_eview: unexpected boundary promotion on the no-eview path".into(),
+        )),
+    }
+}
+
+/// The structured outcome of one `run_node_sync` pass (B3b yield-at-boundary, DC-EPOCH-17). NOT a
+/// bare tip option: the relay loop MUST distinguish a durable epoch-boundary promotion -- after which
+/// it advances the reduced stake checkpoint to the new tip BEFORE re-entering sync with the SAME
+/// authority -- from the wire feed simply ending. A typed failure is the `Err(NodeSyncError)` arm: a
+/// deterministic halt, never a silent skip. The wire layer owns reconnect; reconnect is NEVER boundary
+/// control flow (a boundary is a clean in-process yield -- the reconnect-consistency concern is B4).
+#[derive(Debug)]
+pub enum SyncOutcome {
+    /// The wire feed ended (drained / closed) without crossing a boundary. The relay loop advances the
+    /// reduced checkpoint, runs the idempotent first-boundary fallback, and re-enters with the SAME
+    /// authority. `selected_tip` is the last durably-admitted tip this pass (None if the feed was empty).
+    SourceEnded { selected_tip: Option<PumpTip> },
+    /// A durable authority promotion crossed an epoch boundary. `run_node_sync` YIELDS here so the relay
+    /// loop can advance the reduced checkpoint to the new durable tip before the next iteration (keeping
+    /// it current for the NEXT boundary's window-replay, with zero per-block advance overhead). The
+    /// promotion is DURABLE before this returns: the WAL activation record (written inside the seam), the
+    /// chain-dep epoch tick, the admitted boundary block (`pump_block`), and the recovery checkpoint.
+    BoundaryPromoted {
+        from_epoch: ade_types::EpochNo,
+        to_epoch: ade_types::EpochNo,
+        promotion_commitment: ade_types::Hash32,
+        selected_tip: Option<PumpTip>,
+    },
+}
+
+impl SyncOutcome {
+    /// The last durably-admitted tip of this pass (carried by BOTH variants; None if no block advanced
+    /// the tip). Lets follow / rollback tests assert tip movement uniformly across the SyncOutcome rewire.
+    pub fn selected_tip(&self) -> Option<&PumpTip> {
+        match self {
+            SyncOutcome::SourceEnded { selected_tip }
+            | SyncOutcome::BoundaryPromoted { selected_tip, .. } => selected_tip.as_ref(),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -501,7 +546,7 @@ pub async fn run_node_sync<D>(
     mut authority: Option<&mut crate::epoch_activation::ActiveEpochAuthority<'_>>,
     eview: Option<&crate::epoch_wire::EviewActivationInputs>,
     reduced_checkpoint: Option<&ade_runtime::chaindb::ReducedUtxoCheckpoint>,
-) -> Result<Option<PumpTip>, NodeSyncError>
+) -> Result<SyncOutcome, NodeSyncError>
 where
     D: ChainDb + SnapshotStore,
 {
@@ -544,9 +589,14 @@ where
         // that candidate -- breaking the deadlock where the durable tip cannot enter N+1 because the first
         // N+1 header fails the forecast. A no-op off the boundary; terminal on a guard violation (parent
         // not binding the durable tip, candidate slot skipping N+1).
+        let mut boundary_promotion: Option<(ade_types::EpochNo, ade_types::EpochNo, ade_types::Hash32)> =
+            None;
         if let (Some(inputs), Some(live), Some(auth)) =
             (eview, reduced_checkpoint, authority.as_deref_mut())
         {
+            // capture the authority's epoch BEFORE the seam may advance it -- the B3b yield reports the
+            // exact boundary crossed (from -> to), never a bare "promoted" bool.
+            let from_epoch = auth.epoch();
             let decoded = ade_ledger::block_validity::decode_block(&block_bytes)
                 .map_err(|e| NodeSyncError::Pump(format!("eview decode: {e:?}")))?;
             let candidate_parent = decoded
@@ -611,7 +661,12 @@ where
                             ticked.epoch_nonce.0, bridge_eta0, auth.epoch()
                         )));
                     }
+                    // the promotion commitment = the new epoch nonce (eta0): the cryptographic
+                    // commitment to the crossed boundary's randomness. Capture it before the move, then
+                    // record the boundary so run_node_sync YIELDS after this block is durably admitted.
+                    let promotion_commitment = ticked.epoch_nonce.0.clone();
                     state.receive.chain_dep = ticked;
+                    boundary_promotion = Some((from_epoch, auth.epoch(), promotion_commitment));
                 }
             }
         }
@@ -636,6 +691,23 @@ where
         if let Some(t) = tip {
             selected_tip = Some(t);
         }
+        // B3b yield-at-boundary (DC-EPOCH-17): the boundary block is now durably admitted. Capture the
+        // recovery checkpoint (so the chain-dep tick is durable) and YIELD -- the relay loop advances the
+        // reduced stake checkpoint to this tip before re-entering with the SAME authority, keeping the
+        // checkpoint current for the NEXT boundary's window-replay without per-block advance overhead.
+        if let Some((from_epoch, to_epoch, promotion_commitment)) = boundary_promotion {
+            if let Some(tip) = &selected_tip {
+                PersistentSnapshotCache::new(chaindb)
+                    .capture(tip.slot, &state.receive.ledger, &state.receive.chain_dep)
+                    .map_err(|e| NodeSyncError::Capture(format!("{e:?}")))?;
+            }
+            return Ok(SyncOutcome::BoundaryPromoted {
+                from_epoch,
+                to_epoch,
+                promotion_commitment,
+                selected_tip,
+            });
+        }
     }
 
     // E4: capture the recovery checkpoint AT the selected tip, via the same
@@ -647,7 +719,7 @@ where
             .map_err(|e| NodeSyncError::Capture(format!("{e:?}")))?;
     }
 
-    Ok(selected_tip)
+    Ok(SyncOutcome::SourceEnded { selected_tip })
 }
 
 /// PHASE4-N-U S1 (DC-NODE-12) — the durable-forge-admit driver: route a BLUE

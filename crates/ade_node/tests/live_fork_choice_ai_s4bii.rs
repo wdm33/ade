@@ -343,7 +343,7 @@ async fn ak_s2_rollback_to_recovered_anchor_is_idempotent_noop() {
     let out = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None)
         .await
         .expect("rollback-to-recovered-anchor is an accepted no-op");
-    assert!(out.is_none(), "a no-op rollback advances no tip");
+    assert!(out.selected_tip().is_none(), "a no-op rollback advances no tip");
     // No durable mutation: WAL empty, ChainDb tip absent, ledger + chain_dep intact.
     assert!(wal.entries.is_empty(), "no WAL append on the no-op");
     assert!(db.tip().unwrap().is_none(), "no ChainDb mutation");
