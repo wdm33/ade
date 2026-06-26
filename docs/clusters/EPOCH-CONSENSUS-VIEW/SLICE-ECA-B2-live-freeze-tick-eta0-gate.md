@@ -109,3 +109,24 @@ boundary tick deferred. B2 makes the freeze live-correct, wires the tick on the 
   replay-derived seed+2 stake authority) so Ade VALIDATES N+2 blocks — the eta0(N+2) gate proves the
   nonce is right; validating N+2 needs the N+2 leadership authority.
 - **B5:** the full unattended forge-off crossing proof.
+
+## RESULT — DC-EPOCH-16 ENFORCED (live-proven 2026-06-26)
+
+The decisive `eta0(seed+2)` gate **PASSED**. Bootstrapping at a retained epoch-1338 preview Mithril
+snapshot, Ade crossed 1338→1339 (the BLUE tick cross-checked **== the ECA-5 bridge eta0**), followed
+all of 1339, and self-evolved **`eta0(1340) =
+5299da6e848ef87a2386b737e42816f12b9c0756ea7bebddf71ac4ed98bf94e4` == the live cardano-node's
+`epochNonce(1340)`, byte-for-byte** — two boundaries deep, where the bridge cannot help.
+
+The first gate run *failed* (a wrong `eta0(seed+2)`), and the live venue earned its keep: every B1/B2
+transition was then verified against the cardano source (`praos_nonce_value == vrfNonceValue`, the
+freeze condition, the tick combine + lab rotation — all matching), isolating the bug to the **seed**.
+Root cause (**B2c**, commit `e8589e1e`): `extract_praos_nonces_v2` took the last *five* of the *six*
+contiguous `PraosState` nonce wrappers `[evolving, candidate, epoch, previousEpoch, lab,
+lastEpochBlock]` and mis-read `previousEpoch` as the evolving nonce. Boundary 1 used the seeded
+*candidate*, never the evolving, so it stayed hidden until boundary 2 built a candidate from the wrong
+evolving. Fixed: read all six, `evolving = tail[0]`.
+
+DC-EPOCH-16 `declared → enforced` (registry + `ci_check_praos_nonce_follow_evolution.sh`). The durable
+chain-dep format (`array(10)`) is unchanged; the getting-started receipt values are not
+nonce-dependent. Operational venue detail (snapshot, slots, commands) stays in the untracked runbook.
