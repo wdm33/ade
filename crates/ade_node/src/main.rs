@@ -63,6 +63,13 @@ async fn main() -> ExitCode {
         }
     };
 
+    // Operational follow-progress log: default to `<data-dir>/node.log` so the human-readable
+    // follow / boundary narrative lands in a KNOWN place (not just whatever stderr is redirected
+    // to). Best-effort + non-fatal; the lines still go to stderr regardless.
+    if let Some(dir) = &cli.data_dir {
+        ade_node::ops_log::init_ops_log(&dir.join("node.log"));
+    }
+
     let log_file = match File::create(&cli.log_path) {
         Ok(f) => f,
         Err(e) => {

@@ -40,6 +40,7 @@ pub mod node;
 pub mod node_lifecycle;
 pub mod node_sync;
 pub mod operator_forge;
+pub mod ops_log;
 pub mod post_switch_continuity;
 pub mod produce_mode;
 pub mod rehearsal_evidence;

@@ -2168,7 +2168,7 @@ pub async fn run_relay_loop_with_sched(
                         ..
                     } = &sync_outcome
                     {
-                        eprintln!(
+                        crate::node_log!(
                             "epoch-boundary yield: {} -> {} (eta0 {:?})",
                             from_epoch.0, to_epoch.0, promotion_commitment
                         );

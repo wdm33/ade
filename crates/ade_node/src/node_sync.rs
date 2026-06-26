@@ -551,6 +551,10 @@ where
     D: ChainDb + SnapshotStore,
 {
     let mut selected_tip: Option<PumpTip> = None;
+    // Observability (default-level follow progress): a per-batch count of admitted blocks, used to
+    // throttle the `follow:` tip log below so an operator SEES the tip advance + how far behind the
+    // peer it is, instead of inferring progress from disk growth or reading "dead air" keep-alives.
+    let mut admitted_this_pass: u64 = 0;
 
     while let Some(item) = source.next_item().await {
         // PHASE4-N-AK AK-S2 (DC-NODE-32): a RollBackward binding EXACTLY (slot AND
@@ -689,6 +693,32 @@ where
         )
         .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?;
         if let Some(t) = tip {
+            admitted_this_pass += 1;
+            // Compare against the peer tip the wire pump already tracks (FollowedPeerTipSignal, from
+            // TipUpdate). Log the first block of each batch, every 500th while catching up, and every
+            // block once at/near the peer tip -- so BOTH the catch-up and the caught-up transition are
+            // visible (a caught-up node is legitimately quiet; this shows the difference from a stall).
+            let behind = source
+                .followed_peer_tip_signal()
+                .tip()
+                .map(|p| p.slot.0.saturating_sub(t.slot.0));
+            if admitted_this_pass == 1
+                || admitted_this_pass % 500 == 0
+                || matches!(behind, Some(b) if b <= 2)
+            {
+                match behind {
+                    Some(0) => crate::node_log!(
+                        "follow: tip slot={} -- AT PEER TIP (caught up, following live)",
+                        t.slot.0
+                    ),
+                    Some(b) => {
+                        crate::node_log!("follow: tip slot={} behind={} slots from peer", t.slot.0, b)
+                    }
+                    None => {
+                        crate::node_log!("follow: tip slot={} (peer tip not observed yet)", t.slot.0)
+                    }
+                }
+            }
             selected_tip = Some(t);
         }
         // B3b yield-at-boundary (DC-EPOCH-17): the boundary block is now durably admitted. Capture the
