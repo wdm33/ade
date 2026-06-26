@@ -304,6 +304,34 @@ impl<'a> ActiveEpochAuthority<'a> {
         Ok(())
     }
 
+    /// Advance the authority to the NEXT epoch's bound view (DC-EPOCH-17 / B3): the per-boundary
+    /// generalization of `promote`. The new view must answer for EXACTLY one epoch past the current
+    /// authoritative view (Seed's seed epoch N -> N+1 at boundary 1; Promoted(P) -> P+1 at boundary
+    /// k>=2); re-advancing to the SAME promoted source is an idempotent replay; any other view -- a
+    /// boundary skip, a regression, or a same-epoch conflict -- is a terminal
+    /// `EpochViewActivationConflict`. The projected `PoolDistrView` (the caller's
+    /// `source.to_pool_distr_view(...)`) is installed as the active view in lockstep. Durable-before-
+    /// visible is the caller's contract (the WAL activation record precedes this), exactly as `promote`.
+    pub fn advance(
+        &mut self,
+        source: EpochConsensusView,
+        projected: PoolDistrView,
+    ) -> Result<(), EpochViewActivationError> {
+        // Idempotent replay: re-advancing to the SAME promoted source is a no-op.
+        if self.activation.promoted().is_some_and(|p| *p == source) {
+            return Ok(());
+        }
+        // The new view must be EXACTLY one epoch ahead of the current authoritative view.
+        let current = self.epoch().0;
+        let next = projected.epoch().0;
+        if Some(next) != current.checked_add(1) {
+            return Err(EpochViewActivationError::EpochViewActivationConflict);
+        }
+        self.activation = ActiveEpochView::Promoted(source);
+        self.promoted_view = Some(projected);
+        Ok(())
+    }
+
     /// The epoch the current authoritative view answers for (the seed epoch N before promotion, the
     /// target epoch N+1 after). The input to the epoch-match guard.
     pub fn epoch(&self) -> EpochNo {
@@ -590,6 +618,32 @@ mod tests {
             BluePoolEntry { active_stake: 1_000, vrf_keyhash: Hash32([marker; 32]) },
         );
         PoolDistrView::new(EpochNo(epoch), 1_000, ActiveSlotsCoeff { numer: 1, denom: 20 }, pools)
+    }
+
+    // DC-EPOCH-17 (B3): the authority ADVANCES per boundary (P -> P+1), not once. Boundary 1
+    // (seed -> seed+1) then boundary 2 (seed+1 -> seed+2); a boundary SKIP is terminal; the same
+    // source is an idempotent replay; a rejected advance leaves the authority unchanged.
+    #[test]
+    fn authority_advances_per_boundary_and_rejects_skip() {
+        let seed = pdv(577, 0x10);
+        let mut auth = ActiveEpochAuthority::seed(&seed);
+        // boundary 1: seed 577 -> 578.
+        auth.advance(view(1000), pdv(578, 0x20)).expect("advance to 578");
+        assert_eq!(auth.epoch(), EpochNo(578));
+        // boundary 2: 578 -> 579 -- the advance PAST the first promotion (the welded seam could not).
+        auth.advance(view(2000), pdv(579, 0x30)).expect("advance to 579");
+        assert_eq!(auth.epoch(), EpochNo(579));
+        assert_eq!(auth.pool_distr_view(), &pdv(579, 0x30));
+        // idempotent: re-advancing to the SAME promoted source is a no-op.
+        auth.advance(view(2000), pdv(579, 0x30)).expect("idempotent re-advance");
+        assert_eq!(auth.epoch(), EpochNo(579));
+        // a boundary SKIP (579 -> 581) is terminal -- never a silent multi-epoch jump.
+        assert_eq!(
+            auth.advance(view(3000), pdv(581, 0x40)),
+            Err(EpochViewActivationError::EpochViewActivationConflict)
+        );
+        // no partial mutation: the authority still answers for 579 after the rejected skip.
+        assert_eq!(auth.epoch(), EpochNo(579));
     }
 
     // ECA-3 (DC-EPOCH-14): the ONE owned authority yields the seed view until promotion, then the
