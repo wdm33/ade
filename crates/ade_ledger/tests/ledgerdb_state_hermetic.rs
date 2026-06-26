@@ -127,9 +127,10 @@ fn build_state(current_era_index: u64, pool_vrf: [u8; 32], pool_distr_vrf: [u8; 
         tele.extend(concat(&[arr(2), bound(), bound()]));
     }
     tele.extend(concat(&[arr(2), bound(), era_state]));
-    // headerState = [dummy, array(5) of the trailing PraosState nonces]
-    let mut ns = arr(5);
-    for k in 0..5u8 {
+    // headerState = [dummy, array(6) of the trailing PraosState nonces in record
+    // order [evolving, candidate, epoch, previousEpoch, lab, lastEpochBlock]]
+    let mut ns = arr(6);
+    for k in 0..6u8 {
         ns.extend(nonce(k + 1));
     }
     let hs = concat(&[arr(2), uint(0), ns]);

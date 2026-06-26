@@ -287,9 +287,10 @@ fn build_state(k: &Knobs) -> Vec<u8> {
         tele.extend(concat(&[arr(2), bound(), bound()]));
     }
     tele.extend(concat(&[arr(2), bound(), era_state]));
-    // headerState = [dummy, array(5) of the trailing PraosState nonces]
-    let mut ns = arr(5);
-    for kk in 0..5u8 {
+    // headerState = [dummy, array(6) of the trailing PraosState nonces in record
+    // order [evolving, candidate, epoch, previousEpoch, lab, lastEpochBlock]]
+    let mut ns = arr(6);
+    for kk in 0..6u8 {
         ns.extend(nonce(kk + 1));
     }
     let hs = concat(&[arr(2), uint(0), ns]);
@@ -314,13 +315,16 @@ fn happy_minimal_state_decodes_all_fields() {
     assert_eq!(s.cert_state.pool.pools.len(), 1, "the FULL CertState carries the pool");
     assert_eq!(s.cert_state.delegation.delegations.len(), 1);
     assert_eq!(s.pool_distr.len(), 1);
-    // Record order [candidate, epoch, evolving, lab, lastEpochBlock] (tail[0..5]). candidate=tail[0]
-    // and epoch=tail[1] are value-proven against the live node: eta0(N+1) = blake2b(candidate || leb).
-    assert_eq!(s.praos_nonces.candidate.0, [1u8; 32]);
-    assert_eq!(s.praos_nonces.epoch.0, [2u8; 32]);
-    assert_eq!(s.praos_nonces.evolving.0, [3u8; 32]);
-    assert_eq!(s.praos_nonces.lab.0, [4u8; 32]);
-    assert_eq!(s.praos_nonces.last_epoch_block.0, [5u8; 32]);
+    // Record order [evolving, candidate, epoch, previousEpoch, lab, lastEpochBlock] (tail[0..6]).
+    // evolving=tail[0]; candidate=tail[1] + epoch=tail[2] + lastEpochBlock=tail[5] are value-proven
+    // against the live node: eta0(N+1) = blake2b(candidate || lastEpochBlock), and the self-evolved
+    // eta0(seed+2) matches the node's epochNonce (DC-EPOCH-16 live gate). previousEpoch (tail[3]) is
+    // skipped (write-only bookkeeping).
+    assert_eq!(s.praos_nonces.evolving.0, [1u8; 32]);
+    assert_eq!(s.praos_nonces.candidate.0, [2u8; 32]);
+    assert_eq!(s.praos_nonces.epoch.0, [3u8; 32]);
+    assert_eq!(s.praos_nonces.lab.0, [5u8; 32]);
+    assert_eq!(s.praos_nonces.last_epoch_block.0, [6u8; 32]);
     // protocol params decoded natively (not defaulted).
     assert_eq!(s.protocol_params.min_fee_a, Coin(44));
     assert_eq!(s.protocol_params.min_fee_b, Coin(155_381));

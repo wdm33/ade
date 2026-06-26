@@ -363,13 +363,13 @@ fn extract_praos_nonces_v2(hs: &[u8]) -> R<PraosNonces> {
             i += 1;
         }
     }
-    if offs.len() < 5 {
-        return Err(malformed(format!("praos nonces: found {} < 5", offs.len())));
+    if offs.len() < 6 {
+        return Err(malformed(format!("praos nonces: found {} < 6", offs.len())));
     }
-    let tail = &offs[offs.len() - 5..];
+    let tail = &offs[offs.len() - 6..];
     for w in tail.windows(2) {
         if w[1] - w[0] != 36 {
-            return Err(malformed("praos nonces: trailing five not contiguous"));
+            return Err(malformed("praos nonces: trailing six not contiguous"));
         }
     }
     let nonce_at = |o: usize| -> Nonce {
@@ -377,19 +377,21 @@ fn extract_praos_nonces_v2(hs: &[u8]) -> R<PraosNonces> {
         b.copy_from_slice(&hs[o + 4..o + 36]);
         Nonce(b)
     };
-    // Nonce field order checked against the live preview node (cardano-cli query protocol-state).
-    // Record order is [candidate, epoch, evolving, lab, lastEpochBlock]: epochNonce (the leader-VRF
-    // eta0) is tail[1] and lastEpochBlockNonce is tail[4] (both cross-checked by value), and the
-    // CANDIDATE is tail[0] -- PROVEN by value: eta0(N+1) = blake2b(tail[0] || tail[4]) reproduces the
-    // live node's epoch nonce for the next epoch. The prior candidate=tail[2] mapping (evolving and
-    // candidate swapped) fed the wrong candidate into the seed+1 eta0 combination ->
-    // VrfCert(VerificationFailed) on the first post-boundary block.
+    // The Praos chain-dep state (ouroboros-consensus PraosState) serializes SIX contiguous nonce
+    // wrappers in record order [evolving, candidate, epoch, previousEpoch, lab, lastEpochBlock]
+    // (Ouroboros/Consensus/Protocol/Praos.hs:272-283/313). epochNonce (the leader-VRF eta0) is
+    // tail[2] and lastEpochBlockNonce is tail[5] (both cross-checked by value), and the CANDIDATE is
+    // tail[1] -- PROVEN by value: eta0(N+1) = blake2b(tail[1] || tail[5]) reproduces the live node's
+    // epoch nonce for the next epoch (ECA-5). The EVOLVING nonce is tail[0] -- the prior 5-nonce scan
+    // dropped it (it took the last FIVE = [candidate, epoch, previousEpoch, lab, lastEpochBlock] and
+    // mis-read previousEpoch as evolving), feeding a wrong candidate into eta0(seed+2). DC-EPOCH-16:
+    // the boundary-2 live gate caught it -- boundary 1 used the seeded candidate, never the evolving.
     Ok(PraosNonces {
-        candidate: nonce_at(tail[0]),
-        epoch: nonce_at(tail[1]),
-        evolving: nonce_at(tail[2]),
-        lab: nonce_at(tail[3]),
-        last_epoch_block: nonce_at(tail[4]),
+        evolving: nonce_at(tail[0]),
+        candidate: nonce_at(tail[1]),
+        epoch: nonce_at(tail[2]),
+        lab: nonce_at(tail[4]),
+        last_epoch_block: nonce_at(tail[5]),
     })
 }
 
