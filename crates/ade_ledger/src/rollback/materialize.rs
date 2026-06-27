@@ -22,7 +22,7 @@ use ade_core::consensus::ledger_view::LedgerView;
 use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
 use ade_types::{CardanoEra, Hash32, SlotNo};
 
-use crate::block_validity::transition::{block_validity, BlockValidityOutcome};
+use crate::block_validity::transition::{block_validity_trusted_replay, BlockValidityOutcome};
 use crate::block_validity::verdict::BlockValidityVerdict;
 use crate::state::LedgerState;
 
@@ -78,6 +78,16 @@ pub fn materialize_rolled_back_state(
         return Ok((ledger, chain_dep));
     }
 
+    // Extend a working copy of the schedule so the forecast horizon spans the durable tip. The
+    // replay-forward re-validates the durable blocks up to `target`, which may be epochs past the
+    // seed (a node that CROSSED boundaries before restarting); without this the seed-epoch horizon
+    // rejects the first post-boundary header as `OutsideForecastRange`. NO-OP when the schedule
+    // already covers `target` (within-epoch rollbacks / already-extended live schedules stay
+    // byte-identical), via the SAME `EraSchedule::extend_to_slot` the live follow's horizon extension
+    // uses -- one definition for both paths.
+    let mut replay_schedule = era_schedule.clone();
+    replay_schedule.extend_to_slot(target.slot);
+
     // 3. Replay-forward over blocks in (snapshot_slot, target.slot].
     let blocks = source.blocks_in_range(snapshot_slot, target.slot);
     for (slot, block_bytes) in blocks {
@@ -97,11 +107,20 @@ pub fn materialize_rolled_back_state(
             });
         }
 
+        // The replay re-applies ALREADY-DURABLE (admit-validated) blocks to reconstruct state, so it
+        // TRUSTS their leader eligibility (the durable store is the replay authority) and lacks the
+        // per-epoch stake to re-check it; structural + VRF-proof + nonce-apply still run identically.
         let BlockValidityOutcome {
             verdict,
             ledger: new_ledger,
             chain_dep: new_chain_dep,
-        } = block_validity(&ledger, &chain_dep, era_schedule, ledger_view, &block_bytes);
+        } = block_validity_trusted_replay(
+            &ledger,
+            &chain_dep,
+            &replay_schedule,
+            ledger_view,
+            &block_bytes,
+        );
         match verdict {
             BlockValidityVerdict::Valid { .. } => {
                 ledger = new_ledger;
@@ -126,6 +145,7 @@ fn is_supported_era(era: CardanoEra) -> bool {
 #[allow(clippy::panic)]
 mod tests {
     use super::*;
+    use crate::block_validity::transition::block_validity;
     use std::collections::BTreeMap;
 
     use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;

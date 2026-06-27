@@ -19,7 +19,8 @@ use std::collections::BTreeMap;
 use ade_core::consensus::vrf_cert::vrf_input;
 use ade_core::consensus::{
     validate_and_apply_header, ActiveSlotsCoeff, BootstrapAnchorHash, EraSchedule, EraSummary,
-    HeaderInput, HeaderValidationError, HeaderVrf, Nonce, OpCertCounterError, OutsideForecastRange,
+    HeaderInput, HeaderValidationError, HeaderVrf, LeaderEligibility, Nonce, OpCertCounterError,
+    OutsideForecastRange,
     PraosChainDepState, VrfCertError, VrfRole,
 };
 use ade_crypto::vrf::{VrfProof, VrfVerificationKey};
@@ -117,7 +118,7 @@ fn valid_header_accepted_advances_state() {
     let state = genesis_state();
     let header = header_at(&sk, &vk, &state, SlotNo(1), BlockNo(1), 0);
 
-    let applied = validate_and_apply_header(&state, &header, &ledger(vk), &schedule())
+    let applied = validate_and_apply_header(&state, &header, &ledger(vk), &schedule(), LeaderEligibility::Enforce)
         .expect("valid header accepted");
     assert_eq!(applied.new_state.last_slot, Some(SlotNo(1)));
     assert_eq!(applied.new_state.last_block_no, Some(BlockNo(1)));
@@ -137,7 +138,7 @@ fn header_with_slot_regression_rejected() {
     let mut state = genesis_state();
     state.last_slot = Some(SlotNo(100));
     let header = header_at(&sk, &vk, &state, SlotNo(50), BlockNo(1), 0);
-    let res = validate_and_apply_header(&state, &header, &ledger(vk), &schedule());
+    let res = validate_and_apply_header(&state, &header, &ledger(vk), &schedule(), LeaderEligibility::Enforce);
     assert_eq!(
         res,
         Err(HeaderValidationError::SlotBeforeLastApplied {
@@ -154,7 +155,7 @@ fn header_with_block_no_regression_rejected() {
     state.last_slot = Some(SlotNo(1));
     state.last_block_no = Some(BlockNo(100));
     let header = header_at(&sk, &vk, &state, SlotNo(2), BlockNo(50), 0);
-    let res = validate_and_apply_header(&state, &header, &ledger(vk), &schedule());
+    let res = validate_and_apply_header(&state, &header, &ledger(vk), &schedule(), LeaderEligibility::Enforce);
     assert_eq!(
         res,
         Err(HeaderValidationError::BlockNoOutOfOrder {
@@ -172,13 +173,13 @@ fn header_with_op_cert_regression_rejected() {
     // First admit a header with counter = 10.
     let h1 = header_at(&sk, &vk, &state, SlotNo(1), BlockNo(1), 10);
     let applied =
-        validate_and_apply_header(&state, &h1, &ledger(vk.clone()), &schedule()).expect("first ok");
+        validate_and_apply_header(&state, &h1, &ledger(vk.clone()), &schedule(), LeaderEligibility::Enforce).expect("first ok");
 
     // Now attempt to admit a second header with a regression (counter
     // = 9 < 10) for the same pool + KES period.
     let s2 = applied.new_state;
     let h2 = header_at(&sk, &vk, &s2, SlotNo(2), BlockNo(2), 9);
-    let res = validate_and_apply_header(&s2, &h2, &ledger(vk), &schedule());
+    let res = validate_and_apply_header(&s2, &h2, &ledger(vk), &schedule(), LeaderEligibility::Enforce);
     assert_eq!(
         res,
         Err(HeaderValidationError::OpCertCounter(
@@ -213,7 +214,7 @@ fn header_with_invalid_vrf_proof_rejected() {
         },
         kes: None,
     };
-    let res = validate_and_apply_header(&state, &header, &ledger(vk), &schedule());
+    let res = validate_and_apply_header(&state, &header, &ledger(vk), &schedule(), LeaderEligibility::Enforce);
     assert_eq!(
         res,
         Err(HeaderValidationError::VrfCert(
@@ -228,7 +229,7 @@ fn header_beyond_forecast_horizon_rejected() {
     let state = genesis_state();
     let beyond = SlotNo(u64::MAX);
     let header = header_at(&sk, &vk, &state, beyond, BlockNo(1), 0);
-    let res = validate_and_apply_header(&state, &header, &ledger(vk), &schedule());
+    let res = validate_and_apply_header(&state, &header, &ledger(vk), &schedule(), LeaderEligibility::Enforce);
     assert_eq!(
         res,
         Err(HeaderValidationError::OutsideForecastRange(
@@ -246,10 +247,10 @@ fn validate_replay_is_deterministic() {
     let state = genesis_state();
     let header = header_at(&sk, &vk, &state, SlotNo(1), BlockNo(1), 0);
 
-    let a = validate_and_apply_header(&state, &header, &ledger(vk.clone()), &schedule())
+    let a = validate_and_apply_header(&state, &header, &ledger(vk.clone()), &schedule(), LeaderEligibility::Enforce)
         .expect("first apply");
     let b =
-        validate_and_apply_header(&state, &header, &ledger(vk), &schedule()).expect("second apply");
+        validate_and_apply_header(&state, &header, &ledger(vk), &schedule(), LeaderEligibility::Enforce).expect("second apply");
     assert_eq!(a, b);
 }
 

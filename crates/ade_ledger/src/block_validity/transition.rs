@@ -19,7 +19,9 @@
 
 use ade_core::consensus::events::Point;
 use ade_core::consensus::ledger_view::LedgerView;
-use ade_core::consensus::{validate_and_apply_header, EraSchedule, PraosChainDepState};
+use ade_core::consensus::{
+    validate_and_apply_header, EraSchedule, LeaderEligibility, PraosChainDepState,
+};
 
 use crate::rules::apply_block_with_verdicts;
 use crate::state::LedgerState;
@@ -39,13 +41,58 @@ pub struct BlockValidityOutcome {
 ///
 /// Total and fail-fast: the first failing stage produces the verdict and the
 /// input states are returned unchanged. A `Valid` verdict returns the states
-/// evolved by both authorities.
+/// evolved by both authorities. ENFORCES the leader-eligibility (stake) check —
+/// the live, untrusted-header entry point.
 pub fn block_validity(
     ledger: &LedgerState,
     chain_dep: &PraosChainDepState,
     era_schedule: &EraSchedule,
     ledger_view: &dyn LedgerView,
     block_cbor: &[u8],
+) -> BlockValidityOutcome {
+    block_validity_with_eligibility(
+        ledger,
+        chain_dep,
+        era_schedule,
+        ledger_view,
+        block_cbor,
+        LeaderEligibility::Enforce,
+    )
+}
+
+/// `block_validity` for the warm-start / rollback REPLAY of already-admit-validated DURABLE blocks:
+/// it TRUSTS each block's leader claim (the durable store is the replay authority) and lacks the
+/// per-epoch stake to re-check it. Every other stage (structural, VRF-proof, KES, op-cert, nonce
+/// apply, body authority) runs identically, so the reconstructed state is byte-identical to the
+/// enforcing path — only the redundant stake-threshold check is skipped (see [`LeaderEligibility`]).
+///
+/// `pub(crate)`, NOT `pub`: the trust-skipping variant must never be reachable from an untrusted
+/// (peer / admission) entry point. Its ONLY caller is `materialize_rolled_back_state` (durable
+/// replay); `ci/ci_check_trusted_replay_boundary.sh` enforces the single-caller invariant mechanically.
+pub(crate) fn block_validity_trusted_replay(
+    ledger: &LedgerState,
+    chain_dep: &PraosChainDepState,
+    era_schedule: &EraSchedule,
+    ledger_view: &dyn LedgerView,
+    block_cbor: &[u8],
+) -> BlockValidityOutcome {
+    block_validity_with_eligibility(
+        ledger,
+        chain_dep,
+        era_schedule,
+        ledger_view,
+        block_cbor,
+        LeaderEligibility::TrustDurable,
+    )
+}
+
+fn block_validity_with_eligibility(
+    ledger: &LedgerState,
+    chain_dep: &PraosChainDepState,
+    era_schedule: &EraSchedule,
+    ledger_view: &dyn LedgerView,
+    block_cbor: &[u8],
+    leader_eligibility: LeaderEligibility,
 ) -> BlockValidityOutcome {
     // Step 1: decode (era-tagged envelope → header input + hashes).
     let decoded = match decode_block(block_cbor) {
@@ -60,6 +107,7 @@ pub fn block_validity(
         &decoded.header_input,
         ledger_view,
         era_schedule,
+        leader_eligibility,
     ) {
         Ok(a) => a,
         Err(e) => return invalid(ledger, chain_dep, BlockValidityError::Header(e)),

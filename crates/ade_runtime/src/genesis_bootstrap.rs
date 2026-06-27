@@ -436,6 +436,9 @@ mod tests {
             epoch_nonce: inputs.epoch_nonce.clone(),
             genesis_hash: inputs.genesis_hash.clone(),
             protocol_params_hash: inputs.protocol_params_hash.clone(),
+            // the merge carries the seed point from the canonical's source_tip (LAYER-4).
+            seed_point_slot: inputs.source_tip_slot,
+            seed_point_hash: inputs.source_tip_hash.clone(),
             active_slots_coeff: inputs.active_slots_coeff,
             total_active_stake: 3_500,
             pool_distribution: expected_pools,

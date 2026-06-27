@@ -128,6 +128,60 @@ impl EraSchedule {
         &self.eras
     }
 
+    /// Extend the schedule forward so it spans up to (and including) `target` epoch, by appending
+    /// summaries cloned from the seed era (epoch 0) — the SAME forecast-horizon extension the live
+    /// follow applies at each boundary, lifted here so the live path and the warm-start replay path
+    /// share ONE definition (never two that can drift). A NO-OP when the schedule already reaches
+    /// `target` (callers already covered stay byte-identical). Idempotent.
+    pub fn extend_to_epoch(&mut self, target: EpochNo) {
+        let (anchor, system_start, new_eras) = {
+            let eras = self.eras();
+            let seed = &eras[0];
+            let last_epoch = eras[eras.len() - 1].start_epoch;
+            if target.0 <= last_epoch.0 {
+                return;
+            }
+            let l = u64::from(seed.epoch_length_slots);
+            let mut new_eras: Vec<EraSummary> = eras.to_vec();
+            for e in (last_epoch.0 + 1)..=target.0 {
+                let offset = e - seed.start_epoch.0;
+                new_eras.push(EraSummary {
+                    randomness_stabilisation_window_slots: seed.randomness_stabilisation_window_slots,
+                    era: seed.era,
+                    start_slot: SlotNo(seed.start_slot.0 + offset * l),
+                    start_epoch: EpochNo(e),
+                    slot_length_ms: seed.slot_length_ms,
+                    epoch_length_slots: seed.epoch_length_slots,
+                    safe_zone_slots: seed.epoch_length_slots,
+                });
+            }
+            (self.anchor().clone(), self.system_start_unix_ms(), new_eras)
+        };
+        if let Ok(extended) = EraSchedule::new(anchor, system_start, new_eras) {
+            *self = extended;
+        }
+    }
+
+    /// Extend so the schedule's forecast horizon covers `slot`. The epoch is computed from the seed
+    /// era's geometry (the schedule may not yet reach `slot`, so `locate` can't be used), then the
+    /// schedule is extended to that epoch via [`Self::extend_to_epoch`]. NO-OP when already covered.
+    /// Used by the warm-start replay-forward so it can re-validate durable blocks past the seed
+    /// epoch's frozen horizon, exactly as the live follow extends per boundary.
+    pub fn extend_to_slot(&mut self, slot: SlotNo) {
+        let (start_slot, start_epoch, epoch_len) = {
+            let seed = &self.eras()[0];
+            (
+                seed.start_slot.0,
+                seed.start_epoch.0,
+                u64::from(seed.epoch_length_slots),
+            )
+        };
+        if epoch_len == 0 || slot.0 < start_slot {
+            return;
+        }
+        self.extend_to_epoch(EpochNo(start_epoch + (slot.0 - start_slot) / epoch_len));
+    }
+
     /// Pure translation: which era / epoch / relative slot is `slot`?
     pub fn locate(&self, slot: SlotNo) -> Result<EraLocation, HFCError> {
         if self.eras.is_empty() {

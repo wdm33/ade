@@ -17,7 +17,8 @@
 use ade_codec::cbor::{self, envelope::decode_block_envelope, ContainerEncoding};
 use ade_core::consensus::{
     validate_and_apply_header, BootstrapAnchorHash, EraSchedule, EraSummary, HeaderApplied,
-    HeaderInput, HeaderKes, HeaderValidationError, HeaderVrf, Nonce, PraosChainDepState,
+    HeaderInput, HeaderKes, HeaderValidationError, HeaderVrf, LeaderEligibility, Nonce,
+    PraosChainDepState,
 };
 use ade_crypto::blake2b::{blake2b_224, blake2b_256};
 use ade_crypto::vrf::{VrfOutput, VrfProof, VrfVerificationKey};
@@ -165,7 +166,7 @@ fn validate_block(
     let ch = corpus_header(corpus, i);
     let view = pool_distr_view_from_corpus(corpus, EPOCH_576).expect("pool distr view");
     let state = state_with_eta0(corpus.epoch_nonce);
-    validate_and_apply_header(&state, &ch.input, &view, &schedule())
+    validate_and_apply_header(&state, &ch.input, &view, &schedule(), LeaderEligibility::Enforce)
 }
 
 #[test]
@@ -191,7 +192,8 @@ fn conway_corpus_headers_all_pass_leader_check() {
         );
 
         let state = state_with_eta0(corpus.epoch_nonce);
-        let res = validate_and_apply_header(&state, &ch.input, &view, &schedule());
+        let res =
+            validate_and_apply_header(&state, &ch.input, &view, &schedule(), LeaderEligibility::Enforce);
         assert!(
             res.is_ok(),
             "block {i} (slot {}) failed header validation: {:?}",
@@ -226,7 +228,7 @@ fn praos_vrf_keyhash_mismatch_rejected() {
     k[0] ^= 0xFF;
     bad.vrf_vk = VrfVerificationKey(k);
 
-    match validate_and_apply_header(&state, &bad, &view, &schedule()) {
+    match validate_and_apply_header(&state, &bad, &view, &schedule(), LeaderEligibility::Enforce) {
         Err(HeaderValidationError::VrfKeyhashMismatch { .. }) => {}
         other => panic!("expected VrfKeyhashMismatch, got {other:?}"),
     }
@@ -253,7 +255,7 @@ fn praos_malformed_vrf_proof_rejected() {
         HeaderVrf::Tpraos { .. } => panic!("corpus is Praos"),
     };
 
-    match validate_and_apply_header(&state, &bad, &view, &schedule()) {
+    match validate_and_apply_header(&state, &bad, &view, &schedule(), LeaderEligibility::Enforce) {
         Err(HeaderValidationError::VrfCert(_)) => {}
         other => panic!("expected VrfCert error, got {other:?}"),
     }
@@ -272,7 +274,7 @@ fn praos_malformed_kes_sig_rejected() {
         kes.kes_signature.truncate(447);
     }
 
-    match validate_and_apply_header(&state, &bad, &view, &schedule()) {
+    match validate_and_apply_header(&state, &bad, &view, &schedule(), LeaderEligibility::Enforce) {
         Err(HeaderValidationError::MalformedField(fe)) => {
             assert_eq!(fe.actual, 447);
             assert_eq!(fe.expected, 448);

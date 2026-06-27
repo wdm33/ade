@@ -47,10 +47,15 @@ use crate::consensus_view::PoolEntry;
 /// durable consensus-profile hashes (`genesis_hash`, `protocol_params_hash`) so
 /// a continuous producer recovers the FULL consensus profile from the store, not
 /// a restart CLI/genesis (a pre-v4 store fails closed as a TYPED schema-upgrade
-/// requirement, not corruption — see `bootstrap.rs`).
-pub const SEED_CINPUT_SCHEMA_VERSION: u32 = 4;
+/// requirement, not corruption — see `bootstrap.rs`). 4 -> 5 by the warm-start
+/// multi-boundary recovery, which carries the SEED BOOTSTRAP POINT
+/// (`seed_point_slot` / `seed_point_hash`) as durable replay authority: the
+/// recovery's `compute_first_window_bounds` needs the EXACT bootstrap point (in
+/// the seed epoch), and on a restart the durable tip is epochs ahead — a v4
+/// sidecar (no seed point) fails closed (UnknownVersion).
+pub const SEED_CINPUT_SCHEMA_VERSION: u32 = 5;
 
-const FIELDS_OUTER: u64 = 11;
+const FIELDS_OUTER: u64 = 13;
 const ASC_FIELDS: u64 = 2;
 const POOL_ENTRY_FIELDS: u64 = 2;
 
@@ -89,6 +94,15 @@ pub struct SeedEpochConsensusInputs {
     /// commitment). Durable replay authority (DC-CINPUT-06): never recomputed from reserialized
     /// params at runtime (byte-sensitive), never CLI-supplied.
     pub protocol_params_hash: Hash32,
+    /// The EXACT seed bootstrap point's slot (the Mithril snapshot point, INSIDE `epoch_no`).
+    /// Durable replay authority for the warm-start multi-boundary recovery: the recovery's
+    /// `compute_first_window_bounds` anchors the seed→seed+2 window at THIS point, not the durable
+    /// tip (which on a restart is epochs ahead). At FIRST RUN the tip IS this point; persisting it
+    /// lets a restart recover the SAME window, NOT re-derive from the recovered tip.
+    pub seed_point_slot: SlotNo,
+    /// The seed bootstrap point's block hash (the window's lineage anchor), paired with
+    /// `seed_point_slot`. Never the recovered tip's hash on a restart.
+    pub seed_point_hash: Hash32,
     pub active_slots_coeff: ActiveSlotsCoeff,
     pub total_active_stake: u64,
     /// Deterministic `BTreeMap` ordering; `PoolEntry` carries the VRF keyhash,
@@ -118,10 +132,10 @@ pub enum SeedConsensusInputsError {
 
 /// Canonical CBOR encode. CN-CINPUT-01: sole pub encoder.
 ///
-/// Wire shape (v4):
+/// Wire shape (v5):
 /// ```text
-/// array(11) [
-///   uint   SEED_CINPUT_SCHEMA_VERSION (= 4),
+/// array(13) [
+///   uint   SEED_CINPUT_SCHEMA_VERSION (= 5),
 ///   bytes(32) anchor_fp,
 ///   uint   epoch_no,
 ///   uint   epoch_start_slot,
@@ -129,6 +143,8 @@ pub enum SeedConsensusInputsError {
 ///   bytes(32) epoch_nonce,
 ///   bytes(32) genesis_hash,                   // ECA-2-pre (DC-CINPUT-06)
 ///   bytes(32) protocol_params_hash,           // ECA-2-pre (DC-CINPUT-06)
+///   uint   seed_point_slot,                    // warm-start seed bootstrap point
+///   bytes(32) seed_point_hash,                 // warm-start seed bootstrap point
 ///   array(2) [ uint asc.numer, uint asc.denom ],
 ///   uint   total_active_stake,
 ///   map(K) {                                  // K = pool count, BTreeMap order
@@ -152,6 +168,8 @@ pub fn encode_seed_epoch_consensus_inputs(inputs: &SeedEpochConsensusInputs) -> 
     write_bytes_canonical(&mut buf, inputs.epoch_nonce.as_bytes());
     write_bytes_canonical(&mut buf, &inputs.genesis_hash.0);
     write_bytes_canonical(&mut buf, &inputs.protocol_params_hash.0);
+    write_uint_canonical(&mut buf, inputs.seed_point_slot.0);
+    write_bytes_canonical(&mut buf, &inputs.seed_point_hash.0);
 
     write_array_header(
         &mut buf,
@@ -206,6 +224,8 @@ pub fn decode_seed_epoch_consensus_inputs(
     let epoch_nonce = Nonce(read_hash32(bytes, &mut o)?);
     let genesis_hash = read_hash32(bytes, &mut o)?;
     let protocol_params_hash = read_hash32(bytes, &mut o)?;
+    let seed_point_slot = SlotNo(read_u64_field(bytes, &mut o)?);
+    let seed_point_hash = read_hash32(bytes, &mut o)?;
 
     expect_definite_array(bytes, &mut o, ASC_FIELDS, "active_slots_coeff")?;
     let numer = read_u32_field(bytes, &mut o)?;
@@ -230,6 +250,8 @@ pub fn decode_seed_epoch_consensus_inputs(
         epoch_nonce,
         genesis_hash,
         protocol_params_hash,
+        seed_point_slot,
+        seed_point_hash,
         active_slots_coeff,
         total_active_stake,
         pool_distribution,
@@ -390,6 +412,8 @@ mod tests {
             epoch_nonce: Nonce(Hash32([0x55; 32])),
             genesis_hash: Hash32([0x9a; 32]),
             protocol_params_hash: Hash32([0x9b; 32]),
+            seed_point_slot: SlotNo(576 * 432_000 + 12_345),
+            seed_point_hash: Hash32([0x66; 32]),
             active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 20 },
             total_active_stake: 1_003_499,
             pool_distribution,
@@ -442,15 +466,15 @@ mod tests {
     #[test]
     fn seed_cinput_decode_rejects_unknown_version() {
         // Splice a bad version header in front of an otherwise-valid body.
-        // The outer array header is 1 byte (0x8b for array(11)); the version
-        // (=4) is the next 1 byte (0x04). So the body after the version starts
-        // at index 2. ECA-2-pre (DC-CINPUT-06): the current version is 4; v1/v2/v3
-        // are old sidecars (omitting eta0 / venue geometry / the consensus-profile
-        // hashes) — ALL fail closed at the codec (UnknownVersion); the bootstrap
-        // authority surfaces that as the typed ConsensusInputsSchemaUnsupported
-        // (a reimport requirement, not corruption).
+        // The outer array header is 1 byte (0x8d for array(13)); the version
+        // (=5) is the next 1 byte (0x05). So the body after the version starts
+        // at index 2. The current version is 5; v1/v2/v3/v4 are old sidecars
+        // (omitting eta0 / venue geometry / the consensus-profile hashes / the
+        // seed bootstrap point) — ALL fail closed at the codec (UnknownVersion);
+        // the bootstrap authority surfaces that as the typed
+        // ConsensusInputsSchemaUnsupported (a reimport requirement, not corruption).
         let fresh = encode_seed_epoch_consensus_inputs(&sample());
-        for bad_version in [0u64, 1, 2, 3, 99] {
+        for bad_version in [0u64, 1, 2, 3, 4, 99] {
             let mut buf = Vec::new();
             write_array_header(
                 &mut buf,
@@ -459,7 +483,7 @@ mod tests {
             write_uint_canonical(&mut buf, bad_version);
             buf.extend_from_slice(&fresh[2..]);
             match decode_seed_epoch_consensus_inputs(&buf) {
-                Err(SeedConsensusInputsError::UnknownVersion { expected: 4, found })
+                Err(SeedConsensusInputsError::UnknownVersion { expected: 5, found })
                     if found == bad_version as u32 => {}
                 other => panic!("expected UnknownVersion for v{bad_version}, got {other:?}"),
             }
@@ -537,6 +561,8 @@ mod tests {
         write_bytes_canonical(&mut buf, s.epoch_nonce.as_bytes());
         write_bytes_canonical(&mut buf, &s.genesis_hash.0);
         write_bytes_canonical(&mut buf, &s.protocol_params_hash.0);
+        write_uint_canonical(&mut buf, s.seed_point_slot.0);
+        write_bytes_canonical(&mut buf, &s.seed_point_hash.0);
         write_array_header(
             &mut buf,
             ContainerEncoding::Definite(ASC_FIELDS, canonical_width(ASC_FIELDS)),

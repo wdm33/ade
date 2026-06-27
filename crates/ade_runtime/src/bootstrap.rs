@@ -299,8 +299,15 @@ where
     // seed) the evolving nonce equals eta0, so both are set — reconstructing
     // `genesis(eta0)`. Idempotent after the materialize overlay above.
     if let Some(sidecar) = &seed_epoch_consensus_inputs {
-        chain_dep.epoch_nonce = sidecar.epoch_nonce.clone();
-        chain_dep.evolving_nonce = sidecar.epoch_nonce.clone();
+        // Only overlay onto the ZERO placeholder (the seed / cold-start snapshot). A snapshot
+        // captured PAST the seed epoch already persists its real eta0 (the materialize overlay above
+        // now preserves it); stamping the seed nonce over it would CLOBBER the correct nonce and fail
+        // the first post-boundary header VRF. Mirrors the guard in
+        // PraosChainDepState::overlay_recovered_eta0 (same zero-placeholder predicate).
+        if chain_dep.epoch_nonce == ade_core::consensus::Nonce::ZERO {
+            chain_dep.epoch_nonce = sidecar.epoch_nonce.clone();
+            chain_dep.evolving_nonce = sidecar.epoch_nonce.clone();
+        }
     }
 
     Ok(BootstrapState {
@@ -743,6 +750,21 @@ mod tests {
     /// warm-start branch) plus the `(schedule, view)` it needs.
     /// Mirrors `bootstrap_warm_start_materializes_from_persistent_snapshot`.
     fn warm_started_db() -> (InMemoryChainDb, EraSchedule, PoolDistrView) {
+        // The snapshot keeps the corpus (seed-epoch) eta0 -- a real, NON-zero nonce. This exercises
+        // the post-seed path where the recovered-eta0 overlay is a NO-OP (the snapshot owns its nonce).
+        warm_started_db_capture(None)
+    }
+
+    /// As `warm_started_db`, but the captured snapshot carries the genuine `Nonce::ZERO` placeholder
+    /// the C1 admission seed persists (admission/bootstrap.rs). The real seed eta0 lives in the
+    /// recovered sidecar; the overlay (DC-CINPUT-03) supplies it -- the case the overlay GUARD admits.
+    fn warm_started_db_zero_eta0() -> (InMemoryChainDb, EraSchedule, PoolDistrView) {
+        warm_started_db_capture(Some(Nonce::ZERO))
+    }
+
+    fn warm_started_db_capture(
+        snapshot_eta0_override: Option<Nonce>,
+    ) -> (InMemoryChainDb, EraSchedule, PoolDistrView) {
         let (corpus, view) = corpus_view();
         let sched = schedule();
         let idx = (0..corpus.blocks.len())
@@ -771,6 +793,12 @@ mod tests {
             BlockValidityVerdict::Invalid { error, .. } => {
                 panic!("seed block must be valid, got {error:?}")
             }
+        }
+        // The C1 admission seed persists the `Nonce::ZERO` placeholder, NOT the live nonce; simulate
+        // that when requested so the eta0-overlay guard (overlay ONLY the ZERO placeholder) is tested.
+        if let Some(eta0) = snapshot_eta0_override {
+            chain_dep.epoch_nonce = eta0.clone();
+            chain_dep.evolving_nonce = eta0;
         }
 
         let db = InMemoryChainDb::new();
@@ -806,6 +834,8 @@ mod tests {
             epoch_nonce: Nonce(Hash32([0x99; 32])),
             genesis_hash: Hash32([0x9a; 32]),
             protocol_params_hash: Hash32([0x9b; 32]),
+            seed_point_slot: SlotNo(epoch.0 * 432_000 + 100),
+            seed_point_hash: Hash32([0x6c; 32]),
             active_slots_coeff: ActiveSlotsCoeff {
                 numer: 5,
                 denom: 100,
@@ -867,15 +897,13 @@ mod tests {
     fn warm_start_overlays_recovered_eta0_onto_chain_dep_g_n() {
         // PHASE4-N-F-G-N (T-REC-04 / DC-CINPUT-03): the WarmStart-recovered forge
         // chain_dep.epoch_nonce MUST come from the seed-epoch sidecar, NOT the
-        // snapshot. The snapshot's chain_dep here carries the corpus eta0 (a
-        // stand-in for the C1 admission seed's Nonce::ZERO placeholder); the
-        // persisted sidecar carries a DISTINCT eta0 ([0x99;32]). The recovered
-        // chain_dep must equal the SIDECAR's eta0 — the exact bug fix (pre-G-N
-        // the forge signed the header VRF over the snapshot's wrong nonce ->
-        // VRFKeyBadProof from a real Conway peer).
-        let (corpus, _v) = corpus_view();
-        let snapshot_eta0 = Nonce(Hash32(corpus.epoch_nonce));
-        let (db, sched, view) = warm_started_db();
+        // snapshot. The snapshot's chain_dep here carries the genuine C1 admission seed
+        // `Nonce::ZERO` placeholder; the persisted sidecar carries a DISTINCT eta0 ([0x99;32]). The
+        // recovered chain_dep must equal the SIDECAR's eta0 — the exact bug fix (pre-G-N the forge
+        // signed the header VRF over the snapshot's wrong nonce -> VRFKeyBadProof from a real Conway
+        // peer). The eta0-overlay guard admits this because the snapshot's `epoch_nonce == ZERO`.
+        let snapshot_eta0 = Nonce::ZERO;
+        let (db, sched, view) = warm_started_db_zero_eta0();
         let record = sample_sidecar(A3B_ANCHOR, EPOCH_576); // epoch_nonce = [0x99;32]
         assert_ne!(
             record.epoch_nonce, snapshot_eta0,
@@ -906,6 +934,45 @@ mod tests {
         assert_ne!(
             out.chain_dep.epoch_nonce, snapshot_eta0,
             "the snapshot's placeholder eta0 must NOT reach the forge"
+        );
+    }
+
+    #[test]
+    fn warm_start_keeps_post_seed_snapshot_eta0() {
+        // The eta0-overlay GUARD (warm-start multi-boundary recovery, layer 2): a snapshot captured
+        // PAST the seed epoch already persists its REAL epoch nonce (NOT the ZERO placeholder), so the
+        // recovered-sidecar overlay must be a NO-OP -- stamping the seed eta0 over it would clobber the
+        // correct nonce and fail the first post-boundary header VRF. Here the snapshot carries a
+        // NON-zero corpus eta0; the recovered chain_dep must KEEP it, never take the sidecar's [0x99].
+        let (corpus, _v) = corpus_view();
+        let snapshot_eta0 = Nonce(Hash32(corpus.epoch_nonce));
+        let (db, sched, view) = warm_started_db();
+        let record = sample_sidecar(A3B_ANCHOR, EPOCH_576); // epoch_nonce = [0x99;32]
+        assert_ne!(
+            record.epoch_nonce, snapshot_eta0,
+            "precondition: the sidecar eta0 must differ from the snapshot's real eta0"
+        );
+        let (_bytes, provenance) = seed_sidecar(&db, &record);
+
+        let out = bootstrap_initial_state(BootstrapInputs {
+            chaindb: &db,
+            snapshot_store: &db,
+            era_schedule: &sched,
+            ledger_view: &view,
+            genesis_initial: None,
+            seed_epoch_consensus_source:
+                SeedEpochConsensusSource::RequiredFromRecoveredProvenance(provenance),
+            recovered_anchor: None,
+        })
+        .expect("required warm-start");
+
+        assert_eq!(
+            out.chain_dep.epoch_nonce, snapshot_eta0,
+            "a post-seed snapshot's real eta0 must be KEPT (the overlay is a no-op on a non-ZERO nonce)"
+        );
+        assert_ne!(
+            out.chain_dep.epoch_nonce, record.epoch_nonce,
+            "the sidecar eta0 must NOT clobber the snapshot's persisted nonce"
         );
     }
 
@@ -1130,9 +1197,9 @@ mod tests {
         // (SeedConsensusSidecarDecode) — so an operator can tell "reimport the
         // store" from "the store is corrupt". Fail-closed but recoverable.
         let (db, sched, view) = warm_started_db();
-        // Encode a valid current-schema (v4) sidecar, then rewrite the version
-        // uint (index 1; index 0 is the array(11) header) from 0x04 to 0x03 so it
-        // decodes as a pre-v4 sidecar. The provenance hash binds the spliced bytes,
+        // Encode a valid current-schema (v5) sidecar, then rewrite the version
+        // uint (index 1; index 0 is the array(13) header) from 0x05 to 0x03 so it
+        // decodes as a pre-v5 sidecar. The provenance hash binds the spliced bytes,
         // so the hash check passes and the decode is what fails closed (on version).
         let mut old = encode_seed_epoch_consensus_inputs(&sample_sidecar(A3B_ANCHOR, EPOCH_576));
         old[1] = 0x03;
@@ -1160,7 +1227,7 @@ mod tests {
                 err,
                 BootstrapError::ConsensusInputsSchemaUnsupported {
                     found_version: 3,
-                    required_version: 4
+                    required_version: 5
                 }
             ),
             "a pre-v4 sidecar is a typed schema-upgrade requirement, not corruption; got {err:?}"

@@ -23,6 +23,7 @@ use std::collections::BTreeMap;
 use ade_core::consensus::vrf_cert::vrf_input;
 use ade_core::consensus::{
     apply_rollback, encode_chain_event, validate_and_apply_header, ActiveSlotsCoeff,
+    LeaderEligibility,
     BlockDistance, BootstrapAnchorHash, ChainEvent, ChainSelectionReject, ChainSelectorState,
     EraSchedule, EraSummary, HeaderInput, HeaderVrf, Nonce, Point, PraosChainDepState,
     RollBackRequest, SecurityParam, TiebreakerView, VrfRole,
@@ -429,7 +430,7 @@ fn rollback_equivalent_to_truncated_replay() {
             BlockNo(i),
             i - 1, // counter strictly increasing: 0,1,2,3,4
         );
-        let res = validate_and_apply_header(&chain_dep, &h, &ledger(vk.clone()), &schedule())
+        let res = validate_and_apply_header(&chain_dep, &h, &ledger(vk.clone()), &schedule(), LeaderEligibility::Enforce)
             .expect("header admits");
         chain_dep = res.new_state;
         applied_summaries.push(res.summary);
@@ -453,6 +454,7 @@ fn rollback_equivalent_to_truncated_replay() {
                     &h2,
                     &ledger(vk.clone()),
                     &schedule(),
+                    LeaderEligibility::Enforce,
                 )
                 .expect("subsequent header admits");
                 chain_dep = res2.new_state;

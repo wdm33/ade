@@ -43,7 +43,7 @@ pub use events::{
     BlockDistance, ChainEvent, ChainHash, ChainSelectionReject, Point, SecurityParam,
 };
 pub use header_summary::{HeaderInput, HeaderKes, HeaderVrf, ValidatedHeaderSummary};
-pub use header_validate::{validate_and_apply_header, HeaderApplied};
+pub use header_validate::{validate_and_apply_header, HeaderApplied, LeaderEligibility};
 pub use kes_check::{expect_size, verify_header_kes, SLOTS_PER_KES_PERIOD};
 pub use leader_check::{
     is_leader_for_vrf_output, verify_and_evaluate_leader, LeaderCheckError, LeaderCheckVerdict,

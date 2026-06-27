@@ -20,7 +20,7 @@ use ade_core::consensus::events::{BlockDistance, ChainEvent, ChainSelectionRejec
 use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::fork_choice::select_best_chain;
 use ade_core::consensus::header_summary::HeaderInput;
-use ade_core::consensus::header_validate::validate_and_apply_header;
+use ade_core::consensus::header_validate::{validate_and_apply_header, LeaderEligibility};
 use ade_core::consensus::ledger_view::LedgerView;
 use ade_core::consensus::nonce::{apply_nonce_input, NonceInput};
 use ade_core::consensus::praos_state::PraosChainDepState;
@@ -140,7 +140,13 @@ fn process_header_arrival(
     ledger_view: &dyn LedgerView,
     era_schedule: &EraSchedule,
 ) -> Result<ChainEvent, OrchestratorError> {
-    let applied = validate_and_apply_header(&state.chain_dep, header, ledger_view, era_schedule)
+    let applied = validate_and_apply_header(
+        &state.chain_dep,
+        header,
+        ledger_view,
+        era_schedule,
+        LeaderEligibility::Enforce,
+    )
         .map_err(OrchestratorError::HeaderInvalid)?;
 
     // Build a single-header CandidateFragment rooted at the current

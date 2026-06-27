@@ -119,6 +119,13 @@ pub fn merge_seed_epoch_consensus_inputs(
         // (the ECA-0b commitment inputs) from the STORE, not a restart CLI/genesis.
         genesis_hash: canonical.genesis_hash.clone(),
         protocol_params_hash: canonical.protocol_params_hash.clone(),
+        // Warm-start multi-boundary recovery (v5): persist the EXACT seed bootstrap point. The
+        // canonical `source_tip` IS the Mithril `certified_point` (mithril_native_assembly.rs) which
+        // is the anchor's `seed_point` (DC-MITHRIL-02) — the SAME point the FirstRun EviewActivationInputs
+        // anchors its window on (node_lifecycle.rs:578 `tip`). A restart's recovery anchors the
+        // seed→seed+2 window on THIS, not the recovered durable tip (epochs ahead).
+        seed_point_slot: canonical.source_tip_slot,
+        seed_point_hash: canonical.source_tip_hash.clone(),
         active_slots_coeff: canonical.active_slots_coeff,
         total_active_stake,
         pool_distribution,

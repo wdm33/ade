@@ -74,6 +74,8 @@ where
 {
     let anchor_fp = anchor.initial_ledger_fingerprint.clone();
     let epoch_no: EpochNo = seed_consensus_inputs.epoch_no;
+    // The merge carries the seed bootstrap point from the canonical's `source_tip`, which the native
+    // assembly sets to the certified Mithril point (mithril_native_assembly.rs). Warm-start LAYER-4.
     let record =
         merge_seed_epoch_consensus_inputs(anchor_fp.clone(), epoch_no, seed_consensus_inputs)
             .map_err(SeedEpochLineagePersistError::Merge)?;

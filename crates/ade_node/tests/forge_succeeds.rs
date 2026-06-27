@@ -47,7 +47,7 @@ use ade_core::consensus::leader_schedule::LeaderScheduleAnswer;
 use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
 use ade_core::consensus::vrf_cert::{leader_vrf_input, ActiveSlotsCoeff};
 use ade_core::consensus::errors::{HeaderValidationError, VrfCertError};
-use ade_core::consensus::validate_and_apply_header;
+use ade_core::consensus::{validate_and_apply_header, LeaderEligibility};
 use ade_core::consensus::{BootstrapAnchorHash, EraSummary};
 use ade_crypto::vrf::VrfVerificationKey;
 use ade_ledger::consensus_view::{PoolDistrView, PoolEntry};
@@ -781,6 +781,8 @@ fn feed_header_validates_against_recovered_surface_not_empty_view() {
         epoch_nonce: fixture.eta0_holder.epoch_nonce.clone(),
         genesis_hash: Hash32([0x9a; 32]),
         protocol_params_hash: Hash32([0x9b; 32]),
+        seed_point_slot: SlotNo(epoch.0 * 432_000 + 100),
+        seed_point_hash: Hash32([0x6c; 32]),
         active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
         total_active_stake: 1,
         pool_distribution: pools,
@@ -793,6 +795,7 @@ fn feed_header_validates_against_recovered_surface_not_empty_view() {
         &decoded.header_input,
         &recovered_view,
         &fixture.era_schedule,
+        LeaderEligibility::Enforce,
     )
     .expect(
         "the recovered consensus surface validates the genesis-successor header \
@@ -809,6 +812,7 @@ fn feed_header_validates_against_recovered_surface_not_empty_view() {
         &decoded.header_input,
         &empty_view,
         &fixture.era_schedule,
+        LeaderEligibility::Enforce,
     )
     .expect_err("the empty placeholder view must fail closed (the pre-G-P bug)");
     assert!(

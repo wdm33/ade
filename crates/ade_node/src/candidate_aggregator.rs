@@ -28,7 +28,7 @@ use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::errors::HeaderValidationError;
 use ade_core::consensus::events::{BlockDistance, Point};
 use ade_core::consensus::header_summary::HeaderInput;
-use ade_core::consensus::header_validate::validate_and_apply_header;
+use ade_core::consensus::header_validate::{validate_and_apply_header, LeaderEligibility};
 use ade_core::consensus::ledger_view::LedgerView;
 use ade_core::consensus::praos_state::PraosChainDepState;
 use ade_types::BlockNo;
@@ -83,7 +83,8 @@ pub fn build_candidate_fragment(
     let mut chain_dep = anchor_chain_dep.clone();
     let mut summaries = Vec::with_capacity(headers.len());
     for (index, header) in headers.iter().enumerate() {
-        let applied = validate_and_apply_header(&chain_dep, header, ledger_view, era_schedule)
+        let applied =
+            validate_and_apply_header(&chain_dep, header, ledger_view, era_schedule, LeaderEligibility::Enforce)
             .map_err(|error| CandidateBuildError::HeaderInvalid { index, error })?;
         chain_dep = applied.new_state;
         summaries.push(applied.summary);

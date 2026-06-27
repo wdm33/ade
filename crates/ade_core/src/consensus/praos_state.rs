@@ -162,6 +162,14 @@ impl PraosChainDepState {
     /// since the seed) the evolving nonce equals eta0, so both are set —
     /// reconstructing `genesis(eta0)`'s nonce basis.
     pub fn overlay_recovered_eta0(&mut self, eta0: &Nonce) {
+        // Only supply the recovered eta0 when the snapshot carries the ZERO placeholder — a SEED /
+        // cold-start snapshot whose nonce was not persisted. A snapshot captured PAST the seed epoch
+        // (a node that CROSSED boundaries before restarting) already persists its real epoch nonce
+        // [eta0(N)] and evolving nonce; stamping the seed eta0 over it would CLOBBER the correct nonce
+        // and fail the first post-boundary header VRF. NO-OP once a real nonce is present (idempotent).
+        if self.epoch_nonce != Nonce::ZERO {
+            return;
+        }
         self.epoch_nonce = eta0.clone();
         self.evolving_nonce = eta0.clone();
     }

@@ -4,8 +4,8 @@ set -uo pipefail
 # PHASE4-N-F-G-N (T-REC-04 / DC-CINPUT-03): the WarmStart-recovered forge eta0 comes from the persisted
 # seed-epoch consensus sidecar, never the snapshot placeholder / genesis.
 #   (A) SeedEpochConsensusInputs carries an explicit epoch_nonce field.
-#   (B) the sidecar codec is versioned (SEED_CINPUT_SCHEMA_VERSION = 2) and fail-closed (UnknownVersion) —
-#       an old v1 sidecar (no eta0) must NOT default-to-zero.
+#   (B) the sidecar codec is versioned (SEED_CINPUT_SCHEMA_VERSION = 5) and fail-closed (UnknownVersion) —
+#       an old sidecar (no eta0 / no seed bootstrap point) must NOT default-to-zero.
 #   (C) the admission merge persists epoch_nonce from the imported LiveConsensusInputsCanonical.
 #   (D) bootstrap_initial_state overlays the recovered sidecar epoch_nonce onto chain_dep (+ evolving_nonce).
 #   (E) the regression test exists.
@@ -31,8 +31,8 @@ grep -Eq 'pub epoch_nonce: Nonce' "$SCI" \
     || print_fail "(A) SeedEpochConsensusInputs has no explicit epoch_nonce field"
 
 # (B) versioned + fail-closed.
-grep -Eq 'SEED_CINPUT_SCHEMA_VERSION: u32 = 2' "$SCI" \
-    || print_fail "(B) SEED_CINPUT_SCHEMA_VERSION not bumped to 2 (versioned schema change)"
+grep -Eq 'SEED_CINPUT_SCHEMA_VERSION: u32 = 5' "$SCI" \
+    || print_fail "(B) SEED_CINPUT_SCHEMA_VERSION not bumped to 5 (versioned schema change)"
 grep -Eq 'UnknownVersion' "$SCI" \
     || print_fail "(B) decode no longer fail-closes on an unknown/old schema version"
 grep -Eq 'fn seed_cinput_decode_rejects_unknown_version' "$SCI" \

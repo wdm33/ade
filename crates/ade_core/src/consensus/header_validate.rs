@@ -68,11 +68,27 @@ pub struct HeaderApplied {
 ///
 /// Pure of wall clock and arrival order — same inputs always produce
 /// the same result.
+/// Whether the leader-eligibility (stake-threshold) check is ENFORCED. Live header validation
+/// enforces it (untrusted peer headers). The warm-start / rollback replay-forward re-applies
+/// ALREADY-DURABLE (admit-validated) blocks to reconstruct state: it TRUSTS their leader eligibility
+/// (the durable store is the replay authority) and lacks the per-epoch stake to re-check it. EVERY
+/// other step — structural, monotonicity, VRF-proof, KES, op-cert, nonce-apply — ALWAYS runs, so the
+/// reconstructed state is byte-identical either way; only the (for a durable block, redundant) stake
+/// threshold is skipped. Replay-equivalent by construction: the check never feeds the applied state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaderEligibility {
+    /// Enforce the stake-threshold leader check (live, untrusted headers).
+    Enforce,
+    /// Trust the durable block's leader claim (warm-start / rollback replay of admit-validated blocks).
+    TrustDurable,
+}
+
 pub fn validate_and_apply_header(
     state: &PraosChainDepState,
     header: &HeaderInput,
     ledger_view: &dyn LedgerView,
     era_schedule: &EraSchedule,
+    leader_eligibility: LeaderEligibility,
 ) -> Result<HeaderApplied, HeaderValidationError> {
     // Step 1: forecast horizon.
     era_schedule
@@ -185,37 +201,42 @@ pub fn validate_and_apply_header(
         }
     };
 
-    // Step 7: leader threshold check.
-    // Stake fraction and active-slots-coefficient come from the ledger
-    // view. Missing pieces are treated as a failed leader claim — the
-    // caller cannot prove leadership without ledger data, so we reject
-    // structurally via `VerificationFailed`.
-    let pool_stake = ledger_view
-        .pool_active_stake(epoch, &header.issuer_pool)
-        .ok_or(HeaderValidationError::VrfCert(
-            VrfCertError::VerificationFailed,
-        ))?;
-    let total_stake = ledger_view
-        .total_active_stake(epoch)
-        .ok_or(HeaderValidationError::VrfCert(
-            VrfCertError::VerificationFailed,
-        ))?;
-    if total_stake == 0 {
-        return Err(HeaderValidationError::VrfCert(
-            VrfCertError::VerificationFailed,
-        ));
+    // Step 7: leader threshold check — ENFORCED only for untrusted (live) headers. A durable replay
+    // (warm-start / rollback) re-applies admit-validated blocks, TRUSTS their leader claim (the
+    // durable store is the replay authority), and lacks the per-epoch stake to re-check. The check
+    // never feeds the applied state (steps 8-9 do), so skipping it is replay-equivalent.
+    if leader_eligibility == LeaderEligibility::Enforce {
+        // Stake fraction and active-slots-coefficient come from the ledger
+        // view. Missing pieces are treated as a failed leader claim — the
+        // caller cannot prove leadership without ledger data, so we reject
+        // structurally via `VerificationFailed`.
+        let pool_stake = ledger_view
+            .pool_active_stake(epoch, &header.issuer_pool)
+            .ok_or(HeaderValidationError::VrfCert(
+                VrfCertError::VerificationFailed,
+            ))?;
+        let total_stake = ledger_view
+            .total_active_stake(epoch)
+            .ok_or(HeaderValidationError::VrfCert(
+                VrfCertError::VerificationFailed,
+            ))?;
+        if total_stake == 0 {
+            return Err(HeaderValidationError::VrfCert(
+                VrfCertError::VerificationFailed,
+            ));
+        }
+        let asc = ledger_view
+            .active_slots_coeff(epoch)
+            .ok_or(HeaderValidationError::VrfCert(
+                VrfCertError::VerificationFailed,
+            ))?;
+        let sigma = StakeFraction {
+            numer: pool_stake,
+            denom: total_stake,
+        };
+        check_leader_claim(&leader_value_output, sigma, asc)
+            .map_err(HeaderValidationError::VrfCert)?;
     }
-    let asc = ledger_view
-        .active_slots_coeff(epoch)
-        .ok_or(HeaderValidationError::VrfCert(
-            VrfCertError::VerificationFailed,
-        ))?;
-    let sigma = StakeFraction {
-        numer: pool_stake,
-        denom: total_stake,
-    };
-    check_leader_claim(&leader_value_output, sigma, asc)
-        .map_err(HeaderValidationError::VrfCert)?;
 
     // Step 7b: KES signature + op-cert verification (Praos headers carry the
     // material; TPraos headers were authenticated under the legacy N-B model).
@@ -450,7 +471,8 @@ mod tests {
             kes: None,
         };
 
-        let res = validate_and_apply_header(&state, &header, &ledger(vk), &schedule());
+        let res =
+            validate_and_apply_header(&state, &header, &ledger(vk), &schedule(), LeaderEligibility::Enforce);
         assert_eq!(
             res,
             Err(HeaderValidationError::SlotBeforeLastApplied {
@@ -489,7 +511,8 @@ mod tests {
         assert_ne!(nonce_output_bytes, leader_output_bytes);
 
         let applied =
-            validate_and_apply_header(&state, &header, &ledger(vk), &schedule()).expect("happy");
+            validate_and_apply_header(&state, &header, &ledger(vk), &schedule(), LeaderEligibility::Enforce)
+                .expect("happy");
 
         // Expected evolving nonce: blake2b256(prior_evolving ‖ nonce_output[0..32]).
         let mut buf = [0u8; 64];

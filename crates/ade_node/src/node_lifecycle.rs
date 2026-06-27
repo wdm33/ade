@@ -571,12 +571,18 @@ async fn run_node_lifecycle_inner(
                 state.seed_epoch_consensus_inputs.as_ref(),
                 state.tip.as_ref(),
             ) {
-                (Some(_live), Some(sidecar), Some(tip)) => {
+                (Some(_live), Some(sidecar), Some(_tip)) => {
                     let network_magic = resolve_network_magic(cli)?;
                     Some(crate::epoch_wire::EviewActivationInputs {
                         seed_bootstrap_state: state.ledger.clone(),
-                        seed_point_slot: tip.slot,
-                        seed_point_hash: tip.hash.clone(),
+                        // Warm-start LAYER-4 fix (mirror of the other match arm): anchor the recovery's
+                        // seed->seed+2 window on the ORIGINAL seed bootstrap point persisted in the v5
+                        // sidecar, NOT `tip` (the recovered durable tip -- on a restart it is EPOCHS ahead
+                        // of the seed epoch, so compute_first_window_bounds returns None ->
+                        // EpochViewPostPromotionMismatch). At FirstRun the sidecar's seed point IS the
+                        // bootstrap tip, so this stays byte-identical there.
+                        seed_point_slot: sidecar.seed_point_slot,
+                        seed_point_hash: sidecar.seed_point_hash.clone(),
                         seed_epoch: sidecar.epoch_no,
                         network_magic,
                         nonce: sidecar.epoch_nonce.0.clone(),
@@ -767,12 +773,17 @@ async fn run_node_lifecycle_inner(
                 state.seed_epoch_consensus_inputs.as_ref(),
                 state.tip.as_ref(),
             ) {
-                (Some(_live), Some(sidecar), Some(tip)) => {
+                (Some(_live), Some(sidecar), Some(_tip)) => {
                     let network_magic = resolve_network_magic(cli)?;
                     Some(crate::epoch_wire::EviewActivationInputs {
                         seed_bootstrap_state: state.ledger.clone(),
-                        seed_point_slot: tip.slot,
-                        seed_point_hash: tip.hash.clone(),
+                        // Warm-start LAYER-4 fix: anchor the recovery's seed→seed+2 window on the
+                        // ORIGINAL seed bootstrap point (persisted in the v5 sidecar), NOT `tip` (the
+                        // recovered durable tip — on a restart it is EPOCHS AHEAD of the seed epoch,
+                        // so compute_first_window_bounds returns None -> EpochViewPostPromotionMismatch).
+                        // At FirstRun (node_lifecycle.rs:578) `tip` IS this point; on warm-start it is not.
+                        seed_point_slot: sidecar.seed_point_slot,
+                        seed_point_hash: sidecar.seed_point_hash.clone(),
                         seed_epoch: sidecar.epoch_no,
                         network_magic,
                         nonce: sidecar.epoch_nonce.0.clone(),
@@ -1659,36 +1670,10 @@ fn maybe_activate_epoch_boundary(
 /// per-boundary append and a warm-start single reconstruction yield byte-identical summaries. No
 /// flag/clock/peer input -- the horizon extends ONLY after (and to match) a durable authority promotion.
 pub(crate) fn extend_schedule_to_epoch(era_schedule: &mut EraSchedule, target: EpochNo) {
-    let (anchor, system_start, new_eras) = {
-        let eras = era_schedule.eras();
-        let seed = &eras[0];
-        let last_epoch = eras[eras.len() - 1].start_epoch;
-        if target.0 <= last_epoch.0 {
-            return;
-        }
-        let l = u64::from(seed.epoch_length_slots);
-        let mut new_eras: Vec<EraSummary> = eras.to_vec();
-        for e in (last_epoch.0 + 1)..=target.0 {
-            let offset = e - seed.start_epoch.0;
-            new_eras.push(EraSummary {
-                randomness_stabilisation_window_slots: seed.randomness_stabilisation_window_slots,
-                era: seed.era,
-                start_slot: SlotNo(seed.start_slot.0 + offset * l),
-                start_epoch: EpochNo(e),
-                slot_length_ms: seed.slot_length_ms,
-                epoch_length_slots: seed.epoch_length_slots,
-                safe_zone_slots: seed.epoch_length_slots,
-            });
-        }
-        (
-            era_schedule.anchor().clone(),
-            era_schedule.system_start_unix_ms(),
-            new_eras,
-        )
-    };
-    if let Ok(extended) = EraSchedule::new(anchor, system_start, new_eras) {
-        *era_schedule = extended;
-    }
+    // Delegates to the single shared definition on EraSchedule (ade_core): the live follow and the
+    // warm-start replay path MUST extend the forecast horizon identically, so there is exactly ONE
+    // copy of this logic (no second convention that can drift -- the credential-decoder lesson).
+    era_schedule.extend_to_epoch(target);
 }
 
 /// Relay loop with an optional emit-only CN-NODE-04 diagnostic sink
@@ -1780,7 +1765,12 @@ pub async fn run_relay_loop_with_sched(
             chaindb,
             &inputs.seed_bootstrap_state,
             inputs.network_magic,
-            inputs.nonce.clone(),
+            // Layer 4 (DC-EPOCH-06): the recovery re-derives the LATEST record's epoch view, whose
+            // eta0 is the durable tip's epoch nonce -- NOT the seed sidecar nonce (`inputs.nonce`).
+            // The replay-forward reconstructed that nonce into the recovered chain_dep (replay-derived
+            // from the durable blocks, independent of the record), so feeding it and then comparing the
+            // re-derived candidate against the record stays reject-non-recomputable.
+            state.receive.chain_dep.epoch_nonce.0.clone(),
             inputs.genesis_hash.clone(),
             inputs.protocol_params_hash.clone(),
             inputs.asc,
@@ -5850,6 +5840,8 @@ mod tests {
             epoch_nonce: Nonce(Hash32([0x99; 32])),
             genesis_hash: Hash32([0x9a; 32]),
             protocol_params_hash: Hash32([0x9b; 32]),
+            seed_point_slot: SlotNo(epoch.0 * 432_000 + 100),
+            seed_point_hash: Hash32([0x6c; 32]),
             active_slots_coeff: ActiveSlotsCoeff {
                 numer: 5,
                 denom: 100,
@@ -5975,8 +5967,8 @@ mod tests {
         // (a reimport requirement), DISTINCT from the generic WarmStartBootstrap
         // (corruption) -- so the live-path diagnostics match the bootstrap authority.
         let d = fresh_warm_dirs();
-        // A valid current-schema (v4) sidecar, with the version uint (index 1; index
-        // 0 is the array(11) header) rewritten 0x04 -> 0x03 so it decodes as pre-v4.
+        // A valid current-schema (v5) sidecar, with the version uint (index 1; index
+        // 0 is the array(13) header) rewritten 0x05 -> 0x03 so it decodes as an old schema.
         let mut bytes =
             encode_seed_epoch_consensus_inputs(&warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH));
         bytes[1] = 0x03;
@@ -5997,7 +5989,7 @@ mod tests {
                 err,
                 NodeLifecycleError::ConsensusInputsSchemaUnsupported {
                     found_version: 3,
-                    required_version: 4
+                    required_version: 5
                 }
             ),
             "the live warm-start path must surface the TYPED schema-upgrade error, not generic corruption; got {err:?}"
