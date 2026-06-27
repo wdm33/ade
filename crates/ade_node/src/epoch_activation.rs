@@ -91,6 +91,13 @@ pub enum EpochViewActivationError {
     EpochViewActivationConflict,
     /// After publication, the active view does not match the WAL record ⇒ halt.
     EpochViewPostPromotionMismatch,
+    /// DC-EPOCH-18: the seed+2 authority's bootstrap reward update is REQUIRED but absent (the seed
+    /// epoch it would be bound to). A specific, diagnostic terminal halt -- distinct from a generic
+    /// derivation failure, so an operator sees WHY a legacy/absent-rupd store is refused.
+    BootstrapRewardUpdateAbsent { seed: EpochNo },
+    /// DC-EPOCH-18: the recovered bootstrap reward update is bound to a different seed epoch than the
+    /// authority being derived ⇒ terminal halt.
+    BootstrapRewardUpdateEpochMismatch { bound: EpochNo, seed: EpochNo },
 }
 
 /// EPOCH-CONTINUITY-ACTIVATION ECA-3 (DC-EPOCH-14, criterion #9): why an authoritative decision is

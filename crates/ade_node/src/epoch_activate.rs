@@ -19,7 +19,7 @@ use crate::epoch_activation::{
     ActivationOutcome, ActivationReject, ActiveEpochAuthority, ActiveEpochView,
     EpochViewActivationError,
 };
-use crate::epoch_candidate::{derive_candidate, CandidateProfile};
+use crate::epoch_candidate::{derive_candidate, CandidateDeriveError, CandidateProfile};
 use crate::epoch_source_window::{validate_source_window, ActivationSourceWindow, SourceWindowBlock};
 use ade_core::consensus::events::Point;
 use ade_ledger::reduced_epoch_view::{EpochConsensusView, ViewBindings};
@@ -118,7 +118,15 @@ pub fn activate_at_boundary(
     let candidate = derive_candidate(
         window, checkpoint, bootstrap_state, blocks, era, network_magic, nonce, profile,
     )
-    .map_err(|_| EpochViewActivationError::EpochViewActivationFailed)?;
+    .map_err(|e| match e {
+        CandidateDeriveError::BootstrapRewardUpdateAbsent { seed } => {
+            EpochViewActivationError::BootstrapRewardUpdateAbsent { seed }
+        }
+        CandidateDeriveError::BootstrapRewardUpdateEpochMismatch { bound, seed } => {
+            EpochViewActivationError::BootstrapRewardUpdateEpochMismatch { bound, seed }
+        }
+        _ => EpochViewActivationError::EpochViewActivationFailed,
+    })?;
 
     // 3. the activation predicate (DC-EPOCH-05/07), BEFORE the WAL: transition eligible + bindings
     //    verify + the candidate's source is ancestor-or-equal of the selected tip on the durable
@@ -193,7 +201,15 @@ pub fn recover_at_boundary(
     let candidate = derive_candidate(
         window, checkpoint, bootstrap_state, blocks, era, network_magic, nonce, profile,
     )
-    .map_err(|_| EpochViewActivationError::EpochViewActivationFailed)?;
+    .map_err(|e| match e {
+        CandidateDeriveError::BootstrapRewardUpdateAbsent { seed } => {
+            EpochViewActivationError::BootstrapRewardUpdateAbsent { seed }
+        }
+        CandidateDeriveError::BootstrapRewardUpdateEpochMismatch { bound, seed } => {
+            EpochViewActivationError::BootstrapRewardUpdateEpochMismatch { bound, seed }
+        }
+        _ => EpochViewActivationError::EpochViewActivationFailed,
+    })?;
 
     // 3. RECOVER against the durable record (NOT the live predicate, NO new WAL write): the re-derived
     //    candidate must reproduce the record's entire identity, else a TERMINAL mismatch. This is the
@@ -432,6 +448,41 @@ mod tests {
         );
         assert_eq!(r, Err(EpochViewActivationError::EpochViewActivationFailed));
         assert!(!authority.is_promoted(), "no publication on a non-durable WAL write");
+    }
+
+    #[test]
+    fn seed2_without_rupd_surfaces_the_specific_diagnostic_not_a_generic_failure() {
+        // DC-EPOCH-18 diagnostics: a seed+2 window (source_epoch == seed_epoch) with NO bootstrap reward
+        // update fails closed with the SPECIFIC BootstrapRewardUpdateAbsent at the activation seam, not a
+        // generic EpochViewActivationFailed -- so an operator sees WHY a legacy/absent-rupd store is refused.
+        let (cp, _d, state) = checkpoint();
+        let sv = seed_view();
+        let mut authority = ActiveEpochAuthority::seed(&sv);
+        let seed2_profile = CandidateProfile {
+            seed_epoch: EpochNo(575), // == window().source_epoch -> the seed+2 window requires the rupd
+            ..profile()               // bootstrap_reward_update: None
+        };
+        let r = activate_at_boundary(
+            &window(Hash32([0xab; 32])),
+            &window_blocks(),
+            &cp,
+            &state,
+            std::slice::from_ref(&conway_block()),
+            CardanoEra::Conway,
+            2,
+            Hash32([0x42; 32]),
+            &seed2_profile,
+            &selected_point(),
+            &chaindb(),
+            true,
+            &mut authority,
+            |_rec| true,
+        );
+        assert_eq!(
+            r,
+            Err(EpochViewActivationError::BootstrapRewardUpdateAbsent { seed: EpochNo(575) })
+        );
+        assert!(!authority.is_promoted(), "no promotion when the seed+2 rupd is absent");
     }
 
     #[test]
