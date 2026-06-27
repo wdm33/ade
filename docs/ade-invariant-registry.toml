@@ -9277,3 +9277,40 @@ ci_scripts = ["ci/ci_check_bootstrap_rupd_window_end.sh"]
 status = "enforced"
 introduced_in = "EPOCH-CONSENSUS-VIEW-B3c"
 strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-19"
+tier = "derived"
+statement = """
+Self-sustaining live ledger epoch evolution. After every durable selected-chain block, the node holds
+enough durable, replayable state to derive EVERY future epoch transition -- rewards, stake snapshots,
+pool/cert lifecycle, and leadership authority -- WITHOUT another Mithril import, an external CLI oracle,
+or a manually injected authority. The mechanism is ONE total, deterministic, replay-equivalent transition
+apply_selected_block(prior EpochAccumulator, canonical block, selected ctx) -> next | structured error,
+applied per durable admitted block, that evolves the non-UTxO ledger facts (cert state + delegations +
+pool/future-pool/retirement maps + per-epoch block_production + epoch_fees + reserves/treasury pots +
+mark/set/go snapshots + the consensus-relevant protocol/governance state + the pending reward update) in
+cardano-ledger NEWEPOCH order at each crossed boundary (apply the completed RUPD over the just-finished
+epoch's accumulated counts/fees AFTER that epoch's withdrawals -> SNAP rotate mark/set/go -> POOLREAP ->
+enactment/reset) and the within-epoch tx/cert effects per block. (a) BOUNDED MEMORY: the large UTxO/stake
+set stays in the disk-backed reduced checkpoint (no permanent full UTxO map in RAM, no full-chain replay
+per block, no full-accumulator clone per block); the accumulator is the small non-UTxO state machine,
+persisted incrementally with a boundary checkpoint + at-most-one-epoch within-epoch replay. (b)
+REPLAY-EQUIVALENT: restart + rollback re-materialize the IDENTICAL accumulator + authority from the
+durable selected chain via the same fold. (c) FAIL-CLOSED: a malformed block, unknown authority-path
+cert/governance variant, pot/reward/count overflow, missing input, or boundary gap is terminal. (d)
+BOOTSTRAP-TRANSITION: seed+1 (MARK bridge, DC-EPOCH-15) and seed+2 (snapshot nesRu, DC-EPOCH-18) remain
+the bootstrap-transient seeds; the native RUPD takes over at the first boundary whose entire input epoch
+was followed. LIVE GROUND TRUTH: a fresh native bootstrap at N crosses N+1->N+2->N+3 with self-derived
+rewards + snapshots (byte-exact vs the live cardano-node at >=2 self-derived boundaries), restarts in each
+phase, survives a controlled rollback -- no Mithril re-import / oracle / injection -- and bounded memory
+holds across the run.
+"""
+source = "docs/clusters/LIVE-LEDGER-EPOCH-TRANSITION/cluster.md + SLICE-S1-authority-transition-contract.md. The authority-surface trace (2026-06-27) confirmed the live follow validates headers + stores blocks + advances the reduced checkpoint + the Praos nonce, but does NOT evolve rewards/block-production/fees/snapshot-rotation -- so post-bootstrap future authority runs out. Preserves MEM-OPT (no full live UTxO). Operational venue detail in the untracked competition-secret runbook."
+cross_ref = ["DC-EPOCH-18", "DC-EPOCH-17", "DC-EPOCH-16", "DC-EPOCH-15", "DC-EVIEW-08", "DC-MEM-09"]
+code_locus = "NEW: ade_ledger EpochAccumulator + apply_selected_block (the total transition) + its canonical codec; ade_runtime forward_sync/node_sync (per-block evolution on the follow); the boundary transition reusing ade_ledger::rules apply_epoch_boundary_with_registrations + rotate_snapshots + apply_pool_reap; the reduced checkpoint stays the stake substrate. TBD per slice S1-S6."
+tests = []
+ci_scripts = []
+status = "declared"
+introduced_in = "LIVE-LEDGER-EPOCH-TRANSITION-S1"
+strengthened_in = []
