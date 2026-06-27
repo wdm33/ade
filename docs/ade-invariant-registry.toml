@@ -9239,3 +9239,41 @@ ci_scripts = ["ci/ci_check_native_firstrun_reduced_checkpoint.sh"]
 status = "enforced"
 introduced_in = "MITHRIL-VERIFIED-ANCHOR-INTEGRATION-S2"
 strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-18"
+tier = "derived"
+statement = """
+Window-end bootstrap reward update for the seed+2 leadership authority. The first post-bootstrap
+replay-derived authority (seed+2, DC-EPOCH-17) is the per-pool stake snapshot at the seed->seed+1
+boundary; that stake = base-UTxO + reward-account balance MUST include the epoch-boundary REWARD UPDATE
+the chain distributes at that boundary. Cardano applies the reward update AFTER the replayed epoch's
+withdrawals and THEN snapshots (NewEpochState applyRUpd precedes SNAP), so the delta is applied at the
+WINDOW-END of the seed-epoch replay -- in drive_window_consensus_inputs after the replay loop,
+immediately before aggregate_pool_stake -- and EXACTLY ONCE. (a) NO MUTATED PSEUDO-STATE: the seed
+cert-state is NEVER mutated; the delta is a separate, manifest-bound (anchor_fp), commitment-bound
+(domain-separated blake2b), version-gated (v1) replay INPUT (BootstrapRewardUpdate = the snapshot's
+Complete nesRu rs map, aggregated per credential), persisted at bootstrap + recovered at warm-start.
+(b) PURE BLUE TRANSITION: apply_bootstrap_reward_deltas(&mut DelegationState, &delta) on the
+window-replay CLONE (the RED driver never mutates core state directly); checked_add fail-closed on
+overflow. (c) REPLAY-EQUIVALENT: pre-update seed + canonical replay window + the bound delta reproduce
+the identical post-boundary snapshot on first-run derive AND warm-start recover (they share
+CandidateProfile). (d) FAIL-CLOSED MECHANICALLY AT THE SINGLE DERIVATION SITE: derive_candidate
+REQUIRES the bound rupd (target_epoch == seed_epoch) for the seed+2 window (source_epoch == seed_epoch)
+-- absent or wrong-epoch is TERMINAL -- so EVERY seed+2 derivation path (live first-boundary activate,
+per-boundary prepare, warm-start recover) fails closed WITHOUT replicating the gate in callers; a
+mid-pulse (non-Complete) nesRu also fails closed at decode. No native-bootstrap route derives this
+authority without the reward distribution (a legacy apply-at-bootstrap store, which mutated the seed,
+fails closed). (e) CLOSED CODEC: decode rejects unknown version, commitment mismatch,
+non-canonical/duplicate credential keys, unknown credential tag, trailing bytes, non-minimal encoding.
+LIVE GROUND TRUTH: on preview epoch 1340 the derived pool stake equals the real node's go snapshot to
+the lovelace; every 1340 block admits on first-run AND warm-start; a no-rupd legacy store fails closed.
+"""
+source = "docs/clusters/EPOCH-CONSENSUS-VIEW (B3c). Strengthens the DC-EPOCH-17 seed+2 window-replay authority with the cardano-ledger epoch-boundary reward update. Replaces a rejected apply-at-bootstrap approach (known counterexample: a seed-window-tail reward-withdrawer would receive 0 instead of its boundary reward). Operational venue detail in the untracked competition-secret runbook."
+cross_ref = ["DC-EPOCH-17", "DC-EPOCH-16", "DC-EPOCH-15", "DC-MITHRIL-04"]
+code_locus = "crates/ade_ledger/src/bootstrap_reward_update.rs (closed codec); crates/ade_ledger/src/delegation.rs apply_bootstrap_reward_deltas (BLUE apply); crates/ade_runtime/src/chaindb/reduced_window_driver.rs drive_window_consensus_inputs (window-end call); crates/ade_node/src/epoch_candidate.rs derive_candidate (the single-site seed+2 fail-closed gate + CandidateProfile.seed_epoch); crates/ade_node/src/epoch_wire.rs EviewActivationInputs.bootstrap_reward_delta + the CandidateProfile constructions; crates/ade_node/src/native_firstrun.rs (persist); crates/ade_node/src/node_lifecycle.rs (recover, both arms); crates/ade_runtime/src/chaindb/{mod.rs,persistent.rs} bootstrap_rupd_by_anchor_fp; crates/ade_ledger/src/ledgerdb_state.rs read_reward_update_deltas (Complete-or-fail-closed)."
+tests = ["bootstrap_reward_update::tests (round-trip/version/commitment/tamper)", "reduced_window_driver drive_window_applies_bootstrap_reward_delta_to_the_aggregate", "delegation apply_bootstrap_reward_deltas_sums_and_fails_closed_on_overflow", "epoch_candidate seed2_window_without_rupd_fails_closed / seed2_window_with_wrong_epoch_rupd_fails_closed / seed2_window_with_correct_rupd_derives / non_seed2_window_without_rupd_is_a_strict_noop"]
+ci_scripts = ["ci/ci_check_bootstrap_rupd_window_end.sh"]
+status = "enforced"
+introduced_in = "EPOCH-CONSENSUS-VIEW-B3c"
+strengthened_in = []

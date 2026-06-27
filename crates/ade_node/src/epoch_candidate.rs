@@ -23,7 +23,7 @@ use ade_runtime::chaindb::{
 };
 use ade_types::shelley::block::ShelleyBlock;
 use ade_types::tx::{Coin, PoolId};
-use ade_types::{CardanoEra, Hash32};
+use ade_types::{CardanoEra, EpochNo, Hash32};
 
 /// Why a candidate could not be derived (fail closed -- no candidate, so the predicate
 /// (S3f-4b) never sees a partial one).
@@ -36,6 +36,13 @@ pub enum CandidateDeriveError {
     /// The recomputed kept-pool total overflowed u64 (unreachable under the Cardano supply bound;
     /// never silently wrapped) — a structured failure, no partial candidate.
     Overflow,
+    /// Option B (B3c / DC-EPOCH-18): the seed+2 authority window requires the snapshot-bound bootstrap
+    /// reward update, but it was absent (a legacy / non-native-bootstrap store). Fail closed — no
+    /// native-bootstrap route derives the seed+2 authority without the reward distribution.
+    BootstrapRewardUpdateAbsent { seed: EpochNo },
+    /// Option B (B3c / DC-EPOCH-18): the bootstrap reward update is present but bound to a different
+    /// seed epoch than this window's (a provenance mismatch). Fail closed.
+    BootstrapRewardUpdateEpochMismatch { bound: EpochNo, seed: EpochNo },
 }
 
 /// The canonical leadership consensus profile bound into the candidate (ECA-0b): the source-epoch
@@ -48,6 +55,19 @@ pub struct CandidateProfile {
     pub genesis_hash: Hash32,
     pub protocol_params_hash: Hash32,
     pub asc: ActiveSlotsCoeff,
+    /// Option B (B3c): the snapshot-bound bootstrap reward update, carried on the profile so BOTH the
+    /// live `activate_at_boundary` and the warm-start `recover_at_boundary` apply it IDENTICALLY at the
+    /// window-end of the seed+2 authority replay (replay-equivalence). `None` for every non-native /
+    /// non-seed-window path; `derive_candidate` additionally gates the apply on
+    /// `target_epoch == window.source_epoch`, so a carried update is a strict no-op off its bound window.
+    pub bootstrap_reward_update:
+        Option<ade_ledger::bootstrap_reward_update::BootstrapRewardUpdate>,
+    /// Option B (B3c / DC-EPOCH-18): the seed epoch. The seed+2 authority window is the one whose
+    /// `source_epoch == seed_epoch` (`compute_first_window_bounds(seed_epoch)`), so `derive_candidate`
+    /// uses this to decide — MECHANICALLY, at the single derivation site — whether the bootstrap reward
+    /// update is REQUIRED (seed+2 window: absent/wrong-epoch is terminal) or irrelevant (any other
+    /// window: a carried update is a strict no-op).
+    pub seed_epoch: EpochNo,
 }
 
 /// Derive the LEADERSHIP-COMPLETE activation candidate from a validated source window (ECA-0b):
@@ -70,12 +90,37 @@ pub fn derive_candidate(
     nonce: Hash32,
     profile: &CandidateProfile,
 ) -> Result<EpochConsensusView, CandidateDeriveError> {
+    // Option B (B3c, DC-EPOCH-18): the SINGLE mechanical fail-closed site for the bootstrap reward
+    // update. The seed+2 authority window (source epoch == the seed epoch) MUST apply the snapshot-bound
+    // update at the window-end; absent or wrong-epoch-bound is TERMINAL here -- no native-bootstrap route
+    // derives this authority via the rejected accidental-correctness path. Because EVERY caller that
+    // derives the seed+2 authority (the activate seam, prepare_authority, and the warm-start recover)
+    // routes through this one function, the enforcement is local to the derivation, never replicated in
+    // (and never able to drift across) the callers. A non-seed+2 window never applies it -- a carried
+    // update is a strict no-op. activate + recover share the profile, so they derive byte-identically.
+    let is_seed2 = window.source_epoch == profile.seed_epoch;
+    let bootstrap_reward_delta = match (profile.bootstrap_reward_update.as_ref(), is_seed2) {
+        (Some(rupd), true) if rupd.target_epoch == profile.seed_epoch => Some(&rupd.reward_delta),
+        (Some(rupd), true) => {
+            return Err(CandidateDeriveError::BootstrapRewardUpdateEpochMismatch {
+                bound: rupd.target_epoch,
+                seed: profile.seed_epoch,
+            })
+        }
+        (None, true) => {
+            return Err(CandidateDeriveError::BootstrapRewardUpdateAbsent {
+                seed: profile.seed_epoch,
+            })
+        }
+        (_, false) => None,
+    };
     let inputs = drive_window_consensus_inputs(
         checkpoint,
         bootstrap_state,
         blocks,
         era,
         profile.slots_per_epoch,
+        bootstrap_reward_delta,
     )
     .map_err(CandidateDeriveError::Drive)?;
     // The window drive applies block deltas, which clear the completeness marker; finalize
@@ -127,6 +172,7 @@ mod tests {
     use crate::epoch_source_window::target_epoch_for_source;
     use ade_ledger::delegation::PoolParams;
     use ade_ledger::reduced_snapshot::SnapshotPhase;
+    use ade_ledger::bootstrap_reward_update::BootstrapRewardUpdate as BootstrapRewardUpdateT;
     use ade_ledger::reduced_utxo::ReducedStakeRef;
     use ade_types::primitives::SlotNo;
     use ade_types::shelley::cert::StakeCredential;
@@ -203,6 +249,9 @@ mod tests {
                 genesis_hash: Hash32([0x91; 32]),
                 protocol_params_hash: Hash32([0x92; 32]),
                 asc: ActiveSlotsCoeff { numer: 1, denom: 20 },
+                bootstrap_reward_update: None,
+                // not the seed+2 window (the window source is 575) -> the rupd gate is a no-op.
+                seed_epoch: EpochNo(0),
             },
         )
         .expect("derive");
@@ -234,12 +283,21 @@ mod tests {
             genesis_hash: Hash32([0x91; 32]),
             protocol_params_hash: Hash32([0x92; 32]),
             asc: ActiveSlotsCoeff { numer: 1, denom: 20 },
+            bootstrap_reward_update: None,
+            // not the seed+2 window -> the rupd gate is a strict no-op for this generic derive.
+            seed_epoch: EpochNo(0),
         }
+    }
+
+    fn derive_with(profile: &CandidateProfile) -> EpochConsensusView {
+        derive_with_result(profile).expect("derive")
     }
 
     // Build a FRESH checkpoint + bootstrap state (a registered + delegated pool) and derive the
     // candidate — a fresh checkpoint per call, so the drive is over equivalent durable inputs.
-    fn derive_with(profile: &CandidateProfile) -> EpochConsensusView {
+    fn derive_with_result(
+        profile: &CandidateProfile,
+    ) -> Result<EpochConsensusView, CandidateDeriveError> {
         let dir = tempfile::tempdir().unwrap();
         let cp = ReducedUtxoCheckpoint::open(&dir.path().join("rc.redb")).unwrap();
         let mut reduced: BTreeMap<TxIn, (Coin, ReducedStakeRef)> = BTreeMap::new();
@@ -277,7 +335,72 @@ mod tests {
             Hash32([0x42; 32]),
             profile,
         )
-        .expect("derive")
+    }
+
+    // ---- Option B (B3c / DC-EPOCH-18) -- the mechanical seed+2 rupd fail-closed gate ----
+    // `window().source_epoch == 575`, so a profile with `seed_epoch == 575` IS the seed+2 window.
+    fn seed2_profile(rupd: Option<BootstrapRewardUpdateT>) -> CandidateProfile {
+        CandidateProfile {
+            seed_epoch: window().source_epoch,
+            bootstrap_reward_update: rupd,
+            ..test_profile()
+        }
+    }
+    fn rupd_bound_to(target_epoch: EpochNo) -> BootstrapRewardUpdateT {
+        let manifest_commitment = Hash32([0x44; 32]);
+        let source_point_slot = SlotNo(1);
+        let source_point_hash = Hash32([0x66; 32]);
+        let reward_delta = BTreeMap::new();
+        let canonical_commitment = ade_ledger::bootstrap_reward_update::bootstrap_rupd_commitment(
+            &manifest_commitment,
+            source_point_slot,
+            &source_point_hash,
+            target_epoch,
+            &reward_delta,
+        );
+        BootstrapRewardUpdateT {
+            manifest_commitment,
+            source_point_slot,
+            source_point_hash,
+            target_epoch,
+            reward_delta,
+            canonical_commitment,
+        }
+    }
+
+    #[test]
+    fn seed2_window_without_rupd_fails_closed() {
+        match derive_with_result(&seed2_profile(None)) {
+            Err(CandidateDeriveError::BootstrapRewardUpdateAbsent { seed }) => {
+                assert_eq!(seed, window().source_epoch)
+            }
+            other => panic!("expected BootstrapRewardUpdateAbsent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn seed2_window_with_wrong_epoch_rupd_fails_closed() {
+        let wrong = rupd_bound_to(EpochNo(999)); // != window().source_epoch (575)
+        match derive_with_result(&seed2_profile(Some(wrong))) {
+            Err(CandidateDeriveError::BootstrapRewardUpdateEpochMismatch { bound, seed }) => {
+                assert_eq!(bound, EpochNo(999));
+                assert_eq!(seed, window().source_epoch);
+            }
+            other => panic!("expected BootstrapRewardUpdateEpochMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn seed2_window_with_correct_rupd_derives() {
+        let ok = rupd_bound_to(window().source_epoch);
+        assert!(derive_with_result(&seed2_profile(Some(ok))).is_ok());
+    }
+
+    #[test]
+    fn non_seed2_window_without_rupd_is_a_strict_noop() {
+        // test_profile().seed_epoch (0) != window().source_epoch (575): not the seed+2 window, so an
+        // absent rupd is a strict no-op, NOT a fail-close.
+        assert!(derive_with_result(&test_profile()).is_ok());
     }
 
     // Report req 2: the candidate's canonical hash is byte-identical across an equivalent replay

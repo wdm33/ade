@@ -633,6 +633,7 @@ mod tests {
             reserves: Coin(13_000_000_000_000_000),
             treasury: Coin(1_000_000_000_000),
             block_production,
+            reward_deltas: std::collections::BTreeMap::new(),
             reward_nibble_observation: RewardNibbleObservation::Mixed,
         }
     }

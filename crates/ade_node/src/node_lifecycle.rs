@@ -601,6 +601,21 @@ async fn run_node_lifecycle_inner(
                                 )
                                 .ok()
                             }),
+                        // M1 (B3c): `.ok()` downgrades a missing/unreadable/undecodable rupd to None --
+                        // a deliberate mirror of the `next_epoch_bridge` recovery above. A None is NOT
+                        // silently accepted: the seed+2 derivation (derive_candidate) FAILS CLOSED on an
+                        // absent rupd, so a corrupt sidecar surfaces as a terminal
+                        // BootstrapRewardUpdateAbsent at the authority derivation, never a silent zero.
+                        bootstrap_reward_delta: chaindb
+                            .get_bootstrap_reward_update(&sidecar.anchor_fp)
+                            .ok()
+                            .flatten()
+                            .and_then(|b| {
+                                ade_ledger::bootstrap_reward_update::decode_bootstrap_reward_update(
+                                    &b,
+                                )
+                                .ok()
+                            }),
                     })
                 }
                 _ => None,
@@ -797,6 +812,21 @@ async fn run_node_lifecycle_inner(
                             .flatten()
                             .and_then(|b| {
                                 ade_ledger::bootstrap_bridge::decode_bootstrap_next_epoch_authority(
+                                    &b,
+                                )
+                                .ok()
+                            }),
+                        // M1 (B3c): `.ok()` downgrades a missing/unreadable/undecodable rupd to None --
+                        // a deliberate mirror of the `next_epoch_bridge` recovery above. A None is NOT
+                        // silently accepted: the seed+2 derivation (derive_candidate) FAILS CLOSED on an
+                        // absent rupd, so a corrupt sidecar surfaces as a terminal
+                        // BootstrapRewardUpdateAbsent at the authority derivation, never a silent zero.
+                        bootstrap_reward_delta: chaindb
+                            .get_bootstrap_reward_update(&sidecar.anchor_fp)
+                            .ok()
+                            .flatten()
+                            .and_then(|b| {
+                                ade_ledger::bootstrap_reward_update::decode_bootstrap_reward_update(
                                     &b,
                                 )
                                 .ok()
@@ -1774,6 +1804,7 @@ pub async fn run_relay_loop_with_sched(
             inputs.genesis_hash.clone(),
             inputs.protocol_params_hash.clone(),
             inputs.asc,
+            inputs.bootstrap_reward_delta.as_ref(),
             &mut authority,
             &inputs.replay_scratch_path,
         )

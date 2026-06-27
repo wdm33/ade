@@ -20,13 +20,14 @@
 //! per-step transforms it sequences are deterministic and individually proven.
 
 use super::reduced_utxo_checkpoint::{ReducedCheckpointError, ReducedUtxoCheckpoint};
-use ade_ledger::delegation::{apply_pool_reap, PoolParams};
+use ade_ledger::delegation::{apply_bootstrap_reward_deltas, apply_pool_reap, PoolParams};
 use ade_ledger::error::LedgerError;
 use ade_ledger::reduced_advance::{advance_cert_state, reduced_block_delta};
 use ade_ledger::reduced_aggregate::{aggregate_pool_stake, AggregateError, StakeByPool};
 use ade_ledger::state::LedgerState;
 use ade_types::shelley::block::ShelleyBlock;
-use ade_types::tx::PoolId;
+use ade_types::shelley::cert::StakeCredential;
+use ade_types::tx::{Coin, PoolId};
 use ade_types::{CardanoEra, EpochNo};
 use std::collections::BTreeMap;
 
@@ -80,6 +81,7 @@ pub fn drive_window_consensus_inputs(
     blocks: &[ShelleyBlock],
     era: CardanoEra,
     slots_per_epoch: u64,
+    reward_delta: Option<&BTreeMap<StakeCredential, Coin>>,
 ) -> Result<WindowConsensusInputs, WindowDriverError> {
     // Fail closed on a zero epoch length: without a valid slots_per_epoch the boundary detection
     // would silently collapse all blocks to epoch 0 and never apply POOLREAP (a consensus-divergent
@@ -112,6 +114,22 @@ pub fn drive_window_consensus_inputs(
         state.cert_state = cert_state;
         state.gov_state = gov_state;
     }
+    // OPTION B (B3c): apply the snapshot-bound bootstrap reward update at the WINDOW-END -- AFTER the
+    // replayed epoch's withdrawals (the loop above), immediately BEFORE the snapshot aggregate. This is
+    // Cardano's temporal model: at the epoch boundary the reward update is distributed to reward
+    // accounts, THEN the new stake snapshot is taken. Applied exactly once; the caller passes `Some`
+    // ONLY for the seed+2 authority window (the window whose end is the seed->seed+1 boundary). So a
+    // PRE-update seed + the canonical replay window + this bound delta = the post-boundary stake
+    // snapshot, reproduced IDENTICALLY on first-run derive AND warm-start recovery (the seed cert state
+    // is never mutated). A credential that withdrew in the replayed epoch (above) correctly receives its
+    // boundary reward here, not zero.
+    if let Some(delta) = reward_delta {
+        // FC/IS: the reward-distribution transition is a pure BLUE ledger fn (checked_add, fail-closed
+        // on overflow); the RED driver only SEQUENCES it on the window-replay clone -- it never mutates
+        // core state inline.
+        apply_bootstrap_reward_deltas(&mut state.cert_state.delegation, delta)
+            .map_err(WindowDriverError::Aggregate)?;
+    }
     let cred_utxo_stake = checkpoint
         .sum_base_credential_stake()
         .map_err(WindowDriverError::Checkpoint)?;
@@ -131,7 +149,7 @@ pub fn drive_window_aggregate(
     blocks: &[ShelleyBlock],
     era: CardanoEra,
 ) -> Result<StakeByPool, WindowDriverError> {
-    drive_window_consensus_inputs(checkpoint, bootstrap_state, blocks, era, u64::MAX)
+    drive_window_consensus_inputs(checkpoint, bootstrap_state, blocks, era, u64::MAX, None)
         .map(|w| w.stake)
 }
 
@@ -381,12 +399,50 @@ mod tests {
         state.cert_state.delegation.rewards.insert(cred(0xDD), Coin(0));
         state.cert_state.delegation.delegations.insert(cred(0xDD), pool(0xBB));
 
-        let out = drive_window_consensus_inputs(&cp, &state, &[b0, b1], era, 100).expect("drive");
+        let out =
+            drive_window_consensus_inputs(&cp, &state, &[b0, b1], era, 100, None).expect("drive");
 
         assert_eq!(out.pool_params[&pool(0xAA)].vrf_hash, Hash32([0x22; 32]), "future VRF adopted at boundary");
         assert!(!out.pool_params.contains_key(&pool(0xBB)), "retiring pool reaped at the boundary");
         assert_eq!(out.stake.pool_stakes.get(&pool(0xAA)).copied(), Some(Coin(3_000_000)), "adopted pool keeps its delegated stake");
         assert!(!out.stake.pool_stakes.contains_key(&pool(0xBB)), "reaped pool's delegation cleared -> no stake");
+    }
+
+    // Option B (B3c / DC-EPOCH-18): a non-empty bootstrap reward delta passed to the driver is applied
+    // at the WINDOW-END and reaches the pool stake aggregate (UTxO + the boundary reward distribution).
+    #[test]
+    fn drive_window_applies_bootstrap_reward_delta_to_the_aggregate() {
+        let era = CardanoEra::Conway;
+        let tmpl = real_conway_block();
+        let block = empty_block_at(&tmpl, 50); // a single epoch-0 block -> no boundary crossing
+        let mut reduced: BTreeMap<TxIn, (Coin, ReducedStakeRef)> = BTreeMap::new();
+        reduced.insert(txin(0xDD), (Coin(7_000_000), ReducedStakeRef::Base(cred(0xDD))));
+        let mut state = LedgerState::new(era);
+        state.cert_state.pool.pools.insert(pool(0xAA), pp(0xAA, 0x11));
+        state.cert_state.delegation.registrations.insert(cred(0xDD), Coin(2_000_000));
+        state.cert_state.delegation.rewards.insert(cred(0xDD), Coin(0));
+        state.cert_state.delegation.delegations.insert(cred(0xDD), pool(0xAA));
+
+        // No delta -> the pool stake is the UTxO only (7M).
+        let (cp, _d0) = temp_checkpoint();
+        cp.build_from(&reduced).expect("build");
+        let base = drive_window_consensus_inputs(&cp, &state, std::slice::from_ref(&block), era, 100, None)
+            .expect("drive");
+        assert_eq!(base.stake.pool_stakes.get(&pool(0xAA)).copied(), Some(Coin(7_000_000)));
+
+        // A 1M reward delta for the delegator -> pool stake = UTxO 7M + reward 1M = 8M.
+        let mut delta = BTreeMap::new();
+        delta.insert(cred(0xDD), Coin(1_000_000));
+        let (cp2, _d1) = temp_checkpoint();
+        cp2.build_from(&reduced).expect("build");
+        let with =
+            drive_window_consensus_inputs(&cp2, &state, std::slice::from_ref(&block), era, 100, Some(&delta))
+                .expect("drive");
+        assert_eq!(
+            with.stake.pool_stakes.get(&pool(0xAA)).copied(),
+            Some(Coin(8_000_000)),
+            "the bootstrap reward delta is added to the pool's stake at the window-end"
+        );
     }
 
     // ECA-0a replay equivalence: the boundary-crossing drive is deterministic — two fresh runs over
@@ -410,7 +466,7 @@ mod tests {
             state.cert_state.delegation.registrations.insert(cred(0xDD), Coin(2_000_000));
             state.cert_state.delegation.rewards.insert(cred(0xDD), Coin(0));
             state.cert_state.delegation.delegations.insert(cred(0xDD), pool(0xBB));
-            drive_window_consensus_inputs(&cp, &state, &blocks, era, 100).unwrap()
+            drive_window_consensus_inputs(&cp, &state, &blocks, era, 100, None).unwrap()
         };
         assert_eq!(run(), run(), "boundary-crossing drive is replay-deterministic");
     }
@@ -423,7 +479,7 @@ mod tests {
         cp.build_from(&BTreeMap::new()).unwrap();
         let state = LedgerState::new(CardanoEra::Conway);
         let b = empty_block_at(&real_conway_block(), 50);
-        match drive_window_consensus_inputs(&cp, &state, &[b], CardanoEra::Conway, 0) {
+        match drive_window_consensus_inputs(&cp, &state, &[b], CardanoEra::Conway, 0, None) {
             Err(WindowDriverError::InvalidEpochLength) => {}
             other => panic!("expected InvalidEpochLength, got {other:?}"),
         }

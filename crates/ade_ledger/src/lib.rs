@@ -53,6 +53,7 @@ pub mod reduced_snapshot;
 pub mod reduced_utxo;
 pub mod rollback;
 pub mod bootstrap_bridge;
+pub mod bootstrap_reward_update;
 pub mod rules;
 pub mod scripts;
 pub mod seed_consensus_inputs;

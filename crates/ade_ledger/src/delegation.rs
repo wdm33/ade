@@ -342,6 +342,26 @@ pub fn apply_pool_reap(cert: &mut CertState, entered_epoch: EpochNo) {
     }
 }
 
+/// Option B (B3c, DC-EPOCH-18): apply the snapshot-bound bootstrap reward update to the delegation
+/// reward balances at the seed window-end. Each credential's delta is ADDED to its existing reward
+/// balance (the real chain distributes the boundary reward update into the reward accounts, AFTER the
+/// epoch's withdrawals); keys join the existing `rewards` map by the SAME `StakeCredential`
+/// representation. Pure, total, deterministic, FAIL-CLOSED on overflow (`checked_add`, never a silently
+/// saturated authoritative reward).
+pub fn apply_bootstrap_reward_deltas(
+    delegation: &mut DelegationState,
+    delta: &BTreeMap<StakeCredential, Coin>,
+) -> Result<(), crate::reduced_aggregate::AggregateError> {
+    for (cred, coin) in delta {
+        let entry = delegation.rewards.entry(cred.clone()).or_insert(Coin(0));
+        entry.0 = entry
+            .0
+            .checked_add(coin.0)
+            .ok_or(crate::reduced_aggregate::AggregateError::StakeOverflow)?;
+    }
+    Ok(())
+}
+
 /// Apply a sequence of certificates to the certificate state.
 ///
 /// Processes certificates in order, threading state through each application.
@@ -576,6 +596,28 @@ mod tests {
 
     fn make_cred(byte: u8) -> StakeCredential {
         StakeCredential::KeyHash(Hash28([byte; 28]))
+    }
+
+    // Option B (B3c / DC-EPOCH-18): the bootstrap reward delta ADDS to existing reward balances and
+    // FAILS CLOSED on overflow (checked_add, never saturates).
+    #[test]
+    fn apply_bootstrap_reward_deltas_sums_and_fails_closed_on_overflow() {
+        let (c1, c2) = (make_cred(0x01), make_cred(0x02));
+        let mut d = DelegationState::default();
+        d.rewards.insert(c1.clone(), Coin(100));
+        let mut delta = BTreeMap::new();
+        delta.insert(c1.clone(), Coin(50));
+        delta.insert(c2.clone(), Coin(7));
+        apply_bootstrap_reward_deltas(&mut d, &delta).expect("apply");
+        assert_eq!(d.rewards.get(&c1), Some(&Coin(150)), "delta adds to the existing reward");
+        assert_eq!(d.rewards.get(&c2), Some(&Coin(7)), "delta seeds a new reward");
+
+        // overflow fails closed (never a silently saturated reward).
+        let mut d2 = DelegationState::default();
+        d2.rewards.insert(c1.clone(), Coin(u64::MAX));
+        let mut big = BTreeMap::new();
+        big.insert(c1.clone(), Coin(1));
+        assert!(apply_bootstrap_reward_deltas(&mut d2, &big).is_err());
     }
 
     fn make_pool_id(byte: u8) -> PoolId {

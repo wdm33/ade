@@ -67,6 +67,13 @@ pub struct EviewActivationInputs {
     /// imported MARK snapshot, recovered from durable storage at relay-loop start (first-run OR warm-
     /// start). `Some` for a native-Mithril-started node; the seam REQUIRES it for the first boundary.
     pub next_epoch_bridge: Option<BootstrapNextEpochAuthority>,
+    /// Option B (B3c): the snapshot-bound bootstrap reward update, recovered from durable storage at
+    /// relay-loop start (first-run OR warm-start), bound to the SAME `anchor_fp` as the seed sidecar.
+    /// REQUIRED for the seed+2 authority (the first replay-derived leader schedule); the seam fails
+    /// closed if it is absent at that boundary. Applied at the WINDOW-END of the seed+2 replay (the
+    /// `CandidateProfile` carries it to `derive_candidate`), NEVER mutated into the seed cert state.
+    pub bootstrap_reward_delta:
+        Option<ade_ledger::bootstrap_reward_update::BootstrapRewardUpdate>,
 }
 
 impl EviewActivationInputs {
@@ -99,6 +106,7 @@ impl EviewActivationInputs {
             self.genesis_hash.clone(),
             self.protocol_params_hash.clone(),
             self.asc,
+            self.bootstrap_reward_delta.as_ref(),
             selected_point,
             active_view,
             scratch_path,
@@ -444,6 +452,7 @@ pub fn maybe_activate_first_boundary(
     genesis_hash: Hash32,
     protocol_params_hash: Hash32,
     asc: ActiveSlotsCoeff,
+    bootstrap_reward_update: Option<&ade_ledger::bootstrap_reward_update::BootstrapRewardUpdate>,
     selected_point: &Point,
     active_view: &mut ActiveEpochAuthority,
     scratch_path: &std::path::Path,
@@ -472,6 +481,8 @@ pub fn maybe_activate_first_boundary(
         genesis_hash,
         protocol_params_hash,
         asc,
+        bootstrap_reward_update: bootstrap_reward_update.cloned(),
+        seed_epoch,
     };
     let outcome = try_activate_at_boundary(
         live,
@@ -563,6 +574,11 @@ pub fn prepare_authority_for_candidate_slot(
                 "window-replay beyond seed+2 not yet wired (candidate {candidate_epoch:?}, seed {seed_epoch:?})"
             )));
         }
+        // Option B (B3c, DC-EPOCH-18): the seed+2 authority's stake snapshot REQUIRES the snapshot-bound
+        // bootstrap reward update; the fail-closed (absent / wrong-epoch is terminal) is now enforced
+        // MECHANICALLY at the single derivation site (derive_candidate over the seed window), so it
+        // cannot drift across the activate / recover / first-boundary callers. The update is carried on
+        // the profile below.
         let ticked = ade_core::consensus::apply_nonce_input(
             chain_dep,
             &ade_core::consensus::NonceInput::EpochBoundary {
@@ -585,6 +601,8 @@ pub fn prepare_authority_for_candidate_slot(
             genesis_hash: inputs.genesis_hash.clone(),
             protocol_params_hash: inputs.protocol_params_hash.clone(),
             asc: inputs.asc,
+            bootstrap_reward_update: inputs.bootstrap_reward_delta.clone(),
+            seed_epoch,
         };
         let selected_point = Point {
             slot: durable_tip_slot,
@@ -753,6 +771,7 @@ pub fn maybe_recover_promoted_authority(
     genesis_hash: Hash32,
     protocol_params_hash: Hash32,
     asc: ActiveSlotsCoeff,
+    bootstrap_reward_update: Option<&ade_ledger::bootstrap_reward_update::BootstrapRewardUpdate>,
     active_view: &mut ActiveEpochAuthority,
     scratch_path: &std::path::Path,
 ) -> Result<(), ActivationError> {
@@ -764,6 +783,11 @@ pub fn maybe_recover_promoted_authority(
     let Some(record) = record else {
         return Ok(());
     };
+    // Option B (B3c, DC-EPOCH-18): reproducing the recovered seed+2 authority REQUIRES the
+    // snapshot-bound bootstrap reward update; the fail-closed (absent / wrong-epoch is terminal) is
+    // enforced MECHANICALLY at the shared derivation site (derive_candidate over the seed window), so a
+    // legacy store (no rupd sidecar, e.g. a mutated post-RUPD seed) cannot re-derive this authority via
+    // the accidental-correctness path. The update is carried on the profile below.
     // a durable record is present (checked above), so the boundary WAS crossed and its first-boundary
     // window WAS computable when the record was written. If the bounds are now uncomputable from the
     // SAME durable seed point/epoch, the store is inconsistent with the record -- the recorded promotion
@@ -783,6 +807,8 @@ pub fn maybe_recover_promoted_authority(
         genesis_hash,
         protocol_params_hash,
         asc,
+        bootstrap_reward_update: bootstrap_reward_update.cloned(),
+        seed_epoch,
     };
     try_recover_at_boundary(
         live,
@@ -943,6 +969,9 @@ mod tests {
             genesis_hash: Hash32([0x91; 32]),
             protocol_params_hash: Hash32([0x92; 32]),
             asc: ActiveSlotsCoeff { numer: 1, denom: 20 },
+            bootstrap_reward_update: None,
+            // window source is 10 -> not the seed+2 window -> the rupd gate is a no-op.
+            seed_epoch: EpochNo(0),
         };
         let r = try_activate_at_boundary(
             &live,
@@ -1026,7 +1055,7 @@ mod tests {
         let mut av = ActiveEpochAuthority::seed(&av_sv);
         let r = maybe_activate_first_boundary(
             &sched, SlotNo(8_640_000 + 60_000), EpochNo(100), seed_slot, Hash32([7; 32]),
-            &live, &db, &state, 2, Hash32([0; 32]), Hash32([0x91; 32]), Hash32([0x92; 32]), ActiveSlotsCoeff { numer: 1, denom: 20 }, &pt, &mut av, &dir.path().join("s1.redb"), |_| true,
+            &live, &db, &state, 2, Hash32([0; 32]), Hash32([0x91; 32]), Hash32([0x92; 32]), ActiveSlotsCoeff { numer: 1, denom: 20 }, None, &pt, &mut av, &dir.path().join("s1.redb"), |_| true,
         );
         assert!(matches!(r, Ok(None)), "pre-boundary -> no activation");
         assert!(!av.is_promoted(), "the seed view is untouched");
@@ -1038,7 +1067,7 @@ mod tests {
         let mut av2 = ActiveEpochAuthority::seed(&av2_sv);
         let r2 = maybe_activate_first_boundary(
             &sched, SlotNo(8_640_000 + 90_000), EpochNo(100), seed_slot, Hash32([7; 32]),
-            &live, &db, &state, 2, Hash32([0; 32]), Hash32([0x91; 32]), Hash32([0x92; 32]), ActiveSlotsCoeff { numer: 1, denom: 20 }, &pt, &mut av2, &dir.path().join("s2.redb"), |_| true,
+            &live, &db, &state, 2, Hash32([0; 32]), Hash32([0x91; 32]), Hash32([0x92; 32]), ActiveSlotsCoeff { numer: 1, denom: 20 }, None, &pt, &mut av2, &dir.path().join("s2.redb"), |_| true,
         );
         assert!(
             matches!(r2, Err(ActivationError::SourceWindow(_))),

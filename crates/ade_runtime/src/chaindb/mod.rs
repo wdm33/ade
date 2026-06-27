@@ -208,6 +208,26 @@ pub trait SnapshotStore: Send + Sync {
         Ok(None)
     }
 
+    /// Option B (B3c): persist the snapshot-bound bootstrap reward update (the seed+2 authority's
+    /// window-end reward distribution), keyed by the SAME `anchor_fp` as the seed sidecar, in its OWN
+    /// disjoint anchor-fp space. Idempotent on identical bytes; conflicting bytes -> InvalidOperation.
+    /// Default: no-op (non-persisting impls carry no reward update).
+    fn put_bootstrap_reward_update(
+        &self,
+        _anchor_fp: &Hash32,
+        _bytes: &[u8],
+    ) -> Result<(), ChainDbError> {
+        Ok(())
+    }
+
+    /// Look up the bootstrap reward update by `anchor_fp`. `Ok(None)` if absent. Default: absent.
+    fn get_bootstrap_reward_update(
+        &self,
+        _anchor_fp: &Hash32,
+    ) -> Result<Option<Vec<u8>>, ChainDbError> {
+        Ok(None)
+    }
+
     /// All anchor fingerprints with a stored seed-epoch consensus-inputs
     /// sidecar, ascending. PHASE4-N-F-C L3 (W2): a read-only **discovery**
     /// surface for warm-start recovery — it locates the persisted bootstrap

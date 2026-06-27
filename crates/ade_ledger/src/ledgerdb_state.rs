@@ -759,6 +759,10 @@ pub struct NativeSnapshotNonUtxoState {
     pub treasury: Coin,
     /// `nesBprev`: blocks each pool made in the previous epoch.
     pub block_production: BTreeMap<PoolId, u64>,
+    /// `nesRu` Complete reward update's `rs`, aggregated per credential = the reward deltas the real
+    /// chain applies at the NEXT epoch boundary (the seed-window-end RUPD that authority(N+2) needs).
+    /// Empty when SNothing or mid-pulse.
+    pub reward_deltas: BTreeMap<StakeCredential, Coin>,
     /// DIAGNOSTIC evidence only (never a verdict): the pool reward-account network-nibble
     /// distribution. `network_id` above (manifest-derived) is the sole network authority.
     pub reward_nibble_observation: RewardNibbleObservation,
@@ -838,6 +842,68 @@ fn read_mark_snapshot_pool_distr_nn(
 /// outside the CertState pool set is TERMINAL (never defaulted or partial). Network identity
 /// is the manifest magic ALONE; reward-account nibbles are diagnostic evidence only and never
 /// accept or reject the snapshot.
+/// Sum the amounts of one credential's `Set Reward` value in the `rs` map. The set is optionally
+/// CBOR-tag-258 wrapped, then `array(M)`; each `Reward = array(3)[type(word), pool(hash28), amount]`.
+/// Conway aggregates ALL of a credential's rewards (member + leader), so we sum every amount.
+fn read_reward_set_amount_sum(d: &[u8], o: &mut usize) -> R<u64> {
+    if peek_major(d, *o).map_err(|e| malformed(format!("rewardSet.peek: {e:?}")))? == 6 {
+        let _ = read_tag(d, o).map_err(|e| malformed(format!("rewardSet.tag: {e:?}")))?; // set tag 258
+    }
+    let m = array_len(d, o, "rewardSet")?;
+    let mut sum = 0u64;
+    for _ in 0..m {
+        expect_array(d, o, 3, "Reward")?;
+        let _rtype = read_u64(d, o, "Reward.type")?;
+        let _pool = read_fixed_bytes(d, o, 28, "Reward.pool")?;
+        let amount = read_u64(d, o, "Reward.amount")?;
+        sum = sum.saturating_add(amount);
+    }
+    Ok(sum)
+}
+
+/// Decode `nesRu` (`StrictMaybe PulsingRewUpdate`) -> the per-credential reward deltas the real chain
+/// applies at the NEXT epoch boundary. Only a Complete (already-pulsed) `RewardUpdate` yields deltas;
+/// `SNothing` or a mid-pulse `Pulsing` update yields an empty map (the boundary then carries the
+/// snapshot rewards unchanged). `rs = map(Credential -> Set Reward)`; credentials route through the
+/// SAME `read_credential` as the dstate so the keys JOIN the existing reward map. The full item is
+/// consumed regardless (so the caller's decode stays aligned).
+fn read_reward_update_deltas(d: &[u8], o: &mut usize) -> R<BTreeMap<StakeCredential, Coin>> {
+    let mut deltas: BTreeMap<StakeCredential, Coin> = BTreeMap::new();
+    // StrictMaybe: array(0) = SNothing, array(1) = SJust PulsingRewUpdate.
+    let sm = array_len(d, o, "nesRu.strictMaybe")?;
+    if sm == 0 {
+        return Ok(deltas);
+    }
+    // SJust PulsingRewUpdate = array[tag, ...]: tag 0 = Pulsing(+RewardSnapShot+Pulser), 1 = Complete(+RewardUpdate).
+    let _pru = array_len(d, o, "nesRu.pulsing")?;
+    let tag = read_u64(d, o, "nesRu.tag")?;
+    if tag != 1 {
+        // M4 (B3c / DC-EPOCH-18): a mid-pulse (Pulsing tag 0) PulsingRewUpdate means the seed+2 reward
+        // distribution is NOT yet computed in the snapshot. FAIL CLOSED -- bootstrap must not proceed
+        // with zero boundary rewards (a silent undercount of the seed+2 stake). Only SNothing (handled
+        // above, sm == 0) is a legit empty delta.
+        return Err(malformed(format!(
+            "nesRu is mid-pulse (Pulsing tag {tag}, not Complete): seed+2 reward distribution not yet computed"
+        )));
+    }
+    // Complete: the remaining field is RewardUpdate = array(5)[deltaT, -deltaR, rs, -deltaF, nonMyopic].
+    expect_array(d, o, 5, "RewardUpdate")?;
+    skip_item(d, o).map_err(|e| malformed(format!("RewardUpdate.deltaT: {e:?}")))?;
+    skip_item(d, o).map_err(|e| malformed(format!("RewardUpdate.deltaR: {e:?}")))?;
+    map_each(d, o, "RewardUpdate.rs", |o| {
+        let cred = read_credential(d, o)?;
+        let sum = read_reward_set_amount_sum(d, o)?;
+        if sum > 0 {
+            let e = deltas.entry(cred).or_insert(Coin(0));
+            e.0 = e.0.saturating_add(sum);
+        }
+        Ok(())
+    })?;
+    skip_item(d, o).map_err(|e| malformed(format!("RewardUpdate.deltaF: {e:?}")))?;
+    skip_item(d, o).map_err(|e| malformed(format!("RewardUpdate.nonMyopic: {e:?}")))?;
+    Ok(deltas)
+}
+
 pub fn decode_native_nonutxo_state(
     state_cbor: &[u8],
     point: SeedPoint,
@@ -899,7 +965,10 @@ pub fn decode_native_nonutxo_state(
     skip_item(d, o)?; // ssStakeGo
     skip_item(d, o)?; // ssFee
     skip_item(d, o)?; // EpochState.nonMyopic
-    skip_item(d, o)?; // nes.rewardUpdate
+    // nes.rewardUpdate (nesRu): decode the Complete RUPD's per-credential reward deltas — the
+    // seed-window-end reward distribution that authority(N+2)'s stake needs. R-error -> Rn.
+    let reward_deltas = read_reward_update_deltas(d, o)
+        .map_err(|e| nn_malformed(format!("nesRu rewardUpdate: {e:?}")))?;
     // nes[5] = [PoolDistr, totalActiveStake]
     let pd_n = nn_array_len(d, o, "nes.poolDistrWrapper")?;
     let pool_distr = read_pool_distr_nn(d, o)?;
@@ -968,6 +1037,7 @@ pub fn decode_native_nonutxo_state(
         reserves,
         treasury,
         block_production,
+        reward_deltas,
         reward_nibble_observation,
     };
     let commitment = commit_native_nonutxo_state(&state);

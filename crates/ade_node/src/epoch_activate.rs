@@ -286,6 +286,9 @@ mod tests {
             genesis_hash: Hash32([0x91; 32]),
             protocol_params_hash: Hash32([0x92; 32]),
             asc: ActiveSlotsCoeff { numer: 1, denom: 20 },
+            bootstrap_reward_update: None,
+            // not the seed+2 window -> the rupd gate is a no-op for these activate/recover tests.
+            seed_epoch: EpochNo(0),
         }
     }
 
