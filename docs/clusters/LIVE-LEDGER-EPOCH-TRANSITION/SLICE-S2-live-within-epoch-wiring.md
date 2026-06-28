@@ -7,7 +7,7 @@ LIVE-LEDGER-EPOCH-TRANSITION.
 (tip-after-durable in `apply_plan`), DC-EPOCH-11 (the reduced-checkpoint `LAST_SLOT` lockstep + readiness
 gates), the WAL-is-admission-authority recovery (`recovery/restart.rs`), and
 `materialize_rolled_back_state` (the proven replay-equivalence-is-recovery pattern).
-**Status:** Within-epoch half + RECOVERY IMPLEMENTED. Within-epoch fold LIVE-PROVEN (2026-06-28 preview
+**Status:** S2 within-epoch half + RECOVERY COMPLETE — CE-2a/2e LIVE-PROVEN, CE-2b/2c/2f + CI hermetic-green, CE-2d rematerialize-fold + live warm-start survival proven (the WIRED readiness-gate CONSUMER is S4 by design, not an S2 gap). Within-epoch fold LIVE-PROVEN (2026-06-28 preview
 follow: 380 within-epoch advances then the boundary `MissingBoundaryStake` stall, observe-only). Recovery
 landed (`59153f36`, IDD review PASS): `advance_accumulator_to_durable_tip` — a single advance-to-tip walk
 (warm-start catch-up + reorg reset-then-replay, observe-only) superseding the per-block advance; 4 unit
@@ -16,8 +16,10 @@ landed. **Live warm-start survival PROVEN (2026-06-28 preview):** post-SIGKILL, 
 observe-only accumulator stall re-fires byte-identically at slot 115689630 / epoch 1339 (deterministic
 rematerialize). Two S4 obligations annotated in the wrapper (halt-on-real-fault + lineage-check-if-reorging-path).
 SEPARATE non-S2 finding surfaced by the warm-start: the EpochConsensusView boundary-promotion cross-check
-fail-closes exit 43 (`EpochViewPostPromotionMismatch`) — EPOCH-CONSENSUS-VIEW/ECA cluster, independent of the
-observe-only accumulator. Boundary crossing = S3; leadership-authority flip + the WIRED readiness gate = S4.
+fail-closed exit 43 (`EpochViewPostPromotionMismatch`) — EPOCH-CONSENSUS-VIEW/ECA cluster, independent of the
+observe-only accumulator — now FIXED+PUSHED (`d7653561`, the seed+1 bridge recovery twin; live-proven
+before/after on the reproducing data-dir). Boundary crossing = S3; leadership-authority flip + the WIRED
+readiness gate = S4.
 
 > S2 connects the S1 state machine to EVERY selected-chain admission — **the within-epoch half only.**
 > The boundary crossing (the reward over `nesBprev`, SNAP rotation, POOLREAP, the KeyHash withdrawal
@@ -249,10 +251,18 @@ canonical prefix.
   **380 within-epoch advances, all epoch 1338**, the durable accumulator tracking the live follow
   block-by-block beside the reduced checkpoint (`a842cfe1` seal + `68846dcc` advance; `epoch-accumulator.redb`
   created at bootstrap, advanced through the epoch).
-- [ ] **CE-2b (exactly once):** re-announced / idempotent-no-op blocks apply nothing; one cert + one fee
-  scan per admitted block (test).
-- [ ] **CE-2c (fee byte-semantics, PO-1):** `epoch_fees` matches full-ledger accumulation incl.
-  phase-2-invalid collateral; fail-closed on undeclarable collateral (test).
+- [x] **CE-2b (exactly once) — DONE:** re-announced / idempotent-no-op blocks apply nothing
+  (`at_or_before_tip_is_already_applied`, `over_chaindb_rewalk_is_idempotent`); one admit credits exactly
+  one issuer increment + one fee scan — the end-to-end `epoch_fees` delta equals exactly one
+  `scan_block_tx_effects`, the issuer count goes 1→2 across two admits, no double-count
+  (`apply_selected_block_credits_exactly_one_fee_scan_per_admit`); same-block re-apply is byte-identical
+  (`apply_selected_block_on_real_conway_block_is_deterministic`).
+- [x] **CE-2c (fee byte-semantics, PO-1) — DONE:** `epoch_fees` follows cardano-ledger's UTXOS rule —
+  valid tx → declared fee (key 2), phase-2-invalid tx → consumed collateral (key 17) — fail-closed on
+  undeclarable collateral and on an invalid tx carrying certs/withdrawals, over a fail-closed canonical
+  decode of the invalid set (`valid_tx_fee_is_declared_fee_regression`,
+  `invalid_tx_fee_is_collateral_not_declared_fee`, `invalid_tx_without_total_collateral_is_fail_closed`,
+  `invalid_tx_carrying_certs_is_fail_closed`, 3× `canonical_invalid_set_*`).
 - [~] **CE-2d (DC-EPOCH-20 durability/recovery) — REMATERIALIZE FOLD DONE + UNIT-TESTED; wired gate + live
   restart = S4/remaining:** the recovery fold landed as `advance_accumulator_to_durable_tip` (`59153f36`),
   called after each durable admit beside the reduced checkpoint — a single advance-to-tip walk
@@ -267,7 +277,7 @@ canonical prefix.
   halt on a real fault once the accumulator is consensus authority (observe-only swallow is §8-compliant
   ONLY while non-authoritative); (MEDIUM-2) the reorg detector's height check must become a LINEAGE check
   if the accumulator is ever driven by a reorging fork-choice path (today's sole caller is the fail-closed
-  forward-only `run_node_sync`). **Live warm-start survival PROVEN (2026-06-28 preview, `S2-RECOVER-WARMSTART-PROOF.txt`):** FirstRun sealed + stalled observe-only at slot 115689630 (`MissingBoundaryStake { epoch: 1339 }`), then SIGKILL'd; the snapshot-free WarmStart recovered from its own store and the stall **re-fired byte-identically at slot 115689630 / epoch 1339** — the durable accumulator rematerialized deterministically across a hard crash + restart. (Post-boundary advancement-across-restart stays unit-proven — the live boundary blocks showing it on this snapshot.) **SEPARATE FINDING (not the accumulator, not S2):** after re-stalling the observe-only accumulator, the WarmStart node halted exit 43 = `eview Activate(EpochViewPostPromotionMismatch)` — the EpochConsensusView warm-start-across-boundary promotion cross-check (EPOCH-CONSENSUS-VIEW / ECA cluster, cf. `dabb4210`). The observe-only accumulator (unit-returning, different redb) cannot emit that error; the two are independent. Logged for the EVIEW cluster.
+  forward-only `run_node_sync`). **Live warm-start survival PROVEN (2026-06-28 preview, `S2-RECOVER-WARMSTART-PROOF.txt`):** FirstRun sealed + stalled observe-only at slot 115689630 (`MissingBoundaryStake { epoch: 1339 }`), then SIGKILL'd; the snapshot-free WarmStart recovered from its own store and the stall **re-fired byte-identically at slot 115689630 / epoch 1339** — the durable accumulator rematerialized deterministically across a hard crash + restart. (Post-boundary advancement-across-restart stays unit-proven — the live boundary blocks showing it on this snapshot.) **SEPARATE FINDING (not the accumulator, not S2) — since FIXED:** after re-stalling the observe-only accumulator, the WarmStart node halted exit 43 = `eview Activate(EpochViewPostPromotionMismatch)` — the EpochConsensusView warm-start-across-boundary promotion cross-check (EPOCH-CONSENSUS-VIEW / ECA cluster, cf. `dabb4210`). The observe-only accumulator (unit-returning, different redb) cannot emit that error; the two are independent. **FIXED+PUSHED `d7653561`:** recovery dispatched only the seed+2 window candidate, but a node that crossed only the FIRST boundary holds a seed+1 bridge record → the bridge recovery twin re-binds it; live-proven before/after on the SAME data-dir (was exit 43, now recovers + catches up across 1338→1339).
 - [x] **CE-2e (boundary structurally excluded) — PROVEN (hermetic + LIVE):** a boundary-crossing block on
   the live S2 path fail-closes `MissingBoundaryStake` — POOLREAP + the KeyHash projection never execute
   live. **Live:** at the 1338→1339 boundary the advancer **stalled `MissingBoundaryStake { epoch: 1339 }`

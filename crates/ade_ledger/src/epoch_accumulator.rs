@@ -1625,6 +1625,55 @@ mod tests {
     }
 
     #[test]
+    fn apply_selected_block_credits_exactly_one_fee_scan_per_admit() {
+        // CE-2b end-to-end: a within-epoch admit credits `epoch_fees` by EXACTLY one tx-body scan's
+        // worth — the same total `scan_block_tx_effects` reports for this block — and increments the
+        // issuer's nesBcur by exactly one. The store's slot gate proves a *re-announced* block applies
+        // nothing (`at_or_before_tip_is_already_applied`); this proves the per-admit delta is one scan
+        // (not two, not drifting), tying the fold to the validity-aware scan that CE-2c pins by value.
+        let (_era, block) = decode_selected_block(RAW_CONWAY_BLOCK).expect("decode");
+        let invalid =
+            decode_invalid_tx_indices_canonical(block.invalid_txs.as_deref(), block.tx_count)
+                .expect("canonical invalid set");
+        let (one_scan_fees, _w) =
+            scan_block_tx_effects(block.tx_count, &block.tx_bodies, &invalid).expect("scan");
+
+        let acc0 = fresh_conway_acc();
+        let ctx = SelectedBlockCtx {
+            era: CardanoEra::Conway,
+            block_epoch: EpochNo(500), // same epoch — within-epoch, no boundary
+            block_slot: SlotNo(43_000_000),
+            issuer_pool: pool(0x77),
+            boundary_mark: None,
+        };
+        let acc1 = apply_selected_block(&acc0, RAW_CONWAY_BLOCK, &ctx).expect("admit 1");
+        assert_eq!(
+            acc1.epoch_state.epoch_fees.0 - acc0.epoch_state.epoch_fees.0,
+            one_scan_fees,
+            "one admit credits exactly one fee scan"
+        );
+        assert_eq!(acc1.epoch_state.block_production.get(&pool(0x77)), Some(&1));
+
+        // A second admit (next within-epoch slot) adds exactly one MORE scan's worth — each admitted
+        // block applies once; the BLUE transition is not self-idempotent (the store's slot gate is what
+        // rejects re-applying the SAME block), so the delta must repeat, never double-count.
+        let ctx2 = SelectedBlockCtx {
+            era: CardanoEra::Conway,
+            block_epoch: EpochNo(500),
+            block_slot: SlotNo(43_000_001),
+            issuer_pool: pool(0x77),
+            boundary_mark: None,
+        };
+        let acc2 = apply_selected_block(&acc1, RAW_CONWAY_BLOCK, &ctx2).expect("admit 2");
+        assert_eq!(
+            acc2.epoch_state.epoch_fees.0 - acc1.epoch_state.epoch_fees.0,
+            one_scan_fees,
+            "each admitted block adds exactly one scan — no double-count, no drift"
+        );
+        assert_eq!(acc2.epoch_state.block_production.get(&pool(0x77)), Some(&2));
+    }
+
+    #[test]
     fn replay_equivalence_via_durable_checkpoint_across_a_boundary() {
         // Fold [block@E, block@E+1(boundary)]. Folding from the start must equal folding from the
         // durable checkpoint persisted after block 1 — replay-equivalence IS the recovery mechanism.
