@@ -107,11 +107,25 @@ checkpoint at the prior durable tip and threads it as `ctx.boundary_mark` (repla
 This is the only NEW live input the boundary needs; everything else is held in the accumulator (the
 two-buffer `prev_block_production`/`prev_epoch_fees` reward inputs, the pots, the snapshots).
 
-> **Granularity note (verify at impl):** `form_mark_snapshot` aggregates delegations away
-> (`delegations: BTreeMap::new()`, only `pool_stakes`). Confirm the RUPD + leadership only need the
-> per-pool aggregate at the mark (cardano's mark is per-credential, but the reward/leadership consumers
-> read the pool distribution). If a per-credential mark is required for a downstream consumer, that is an
-> S3 sub-item to surface, not paper over.
+> **Granularity verdict — RESOLVED (2026-06-28, investigation): a per-pool mark is BYTE-INSUFFICIENT.**
+> The reward computation reads PER-CREDENTIAL stake from the `go` snapshot's `delegations` map, in TWO
+> places: the operator leader reward (`rules.rs:1002` `op_stake = go.0.delegations.get(op_cred)` → `0` if
+> absent → wrong leader reward) and the member reward loop (`rules.rs:784` builds `delegator_stakes` from
+> `go.0.delegations`; `rules.rs:1046` distributes over it → EMPTY map → ZERO member rewards). But
+> `form_mark_snapshot` (`reduced_snapshot.rs:55`) sets `delegations: BTreeMap::new()` — so the existing
+> per-pool `StakeByPool` mark (built for EVIEW *leadership*, where per-pool suffices for the VRF threshold)
+> rotates to a `go` with no per-credential stake → zero member rewards two boundaries later. **The live
+> reward-bearing mark MUST be per-credential** (`cred → (pool, stake)`), built from the reduced checkpoint's
+> `sum_base_credential_stake()` (`reduced_utxo_checkpoint.rs:524`, per-credential UTxO) + `cert_state.delegation`
+> — the same inputs `aggregate_pool_stake` consumes BEFORE it aggregates to per-pool. This RESHAPES item #2:
+> the mark plumbing (`SelectedBlockCtx.boundary_mark: Option<StakeByPool>`, `precomputed_mark: Option<&StakeByPool>`,
+> `form_mark_snapshot`) is per-pool and must carry per-credential delegations instead.
+> **MEM-OPT tension (the §6 risk made concrete):** byte-exact rewards consume the `go` snapshot, which is
+> 2–3 epochs STALE — it cannot be recomputed from the current checkpoint, so the per-credential mark/set/go
+> MUST be stored in the accumulator (3× the delegation set in RAM — bounded by the delegation set, NOT the
+> UTxO set, but a real cost vs the closed MEM-OPT / BA-08 RssAnon budget). cardano stores exactly this;
+> the delegation set is far smaller than the UTxO set, but the delta must be measured. This is a design
+> decision (it touches a closed cluster's hard invariant), surfaced to the user before the item-#2 redesign.
 
 ### PO-S3-4 — the bootstrap→native seam.
 
@@ -167,11 +181,16 @@ proof with restarts (S6); operational reconnect/forge gates (alongside S6).
    tests (registered/unclaimed→treasury split; refund-before-clear at the overlap; `== e` not `≤ e`;
    script-hash reward-account routing; delegation-clear actually clears). Strengthens DC-EPOCH-19;
    declares DC-EPOCH-21 + the CI guard.
-2. **Live `boundary_mark` wiring** (the proven-path touch). At the durable-admit boundary, compute
-   `aggregate_pool_stake` over the reduced checkpoint at the prior tip → `form_mark_snapshot` →
+2. **Live PER-CREDENTIAL `boundary_mark` wiring** (RESHAPED by the PO-S3-3 verdict — was "compute
+   `aggregate_pool_stake` → `form_mark_snapshot`", which is byte-insufficient). The reward-bearing mark
+   must be PER-CREDENTIAL (`cred → (pool, stake)`), built from the reduced checkpoint's
+   `sum_base_credential_stake()` + `cert_state.delegation` (the inputs `aggregate_pool_stake` consumes
+   before it aggregates to per-pool), and stored as mark/set/go in the accumulator (the MEM-OPT tension —
+   the `go` snapshot is 2–3 epochs stale, so it cannot be recomputed; it must be held). At the durable-admit
+   boundary the advancer builds the per-credential mark from the reduced checkpoint at the prior tip →
    `ctx.boundary_mark`; the advancer crosses (no longer forces `None`), writes the boundary checkpoint,
-   resumes within-epoch folding. Non-native/test callers unchanged (byte-identical proven path). Venue
-   FirstRun proof: the accumulator CROSSES a real preview boundary (no stall) and keeps folding.
+   resumes folding. Non-native/test callers unchanged. Venue FirstRun proof: the accumulator CROSSES a real
+   preview boundary (no stall) and keeps folding with non-zero member rewards.
 3. **CE-3 byte-exact differential gate** (the decisive proof). Capture cardano-node's reward update +
    stake snapshot at a self-derived boundary (the existing reward_provenance / LedgerDB dump tooling),
    assert Ade's self-computed == it at ≥2 boundaries. Surface any go-snapshot stake drift (the B3c risk
