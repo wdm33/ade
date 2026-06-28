@@ -7,7 +7,8 @@ LIVE-LEDGER-EPOCH-TRANSITION.
 within-epoch fold + the durable accumulator store + the observe-only stall the boundary currently hits),
 DC-EPOCH-18 (the seed+2 byte-exact stake — the bootstrap-transient reward seed the native RUPD takes over
 from), the reduced-checkpoint stake aggregate (`aggregate_pool_stake`).
-**Status:** Proposed.
+**Status:** In progress — item #1 (BLUE POOLREAP reconciliation + discriminant) DONE (CE-3a/CE-3b/CI green;
+DC-EPOCH-21 declared). Items #2 (live `boundary_mark` wiring) + #3 (CE-3 byte-exact differential gate) pending.
 
 > S2 made the accumulator track every within-epoch block and **stall, observe-only, at the boundary**
 > (`MissingBoundaryStake`, because the live driver supplies `ctx.boundary_mark = None`). S3 supplies the
@@ -86,6 +87,14 @@ uses the full `Credential Staking` for the refund target, `isAccountRegistered`,
 test), not the KeyHash projection. Script-hash reward accounts then route byte-exactly. (S1's order test
 used key-hash accounts — the matching projection — so it passed without exercising this.)
 
+> **Split (item #1 finding, tracked).** PO-S3-2 has TWO halves. The POOLREAP deposit-refund target is
+> DONE (item #1: `rules.rs` decodes via `reward_account_credential`). The RUPD REWARD-crediting half is
+> SEPARATE and still pending: the operator/member reward distribution (`rules.rs` `op_cred` ~934-940 + the
+> `delta_t2` partition ~1087-1102) is keyed by a bare `Hash28` (the discriminant already dropped upstream),
+> so a script-hash operator/member reward would mis-route. Routing those by the real discriminant touches
+> byte-exact reward outputs + their oracle tests, so it is its OWN item BEFORE CE-3d (the live byte-exact
+> RUPD gate) — recorded here, not silently dropped.
+
 ### PO-S3-3 — the live `boundary_mark` source (SNAP's new mark).
 
 SNAP sets `ssStakeMark := <current instant stake>` (`Snap.hs:95-103`). On Ade's reduced-checkpoint
@@ -151,7 +160,7 @@ proof with restarts (S6); operational reconnect/forge gates (alongside S6).
 
 ## 5. Implementation order (each a commit, mirroring S2's cadence)
 
-1. **BLUE POOLREAP reconciliation + discriminant** (hermetic, no live). Consolidate the single canonical
+1. **BLUE POOLREAP reconciliation + discriminant — DONE** (hermetic, no live). Consolidate the single canonical
    POOLREAP order into `apply_epoch_boundary_with_registrations`; thread `reward_account_credential` for
    the refund + reward target; remove the redundant `apply_pool_reap` call from `cross_epoch_boundary`
    (fold adoption+clear inside). Keep ALL full-ledger boundary tests green; add cardano-canonical unit
@@ -186,17 +195,30 @@ proof with restarts (S6); operational reconnect/forge gates (alongside S6).
 
 ## 7. Acceptance (CE — S3 closes cluster CE-3; contributes to CE-4/CE-5)
 
-- [ ] **CE-3a (canonical POOLREAP, hermetic):** the single-order POOLREAP matches cardano —
-  registered→refund / unregistered→treasury split, deposit pot shrinks by both, refund-before-clear,
-  `== e`, delegations of retired pools ARE cleared, script-hash reward accounts route correctly (tests).
-- [ ] **CE-3b (full-ledger preserved):** every existing full-ledger boundary test stays green; any corpus
-  delta is a documented correctness move toward cardano (before/after).
+- [x] **CE-3a (canonical POOLREAP, hermetic) — DONE:** the single-order POOLREAP is consolidated inside
+  the shared boundary fn (`rules.rs` `apply_epoch_boundary_with_registrations`) — future-pool adoption →
+  reap `== e` (a STALE `< e` is KEPT, proving `==` not `<=`) → discriminant-correct deposit refund
+  (registered → reward account / unregistered → treasury) → delegator clear → pool/retiring removal.
+  (Ade's accumulator excludes UTxOState, so there is no deposit pot to shrink; `rewards` and `delegations`
+  are SEPARATE maps, so cardano's refund-before-clear order is moot — they never touch the same entry.)
+  5 tests in `rules::cert_state_dispatch::poolreap_ce3a` (`poolreap_reaps_exact_epoch_only`,
+  `poolreap_refund_registered_else_treasury`, `poolreap_clears_reaped_pool_delegations` [the dead-clear
+  regression], `poolreap_script_hash_reward_account_refunds_to_script_cred`,
+  `poolreap_adopts_future_pool_params`).
+- [x] **CE-3b (full-ledger preserved) — DONE:** every existing ade_ledger test stayed green (719→724 lib,
+  +5 new only) + the real-snapshot full-ledger boundary corpus passed unchanged (`epoch_boundary_logic`
+  4/4 — real Shelley→Conway retiring-pool boundaries; oracle `conway_/alonzo_epoch_boundary_end_to_end`
+  2/2). NO existing expectation changed (existing tests use `0xE0` key-hash accounts — for which the
+  discriminant decode yields the identical credential — and set up no boundary-level retiring pools).
 - [ ] **CE-3c (live crossing):** on a real preview boundary the accumulator CROSSES (no
   `MissingBoundaryStake` stall), writes the boundary checkpoint, and resumes within-epoch folding (venue).
 - [ ] **CE-3d (byte-exact RUPD + go-snapshot, the cluster CE-3 gate):** Ade's self-computed reward update
   + rotated go-snapshot == the live cardano-node's at ≥2 self-derived boundaries (the live differential).
-- [ ] **CI:** a DC-EPOCH-21 guard asserts the single-POOLREAP structure (no split whose clear half is
-  dead) + the discriminant-correct refund/reward target; registry `tests`/`ci_scripts` populated.
+- [x] **CI — DONE:** `ci/ci_check_poolreap_single_canonical.sh` asserts the single-POOLREAP structure —
+  (A) strict `== e` (no `<= new_epoch.0`); (B) discriminant-correct refund (`reward_account_credential`);
+  (C) the live clear (`!retired.contains(pool_id)`); (D) no trailing `apply_pool_reap(` call in
+  `cross_epoch_boundary`; (E) DC-EPOCH-21 in the registry. Registry `tests`/`ci_scripts` populated;
+  DC-EPOCH-21 declared (the RUPD-crediting + live-mark + differential-gate enforce as later S3 items land).
 
 ## 8. What S3 does NOT do
 

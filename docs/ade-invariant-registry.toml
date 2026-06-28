@@ -9344,3 +9344,32 @@ ci_scripts = ["ci/ci_check_epoch_accumulator_recovery.sh"]
 status = "declared"
 introduced_in = "LIVE-LEDGER-EPOCH-TRANSITION-S2"
 strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-21"
+tier = "derived"
+statement = """
+The accumulator's epoch-boundary transition reproduces the canonical cardano NEWEPOCH result. POOLREAP is a
+SINGLE transition in the cardano order (Shelley PoolReap.hs, which Conway reuses), consolidated inside the
+shared apply_epoch_boundary_with_registrations so the full-ledger and accumulator paths share ONE order
+whose halves cannot silently fail to compose: (a) adopt staged future-pool re-registrations (drop orphans);
+(b) reap the pools retiring at EXACTLY this epoch (== e, never <= e); (c) refund each reaped pool's deposit
+to its OWN reward-account credential decoded by the REAL key/script discriminant (registered -> that reward
+account, unregistered -> treasury); (d) clear the reaped pools' delegators where the reap happens, so the
+clear can never be dead; (e) remove the reaped pools from the active set + the retiring schedule. No split
+POOLREAP whose clear half silently no-ops (the pre-S3 bug: the inline retirement emptied the retiring map
+before a trailing apply_pool_reap could match == e, so the delegation-clear was dead code), and no KeyHash
+projection that misroutes a script-hash reward account. The boundary's reward update is computed over the
+held nesBprev and the go snapshot AFTER within-epoch withdrawals, and SNAP rotates mark->set->go with the
+new mark = the reduced-checkpoint stake aggregate -- these two (the discriminant-correct RUPD reward
+crediting, still keyed by bare Hash28, and the live mark wiring) are enforced PROGRESSIVELY as S3 lands its
+live-mark wiring and its byte-exact differential gate vs a live cardano-node.
+"""
+source = "docs/clusters/LIVE-LEDGER-EPOCH-TRANSITION/SLICE-S3-boundary-gate.md. Resolves the two S1-recorded byte-exact reconciliation items (POOLREAP completeness/ordering; reward-account credential discriminant) against the cardano-ledger source (Shelley Rules/PoolReap.hs) + the actual Ade boundary surfaces. The pre-S3 split (apply_epoch_boundary_with_registrations inline retirement + a trailing delegation::apply_pool_reap call in cross_epoch_boundary) left the delegation-clear DEAD because the inline retirement emptied the retiring map first, so the trailing reap's == e match found nothing."
+cross_ref = ["DC-EPOCH-19", "DC-EPOCH-20", "DC-EPOCH-18"]
+code_locus = "ade_ledger/rules.rs (apply_epoch_boundary_with_registrations -- the single canonical POOLREAP block: future-pool adoption [drop orphans], retired = {retire_epoch.0 == new_epoch.0}, deposit refund via crate::epoch_accumulator::reward_account_credential [registered -> delegation.rewards, unregistered -> poolreap_to_treasury -> the downstream treasury update], delegation-clear delegations.retain(!retired.contains(pool_id)), pool/retiring removal; SHARED by the full-ledger path apply_epoch_boundary_full so both paths reap identically) + ade_ledger/epoch_accumulator.rs (cross_epoch_boundary -- the trailing apply_pool_reap call REMOVED + its import dropped; reward_account_credential made pub(crate) as the shared discriminant decoder). The discriminant-correct RUPD reward crediting (op_cred / the delta_t2 partition, still keyed by bare Hash28) + the live boundary_mark wiring + the byte-exact differential gate vs cardano-node land in S3's later items -- status stays declared until they do. delegation::apply_pool_reap stays for the reduced-window leadership replay (reduced_window_driver.rs), which needs adopt+clear but not the reward-side deposit refund."
+tests = ["ade_ledger::rules::cert_state_dispatch::poolreap_ce3a (poolreap_reaps_exact_epoch_only -- == e reaped, > e and a STALE < e kept [proves == not <=]; poolreap_refund_registered_else_treasury -- registered operator refunded its deposit, unregistered -> treasury; poolreap_clears_reaped_pool_delegations -- THE dead-clear regression: a delegation to a reaped pool is cleared, a surviving one kept, the delegator registration preserved; poolreap_script_hash_reward_account_refunds_to_script_cred -- a 0xF0 reward account refunds to its ScriptHash credential, NOT a KeyHash projection of the same 28 bytes, and is not sent to treasury; poolreap_adopts_future_pool_params -- staged re-registration params adopted into the active set, future_pools drained, orphan future dropped)"]
+ci_scripts = ["ci/ci_check_poolreap_single_canonical.sh"]
+status = "declared"
+introduced_in = "LIVE-LEDGER-EPOCH-TRANSITION-S3"
+strengthened_in = []

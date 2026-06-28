@@ -47,12 +47,12 @@
 //! ## Reuse, not reimplementation
 //!
 //! The boundary reuses the byte-exact-verified `rules::apply_epoch_boundary_with_registrations` (the
-//! reward, the pots, `epoch::rotate_snapshots`, and the inline retirement) over a transient UTxO-free
-//! `LedgerState` view; the within-epoch cert/governance half reuses `rules::process_block_certificates`; the
-//! bootstrap-transient reward seed reuses `delegation::apply_bootstrap_reward_deltas`; future-pool
-//! adoption reuses `delegation::apply_pool_reap`. The contract is the deterministic orchestration of
-//! these single-authority primitives over the accumulator's non-UTxO state — the new stake for the
-//! boundary mark comes from `ctx` (the reduced-checkpoint aggregate), never a full UTxO map.
+//! reward, the pots, `epoch::rotate_snapshots`, and the single canonical POOLREAP — future-pool
+//! adoption, reap, deposit refund, delegation-clear) over a transient UTxO-free `LedgerState` view; the
+//! within-epoch cert/governance half reuses `rules::process_block_certificates`; the bootstrap-transient
+//! reward seed reuses `delegation::apply_bootstrap_reward_deltas`. The contract is the deterministic
+//! orchestration of these single-authority primitives over the accumulator's non-UTxO state — the new
+//! stake for the boundary mark comes from `ctx` (the reduced-checkpoint aggregate), never a full UTxO map.
 //!
 //! ## Field ownership (what the accumulator OWNS, DEFERS, and FORBIDS)
 //!
@@ -107,7 +107,7 @@ use crate::bootstrap_reward_update::{
     decode_bootstrap_reward_update, encode_bootstrap_reward_update, BootstrapRewardUpdate,
     BootstrapRupdError,
 };
-use crate::delegation::{apply_bootstrap_reward_deltas, apply_pool_reap, CertState};
+use crate::delegation::{apply_bootstrap_reward_deltas, CertState};
 use crate::error::LedgerError;
 use crate::pparams::{ConwayOnlyDepositParams, ProtocolParameters};
 use crate::reduced_aggregate::StakeByPool;
@@ -417,16 +417,12 @@ pub fn cross_epoch_boundary(
     let (new_view, _accounting) =
         apply_epoch_boundary_with_registrations(&view, target, None, Some(mark));
 
-    // POOLREAP completeness: the boundary fn's inline retirement omits future-pool adoption. Adopt the
-    // staged re-registrations so the re-registered VRF is active for the next epoch's leadership (S3
-    // reconciles the deposit-vs-delegation-clear ordering byte-exactly).
-    let mut cert_state = new_view.cert_state;
-    apply_pool_reap(&mut cert_state, target);
-
     // Read back. `new_view.epoch_state` already has epoch=target, rotated snapshots, updated pots, and
-    // block_production/epoch_fees reset to empty/0 (the new epoch's fresh nesBcur).
+    // block_production/epoch_fees reset to empty/0 (the new epoch's fresh nesBcur). POOLREAP — future-pool
+    // adoption, reap (== target), deposit refund, and delegation-clear — now runs INSIDE the boundary fn
+    // as the single canonical order, so there is no trailing reap to compose here.
     acc.epoch_state = new_view.epoch_state;
-    acc.cert_state = cert_state;
+    acc.cert_state = new_view.cert_state;
     acc.gov_state = new_view.gov_state;
     // Rotate the block-production buffers: nesBprev := the just-finished nesBcur.
     acc.prev_block_production = finished_blocks;
@@ -776,8 +772,10 @@ fn read_one_tx_field(
 
 /// Project a Shelley reward account (`header ‖ 28-byte credential`) to a `StakeCredential`. The header
 /// high nibble distinguishes key-hash stake (`0xE_`) from script-hash stake (`0xF_`): bit 4 (`0x10`)
-/// set ⇒ script. Returns `None` for a malformed (≠ 29-byte) account.
-fn reward_account_credential(account: &[u8]) -> Option<StakeCredential> {
+/// set ⇒ script. Returns `None` for a malformed (≠ 29-byte) account. Shared with the boundary
+/// POOLREAP refund (`rules::apply_epoch_boundary_with_registrations`) so a script-hash reward account
+/// routes by its real discriminant, never a KeyHash projection.
+pub(crate) fn reward_account_credential(account: &[u8]) -> Option<StakeCredential> {
     if account.len() != 29 {
         return None;
     }

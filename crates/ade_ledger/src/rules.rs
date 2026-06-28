@@ -1132,44 +1132,70 @@ pub fn apply_epoch_boundary_with_registrations(
         new_mark,
     );
 
-    // 4. Pool retirements effective at this epoch (POOLREAP)
-    //
-    // When a pool retires:
-    // - Pool is removed from the registered pools map
-    // - Pool deposit is returned to the operator's reward account
-    // - If the operator's reward account is unregistered, deposit goes to treasury
+    // 4. POOLREAP — the single canonical cardano transition (Shelley PoolReap.hs:132-241, which
+    //    Conway reuses), consolidated here so the full-ledger and accumulator paths share ONE order
+    //    whose halves cannot silently fail to compose:
+    //      (a) adopt staged future-pool re-registrations,
+    //      (b) reap the pools retiring at EXACTLY this epoch (== e, never <= e),
+    //      (c) refund each reaped pool's deposit to its OWN reward-account credential by the real
+    //          key/script discriminant (registered → that reward account, unregistered → treasury),
+    //      (d) clear the reaped pools' delegators, then
+    //      (e) remove the reaped pools from the active set + the retiring schedule.
     let mut pool_state = state.cert_state.pool.clone();
     let mut poolreap_to_treasury = 0u64;
     let pool_deposit = state.protocol_params.pool_deposit.0;
-    pool_state.retiring.retain(|pool_id, retire_epoch| {
-        if retire_epoch.0 <= new_epoch.0 {
-            // Check if the pool operator's reward account is registered
-            if let Some(params) = pool_state.pools.get(pool_id) {
-                if params.reward_account.len() >= 29 {
-                    let mut cred = [0u8; 28];
-                    cred.copy_from_slice(&params.reward_account[1..29]);
-                    // Reward-account hash from address bytes — no discriminant at
-                    // this boundary; KeyHash matches how the registrations map is keyed.
-                    let stake_cred = ade_types::shelley::cert::StakeCredential::KeyHash(
-                        ade_types::Hash28(cred));
-                    if delegation.registrations.contains_key(&stake_cred) {
-                        // Registered — return deposit to reward account
-                        let entry = delegation.rewards
-                            .entry(stake_cred)
-                            .or_insert(ade_types::tx::Coin(0));
-                        entry.0 = entry.0.saturating_add(pool_deposit);
-                    } else {
-                        // Unregistered — deposit goes to treasury
-                        poolreap_to_treasury += pool_deposit;
-                    }
+
+    // (a) Future-pool adoption: a staged re-registration whose pool is still active becomes the
+    //     active params; an orphan future (no matching active pool) is dropped.
+    let adopted = std::mem::take(&mut pool_state.future_pools);
+    for (pool_id, params) in adopted {
+        if pool_state.pools.contains_key(&pool_id) {
+            pool_state.pools.insert(pool_id, params);
+        }
+    }
+
+    // (b) The pools scheduled to retire at EXACTLY this epoch.
+    let retired: std::collections::BTreeSet<ade_types::tx::PoolId> = pool_state
+        .retiring
+        .iter()
+        .filter(|(_, retire_epoch)| retire_epoch.0 == new_epoch.0)
+        .map(|(pool_id, _)| pool_id.clone())
+        .collect();
+
+    // (c) Refund each reaped pool's deposit to its own reward-account credential, decoded with the
+    //     real discriminant (byte 0 bit 4 = 0x10 ⇒ ScriptHash). Registered → credit its reward
+    //     balance; unregistered → treasury. A malformed (≠29-byte) reward account refunds nowhere.
+    for pool_id in &retired {
+        if let Some(params) = pool_state.pools.get(pool_id) {
+            if let Some(stake_cred) =
+                crate::epoch_accumulator::reward_account_credential(&params.reward_account)
+            {
+                if delegation.registrations.contains_key(&stake_cred) {
+                    let entry = delegation
+                        .rewards
+                        .entry(stake_cred)
+                        .or_insert(ade_types::tx::Coin(0));
+                    entry.0 = entry.0.saturating_add(pool_deposit);
+                } else {
+                    poolreap_to_treasury = poolreap_to_treasury.saturating_add(pool_deposit);
                 }
             }
-            pool_state.pools.remove(pool_id);
-            false
-        } else {
-            true
         }
-    });
+    }
+
+    // (d) Clear the reaped pools' delegators — a credential delegated to a reaped pool is
+    //     un-delegated so it cannot silently reattach if that pool id re-registers later.
+    if !retired.is_empty() {
+        delegation
+            .delegations
+            .retain(|_cred, pool_id| !retired.contains(pool_id));
+    }
+
+    // (e) Remove the reaped pools from the active set + the retiring schedule.
+    for pool_id in &retired {
+        pool_state.pools.remove(pool_id);
+        pool_state.retiring.remove(pool_id);
+    }
 
     // 4b. Conway governance: ratification, enactment, expiry
     let mut governance_treasury_withdrawn = 0u64;
@@ -2753,6 +2779,220 @@ mod cert_state_dispatch {
             new_gov.committee.is_empty(),
             "ratified NoConfidence must dissolve the committee at the epoch boundary",
         );
+    }
+
+    /// CE-3a (LIVE-LEDGER-EPOCH-TRANSITION S3, DC-EPOCH-21): the single canonical POOLREAP now lives
+    /// inside `apply_epoch_boundary_with_registrations` — future-pool adoption → reap (== e) → deposit
+    /// refund by the real reward-account discriminant → delegation-clear → pool/retiring removal. Each
+    /// case is built on `LedgerState::new(Conway)` (reserves/treasury 0, empty go snapshot, gov None) so
+    /// the reward path contributes nothing: treasury moves only by the deposit-refund split and rewards
+    /// only by it, isolating the POOLREAP effect under test.
+    mod poolreap_ce3a {
+        use super::super::apply_epoch_boundary_with_registrations;
+        use crate::delegation::PoolParams;
+        use crate::state::LedgerState;
+        use ade_types::shelley::cert::StakeCredential;
+        use ade_types::tx::{Coin, PoolId};
+        use ade_types::{CardanoEra, EpochNo, Hash28, Hash32};
+
+        const POOL_DEPOSIT: u64 = 500_000_000;
+
+        fn state_at(epoch: u64) -> LedgerState {
+            let mut state = LedgerState::new(CardanoEra::Conway);
+            state.epoch_state.epoch = EpochNo(epoch);
+            state.protocol_params.pool_deposit = Coin(POOL_DEPOSIT);
+            state
+        }
+
+        fn pid(b: u8) -> PoolId {
+            PoolId(Hash28([b; 28]))
+        }
+
+        /// A pool whose reward account is `header ‖ [cred_byte;28]` — header 0xE0 = key-hash stake,
+        /// 0xF0 = script-hash stake.
+        fn pool_with_account(id: u8, header: u8, cred_byte: u8) -> PoolParams {
+            let mut reward_account = vec![header];
+            reward_account.extend_from_slice(&[cred_byte; 28]);
+            PoolParams {
+                pool_id: pid(id),
+                vrf_hash: Hash32([id; 32]),
+                pledge: Coin(0),
+                cost: Coin(0),
+                margin: (0, 1),
+                reward_account,
+                owners: vec![],
+            }
+        }
+
+        // (a) reap pools retiring at EXACTLY the crossed epoch — never `> e`, and never `< e` (the
+        //     stale case is what distinguishes the strict `== e` from a `<= e`: a `<= e` would wrongly
+        //     reap the stale one).
+        #[test]
+        fn poolreap_reaps_exact_epoch_only() {
+            let mut state = state_at(500);
+            let pools = &mut state.cert_state.pool.pools;
+            pools.insert(pid(0xA1), pool_with_account(0xA1, 0xE0, 0x01));
+            pools.insert(pid(0xB2), pool_with_account(0xB2, 0xE0, 0x02));
+            pools.insert(pid(0xC3), pool_with_account(0xC3, 0xE0, 0x03));
+            let retiring = &mut state.cert_state.pool.retiring;
+            retiring.insert(pid(0xA1), EpochNo(501)); // == e  → reaped
+            retiring.insert(pid(0xB2), EpochNo(502)); // > e   → kept
+            retiring.insert(pid(0xC3), EpochNo(499)); // < e (stale) → kept under `==`, reaped under `<=`
+
+            let (out, _ac) =
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None);
+            let pool = &out.cert_state.pool;
+
+            assert!(
+                !pool.pools.contains_key(&pid(0xA1)),
+                "retire == e is reaped"
+            );
+            assert!(!pool.retiring.contains_key(&pid(0xA1)));
+            assert!(
+                pool.pools.contains_key(&pid(0xB2)),
+                "retire > e kept (== e, not <= e)"
+            );
+            assert_eq!(pool.retiring.get(&pid(0xB2)), Some(&EpochNo(502)));
+            assert!(
+                pool.pools.contains_key(&pid(0xC3)),
+                "a STALE retire < e is kept under strict `== e` (a `<= e` would wrongly reap it)"
+            );
+            assert_eq!(pool.retiring.get(&pid(0xC3)), Some(&EpochNo(499)));
+        }
+
+        // (b) registered operator reward account → refund; unregistered → treasury.
+        #[test]
+        fn poolreap_refund_registered_else_treasury() {
+            let registered = StakeCredential::KeyHash(Hash28([0x11; 28]));
+            let mut state = state_at(500);
+            let pools = &mut state.cert_state.pool.pools;
+            pools.insert(pid(0xA1), pool_with_account(0xA1, 0xE0, 0x11));
+            pools.insert(pid(0xB2), pool_with_account(0xB2, 0xE0, 0x22));
+            let retiring = &mut state.cert_state.pool.retiring;
+            retiring.insert(pid(0xA1), EpochNo(501));
+            retiring.insert(pid(0xB2), EpochNo(501));
+            let regs = &mut state.cert_state.delegation.registrations;
+            regs.insert(registered.clone(), Coin(2_000_000));
+
+            let (out, _ac) =
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None);
+
+            assert_eq!(
+                out.cert_state.delegation.rewards.get(&registered),
+                Some(&Coin(POOL_DEPOSIT)),
+                "registered operator account is refunded the pool deposit",
+            );
+            assert_eq!(
+                out.epoch_state.treasury,
+                Coin(POOL_DEPOSIT),
+                "the unregistered operator's deposit is the only treasury movement",
+            );
+        }
+
+        // (c) THE regression: a delegation to a reaped pool is cleared (the dead-clear bug).
+        #[test]
+        fn poolreap_clears_reaped_pool_delegations() {
+            let c = StakeCredential::KeyHash(Hash28([0xCC; 28]));
+            let e = StakeCredential::KeyHash(Hash28([0xEE; 28]));
+            let mut state = state_at(500);
+            let pools = &mut state.cert_state.pool.pools;
+            pools.insert(pid(0xA1), pool_with_account(0xA1, 0xE0, 0x01));
+            pools.insert(pid(0xB2), pool_with_account(0xB2, 0xE0, 0x02));
+            let retiring = &mut state.cert_state.pool.retiring;
+            retiring.insert(pid(0xA1), EpochNo(501));
+            let regs = &mut state.cert_state.delegation.registrations;
+            regs.insert(c.clone(), Coin(2_000_000));
+            regs.insert(e.clone(), Coin(2_000_000));
+            let delegs = &mut state.cert_state.delegation.delegations;
+            delegs.insert(c.clone(), pid(0xA1));
+            delegs.insert(e.clone(), pid(0xB2));
+
+            let (out, _ac) =
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None);
+            let deleg = &out.cert_state.delegation;
+
+            assert_eq!(
+                deleg.delegations.get(&c),
+                None,
+                "delegation to reaped pool cleared"
+            );
+            assert_eq!(
+                deleg.delegations.get(&e),
+                Some(&pid(0xB2)),
+                "surviving delegation kept"
+            );
+            assert!(
+                deleg.registrations.contains_key(&c),
+                "delegator registration preserved"
+            );
+        }
+
+        // (d) a script-hash (0xF0) reward account refunds to a ScriptHash credential, not KeyHash.
+        #[test]
+        fn poolreap_script_hash_reward_account_refunds_to_script_cred() {
+            let script_cred = StakeCredential::ScriptHash(Hash28([0x33; 28]));
+            let key_cred = StakeCredential::KeyHash(Hash28([0x33; 28]));
+            let mut state = state_at(500);
+            let pools = &mut state.cert_state.pool.pools;
+            pools.insert(pid(0xA1), pool_with_account(0xA1, 0xF0, 0x33));
+            let retiring = &mut state.cert_state.pool.retiring;
+            retiring.insert(pid(0xA1), EpochNo(501));
+            let regs = &mut state.cert_state.delegation.registrations;
+            regs.insert(script_cred.clone(), Coin(2_000_000));
+
+            let (out, _ac) =
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None);
+            let rewards = &out.cert_state.delegation.rewards;
+
+            assert_eq!(
+                rewards.get(&script_cred),
+                Some(&Coin(POOL_DEPOSIT)),
+                "a 0xF0 reward account refunds to its ScriptHash credential by the real discriminant",
+            );
+            assert_eq!(
+                rewards.get(&key_cred),
+                None,
+                "the refund is NOT mis-routed to a KeyHash projection of the same 28 bytes",
+            );
+            assert_eq!(
+                out.epoch_state.treasury,
+                Coin(0),
+                "a registered script reward account is refunded, not sent to treasury",
+            );
+        }
+
+        // (e) future-pool adoption still fires at the boundary (and an orphan future is dropped).
+        #[test]
+        fn poolreap_adopts_future_pool_params() {
+            let mut active = pool_with_account(0xA1, 0xE0, 0x01);
+            active.pledge = Coin(100);
+            let mut staged = pool_with_account(0xA1, 0xE0, 0x01);
+            staged.pledge = Coin(200);
+            let mut state = state_at(500);
+            state.cert_state.pool.pools.insert(pid(0xA1), active);
+            let future = &mut state.cert_state.pool.future_pools;
+            future.insert(pid(0xA1), staged);
+            // An orphan future (no matching active pool) must be dropped, not adopted.
+            future.insert(pid(0xB2), pool_with_account(0xB2, 0xE0, 0x02));
+
+            let (out, _ac) =
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None);
+            let pool = &out.cert_state.pool;
+
+            assert_eq!(
+                pool.pools.get(&pid(0xA1)).map(|p| p.pledge),
+                Some(Coin(200)),
+                "the staged re-registration params are adopted into the active set",
+            );
+            assert!(
+                pool.future_pools.is_empty(),
+                "future_pools drained on adoption"
+            );
+            assert!(
+                !pool.pools.contains_key(&pid(0xB2)),
+                "orphan future dropped, not adopted"
+            );
+        }
     }
 
     /// A governance apply error (DRep expiry needed, drep_activity absent) halts
