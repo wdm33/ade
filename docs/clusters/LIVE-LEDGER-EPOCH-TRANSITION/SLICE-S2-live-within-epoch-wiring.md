@@ -7,7 +7,10 @@ LIVE-LEDGER-EPOCH-TRANSITION.
 (tip-after-durable in `apply_plan`), DC-EPOCH-11 (the reduced-checkpoint `LAST_SLOT` lockstep + readiness
 gates), the WAL-is-admission-authority recovery (`recovery/restart.rs`), and
 `materialize_rolled_back_state` (the proven replay-equivalence-is-recovery pattern).
-**Status:** Proposed.
+**Status:** Within-epoch half IMPLEMENTED + LIVE-PROVEN (2026-06-28 preview follow: 380 within-epoch
+advances then the boundary `MissingBoundaryStake` stall, observe-only). Remaining: the recovery
+rematerialize fold + readiness gate (PO-4/PO-5, CE-2d), the CI guard, and the DC-EPOCH-20 registry
+`tests`/`ci_scripts`. Boundary crossing = S3; leadership-authority flip = S4.
 
 > S2 connects the S1 state machine to EVERY selected-chain admission — **the within-epoch half only.**
 > The boundary crossing (the reward over `nesBprev`, SNAP rotation, POOLREAP, the KeyHash withdrawal
@@ -233,9 +236,12 @@ canonical prefix.
 
 ## 7. Acceptance (CE — S2 contributes to cluster CE-2; CE-3..CE-6 are S3+)
 
-- [ ] **CE-2a (live within-epoch fold):** every admitted within-epoch block advances cert state +
-  `block_production[issuer]` + `epoch_fees` via `apply_selected_block`; hermetic + one live preview
-  within-epoch follow.
+- [x] **CE-2a (live within-epoch fold) — PROVEN (hermetic + LIVE):** every admitted within-epoch block
+  advances cert state + `block_production[issuer]` + `epoch_fees` via `apply_selected_block`. **Live
+  preview follow 2026-06-28** (native Mithril FirstRun, certified seed slot 115676685 / epoch 1338):
+  **380 within-epoch advances, all epoch 1338**, the durable accumulator tracking the live follow
+  block-by-block beside the reduced checkpoint (`a842cfe1` seal + `68846dcc` advance; `epoch-accumulator.redb`
+  created at bootstrap, advanced through the epoch).
 - [ ] **CE-2b (exactly once):** re-announced / idempotent-no-op blocks apply nothing; one cert + one fee
   scan per admitted block (test).
 - [ ] **CE-2c (fee byte-semantics, PO-1):** `epoch_fees` matches full-ledger accumulation incl.
@@ -243,8 +249,12 @@ canonical prefix.
 - [ ] **CE-2d (DC-EPOCH-20 durability/recovery):** restart rematerializes the accumulator to the WAL tail
   byte-identically; a forced lag trips the fail-closed readiness gate; a reorg rematerializes via replay,
   not inverse mutation (tests + the live restart).
-- [ ] **CE-2e (boundary structurally excluded):** a boundary-crossing block on the live S2 path
-  fail-closes `MissingBoundaryStake` (test) — POOLREAP + the KeyHash projection are never executed live.
+- [x] **CE-2e (boundary structurally excluded) — PROVEN (hermetic + LIVE):** a boundary-crossing block on
+  the live S2 path fail-closes `MissingBoundaryStake` — POOLREAP + the KeyHash projection never execute
+  live. **Live:** at the 1338→1339 boundary the advancer **stalled `MissingBoundaryStake { epoch: 1339 }`
+  (observe-only)** at slot 115689630; the durable store froze at its last within-epoch slot while the
+  proven follow continued into epoch 1339 (DC-EPOCH-20 / PO-6 — observe-only stall, not a follow halt —
+  confirmed live).
 - [~] **CE-2f (seed binding, PO-3) — constructor + tests DONE:** `seed_from_bootstrap_ledger` binds
   epoch-identity (`SeedEpochMismatch` fail-closed) + refuses pre-Conway (`EraNotSupported`); the two-buffer
   split seeds `nesBprev`→`prev_*` and starts `nesBcur` fresh (3 tests). Remaining: call it at the bootstrap
