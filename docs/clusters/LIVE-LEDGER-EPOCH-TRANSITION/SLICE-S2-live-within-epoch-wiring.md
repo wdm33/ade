@@ -7,10 +7,14 @@ LIVE-LEDGER-EPOCH-TRANSITION.
 (tip-after-durable in `apply_plan`), DC-EPOCH-11 (the reduced-checkpoint `LAST_SLOT` lockstep + readiness
 gates), the WAL-is-admission-authority recovery (`recovery/restart.rs`), and
 `materialize_rolled_back_state` (the proven replay-equivalence-is-recovery pattern).
-**Status:** Within-epoch half IMPLEMENTED + LIVE-PROVEN (2026-06-28 preview follow: 380 within-epoch
-advances then the boundary `MissingBoundaryStake` stall, observe-only). Remaining: the recovery
-rematerialize fold + readiness gate (PO-4/PO-5, CE-2d), the CI guard, and the DC-EPOCH-20 registry
-`tests`/`ci_scripts`. Boundary crossing = S3; leadership-authority flip = S4.
+**Status:** Within-epoch half + RECOVERY IMPLEMENTED. Within-epoch fold LIVE-PROVEN (2026-06-28 preview
+follow: 380 within-epoch advances then the boundary `MissingBoundaryStake` stall, observe-only). Recovery
+landed (`59153f36`, IDD review PASS): `advance_accumulator_to_durable_tip` — a single advance-to-tip walk
+(warm-start catch-up + reorg reset-then-replay, observe-only) superseding the per-block advance; 4 unit
+tests; the DC-EPOCH-20 CI guard (`ci_check_epoch_accumulator_recovery.sh`) + registry `tests`/`ci_scripts`
+landed. Remaining for S2: the live restart re-proof on the advance-to-tip cadence. Two S4 obligations
+annotated in the wrapper (halt-on-real-fault + lineage-check-if-reorging-path). Boundary crossing = S3;
+leadership-authority flip + the WIRED readiness gate = S4.
 
 > S2 connects the S1 state machine to EVERY selected-chain admission — **the within-epoch half only.**
 > The boundary crossing (the reward over `nesBprev`, SNAP rotation, POOLREAP, the KeyHash withdrawal
@@ -246,22 +250,38 @@ canonical prefix.
   scan per admitted block (test).
 - [ ] **CE-2c (fee byte-semantics, PO-1):** `epoch_fees` matches full-ledger accumulation incl.
   phase-2-invalid collateral; fail-closed on undeclarable collateral (test).
-- [ ] **CE-2d (DC-EPOCH-20 durability/recovery):** restart rematerializes the accumulator to the WAL tail
-  byte-identically; a forced lag trips the fail-closed readiness gate; a reorg rematerializes via replay,
-  not inverse mutation (tests + the live restart).
+- [~] **CE-2d (DC-EPOCH-20 durability/recovery) — REMATERIALIZE FOLD DONE + UNIT-TESTED; wired gate + live
+  restart = S4/remaining:** the recovery fold landed as `advance_accumulator_to_durable_tip` (`59153f36`),
+  called after each durable admit beside the reduced checkpoint — a single advance-to-tip walk
+  (`advance_accumulator_over_chaindb`, ade_runtime) that supersedes the per-block advance. It catches a
+  lagging accumulator up to the durable tip on warm-start and rematerializes on reorg (reset-to-seed +
+  forward replay, no inverse mutation). 4 unit tests: `over_chaindb_folds_durable_prefix_to_tip`,
+  `over_chaindb_rewalk_is_idempotent`, `over_chaindb_stops_at_boundary_observe_only`,
+  `reset_then_rewalk_rematerializes`. The fail-closed readiness gate PRIMITIVE exists + is tested
+  (`verify_ready_at`/`verify_advanced_through`; `readiness_gate_fails_closed` — Lagging/Ahead/Unsealed
+  terminal) but has NO consumer in observe-only S2, so its forge call site is **S4** (PO-5). IDD review
+  PASS (`59153f36`) flagged two **S4 obligations** annotated in the wrapper: (MEDIUM-1) the Err arm must
+  halt on a real fault once the accumulator is consensus authority (observe-only swallow is §8-compliant
+  ONLY while non-authoritative); (MEDIUM-2) the reorg detector's height check must become a LINEAGE check
+  if the accumulator is ever driven by a reorging fork-choice path (today's sole caller is the fail-closed
+  forward-only `run_node_sync`). Remaining: the live restart re-proof on the new advance-to-tip cadence.
 - [x] **CE-2e (boundary structurally excluded) — PROVEN (hermetic + LIVE):** a boundary-crossing block on
   the live S2 path fail-closes `MissingBoundaryStake` — POOLREAP + the KeyHash projection never execute
   live. **Live:** at the 1338→1339 boundary the advancer **stalled `MissingBoundaryStake { epoch: 1339 }`
   (observe-only)** at slot 115689630; the durable store froze at its last within-epoch slot while the
   proven follow continued into epoch 1339 (DC-EPOCH-20 / PO-6 — observe-only stall, not a follow halt —
   confirmed live).
-- [~] **CE-2f (seed binding, PO-3) — constructor + tests DONE:** `seed_from_bootstrap_ledger` binds
-  epoch-identity (`SeedEpochMismatch` fail-closed) + refuses pre-Conway (`EraNotSupported`); the two-buffer
-  split seeds `nesBprev`→`prev_*` and starts `nesBcur` fresh (3 tests). Remaining: call it at the bootstrap
-  seal seam (2b-wire).
-- [ ] **CI:** extend `ci_check_epoch_accumulator_no_utxo.sh` (or a sibling) to assert the live advance is
-  behind the durable-admit boundary, recovery folds `apply_selected_block` over the canonical prefix, and
-  the delta codec stays canonical/UTxO-free; **DC-EPOCH-20** present in the registry.
+- [x] **CE-2f (seed binding, PO-3) — DONE:** `seed_from_bootstrap_ledger` binds epoch-identity
+  (`SeedEpochMismatch` fail-closed) + refuses pre-Conway (`EraNotSupported`); the two-buffer split seeds
+  `nesBprev`→`prev_*` and starts `nesBcur` fresh (3 tests). **2b-wire landed (`a842cfe1`):** the bootstrap
+  seal seam calls it at the end of native_firstrun (non-fatal), creating `epoch-accumulator.redb`.
+- [x] **CI — DC-EPOCH-20 guard landed (`59153f36`):** a NEW sibling `ci_check_epoch_accumulator_recovery.sh`
+  asserts the recovery structure — (A) NO inverse/subtractive op on the store/advancer (reset_to_bootstrap is
+  the sole reversal); (B) recovery is a forward fold via `advance_accumulator_over_chaindb` →
+  `advance_accumulator_over_block` → the BLUE `apply_selected_block`; (C) the `advance_accumulator_to_durable_tip`
+  wrapper is unit-returning (observe-only, cannot halt) + resets-then-replays on reorg; (D) the readiness gate
+  is fail-closed (Lagging/Ahead/Unsealed); (E) **DC-EPOCH-20** present in the registry. (The DC-EPOCH-19
+  `ci_check_epoch_accumulator_no_utxo.sh` stays for the field-ownership/no-UTxO contract.)
 
 ## 8. What S2 does NOT do
 
