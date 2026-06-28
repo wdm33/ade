@@ -110,7 +110,7 @@ canonical prefix.
 | B | Recovery: all four reflect one prefix, or rematerialize from it; never a mixed prefix | The accumulator joins `materialize_rolled_back_state`'s replay fold; readiness gate forbids resuming at a mixed prefix (§3, §6). |
 | 1 | `SelectedBlockCtx` derives only from decoded canonical block data + durable selected-chain context | `era`/`block_slot`/`issuer_pool` from the *same* `decode_block` the reducer consumed; `block_epoch` from `era_schedule.locate`; `boundary_mark = None` (S2). No peer/CLI/wall-clock (the `SelectedBlockCtx` doc already forbids them). |
 | 2 | Issuer accounting uses the **verified** issuer identity | `issuer_pool = blake2b_224(header.issuer_vkey)` (`block_validity/header_input.rs`) — the identity Praos VRF/KES validation checks, not a peer convenience field. |
-| 3 | Fee accounting uses the same canonical block semantics full ledger application would | **PO-1 (proof obligation):** phase-2-invalid txs forfeit *collateral* as the fee, not their declared `fee`. S2 reads the Conway `invalid_transactions` index set (no UTxO needed) and uses `total_collateral` for invalid txs; **fail-closed** if an invalid tx's collateral is not declarable without the UTxO. |
+| 3 | Fee accounting uses the same canonical block semantics full ledger application would | **PO-1 — DONE (`epoch_accumulator.rs`).** The `invalid_transactions` set (decoded no-UTxO via `decode_is_valid_indices`) gates ALL within-epoch effects: valid tx → declared fee (key 2) + withdrawals; phase-2-invalid tx → `total_collateral` (key 17), body effects discarded. **Fail-closed:** `InvalidTxCollateralNeedsUtxo` (invalid tx, no declared collateral) and `InvalidTxCarriesAuthorityEffect` (invalid tx carrying certs/withdrawals — the discarded-effect skip is S3's gate, never silently applied; the cert guard means `process_block_certificates` never applies an invalid tx's certs). 4 tests. |
 | 4 | Withdrawal / certificate processing exactly once per selected block | The accumulator advance runs *after* `pump_block`'s idempotent re-announce no-op (`pump.rs:109`), inside the single admit step; one `process_block_certificates` + one `scan_block_tx_effects` per block. A re-announced block applies nothing. |
 | 5 | Within-epoch persistence is canonical + ordered; no map iteration leaks into encoded bytes | The codec is `BTreeMap`-ordered + definite CBOR + the re-encode backstop (S1); the compact delta is encoded by the same canonical writers. `ci_check_epoch_accumulator_no_utxo.sh` already forbids `HashMap`-shaped fields; extend the guard to the delta. |
 | 6 | The snapshot-provided `nesBcur` seed is manifest-bound + its epoch identity checked | **PO-3:** the seed reads `block_production` from the bootstrap snapshot and asserts the snapshot's epoch == the accumulator's start epoch (fail-closed `SeedEpochMismatch`); the seed is bound to the same manifest the reduced checkpoint's `seed_slot` is sealed against. |
@@ -134,6 +134,21 @@ canonical prefix.
   `total_collateral`. The fail-closed case is rare (Conway txs generally declare `total_collateral`) and is
   the correct refusal of a genuinely byte-uncertain value, never a silent wrong sum. (Within-epoch
   accumulation only; the boundary that *consumes* `epoch_fees` is gated to S3.)
+  **Deeper finding (implemented):** the `invalid_transactions` set gates ALL within-epoch effects, not just
+  fees — cardano discards an invalid tx's certs/withdrawals/mint/outputs too (only collateral is consumed).
+  Neither the live reduced-window cert path (`reduced_advance::advance_cert_state`) nor the reused
+  `process_block_certificates` skips invalid txs today — a *shared, pre-existing* behavior, so the
+  accumulator not skipping is consistent with the existing live path, not a new divergence. Rather than
+  silently apply a discarded effect, S2 **fail-closes** on the rare invalid-tx-carrying-certs/withdrawals
+  block (`InvalidTxCarriesAuthorityEffect`), deferring the exact skip semantics to S3's byte-exact gate
+  (which fixes both paths together against cardano-node). **Landed** in `epoch_accumulator.rs`
+  (`scan_block_tx_effects` is validity-aware: `TxScan` per-tx collector + `apply_tx_scan`; the scan runs
+  *before* the cert pass so the guard fires first). **Fail-closed decode of the invalid set itself** (IDD
+  reviewer HIGH): the authority path uses a new `decode_invalid_tx_indices_canonical` (DEFINITE array of
+  canonical-minimal, strictly-ascending uints, each `< tx_count`, no trailing) — NOT the lenient diagnostic
+  `plutus_eval::decode_invalid_tx_indices`, which returns an empty/truncated set on malformed CBOR and would
+  silently under-report the set (applying a discarded tx's effects to authoritative state). 7 tests; 715 lib
+  tests green, clippy + the DC-EPOCH-19 guard clean.
 - **PO-2 (persistence cadence + compact delta).** Pin the durable representation: a separate redb table
   beside the reduced checkpoint vs. extending the snapshot frame; a per-block compact delta + periodic
   full checkpoint vs. boundary-only checkpoints; the durable `LAST_SLOT` cursor. Constraint: **no
@@ -148,6 +163,22 @@ canonical prefix.
 - **PO-5 (readiness-gate placement).** Where the fail-closed `accumulator.LAST_SLOT == wal_tail` gate sits
   on startup and before any consumer reads the accumulator (S4 will add the leadership consumer; S2
   installs the gate).
+- **PO-6 (observe-only stall vs. follow halt) — from the IDD review of the fee unit.** The fee unit makes
+  `apply_within_epoch` HALT on a rare-but-legal Conway block: a phase-2-invalid tx that omits
+  `total_collateral`, or one carrying certs/withdrawals (both deferred to S3). Per IDD §8 a halt beats a
+  silent mis-apply — but in S2 the accumulator is NOT yet the consensus/leadership authority (S4 flips it),
+  so the live wiring must make such a halt **stall the accumulator** (durably record "stalled at slot X,
+  reason"; the readiness gate then fail-closes any future authoritative read until S3 resolves it) rather
+  than halt the whole follow, which continues via the existing bridge/reduced-checkpoint machinery. This is
+  the "structurally excluded until S3" disposition the user's hard rule sanctions, made non-silent. The
+  live-wiring unit owns this stall-vs-halt seam.
+
+> **Review note (tracked, not S2's to fix):** `rules.rs:294` (the legacy `apply_*_classified` full-ledger
+> path) still populates `BlockApplyResult.invalid_tx_indices` from the fail-open
+> `plutus_eval::decode_invalid_tx_indices`. No downstream *authoritative* reader of that field exists today
+> (the accumulator is the authority path and now decodes fail-closed), so it is not a live defect — but that
+> helper must never be promoted onto an authority path; an authority consumer must use
+> `decode_invalid_tx_indices_canonical`.
 
 ---
 

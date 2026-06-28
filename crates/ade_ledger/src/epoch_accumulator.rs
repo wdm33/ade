@@ -243,6 +243,18 @@ pub enum LedgerTransitionError {
     CertApply(LedgerError),
     /// An arithmetic overflow in a pot / reward / count / fee.
     ArithmeticOverflow,
+    /// A phase-2-invalid tx's consumed collateral is not declarable without the UTxO (`total_collateral`,
+    /// key 17, absent). The accumulator is UTxO-free, so the byte-exact fee (= collateral, not the declared
+    /// `fee`) cannot be computed here. Fail-closed rather than credit a knowingly-wrong fee; the rare
+    /// undeclared-collateral case is gated to S3's byte-exact boundary gate.
+    InvalidTxCollateralNeedsUtxo { tx_index: u64 },
+    /// A phase-2-invalid tx carries certificates (key 4) or withdrawals (key 5). cardano-ledger discards an
+    /// invalid tx's body effects (only its collateral is consumed), but the within-epoch cert/withdrawal
+    /// paths do not yet skip invalid txs (a behavior shared with the live reduced-window cert
+    /// reconstruction, `reduced_advance::advance_cert_state`). Rather than silently apply a discarded
+    /// effect, the live within-epoch transition fail-closes; the invalid-tx body-effect skip is S3's
+    /// byte-exact-gate item.
+    InvalidTxCarriesAuthorityEffect { tx_index: u64 },
 }
 
 /// Apply one durable selected-chain block to the accumulator. Total, deterministic, replay-equivalent.
@@ -354,7 +366,23 @@ fn apply_within_epoch(
     era: CardanoEra,
     ctx: &SelectedBlockCtx,
 ) -> Result<EpochAccumulator, LedgerTransitionError> {
-    // Certificates + governance — reuse the single ledger authority (no parallel reimplementation).
+    // Phase-2 validity gate (cardano-ledger UTXOS): decode the block's invalid_transactions set once. It
+    // gates ALL within-epoch effects — a VALID tx contributes its declared fee + withdrawals (+ certs); a
+    // phase-2-INVALID tx contributes ONLY its consumed collateral as fee, every body effect discarded. The
+    // decode is FAIL-CLOSED (not the lenient diagnostic `plutus_eval::decode_invalid_tx_indices`): a corrupt
+    // or non-canonical `invalid_transactions` field HALTS the transition rather than silently under-report
+    // the set, which would apply a discarded tx's fee/certs/withdrawals to authoritative state.
+    let invalid =
+        decode_invalid_tx_indices_canonical(block.invalid_txs.as_deref(), block.tx_count)?;
+
+    // Fees + withdrawals (and the invalid-tx authority-effect guard) in one tx-body scan, BEFORE the cert
+    // pass: an invalid tx carrying certs/withdrawals fail-closes HERE, so the cert reuse below (which walks
+    // every tx) never applies a discarded invalid-tx cert.
+    let (total_fees, withdrawals) =
+        scan_block_tx_effects(block.tx_count, &block.tx_bodies, &invalid)?;
+
+    // Certificates + governance — reuse the single ledger authority (no parallel reimplementation). After
+    // the guard above, no invalid tx carries certs, so only valid txs' certs are applied.
     let (cert_state, gov_state) = {
         let view = acc.as_ledger_view();
         process_block_certificates(block, era, &view).map_err(LedgerTransitionError::CertApply)?
@@ -372,8 +400,7 @@ fn apply_within_epoch(
         .checked_add(1)
         .ok_or(LedgerTransitionError::ArithmeticOverflow)?;
 
-    // Epoch fees (nesBcur) and withdrawals (zero the named reward accounts) in one tx-body scan.
-    let (total_fees, withdrawals) = scan_block_tx_effects(block)?;
+    // Epoch fees (nesBcur).
     acc.epoch_state.epoch_fees = Coin(
         acc.epoch_state
             .epoch_fees
@@ -381,6 +408,7 @@ fn apply_within_epoch(
             .checked_add(total_fees)
             .ok_or(LedgerTransitionError::ArithmeticOverflow)?,
     );
+    // Withdrawals (valid txs only) zero the named reward accounts.
     for cred in withdrawals {
         if let Some(balance) = acc.cert_state.delegation.rewards.get_mut(&cred) {
             *balance = Coin(0);
@@ -415,83 +443,223 @@ fn decode_selected_block(
     Ok((env.era, block))
 }
 
-/// Scan the block's tx bodies once, returning `(Σ fees, withdrawn reward-account credentials)`. Walks
-/// each tx body map for key 2 (fee, a uint) and key 5 (withdrawals, a `map RewardAccount → Coin`),
-/// fail-closed on malformed CBOR or fee overflow. Mirrors `process_block_certificates`' walk.
+/// Fail-closed CANONICAL decode of a block's `invalid_transactions` field (the phase-2-invalid tx indices)
+/// for the BLUE authority path. Distinct from the lenient diagnostic
+/// `plutus_eval::decode_invalid_tx_indices` (which returns an empty/truncated set on malformed CBOR): a
+/// corrupt or non-canonical field HALTS the transition (`MalformedBlock`) rather than silently
+/// UNDER-reporting the invalid set — which would apply a discarded tx's fee/certs/withdrawals to
+/// authoritative cert/reward/fee state with no error (IDD §8 "fail fast on invariant risk"; the module's
+/// "a malformed block is TERMINAL" contract). The field must be a DEFINITE array of canonical-minimal,
+/// strictly-ascending uints (cardano serializes `invalid_transactions` as a sorted set — strict ascent
+/// rejects both duplicates and non-canonical ordering), each `< tx_count` (an index past the last tx is a
+/// malformed-block signal, not a silent no-op), with no trailing bytes. Absent (`None`) or an empty field
+/// is the empty set.
+fn decode_invalid_tx_indices_canonical(
+    invalid_txs: Option<&[u8]>,
+    tx_count: u64,
+) -> Result<std::collections::BTreeSet<u64>, LedgerTransitionError> {
+    use ade_codec::cbor;
+    let bytes = match invalid_txs {
+        Some(b) if !b.is_empty() => b,
+        _ => return Ok(std::collections::BTreeSet::new()),
+    };
+    let mut offset = 0usize;
+    let n = match cbor::read_array_header(bytes, &mut offset)
+        .map_err(|_| LedgerTransitionError::MalformedBlock)?
+    {
+        cbor::ContainerEncoding::Definite(n, w) => {
+            // The array length header must itself be canonical-minimal (honor the `_canonical` name; a
+            // non-minimal length cannot under-report the set, but it is non-canonical).
+            if w != cbor::canonical_width(n) {
+                return Err(LedgerTransitionError::MalformedBlock);
+            }
+            n
+        }
+        cbor::ContainerEncoding::Indefinite => return Err(LedgerTransitionError::MalformedBlock),
+    };
+    let mut out = std::collections::BTreeSet::new();
+    let mut prev: Option<u64> = None;
+    for _ in 0..n {
+        let (idx, width) = cbor::read_uint(bytes, &mut offset)
+            .map_err(|_| LedgerTransitionError::MalformedBlock)?;
+        // Canonical-minimal uint encoding.
+        if width != cbor::canonical_width(idx) {
+            return Err(LedgerTransitionError::MalformedBlock);
+        }
+        // Strictly ascending — rejects duplicates AND unsorted/non-canonical ordering.
+        if let Some(p) = prev {
+            if idx <= p {
+                return Err(LedgerTransitionError::MalformedBlock);
+            }
+        }
+        // In range: an index at/after the last tx is malformed, not a silent under-trigger.
+        if idx >= tx_count {
+            return Err(LedgerTransitionError::MalformedBlock);
+        }
+        prev = Some(idx);
+        out.insert(idx);
+    }
+    // No trailing bytes after the array (a closed surface, not a prefix match).
+    if offset != bytes.len() {
+        return Err(LedgerTransitionError::MalformedBlock);
+    }
+    Ok(out)
+}
+
+/// The per-tx fields the within-epoch scan collects in one body walk. The fee credited to `epoch_fees`
+/// depends on the tx's phase-2 validity (decided against the block's `invalid_transactions` set), so the
+/// declared fee (key 2) and the consumed collateral (key 17) are BOTH captured, plus whether the tx
+/// carries authority effects (certs key 4 / withdrawals key 5) and the withdrawn reward-account creds.
+struct TxScan {
+    /// Declared fee (key 2). `None` if absent (cardano requires it for a valid tx; treated as 0).
+    fee: Option<u64>,
+    /// Declared total collateral (key 17) — the consumed fee for a phase-2-invalid tx.
+    total_collateral: Option<u64>,
+    /// Whether the tx carries a certificate field (key 4).
+    has_certs: bool,
+    /// Withdrawn reward-account credentials (key 5 map keys).
+    withdrawals: Vec<StakeCredential>,
+}
+
+/// Scan the block's tx bodies once, returning `(Σ fees, withdrawn reward-account credentials of VALID
+/// txs)` with cardano-ledger UTXOS fee semantics. A VALID tx (index ∉ `invalid`) contributes its declared
+/// fee (key 2) and its withdrawals; a phase-2-INVALID tx (index ∈ `invalid`) contributes ONLY its consumed
+/// collateral (`total_collateral`, key 17) and NONE of its body effects. Fail-closed: an invalid tx whose
+/// collateral is not declarable without the UTxO (`total_collateral` absent) is
+/// `InvalidTxCollateralNeedsUtxo`; an invalid tx that carries certs (key 4) or withdrawals (key 5) is
+/// `InvalidTxCarriesAuthorityEffect` — the discarded-effect byte-semantics are gated to S3, never silently
+/// applied, and that cert guard means `process_block_certificates` (which walks every tx) never applies an
+/// invalid tx's certs. Malformed CBOR / fee overflow are fail-closed.
 fn scan_block_tx_effects(
-    block: &ade_types::shelley::block::ShelleyBlock,
+    tx_count: u64,
+    tx_bodies: &[u8],
+    invalid: &std::collections::BTreeSet<u64>,
 ) -> Result<(u64, Vec<StakeCredential>), LedgerTransitionError> {
     use ade_codec::cbor;
-    if block.tx_count == 0 {
+    if tx_count == 0 {
         return Ok((0, Vec::new()));
     }
-    let data = &block.tx_bodies;
+    let data = tx_bodies;
     let mut offset = 0usize;
     let mut total_fees: u64 = 0;
     let mut withdrawals: Vec<StakeCredential> = Vec::new();
 
-    let mut process_one = |data: &[u8], offset: &mut usize| -> Result<(), LedgerTransitionError> {
-        let map_enc = cbor::read_map_header(data, offset)
-            .map_err(|_| LedgerTransitionError::MalformedBlock)?;
-        let map_len = match map_enc {
-            cbor::ContainerEncoding::Definite(n, _) => n,
-            cbor::ContainerEncoding::Indefinite => {
-                // Indefinite tx-body map: walk key/value pairs until break.
-                while !cbor::is_break(data, *offset)
-                    .map_err(|_| LedgerTransitionError::MalformedBlock)?
-                {
-                    let (key, _) = cbor::read_uint(data, offset)
-                        .map_err(|_| LedgerTransitionError::MalformedBlock)?;
-                    read_one_tx_field(data, offset, key, &mut total_fees, &mut withdrawals)?;
-                }
-                *offset += 1; // consume break
-                return Ok(());
-            }
-        };
-        for _ in 0..map_len {
-            let (key, _) =
-                cbor::read_uint(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)?;
-            read_one_tx_field(data, offset, key, &mut total_fees, &mut withdrawals)?;
-        }
-        Ok(())
-    };
-
+    let mut index: u64 = 0;
     match cbor::read_array_header(data, &mut offset)
         .map_err(|_| LedgerTransitionError::MalformedBlock)?
     {
         cbor::ContainerEncoding::Definite(n, _) => {
             for _ in 0..n {
-                process_one(data, &mut offset)?;
+                let tx = scan_one_tx(data, &mut offset)?;
+                apply_tx_scan(tx, index, invalid, &mut total_fees, &mut withdrawals)?;
+                index += 1;
             }
         }
         cbor::ContainerEncoding::Indefinite => {
             while !cbor::is_break(data, offset)
                 .map_err(|_| LedgerTransitionError::MalformedBlock)?
             {
-                process_one(data, &mut offset)?;
+                let tx = scan_one_tx(data, &mut offset)?;
+                apply_tx_scan(tx, index, invalid, &mut total_fees, &mut withdrawals)?;
+                index += 1;
             }
         }
+    }
+    // Mechanical coupling check: the tx index space the scan walked (the tx_bodies array length) must
+    // equal the `tx_count` the invalid set was range-checked against in `decode_invalid_tx_indices_canonical`.
+    // Equal by construction today (both derive from the same durable bytes), but asserted so a future caller
+    // passing a mismatched `tx_count` fails closed rather than mis-aligning the validity gate.
+    if index != tx_count {
+        return Err(LedgerTransitionError::MalformedBlock);
     }
     Ok((total_fees, withdrawals))
 }
 
-/// Read one tx-body field given its already-read `key`: key 2 = fee (accumulate), key 5 = withdrawals
-/// (collect reward-account credentials), anything else = skip. Advances `offset` past the value.
+/// Walk ONE tx body map, collecting the fields the validity-aware fee/withdrawal decision needs.
+fn scan_one_tx(data: &[u8], offset: &mut usize) -> Result<TxScan, LedgerTransitionError> {
+    use ade_codec::cbor;
+    let mut tx = TxScan {
+        fee: None,
+        total_collateral: None,
+        has_certs: false,
+        withdrawals: Vec::new(),
+    };
+    match cbor::read_map_header(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)? {
+        cbor::ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                let (key, _) = cbor::read_uint(data, offset)
+                    .map_err(|_| LedgerTransitionError::MalformedBlock)?;
+                read_one_tx_field(data, offset, key, &mut tx)?;
+            }
+        }
+        cbor::ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, *offset)
+                .map_err(|_| LedgerTransitionError::MalformedBlock)?
+            {
+                let (key, _) = cbor::read_uint(data, offset)
+                    .map_err(|_| LedgerTransitionError::MalformedBlock)?;
+                read_one_tx_field(data, offset, key, &mut tx)?;
+            }
+            *offset += 1; // consume break
+        }
+    }
+    Ok(tx)
+}
+
+/// Credit the scanned tx to the running totals per its phase-2 validity (cardano-ledger UTXOS): a valid
+/// tx adds its declared fee + withdrawals; an invalid tx adds its consumed collateral and discards its
+/// body effects, fail-closed on undeclared collateral or any carried authority effect.
+fn apply_tx_scan(
+    tx: TxScan,
+    index: u64,
+    invalid: &std::collections::BTreeSet<u64>,
+    total_fees: &mut u64,
+    withdrawals: &mut Vec<StakeCredential>,
+) -> Result<(), LedgerTransitionError> {
+    if invalid.contains(&index) {
+        // Phase-2-invalid: only the consumed collateral is a fee; every body effect is discarded.
+        if tx.has_certs || !tx.withdrawals.is_empty() {
+            return Err(LedgerTransitionError::InvalidTxCarriesAuthorityEffect { tx_index: index });
+        }
+        let collateral = tx
+            .total_collateral
+            .ok_or(LedgerTransitionError::InvalidTxCollateralNeedsUtxo { tx_index: index })?;
+        *total_fees = total_fees
+            .checked_add(collateral)
+            .ok_or(LedgerTransitionError::ArithmeticOverflow)?;
+    } else {
+        // Valid: the declared fee (cardano requires key 2; absent ⇒ 0) + the withdrawals.
+        let fee = tx.fee.unwrap_or(0);
+        *total_fees = total_fees
+            .checked_add(fee)
+            .ok_or(LedgerTransitionError::ArithmeticOverflow)?;
+        withdrawals.extend(tx.withdrawals);
+    }
+    Ok(())
+}
+
+/// Read one tx-body field into `tx`: key 2 = fee, key 4 = certs (presence only — the byte-exact cert
+/// authority is `process_block_certificates`), key 5 = withdrawals (collect reward-account creds), key 17
+/// = total collateral. Anything else is skipped. Advances `offset` past the value.
 fn read_one_tx_field(
     data: &[u8],
     offset: &mut usize,
     key: u64,
-    total_fees: &mut u64,
-    withdrawals: &mut Vec<StakeCredential>,
+    tx: &mut TxScan,
 ) -> Result<(), LedgerTransitionError> {
     use ade_codec::cbor;
     match key {
         2 => {
             let (fee, _) =
                 cbor::read_uint(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)?;
-            *total_fees = total_fees
-                .checked_add(fee)
-                .ok_or(LedgerTransitionError::ArithmeticOverflow)?;
+            tx.fee = Some(fee);
+        }
+        4 => {
+            // Certs present — the byte-exact cert application is process_block_certificates' job; here we
+            // only record presence (the invalid-tx guard needs it). Skip the value.
+            let _ =
+                cbor::skip_item(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)?;
+            tx.has_certs = true;
         }
         5 => {
             let n = match cbor::read_map_header(data, offset)
@@ -510,11 +678,16 @@ fn read_one_tx_field(
                 // withdrawal (which would leave a reward account un-zeroed).
                 let cred = reward_account_credential(&account)
                     .ok_or(LedgerTransitionError::MalformedBlock)?;
-                withdrawals.push(cred);
+                tx.withdrawals.push(cred);
                 // skip the coin value
                 let _ = cbor::skip_item(data, offset)
                     .map_err(|_| LedgerTransitionError::MalformedBlock)?;
             }
+        }
+        17 => {
+            let (tc, _) =
+                cbor::read_uint(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)?;
+            tx.total_collateral = Some(tc);
         }
         _ => {
             let _ =
@@ -1345,9 +1518,181 @@ mod tests {
 
     #[test]
     fn scan_block_tx_effects_does_not_error_on_real_block() {
-        // The real Conway block scan extracts fees + withdrawals without error (the byte-level wiring).
+        // The real Conway block scan extracts fees + withdrawals without error (the byte-level wiring),
+        // gated by the block's real invalid_transactions set decoded through the FAIL-CLOSED canonical
+        // decoder (mirrors the live within-epoch path: a real cardano-node block is canonical).
         let (era, block) = decode_selected_block(RAW_CONWAY_BLOCK).expect("decode");
         assert_eq!(era, CardanoEra::Conway);
-        let (_fees, _withdrawals) = scan_block_tx_effects(&block).expect("scan");
+        let invalid =
+            decode_invalid_tx_indices_canonical(block.invalid_txs.as_deref(), block.tx_count)
+                .expect("real block invalid_transactions is canonical");
+        let (_fees, _withdrawals) =
+            scan_block_tx_effects(block.tx_count, &block.tx_bodies, &invalid).expect("scan");
+    }
+
+    // ----- Phase-2 validity gate: invalid-tx fee = collateral; body effects fail-closed (PO-1) -----
+
+    /// CBOR uint (canonical minimal width) for the small values used in these tx-body fixtures.
+    fn cbor_uint(v: u64) -> Vec<u8> {
+        let mut b = Vec::new();
+        ade_codec::cbor::write_uint_canonical(&mut b, v);
+        b
+    }
+
+    /// One tx-body map `{2: fee}` (a plain valid tx) as canonical CBOR.
+    fn tx_body_fee(fee: u64) -> Vec<u8> {
+        let mut b = vec![0xA1]; // map(1)
+        b.extend(cbor_uint(2));
+        b.extend(cbor_uint(fee));
+        b
+    }
+
+    /// One tx-body map `{2: fee, 17: total_collateral}` (a phase-2-invalid tx that declares collateral).
+    fn tx_body_fee_collateral(fee: u64, collateral: u64) -> Vec<u8> {
+        let mut b = vec![0xA2]; // map(2), canonical key order 2 < 17
+        b.extend(cbor_uint(2));
+        b.extend(cbor_uint(fee));
+        b.extend(cbor_uint(17));
+        b.extend(cbor_uint(collateral));
+        b
+    }
+
+    /// One tx-body map `{2: fee, 4: []}` (carries an empty certs field).
+    fn tx_body_fee_certs(fee: u64) -> Vec<u8> {
+        let mut b = vec![0xA2]; // map(2), canonical key order 2 < 4
+        b.extend(cbor_uint(2));
+        b.extend(cbor_uint(fee));
+        b.extend(cbor_uint(4));
+        b.push(0x80); // empty array (certs present)
+        b
+    }
+
+    /// Wrap a single tx body in the `tx_bodies` array(1).
+    fn tx_bodies_one(body: Vec<u8>) -> Vec<u8> {
+        let mut b = vec![0x81]; // array(1)
+        b.extend(body);
+        b
+    }
+
+    fn invalid_set(indices: &[u64]) -> std::collections::BTreeSet<u64> {
+        indices.iter().copied().collect()
+    }
+
+    #[test]
+    fn invalid_tx_fee_is_collateral_not_declared_fee() {
+        let bodies = tx_bodies_one(tx_body_fee_collateral(50, 200));
+        // VALID (empty invalid set): the declared fee (50) is credited.
+        let (fees_valid, _) =
+            scan_block_tx_effects(1, &bodies, &invalid_set(&[])).expect("valid scan");
+        assert_eq!(fees_valid, 50, "a valid tx credits its declared fee");
+        // INVALID (index 0): the consumed collateral (200), NOT the declared fee, is credited.
+        let (fees_invalid, _) =
+            scan_block_tx_effects(1, &bodies, &invalid_set(&[0])).expect("invalid scan");
+        assert_eq!(
+            fees_invalid, 200,
+            "a phase-2-invalid tx credits its collateral, not its declared fee"
+        );
+    }
+
+    #[test]
+    fn invalid_tx_without_total_collateral_is_fail_closed() {
+        // An invalid tx with no key-17 total_collateral: the consumed collateral needs the UTxO, which the
+        // accumulator does not have → fail-closed rather than credit a knowingly-wrong fee.
+        let bodies = tx_bodies_one(tx_body_fee(50));
+        let err = scan_block_tx_effects(1, &bodies, &invalid_set(&[0])).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                LedgerTransitionError::InvalidTxCollateralNeedsUtxo { tx_index: 0 }
+            ),
+            "expected InvalidTxCollateralNeedsUtxo, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn invalid_tx_carrying_certs_is_fail_closed() {
+        // cardano discards an invalid tx's certs; the within-epoch cert path does not yet skip them, so
+        // rather than silently apply a discarded cert, the transition fail-closes (the skip is S3's gate).
+        let bodies = tx_bodies_one(tx_body_fee_certs(50));
+        let err = scan_block_tx_effects(1, &bodies, &invalid_set(&[0])).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                LedgerTransitionError::InvalidTxCarriesAuthorityEffect { tx_index: 0 }
+            ),
+            "expected InvalidTxCarriesAuthorityEffect, got {err:?}"
+        );
+        // The SAME block with the tx VALID is fine: the certs are process_block_certificates' job, and the
+        // scan credits the declared fee.
+        let (fees, _) = scan_block_tx_effects(1, &bodies, &invalid_set(&[])).expect("valid scan");
+        assert_eq!(fees, 50);
+    }
+
+    #[test]
+    fn valid_tx_fee_is_declared_fee_regression() {
+        // Two valid txs: Σ declared fees, no withdrawals.
+        let mut bodies = vec![0x82]; // array(2)
+        bodies.extend(tx_body_fee(100));
+        bodies.extend(tx_body_fee(25));
+        let (fees, withdrawals) =
+            scan_block_tx_effects(2, &bodies, &invalid_set(&[])).expect("scan");
+        assert_eq!(fees, 125);
+        assert!(withdrawals.is_empty());
+    }
+
+    // ----- Fail-closed canonical decode of invalid_transactions (the review HIGH: a fail-open set would
+    // silently under-report and apply a discarded tx's effects to authoritative state) -----
+
+    #[test]
+    fn canonical_invalid_set_absent_and_empty_are_empty() {
+        assert!(decode_invalid_tx_indices_canonical(None, 3)
+            .expect("absent is the empty set")
+            .is_empty());
+        // A present, empty definite array (0x80) is the empty set.
+        assert!(decode_invalid_tx_indices_canonical(Some(&[0x80]), 3)
+            .expect("empty array is the empty set")
+            .is_empty());
+    }
+
+    #[test]
+    fn canonical_invalid_set_valid_sorted_in_range() {
+        // array [0, 2], tx_count 3 → {0, 2}.
+        let set = decode_invalid_tx_indices_canonical(Some(&[0x82, 0x00, 0x02]), 3).expect("ok");
+        assert_eq!(set, invalid_set(&[0, 2]));
+    }
+
+    #[test]
+    fn canonical_invalid_set_fail_closed_on_non_canonical() {
+        // Every case that the lenient diagnostic decoder would silently accept / truncate must HALT here.
+        let bad: &[(&[u8], &str)] = &[
+            (&[0x05], "a bare uint, not an array"),
+            (&[0x40], "a bstr, not an array"),
+            (&[0x9f, 0x00, 0xff], "indefinite array"),
+            (
+                &[0x81, 0x40],
+                "non-uint entry (empty bstr) — lenient decoder would skip it",
+            ),
+            (
+                &[0x81, 0x18, 0x05],
+                "non-minimal uint (5 encoded as 0x18 0x05)",
+            ),
+            (&[0x82, 0x01, 0x00], "unsorted [1, 0]"),
+            (&[0x82, 0x00, 0x00], "duplicate [0, 0]"),
+            (&[0x81, 0x00, 0xff], "trailing bytes after [0]"),
+        ];
+        for (bytes, why) in bad {
+            let r = decode_invalid_tx_indices_canonical(Some(bytes), 8);
+            assert!(
+                matches!(r, Err(LedgerTransitionError::MalformedBlock)),
+                "expected MalformedBlock for {why}, got {r:?}"
+            );
+        }
+        // An index at/after the last tx (here 5 with tx_count 3) is a malformed-block signal, not a silent
+        // under-trigger.
+        let r = decode_invalid_tx_indices_canonical(Some(&[0x81, 0x05]), 3);
+        assert!(
+            matches!(r, Err(LedgerTransitionError::MalformedBlock)),
+            "expected MalformedBlock for an out-of-range index, got {r:?}"
+        );
     }
 }
