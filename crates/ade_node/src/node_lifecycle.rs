@@ -1665,6 +1665,81 @@ fn advance_reduced_checkpoint_to_durable_tip(
     .map_err(|e| NodeLifecycleError::RelaySync(format!("reduced-checkpoint advance: {e:?}")))
 }
 
+/// LIVE-LEDGER-EPOCH-TRANSITION S2 (DC-EPOCH-20 / PO-4): reconcile the durable EpochAccumulator to
+/// the current durable ChainDB tip, called after each durable admit beside the reduced checkpoint.
+/// This is the SINGLE accumulator-advance authority -- it folds the within-epoch ledger facts
+/// (issuance / fees / withdrawals) over the canonical selected chain, in admission order, reading
+/// ONLY the durable ChainDB. It subsumes any per-block advance: a no-op in steady state (the prior
+/// tick already reached the tip), it does the real work on (a) warm-start -- catch a lagging
+/// accumulator up to the WAL-tail prefix without re-following -- and (b) reorg -- rematerialize from
+/// the sealed seed baseline then replay forward (no inverse mutation; the accumulator codec exposes
+/// no subtractive op).
+///
+/// OBSERVE-ONLY (DC-EPOCH-20 / PO-6): in S2 the accumulator is NOT yet consensus authority (S4 flips
+/// it), so a stall (a boundary whose mark the S2 path withholds -> `MissingBoundaryStake`) or a store
+/// fault NEVER halts the proven follow. It breaks the walk at the last good within-epoch slot and
+/// returns; the durable accumulator simply trails the durable tip (`LAST_SLOT < wal_tail` is the
+/// stall signal a later slice reads). An unsealed-but-present store is malformed -> skip (never
+/// advance from slot 0 over a seed that already folded those blocks).
+fn advance_accumulator_to_durable_tip(
+    epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
+    chaindb: &PersistentChainDb,
+    era_schedule: &EraSchedule,
+) {
+    use ade_runtime::chaindb::{advance_accumulator_over_chaindb, AccumulatorChaindbOutcome};
+    let Some(store) = epoch_accumulator else {
+        return;
+    };
+    // The seal MUST precede any advance (native_firstrun seals at bootstrap). A present-but-unsealed
+    // store is malformed -- advancing from slot 0 would re-fold blocks already in the seed. Skip.
+    let seed_slot = match store.seed_slot() {
+        Ok(Some(s)) => s,
+        _ => return,
+    };
+    let Some(tip) = chaindb.tip().ok().flatten() else {
+        return;
+    };
+    // Reorg: the accumulator advanced PAST the durable tip -> a rollback shortened the chain.
+    // Rematerialize to the sealed seed baseline (the within-epoch delta is not invertible), then the
+    // forward walk below replays the canonical chain from seed_slot+1. No ad hoc inverse mutation.
+    //
+    // S4 OBLIGATION (S2 IDD review, MEDIUM-2): this HEIGHT check (advanced > tip) suffices ONLY because
+    // the sole caller is the fail-closed, forward-only run_node_sync path (every non-anchor rollback
+    // fail-closes before this is reached). If a later slice ever drives the accumulator from a reorging
+    // fork-choice / participant path, replace it with a LINEAGE check (compare the durable hash at
+    // last_advanced) -- a longer chain diverging BELOW last_advanced is height-invisible and would fold
+    // a new suffix onto a stale prefix (a split-lineage accumulator).
+    let advanced = store
+        .last_advanced_slot()
+        .ok()
+        .flatten()
+        .unwrap_or(seed_slot);
+    if advanced.0 > tip.slot.0 && store.reset_to_bootstrap().is_err() {
+        return;
+    }
+    // The single forward-fold authority (tested in ade_runtime): resume at last+1, fold to the tip,
+    // stop at an observe-only boundary stall. Swallow stalls + faults -- this NEVER halts the follow.
+    //
+    // S4 OBLIGATION (S2 IDD review, MEDIUM-1): swallowing a REAL fault (the Err arm: redb I/O corruption,
+    // an undecodable durable block) is IDD-§8-compliant ONLY in S2, where the accumulator is
+    // non-authoritative + readiness-gated. At the S4 authority flip the Err arm MUST halt (keep swallowing
+    // only StalledAt) -- a persistent fault that silently froze a consensus-authority accumulator is a §8
+    // violation.
+    match advance_accumulator_over_chaindb(store, chaindb, era_schedule, seed_slot, tip.slot) {
+        Ok(AccumulatorChaindbOutcome::ReachedTip { .. }) => {}
+        Ok(AccumulatorChaindbOutcome::StalledAt { slot, reason }) => {
+            crate::node_log!(
+                "epoch-accumulator: stalled at slot {} (observe-only): {}",
+                slot.0,
+                reason
+            );
+        }
+        Err(e) => {
+            crate::node_log!("epoch-accumulator: reconcile fault (observe-only): {:?}", e);
+        }
+    }
+}
+
 /// EPOCH-CONTINUITY-ACTIVATION ECA-1 (DC-EPOCH-13): the first-boundary epoch-view activation,
 /// called after each durable admit. AUTOMATIC -- no arming flag. A strict NO-OP (byte-identical)
 /// unless EVIEW is configured (`eview_activation` + `reduced_checkpoint` both `Some` = canonical
@@ -2200,7 +2275,6 @@ pub async fn run_relay_loop_with_sched(
                         Some(&mut authority),
                         eview_activation,
                         reduced_checkpoint,
-                        epoch_accumulator,
                     )
                         .await
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
@@ -2227,6 +2301,11 @@ pub async fn run_relay_loop_with_sched(
                     // reduced checkpoint to the ChainDB tip (EVIEW only; None elsewhere ->
                     // no-op, byte-identical). Reads only the durable ChainDB; fail-closed.
                     advance_reduced_checkpoint_to_durable_tip(reduced_checkpoint, chaindb)?;
+                    // LIVE-LEDGER-EPOCH-TRANSITION S2 (DC-EPOCH-20): after the same durable admit,
+                    // reconcile the EpochAccumulator to the ChainDB tip -- catch-up on warm-start,
+                    // rematerialize on reorg. OBSERVE-ONLY (PO-6): never `?` -- a boundary stall or
+                    // store fault must not halt the proven follow (None elsewhere -> no-op).
+                    advance_accumulator_to_durable_tip(epoch_accumulator, chaindb, &era_schedule);
                     // EPOCH-CONTINUITY-ACTIVATION ECA-1 (DC-EPOCH-13): the AUTOMATIC first-boundary
                     // activation (no arming flag). A strict no-op (byte-identical) until EVIEW is
                     // configured + the seed epoch completes; then it derives the bound view
