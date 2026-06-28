@@ -12,9 +12,12 @@ follow: 380 within-epoch advances then the boundary `MissingBoundaryStake` stall
 landed (`59153f36`, IDD review PASS): `advance_accumulator_to_durable_tip` — a single advance-to-tip walk
 (warm-start catch-up + reorg reset-then-replay, observe-only) superseding the per-block advance; 4 unit
 tests; the DC-EPOCH-20 CI guard (`ci_check_epoch_accumulator_recovery.sh`) + registry `tests`/`ci_scripts`
-landed. Remaining for S2: the live restart re-proof on the advance-to-tip cadence. Two S4 obligations
-annotated in the wrapper (halt-on-real-fault + lineage-check-if-reorging-path). Boundary crossing = S3;
-leadership-authority flip + the WIRED readiness gate = S4.
+landed. **Live warm-start survival PROVEN (2026-06-28 preview):** post-SIGKILL, snapshot-free WarmStart, the
+observe-only accumulator stall re-fires byte-identically at slot 115689630 / epoch 1339 (deterministic
+rematerialize). Two S4 obligations annotated in the wrapper (halt-on-real-fault + lineage-check-if-reorging-path).
+SEPARATE non-S2 finding surfaced by the warm-start: the EpochConsensusView boundary-promotion cross-check
+fail-closes exit 43 (`EpochViewPostPromotionMismatch`) — EPOCH-CONSENSUS-VIEW/ECA cluster, independent of the
+observe-only accumulator. Boundary crossing = S3; leadership-authority flip + the WIRED readiness gate = S4.
 
 > S2 connects the S1 state machine to EVERY selected-chain admission — **the within-epoch half only.**
 > The boundary crossing (the reward over `nesBprev`, SNAP rotation, POOLREAP, the KeyHash withdrawal
@@ -264,7 +267,7 @@ canonical prefix.
   halt on a real fault once the accumulator is consensus authority (observe-only swallow is §8-compliant
   ONLY while non-authoritative); (MEDIUM-2) the reorg detector's height check must become a LINEAGE check
   if the accumulator is ever driven by a reorging fork-choice path (today's sole caller is the fail-closed
-  forward-only `run_node_sync`). Remaining: the live restart re-proof on the new advance-to-tip cadence.
+  forward-only `run_node_sync`). **Live warm-start survival PROVEN (2026-06-28 preview, `S2-RECOVER-WARMSTART-PROOF.txt`):** FirstRun sealed + stalled observe-only at slot 115689630 (`MissingBoundaryStake { epoch: 1339 }`), then SIGKILL'd; the snapshot-free WarmStart recovered from its own store and the stall **re-fired byte-identically at slot 115689630 / epoch 1339** — the durable accumulator rematerialized deterministically across a hard crash + restart. (Post-boundary advancement-across-restart stays unit-proven — the live boundary blocks showing it on this snapshot.) **SEPARATE FINDING (not the accumulator, not S2):** after re-stalling the observe-only accumulator, the WarmStart node halted exit 43 = `eview Activate(EpochViewPostPromotionMismatch)` — the EpochConsensusView warm-start-across-boundary promotion cross-check (EPOCH-CONSENSUS-VIEW / ECA cluster, cf. `dabb4210`). The observe-only accumulator (unit-returning, different redb) cannot emit that error; the two are independent. Logged for the EVIEW cluster.
 - [x] **CE-2e (boundary structurally excluded) — PROVEN (hermetic + LIVE):** a boundary-crossing block on
   the live S2 path fail-closes `MissingBoundaryStake` — POOLREAP + the KeyHash projection never execute
   live. **Live:** at the 1338→1339 boundary the advancer **stalled `MissingBoundaryStake { epoch: 1339 }`
