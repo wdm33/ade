@@ -46,8 +46,11 @@ durably, recoverably, exactly once.
 - Compact-delta persistence of the accumulator beside the reduced checkpoint, with a durable `LAST_SLOT`.
 - Restart + reorg recovery by **rematerialization** from the durable canonical prefix (never inverse
   mutation), gated by a fail-closed readiness check against the WAL tail.
-- The seed-epoch `nesBcur` seed (partial epoch-N counts) decoded from the bootstrap snapshot, **bound to
-  the manifest and epoch-checked**.
+- The bootstrap SEED accumulator built from the Mithril-bootstrapped ledger at the certified point
+  (`EpochAccumulator::seed_from_bootstrap_ledger`), **epoch-bound to the manifest**. The snapshot carries
+  the PRIOR epoch's counts (`nesBprev`) + a cold-start fee pot → the `prev_*` reward buffers; the
+  accumulator's own `nesBcur` starts FRESH (the follow counts the current epoch only from the certified
+  slot forward). See §5 PO-3.
 
 **Structurally excludes (until S3):** any epoch-boundary crossing. `ctx.boundary_mark` is `None` on the
 live S2 path, so `cross_epoch_boundary` — and with it the reward-over-`nesBprev`, SNAP, POOLREAP, and the
@@ -110,10 +113,10 @@ canonical prefix.
 | B | Recovery: all four reflect one prefix, or rematerialize from it; never a mixed prefix | The accumulator joins `materialize_rolled_back_state`'s replay fold; readiness gate forbids resuming at a mixed prefix (§3, §6). |
 | 1 | `SelectedBlockCtx` derives only from decoded canonical block data + durable selected-chain context | `era`/`block_slot`/`issuer_pool` from the *same* `decode_block` the reducer consumed; `block_epoch` from `era_schedule.locate`; `boundary_mark = None` (S2). No peer/CLI/wall-clock (the `SelectedBlockCtx` doc already forbids them). |
 | 2 | Issuer accounting uses the **verified** issuer identity | `issuer_pool = blake2b_224(header.issuer_vkey)` (`block_validity/header_input.rs`) — the identity Praos VRF/KES validation checks, not a peer convenience field. |
-| 3 | Fee accounting uses the same canonical block semantics full ledger application would | **PO-1 — DONE (`epoch_accumulator.rs`).** The `invalid_transactions` set (decoded no-UTxO via `decode_is_valid_indices`) gates ALL within-epoch effects: valid tx → declared fee (key 2) + withdrawals; phase-2-invalid tx → `total_collateral` (key 17), body effects discarded. **Fail-closed:** `InvalidTxCollateralNeedsUtxo` (invalid tx, no declared collateral) and `InvalidTxCarriesAuthorityEffect` (invalid tx carrying certs/withdrawals — the discarded-effect skip is S3's gate, never silently applied; the cert guard means `process_block_certificates` never applies an invalid tx's certs). 4 tests. |
+| 3 | Fee accounting uses the same canonical block semantics full ledger application would | **PO-1 — DONE (`epoch_accumulator.rs`).** The `invalid_transactions` set (decoded no-UTxO via the fail-closed `decode_invalid_tx_indices_canonical`) gates ALL within-epoch effects: valid tx → declared fee (key 2) + withdrawals; phase-2-invalid tx → `total_collateral` (key 17), body effects discarded. **Fail-closed:** `InvalidTxCollateralNeedsUtxo` (invalid tx, no declared collateral) and `InvalidTxCarriesAuthorityEffect` (invalid tx carrying certs/withdrawals — the discarded-effect skip is S3's gate, never silently applied; the cert guard means `process_block_certificates` never applies an invalid tx's certs). 4 tests. |
 | 4 | Withdrawal / certificate processing exactly once per selected block | The accumulator advance runs *after* `pump_block`'s idempotent re-announce no-op (`pump.rs:109`), inside the single admit step; one `process_block_certificates` + one `scan_block_tx_effects` per block. A re-announced block applies nothing. |
 | 5 | Within-epoch persistence is canonical + ordered; no map iteration leaks into encoded bytes | The codec is `BTreeMap`-ordered + definite CBOR + the re-encode backstop (S1); the compact delta is encoded by the same canonical writers. `ci_check_epoch_accumulator_no_utxo.sh` already forbids `HashMap`-shaped fields; extend the guard to the delta. |
-| 6 | The snapshot-provided `nesBcur` seed is manifest-bound + its epoch identity checked | **PO-3:** the seed reads `block_production` from the bootstrap snapshot and asserts the snapshot's epoch == the accumulator's start epoch (fail-closed `SeedEpochMismatch`); the seed is bound to the same manifest the reduced checkpoint's `seed_slot` is sealed against. |
+| 6 | The snapshot-provided seed is manifest-bound + its epoch identity checked | **PO-3 — DONE (`epoch_accumulator.rs`).** `seed_from_bootstrap_ledger` asserts the bootstrapped ledger's `epoch_state.epoch == expected_epoch` (the manifest epoch the `s1a` decode already cross-checks) — fail-closed `SeedEpochMismatch`; pre-Conway is refused (`EraNotSupported`). The bootstrapped `block_production` (`nesBprev`) + cold-start fee pot seed `prev_block_production`/`prev_epoch_fees`; `nesBcur` starts fresh. 3 tests. |
 | 7 | A reorg cannot undo by ad hoc inverse mutation; rematerialize from the last durable checkpoint + canonical blocks | The accumulator has **no** decrement/inverse path; reorg = reset-to-checkpoint + replay (§3.4). The codec exposes no subtractive op. |
 | 8 | Deferred POOLREAP / withdrawal-discriminant: fully handled **or** structurally excluded until S3 | **Structurally excluded:** both live only inside `cross_epoch_boundary`, unreachable on the S2 live path (`boundary_mark = None → MissingBoundaryStake`). §2. |
 
@@ -129,7 +132,7 @@ canonical prefix.
   for tx `i`, `epoch_fees += (i ∈ invalid_transactions ? collateral_consumed : body.fee)`. S1's
   `scan_block_tx_effects` adds `body.fee` (key 2) for *all* txs → wrong for any block with a phase-2-invalid
   tx. **S2 refinement:** decode the block's `invalid_transactions` index set
-  (`plutus_eval::decode_is_valid_indices`, no UTxO needed); valid tx → `+= body.fee`; invalid tx →
+  (`decode_invalid_tx_indices_canonical`, no UTxO needed); valid tx → `+= body.fee`; invalid tx →
   `+= total_collateral` (key 17); **fail-closed** (`InvalidTxCollateralNeedsUtxo`) if an invalid tx lacks
   `total_collateral`. The fail-closed case is rare (Conway txs generally declare `total_collateral`) and is
   the correct refusal of a genuinely byte-uncertain value, never a silent wrong sum. (Within-epoch
@@ -161,9 +164,27 @@ canonical prefix.
   per-boundary) — the store is cadence-agnostic; the wiring picks a cadence bounded so recovery replays ≤ 1
   epoch (cluster §4), and applies `apply_selected_block` as an in-place delta (its by-value form is the S1
   determinism spec) to honor "no full-accumulator clone per block."
-- **PO-3 (`nesBcur` seed binding).** Confirm the bootstrap snapshot carries the seed epoch's partial
-  `block_production`, how its epoch identity is read, and the manifest it binds to; define the fail-closed
-  `SeedEpochMismatch`.
+- **PO-3 (seed binding) — RESOLVED (constructor LANDED, `epoch_accumulator.rs`).** Grounded finding
+  (overturns the original premise that the snapshot carries a partial `nesBcur`): the bootstrap snapshot
+  (`s1a: NativeSnapshotNonUtxoState`, decoded at `native_firstrun.rs:442`) carries `block_production` =
+  **`nesBprev`** (the PRIOR epoch's per-pool counts, re-keyed into the assembled ledger's
+  `epoch_state.block_production` — `mithril_native_assembly.rs:343`, asserted by its test at :794), the
+  reward update as `reward_deltas` (the `nesRu`), and a **cold-start `epoch_fees = 0`**
+  (`mithril_native_assembly.rs:344`). There is NO snapshot-provided partial `nesBcur`. So
+  `EpochAccumulator::seed_from_bootstrap_ledger(ledger, expected_epoch, pending_reward_update)` (BLUE):
+  (a) seeds the boundary-consumed reward inputs from the bootstrapped epoch-state —
+  `prev_block_production ← ledger.block_production` (the `nesBprev`), `prev_epoch_fees ← ledger.epoch_fees`
+  (the cold-start pot); (b) starts the accumulator's own `nesBcur` FRESH-EMPTY (the live follow counts the
+  current epoch's blocks/fees only from the certified slot forward — the pre-certified partial is an S3
+  boundary-gate reconciliation item, never consumed in S2 because the boundary is excluded and the store's
+  readiness gate fail-closes any authoritative read until S3); (c) carries the within-epoch-consumed
+  authority (`cert_state`, `protocol_params`, `gov_state`, `conway_deposit_params`, snapshots/pots, era)
+  faithfully; (d) is **manifest-bound + epoch-checked** — `epoch_state.epoch == expected_epoch` (the value
+  the `s1a` decode already cross-checks against `manifest_epoch`) or fail-closed `SeedEpochMismatch`, and
+  pre-Conway → `EraNotSupported`. 3 hermetic tests (the two-buffer split with non-trivial values; epoch
+  mismatch fail-closed; pre-Conway refused). **Remaining (2b-wire):** call it at the bootstrap seal seam
+  (mirroring the reduced checkpoint's `seal_bootstrap`), supplying `pending_reward_update` from the
+  existing DC-EPOCH-18 bootstrap reward seed.
 - **PO-4 (recovery fold hook).** Confirm where the accumulator's rematerialize fold attaches:
   inside/alongside `materialize_rolled_back_state`'s replay loop (`rollback/materialize.rs:92`) so it
   lands at the *same* target as the ledger + chain-dep, and the readiness gate's placement on the
@@ -224,8 +245,10 @@ canonical prefix.
   not inverse mutation (tests + the live restart).
 - [ ] **CE-2e (boundary structurally excluded):** a boundary-crossing block on the live S2 path
   fail-closes `MissingBoundaryStake` (test) — POOLREAP + the KeyHash projection are never executed live.
-- [ ] **CE-2f (`nesBcur` seed, PO-3):** the seed binds epoch-identity; `SeedEpochMismatch` is fail-closed
-  (test).
+- [~] **CE-2f (seed binding, PO-3) — constructor + tests DONE:** `seed_from_bootstrap_ledger` binds
+  epoch-identity (`SeedEpochMismatch` fail-closed) + refuses pre-Conway (`EraNotSupported`); the two-buffer
+  split seeds `nesBprev`→`prev_*` and starts `nesBcur` fresh (3 tests). Remaining: call it at the bootstrap
+  seal seam (2b-wire).
 - [ ] **CI:** extend `ci_check_epoch_accumulator_no_utxo.sh` (or a sibling) to assert the live advance is
   behind the durable-admit boundary, recovery folds `apply_selected_block` over the canonical prefix, and
   the delta codec stays canonical/UTxO-free; **DC-EPOCH-20** present in the registry.

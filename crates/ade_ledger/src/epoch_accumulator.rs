@@ -162,6 +162,23 @@ pub struct EpochAccumulator {
     pub pending_reward_update: Option<BootstrapRewardUpdate>,
 }
 
+/// Fail-closed error from sealing the bootstrap SEED accumulator (LIVE-LEDGER-EPOCH-TRANSITION S2,
+/// PO-3 / CE-2f). A seed that does not match the epoch its manifest binds, or a pre-Conway bootstrap, is
+/// REFUSED — never a mis-bound or out-of-era accumulator sealed to the durable store.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SeedError {
+    /// The bootstrapped ledger's epoch disagrees with the manifest-declared seed epoch: the seed is not
+    /// bound to the certified point it claims. `ledger_epoch` is what the bootstrapped ledger carries;
+    /// `expected_epoch` is what the bootstrap manifest / certified point declares.
+    SeedEpochMismatch {
+        ledger_epoch: u64,
+        expected_epoch: u64,
+    },
+    /// The bootstrapped ledger's era is pre-Conway — the accumulator is Conway-scoped (`era_tag` is the
+    /// `CardanoEra as u64`).
+    EraNotSupported { era_tag: u64 },
+}
+
 impl EpochAccumulator {
     /// A fresh empty Conway-era accumulator (genesis-shaped; the live seeding is S2).
     pub fn new(era: CardanoEra) -> Self {
@@ -177,6 +194,66 @@ impl EpochAccumulator {
             era,
             pending_reward_update: None,
         }
+    }
+
+    /// Seal the bootstrap SEED accumulator from the Mithril-bootstrapped `LedgerState` at the certified
+    /// point (LIVE-LEDGER-EPOCH-TRANSITION S2, PO-3 / CE-2f). The non-UTxO authority the within-epoch fold
+    /// consumes is taken faithfully from the bootstrapped ledger — `cert_state`, `protocol_params`,
+    /// `gov_state`, `conway_deposit_params`, `max_lovelace_supply`, `era`, and `epoch_state`'s epoch / slot
+    /// / snapshots / pots.
+    ///
+    /// **The two-buffer split (cardano `nesBprev` / `nesBcur`).** The bootstrapped `EpochState` carries the
+    /// PRIOR epoch's per-pool counts in `block_production` (the `s1a` snapshot's `nesBprev`, re-keyed by the
+    /// native assembly) and a cold-start `epoch_fees`. Both are boundary-consumed reward INPUTS, so they seed
+    /// the `prev_*` buffers. The accumulator's own `nesBcur` accumulators start FRESH-EMPTY: the live follow
+    /// counts the current epoch's blocks and fees only from the certified slot forward (the pre-certified
+    /// partial is an S3 boundary-gate reconciliation item — in S2 the boundary is structurally excluded, so
+    /// these buffers are never consumed and the store's readiness gate fail-closes any authoritative read
+    /// until S3).
+    ///
+    /// **Manifest binding (CE-2f, fail-closed).** `expected_epoch` is the epoch the bootstrap manifest /
+    /// certified point declares the seed is for (the same value the `s1a` decode cross-checks). The seal
+    /// REFUSES (`SeedEpochMismatch`) unless the ledger's own `epoch_state.epoch` matches it, so a seed can
+    /// never be sealed at an epoch other than the one its manifest binds. Pre-Conway is refused too
+    /// (`EraNotSupported`); the accumulator is Conway-scoped, matching the `snapshot/` discipline.
+    ///
+    /// `pending_reward_update` is the DC-EPOCH-18 / Option-B bootstrap reward seed, supplied by the caller
+    /// from the same certified snapshot (also boundary-consumed; gate-protected until S3).
+    pub fn seed_from_bootstrap_ledger(
+        ledger: &LedgerState,
+        expected_epoch: EpochNo,
+        pending_reward_update: Option<BootstrapRewardUpdate>,
+    ) -> Result<Self, SeedError> {
+        if (ledger.era as u8) < (CardanoEra::Conway as u8) {
+            return Err(SeedError::EraNotSupported {
+                era_tag: ledger.era as u64,
+            });
+        }
+        if ledger.epoch_state.epoch.0 != expected_epoch.0 {
+            return Err(SeedError::SeedEpochMismatch {
+                ledger_epoch: ledger.epoch_state.epoch.0,
+                expected_epoch: expected_epoch.0,
+            });
+        }
+
+        // The bootstrapped epoch-state's block_production is nesBprev and its epoch_fees is the (cold-start)
+        // fee pot — both boundary-consumed reward inputs → the prev_* buffers. nesBcur starts fresh-empty.
+        let mut epoch_state = ledger.epoch_state.clone();
+        let prev_block_production = std::mem::take(&mut epoch_state.block_production);
+        let prev_epoch_fees = std::mem::replace(&mut epoch_state.epoch_fees, Coin(0));
+
+        Ok(EpochAccumulator {
+            epoch_state,
+            prev_block_production,
+            prev_epoch_fees,
+            cert_state: ledger.cert_state.clone(),
+            protocol_params: ledger.protocol_params.clone(),
+            gov_state: ledger.gov_state.clone(),
+            conway_deposit_params: ledger.conway_deposit_params.clone(),
+            max_lovelace_supply: ledger.max_lovelace_supply,
+            era: ledger.era,
+            pending_reward_update,
+        })
     }
 
     /// Build the transient UTxO-free `LedgerState` view the reused single-authority primitives
@@ -1123,6 +1200,77 @@ mod tests {
             canonical_commitment: commitment,
         });
         acc
+    }
+
+    // ----- S2 seed (PO-3 / CE-2f): EpochAccumulator::seed_from_bootstrap_ledger -----
+
+    #[test]
+    fn seed_splits_bootstrapped_epoch_state_into_prev_buffers() {
+        // The bootstrapped EpochState carries nesBprev in `block_production` and the (cold-start) fee pot
+        // in `epoch_fees`; the seed moves BOTH into the prev_* reward buffers and starts nesBcur fresh.
+        let boot = populated();
+        let rupd = boot.pending_reward_update.clone();
+        let ledger = boot.as_ledger_view();
+        let nes_bprev = ledger.epoch_state.block_production.clone();
+        let fee_pot = ledger.epoch_state.epoch_fees;
+        assert!(
+            !nes_bprev.is_empty(),
+            "the test ledger must carry a non-empty nesBprev"
+        );
+
+        let seed =
+            EpochAccumulator::seed_from_bootstrap_ledger(&ledger, EpochNo(1340), rupd.clone())
+                .expect("seed");
+
+        // nesBprev + the prior fee pot seed the boundary-consumed reward buffers.
+        assert_eq!(seed.prev_block_production, nes_bprev);
+        assert_eq!(seed.prev_epoch_fees, fee_pot);
+        // nesBcur accumulators start FRESH (the live follow counts from the certified slot forward).
+        assert!(seed.epoch_state.block_production.is_empty());
+        assert_eq!(seed.epoch_state.epoch_fees, Coin(0));
+        // The within-epoch-consumed authority is carried faithfully.
+        assert_eq!(seed.epoch_state.epoch, EpochNo(1340));
+        assert_eq!(seed.epoch_state.slot, ledger.epoch_state.slot);
+        assert_eq!(seed.epoch_state.reserves, ledger.epoch_state.reserves);
+        assert_eq!(seed.epoch_state.treasury, ledger.epoch_state.treasury);
+        assert_eq!(seed.epoch_state.snapshots, ledger.epoch_state.snapshots);
+        assert_eq!(seed.cert_state, ledger.cert_state);
+        assert_eq!(seed.protocol_params, ledger.protocol_params);
+        assert_eq!(seed.gov_state, ledger.gov_state);
+        assert_eq!(seed.conway_deposit_params, ledger.conway_deposit_params);
+        assert_eq!(seed.max_lovelace_supply, ledger.max_lovelace_supply);
+        assert_eq!(seed.era, CardanoEra::Conway);
+        // The bootstrap reward seed is carried verbatim (boundary-consumed; gate-protected until S3).
+        assert_eq!(seed.pending_reward_update, rupd);
+    }
+
+    #[test]
+    fn seed_epoch_mismatch_is_fail_closed() {
+        // CE-2f: a seed whose ledger epoch differs from the manifest-declared epoch is REFUSED.
+        let ledger = populated().as_ledger_view(); // epoch 1340
+        let err = EpochAccumulator::seed_from_bootstrap_ledger(&ledger, EpochNo(1339), None)
+            .expect_err("a mis-bound seed epoch must fail closed");
+        assert_eq!(
+            err,
+            SeedError::SeedEpochMismatch {
+                ledger_epoch: 1340,
+                expected_epoch: 1339,
+            }
+        );
+    }
+
+    #[test]
+    fn pre_conway_seed_is_refused() {
+        // The accumulator is Conway-scoped; a pre-Conway bootstrap is refused before any field is read.
+        let mut ledger = EpochAccumulator::new(CardanoEra::Conway).as_ledger_view();
+        ledger.era = CardanoEra::Babbage;
+        let err =
+            EpochAccumulator::seed_from_bootstrap_ledger(&ledger, ledger.epoch_state.epoch, None)
+                .expect_err("pre-Conway must be refused");
+        assert!(matches!(
+            err,
+            SeedError::EraNotSupported { era_tag } if era_tag == CardanoEra::Babbage as u64
+        ));
     }
 
     // ----- Codec -----
