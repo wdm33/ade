@@ -489,8 +489,19 @@ where
     let mut sched = era_schedule.clone();
     // No eview => the seam never promotes => always SourceEnded; surface its tip for the legacy
     // follow / rollback / re-announce tests (unchanged across the B3b SyncOutcome rewire).
-    match run_node_sync(source, state, chaindb, wal, &mut sched, Some(ledger_view), None, None, None)
-        .await?
+    match run_node_sync(
+        source,
+        state,
+        chaindb,
+        wal,
+        &mut sched,
+        Some(ledger_view),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await?
     {
         SyncOutcome::SourceEnded { selected_tip } => Ok(selected_tip),
         SyncOutcome::BoundaryPromoted { .. } => Err(NodeSyncError::Pump(
@@ -546,6 +557,7 @@ pub async fn run_node_sync<D>(
     mut authority: Option<&mut crate::epoch_activation::ActiveEpochAuthority<'_>>,
     eview: Option<&crate::epoch_wire::EviewActivationInputs>,
     reduced_checkpoint: Option<&ade_runtime::chaindb::ReducedUtxoCheckpoint>,
+    accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
 ) -> Result<SyncOutcome, NodeSyncError>
 where
     D: ChainDb + SnapshotStore,
@@ -694,6 +706,12 @@ where
         .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?;
         if let Some(t) = tip {
             admitted_this_pass += 1;
+            // LIVE-LEDGER-EPOCH-TRANSITION S2 (DC-EPOCH-20): advance the durable non-UTxO accumulator over
+            // the just-admitted block -- OBSERVE-ONLY (the accumulator is not yet the consensus/leadership
+            // authority; S4 flips it). The outcome NEVER affects the proven follow -- it is logged + dropped.
+            if let Some(store) = accumulator {
+                advance_accumulator_observe_only(store, &block_bytes, t.slot, era_schedule);
+            }
             // Compare against the peer tip the wire pump already tracks (FollowedPeerTipSignal, from
             // TipUpdate). Log the first block of each batch, every 500th while catching up, and every
             // block once at/near the peer tip -- so BOTH the catch-up and the caught-up transition are
@@ -750,6 +768,51 @@ where
     }
 
     Ok(SyncOutcome::SourceEnded { selected_tip })
+}
+
+/// Advance the durable non-UTxO accumulator over a just-admitted block, OBSERVE-ONLY (LIVE-LEDGER-
+/// EPOCH-TRANSITION S2, DC-EPOCH-20). Builds the within-epoch context from the decoded block + the era
+/// schedule and calls the advancer; the outcome — `Advanced` / `AlreadyApplied` / a within-epoch
+/// `Stalled` / even a store I/O fault — NEVER affects the follow (it is logged and dropped). The
+/// accumulator is not yet the consensus/leadership authority (S4 flips it), so a Stall (e.g. an epoch
+/// boundary the S2 path withholds the mark for) leaves the store at its last good slot — `LAST_SLOT <
+/// wal_tail` is the durable stall signal — while the proven follow continues via the existing bridge /
+/// reduced-checkpoint machinery. Decode / schedule-locate failures are defensive no-ops (an undecodable
+/// or unplaceable block never reached durable admit).
+fn advance_accumulator_observe_only(
+    store: &ade_runtime::chaindb::EpochAccumulatorStore,
+    block_bytes: &[u8],
+    block_slot: ade_types::SlotNo,
+    era_schedule: &EraSchedule,
+) {
+    use ade_runtime::chaindb::{advance_accumulator_over_block, AdvanceOutcome, WithinEpochCtx};
+    let decoded = match ade_ledger::block_validity::decode_block(block_bytes) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let block_epoch = match era_schedule.locate(block_slot) {
+        Ok(loc) => loc.epoch,
+        Err(_) => return,
+    };
+    let ctx = WithinEpochCtx {
+        era: decoded.era,
+        block_epoch,
+        block_slot,
+        issuer_pool: ade_types::PoolId(decoded.header_input.issuer_pool.clone()),
+    };
+    match advance_accumulator_over_block(store, block_bytes, &ctx) {
+        Ok(AdvanceOutcome::Advanced { .. }) | Ok(AdvanceOutcome::AlreadyApplied { .. }) => {}
+        Ok(AdvanceOutcome::Stalled { slot, reason }) => {
+            crate::node_log!(
+                "epoch-accumulator: stalled at slot {} (observe-only): {}",
+                slot.0,
+                reason
+            );
+        }
+        Err(e) => {
+            crate::node_log!("epoch-accumulator: advance fault (observe-only): {:?}", e);
+        }
+    }
 }
 
 /// PHASE4-N-U S1 (DC-NODE-12) — the durable-forge-admit driver: route a BLUE
@@ -2671,6 +2734,7 @@ mod tests {
             &mut shutdown,
             None,
             Some(&mut sched_log),
+            None,
             None,
             None,
             None,
@@ -7582,6 +7646,7 @@ mod tests {
             &mut sd_rx,
             Some(&mut act),
             Some(&mut sched_log),
+            None,
             None,
             None,
             None,

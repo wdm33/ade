@@ -499,6 +499,27 @@ async fn run_node_lifecycle_inner(
         );
     }
 
+    // LIVE-LEDGER-EPOCH-TRANSITION S2 (DC-EPOCH-20): open the durable non-UTxO accumulator beside the
+    // reduced checkpoint. By here the FirstRun bootstrap has run (the reduced-checkpoint reopen above
+    // proves it), so a native-bootstrapped node finds the sealed store; a warm start finds its prior
+    // store; a non-native start finds none. OBSERVE-ONLY in S2 (S4 makes it the leadership authority),
+    // so an open failure is NON-FATAL -- logged, `None`, and the follow continues without it (the live
+    // advance is gated on `Some`). It NEVER blocks the proven follow.
+    let accumulator_path = snapshot_dir.join("epoch-accumulator.redb");
+    let epoch_accumulator = if accumulator_path.exists() {
+        match ade_runtime::chaindb::EpochAccumulatorStore::open(&accumulator_path) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!(
+                    "ade_node --mode node: epoch-accumulator open skipped (non-fatal): {e:?}"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // 6. Both arms CONVERGE here into the one relay run loop (CN-NODE-02): no
     //    arm prints-and-exits any more.
     //
@@ -671,6 +692,7 @@ async fn run_node_lifecycle_inner(
                 None,
                 reduced_checkpoint.as_ref(),
                 eview_inputs.as_ref(), // ECA-5: cross-epoch EVIEW activation wired into the relay-only path
+                epoch_accumulator.as_ref(),
             )
             .await?;
             eprintln!(
@@ -1002,6 +1024,7 @@ async fn run_node_lifecycle_inner(
                 Some(&mut convergence),
                 reduced_checkpoint.as_ref(),
                 eview_activation,
+                epoch_accumulator.as_ref(),
             )
             .await?;
             // MEM-MEASURE-A2 (OP-MEM-01): final sustained sample + run-level memory
@@ -1567,7 +1590,7 @@ pub async fn run_relay_loop(
 ) -> Result<(), NodeLifecycleError> {
     run_relay_loop_with_sched(
         state, source, chaindb, wal, era_schedule, seed_view, shutdown, forge, None, None, None,
-        None,
+        None, None,
     )
     .await
 }
@@ -1740,6 +1763,11 @@ pub async fn run_relay_loop_with_sched(
     // durable state) after each admit. `None` on non-EVIEW / wrapper / test callers -> inert
     // (byte-identical).
     eview_activation: Option<&crate::epoch_wire::EviewActivationInputs>,
+    // LIVE-LEDGER-EPOCH-TRANSITION S2 (DC-EPOCH-20): the durable non-UTxO accumulator, `Some` when a
+    // native bootstrap sealed it (or a warm start reopened it). After each durable admit the loop
+    // advances it OBSERVE-ONLY (the accumulator is not yet authoritative; S4 flips it), so a stall /
+    // fault never affects the follow. `None` on non-native / wrapper / test callers -> inert.
+    epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
 ) -> Result<(), NodeLifecycleError> {
     // ECA-3 (DC-EPOCH-14): the ONE owned epoch-authority the loop holds — the SOLE view source for
     // BOTH header validation and leadership. Resolved FRESH at each authoritative decision via
@@ -2172,6 +2200,7 @@ pub async fn run_relay_loop_with_sched(
                         Some(&mut authority),
                         eview_activation,
                         reduced_checkpoint,
+                        epoch_accumulator,
                     )
                         .await
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
