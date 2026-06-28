@@ -9308,9 +9308,9 @@ holds across the run.
 """
 source = "docs/clusters/LIVE-LEDGER-EPOCH-TRANSITION/cluster.md + SLICE-S1-authority-transition-contract.md. The authority-surface trace (2026-06-27) confirmed the live follow validates headers + stores blocks + advances the reduced checkpoint + the Praos nonce, but does NOT evolve rewards/block-production/fees/snapshot-rotation -- so post-bootstrap future authority runs out. Preserves MEM-OPT (no full live UTxO). Operational venue detail in the untracked competition-secret runbook."
 cross_ref = ["DC-EPOCH-18", "DC-EPOCH-17", "DC-EPOCH-16", "DC-EPOCH-15", "DC-EVIEW-08", "DC-MEM-09"]
-code_locus = "NEW: ade_ledger EpochAccumulator + apply_selected_block (the total transition) + its canonical codec; ade_runtime forward_sync/node_sync (per-block evolution on the follow); the boundary transition reusing ade_ledger::rules apply_epoch_boundary_with_registrations + rotate_snapshots + apply_pool_reap; the reduced checkpoint stays the stake substrate. TBD per slice S1-S6."
-tests = []
-ci_scripts = []
+code_locus = "S1 LANDED: ade_ledger::epoch_accumulator (EpochAccumulator + apply_selected_block + cross_epoch_boundary + the canonical encode/decode_epoch_accumulator codec composing the snapshot/ sub-codecs + the nesBprev buffers + pending_reward_update). The boundary reuses ade_ledger::rules apply_epoch_boundary_with_registrations + epoch::rotate_snapshots + delegation::apply_pool_reap; the within-epoch half reuses rules::process_block_certificates + delegation::apply_bootstrap_reward_deltas; the reduced checkpoint stays the stake substrate (read via SelectedBlockCtx.boundary_mark, never stored). S2-S6 TBD: ade_runtime forward_sync/node_sync per-block evolution on the live follow + the live byte-exact boundary gate + restart/rollback + the N->N+3 self-derived proof."
+tests = ["ade_ledger::epoch_accumulator::tests (codec round-trip byte-identical + non-canonical/unknown-version/pre-Conway-era/trailing-bytes fail-closed; boundary_rotates_block_production_two_buffer; within_epoch_withdrawal_then_boundary_pays_fresh_reward; pending_reward_update_applied_once_then_cleared; missing_boundary_stake + boundary_gap fail-closed; apply_selected_block_on_real_conway_block_is_deterministic; replay_equivalence_via_durable_checkpoint_across_a_boundary)"]
+ci_scripts = ["ci/ci_check_epoch_accumulator_no_utxo.sh"]
 status = "declared"
 introduced_in = "LIVE-LEDGER-EPOCH-TRANSITION-S1"
 strengthened_in = []

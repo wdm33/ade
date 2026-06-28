@@ -111,35 +111,89 @@ epoch, never the full chain. The encoding is the durable replay authority for S5
 - No full-chain replay per block; per-block work touches only affected entries.
 - The boundary checkpoint write is bounded + disk-backed (the only naturally heavier step).
 
-## Proof obligations (resolve BEFORE coding — slice-entry, not footnotes)
+## Proof obligations — RESOLVED (cardano-ledger source + Ade surfaces, 2026-06-28)
 
-1. **Reward-input lag, exactly:** confirm against cardano-ledger that the RUPD applied at the `e/e+1`
-   boundary consumes epoch-`(e-1)` `block_production` + the go-snapshot active during `e-1`, and that the
-   accumulator's per-epoch `block_production`/`epoch_fees` rotation (1d resets, 2 accumulates) lines those
-   up. Pin the snapshot the RUPD reads (go) vs the snapshot leadership reads (also go, lag 2) — they are
-   the same object but at different rotation ages; the accumulator must hold enough rotation history.
-2. **Bootstrap seam:** the first self-derived RUPD needs a full prior-epoch's counts. Seed+1 (bridge) and
-   seed+2 (DC-EPOCH-18 nesRu) stay as the bootstrap-transient seeds; define EXACTLY at which boundary the
-   accumulator's native RUPD takes over (the first boundary whose entire input epoch was followed) and how
-   the accumulator is seeded from the snapshot (decode `nesBcur` for the partial seed-epoch counts).
-3. **Governance scope:** the minimal protocol/governance state that affects the epoch transition
-   (params + enactment), not the full Conway governance machinery — bound S1's `params`/governance fields
-   to only what the RUPD + leadership need.
-4. **Persistence cadence:** boundary-only checkpoint vs periodic; confirm the within-epoch replay bound is
-   acceptable and the encoding is forward/backward-versioned.
+The resolutions below are read off the cardano-ledger Haskell source (on disk at
+`~/Documents/ade-planning/reference/cardano-ledger`) and the actual Ade `ade_ledger` surfaces. They are
+load-bearing: the contract's rotation is built to them.
+
+1. **Reward-input lag — RESOLVED: the RUPD consumes `nesBprev` over the `go` snapshot (a true 2-buffer
+   model).**
+   - `Rules/Tick.hs:261,276` — `bheadTransition` extracts `bprev` from `NewEpochState _ bprev _ es _ _ _`
+     and runs `TRC (RupdEnv bprev es, nesRu nes1, slot)`. The reward update consumes **`nesBprev`**, not
+     `nesBcur`.
+   - `LedgerState/PulsingReward.hs` — `startStep ... es@(EpochState acnt ls ss nm) ...` reads
+     `let SnapShot ... = ssStakeGo ss`. The stake is the **`go`** snapshot.
+   - `Rules/NewEpoch.hs:151-198` — at boundary `e→e+1`: apply `nesRu` (`updateRewards`) FIRST, then
+     (Shelley only) `MIR`, then `EPOCH`, then rotate `nesBprev := bcur` (the old `nesBcur`),
+     `nesBcur := mempty`, `nesRu := SNothing`. Conway (`Conway/Rules/NewEpoch.hs:158-192`) is identical
+     **minus MIR**, with RATIFY enactment inside EPOCH.
+   - `Rules/Epoch.hs:143-184` — EPOCH order = **SNAP → POOLREAP → UPEC/RATIFY**.
+   - `Rules/Snap.hs:95-103` — `ssStakeMark := <current instant stake>`, `ssStakeSet := old ssStakeMark`,
+     `ssStakeGo := old ssStakeSet` (matches Ade `epoch::rotate_snapshots`).
+   - **Net:** the reward applied at the boundary INTO epoch `X` consumes blocks of epoch `X-2` (the held
+     `nesBprev`) over the held `go` snapshot; after the boundary `nesBprev := nesBcur(X-1)`,
+     `nesBcur := ∅`. So a follower accumulating `nesBcur` per block needs a SEPARATE held `nesBprev`
+     (and `prev_epoch_fees`) — the accumulator carries BOTH. The existing
+     `rules::apply_epoch_boundary_with_registrations` reads `epoch_state.block_production` as the
+     to-be-rewarded counts (the `nesBprev` convention — see `EpochState.block_production` doc + the
+     `ledgerdb_nonutxo_hermetic` NES layout `[epoch, nesBprev, nesBcur, EpochState, ru, pd, stashed]`)
+     and resets it; the contract therefore feeds it `prev_block_production`/`prev_epoch_fees` at the
+     boundary, then rotates `prev := <just-finished nesBcur>`.
+2. **Bootstrap seam — `pending_reward_update` carries the DC-EPOCH-18 seed; applied once at its
+   `target_epoch→+1` boundary, then cleared.** The native RUPD takes over at the first boundary whose
+   entire input epoch was followed (`pending_reward_update == None`). For S1 the field + its one-shot
+   application (`delegation::apply_bootstrap_reward_deltas`, the proven Option-B path) are defined +
+   tested in isolation; the live seeding (`nesBcur` decode for the partial seed epoch) is S2, the exact
+   native-vs-seed layering is verified by S3's live byte-exact gate.
+3. **Governance scope — Conway is the LIVE era, so the accumulator carries the FULL `ConwayGovState` +
+   `ProtocolParameters`** (both already have canonical codecs in `snapshot/`). The boundary reuses the
+   Conway-aware `apply_epoch_boundary_with_registrations` (RATIFY enactment, no MIR, circulation-based
+   `totalStake` for PV≥4). Pre-Conway is rejected by the codec (the `snapshot/` Conway-only discipline).
+4. **Persistence cadence — a full accumulator checkpoint, version-framed + byte-canonical** (the
+   `bootstrap_bridge`/`seed_consensus_inputs` discipline: version gate, definite containers,
+   re-encode-equality backstop, trailing-byte + Conway-era gate). Composes the existing sub-codecs
+   (`encode_epoch_state`/`encode_cert_state`/`encode_pparams`/`encode_gov_state`/
+   `encode_conway_deposit_params`) + the `nesBprev` buffer + `pending_reward_update`. Within-epoch
+   recovery replays the current epoch's durable blocks over the last boundary checkpoint (bounded to one
+   epoch) — S5.
+
+### Known S3 reconciliation items (recorded, not silently dropped)
+- **POOLREAP completeness.** `apply_epoch_boundary_with_registrations` does an INLINE retirement (deposit
+  return + remove from `pools`, `≤ epoch`) but omits future-pool adoption + delegation-clearing;
+  `delegation::apply_pool_reap` does adoption + delegation-clear + `== epoch` reap but no deposits. S1
+  reuses the boundary fn (validated reward path) and additionally calls `apply_pool_reap` for
+  future-pool adoption (consensus-critical: the re-registered VRF must be active next epoch). The
+  deposit-vs-clear ordering reconciliation is an S3 byte-exact item.
+- **Withdrawal credential discriminant.** The boundary credits rewards under a `KeyHash` projection of the
+  reward-account bytes (`rules.rs` known simplification); the contract's withdrawal extraction decodes the
+  real key/script discriminant from the stake-address header. Consistency at script-hash reward accounts
+  is an S3 byte-exact item; S1's order test uses key-hash accounts (the matching projection).
 
 ## Cluster Exit Criteria Addressed
 
 - [x] **CE-1 (contract):** this slice defines + tests the total deterministic replay-equivalent transition.
 - [ ] CE-2..CE-6: out of scope for S1 (S2–S6).
 
-## Acceptance (S1 — hermetic, no live)
+## Acceptance (S1 — hermetic, no live) — DONE
 
-- `apply_selected_block` + `EpochAccumulator` + the canonical codec exist; `cargo test` green.
-- **Determinism/replay:** a hermetic multi-block + ≥1-boundary fixture folded twice yields byte-identical
-  accumulators; folding the same blocks from a mid-sequence checkpoint == folding from the start.
-- **Codec:** round-trip byte-identical; fail-closed on unknown version / non-canonical / trailing bytes.
-- **Order:** a unit test asserts a within-epoch withdrawal followed by a boundary yields the boundary
-  reward (not zero) — the protocol order encoded in the contract.
-- DC-EPOCH-19 declared in the registry; `ci/ci_check_*` placeholder for the contract's structural
-  invariants (no full-clone-per-block; the single transition site).
+Landed in `crates/ade_ledger/src/epoch_accumulator.rs` (BLUE); `cargo test -p ade_ledger --lib` green
+(707 tests, 16 new); clippy clean; the new module is rustfmt-clean.
+
+- [x] `apply_selected_block` + `EpochAccumulator` + `SelectedBlockCtx` + `LedgerTransitionError` +
+  `encode_/decode_epoch_accumulator` exist; the codec composes the existing `snapshot/` sub-codecs (no
+  second encoding scheme).
+- [x] **Determinism/replay:** `apply_selected_block_on_real_conway_block_is_deterministic` (same prior +
+  block + ctx ⇒ byte-identical) and `replay_equivalence_via_durable_checkpoint_across_a_boundary`
+  (folding from the persisted checkpoint == folding from the start, across a real boundary).
+- [x] **Codec:** `codec_round_trips_byte_identical_populated` + fail-closed on unknown version /
+  pre-Conway era / trailing bytes / non-canonical (`codec_rejects_*`).
+- [x] **Order:** `within_epoch_withdrawal_then_boundary_pays_fresh_reward` — the post-withdrawal zero
+  does NOT suppress the boundary's fresh reward (the protocol order, the B3c/DC-EPOCH-18 lesson native).
+- [x] **Two-buffer rotation:** `boundary_rotates_block_production_two_buffer` proves `nesBprev := <finished
+  nesBcur>`, `nesBcur := ∅` (the cardano model resolved in proof obligation #1).
+- [x] **Fail-closed:** `missing_boundary_stake_is_fail_closed`, `boundary_gap_is_fail_closed`,
+  `pending_reward_update_applied_once_then_cleared`.
+- [x] DC-EPOCH-19 in the registry (`tests`/`ci_scripts` populated); `ci/ci_check_epoch_accumulator_no_utxo.sh`
+  mechanically guards the field-ownership contract (NO UTxO field; the OWNED two-buffer + seed; the
+  empty-UTxO `as_ledger_view`; the version-gated Conway-only re-encode-backstop codec).
