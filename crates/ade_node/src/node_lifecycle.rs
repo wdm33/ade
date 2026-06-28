@@ -1908,6 +1908,7 @@ pub async fn run_relay_loop_with_sched(
             inputs.protocol_params_hash.clone(),
             inputs.asc,
             inputs.bootstrap_reward_delta.as_ref(),
+            inputs.next_epoch_bridge.as_ref(),
             &mut authority,
             &inputs.replay_scratch_path,
         )

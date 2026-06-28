@@ -28,12 +28,14 @@ use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::events::Point;
 use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
 use ade_ledger::bootstrap_bridge::BootstrapNextEpochAuthority;
+use ade_ledger::consensus_view::PoolDistrView;
 use ade_ledger::wal::WalEntry;
 use ade_types::tx::{Coin, PoolId};
 
 use crate::epoch_activate::{activate_at_boundary, recover_at_boundary, BoundaryActivationOutcome};
 use crate::epoch_activation::{
-    activation_record_for, ActiveEpochAuthority, EpochViewActivationError,
+    activation_record_for, recover_active_view, ActiveEpochAuthority, ActiveEpochView,
+    EpochViewActivationError,
 };
 use crate::epoch_candidate::{derive_candidate, CandidateDeriveError, CandidateProfile};
 use crate::epoch_source_window::{
@@ -501,6 +503,57 @@ pub fn maybe_activate_first_boundary(
     Ok(Some(outcome))
 }
 
+/// ECA-5 (DC-EPOCH-15): bind the seed+1 epoch view from the durable bootstrap BRIDGE -- the seed+1
+/// leadership projected from the imported MARK snapshot (phase = `Mark`: the seed+1 leadership IS the
+/// MARK snapshot). The SOLE bridge-binding path, shared by the LIVE promotion
+/// ([`prepare_authority_for_candidate_slot`]) and the WARM-START recovery
+/// ([`maybe_recover_promoted_authority`]), so both bind the view BYTE-IDENTICALLY -- the recovery MUST
+/// reproduce the live activation record's exact identity. Returns the bound source view + its projected
+/// leadership `PoolDistrView`; a projection failure is a TERMINAL `BridgeProjection`.
+fn bind_bridge_view(
+    bridge: &BootstrapNextEpochAuthority,
+    network_magic: u32,
+) -> Result<(EpochConsensusView, PoolDistrView), ActivationError> {
+    let mut stake_by_pool: std::collections::BTreeMap<PoolId, Coin> =
+        std::collections::BTreeMap::new();
+    let mut pool_vrf_keyhashes: std::collections::BTreeMap<PoolId, Hash32> =
+        std::collections::BTreeMap::new();
+    for (keyhash, entry) in &bridge.pool_distribution {
+        let pool = PoolId(keyhash.clone());
+        stake_by_pool.insert(pool.clone(), Coin(entry.active_stake));
+        pool_vrf_keyhashes.insert(pool, entry.vrf_keyhash.clone());
+    }
+    let profile_commitment = consensus_profile_commitment(
+        &bridge.genesis_hash,
+        &bridge.protocol_params_hash,
+        bridge.active_slots_coeff,
+    );
+    let source = EpochConsensusView::bind(
+        network_magic,
+        CardanoEra::Conway,
+        bridge.target_epoch,
+        Point {
+            slot: bridge.source_point_slot,
+            hash: bridge.source_point_hash.clone(),
+        },
+        bridge.canonical_commitment.clone(),
+        bridge.epoch_nonce.0.clone(),
+        SnapshotPhase::Mark,
+        stake_by_pool,
+        pool_vrf_keyhashes,
+        Coin(bridge.total_active_stake),
+        profile_commitment,
+    );
+    let projected = source
+        .to_pool_distr_view(
+            &bridge.genesis_hash,
+            &bridge.protocol_params_hash,
+            bridge.active_slots_coeff,
+        )
+        .map_err(|e| ActivationError::BridgeProjection(format!("{e:?}")))?;
+    Ok((source, projected))
+}
+
 /// ECA-5 authority-preparation seam: prepare the N+1 epoch authority for the FIRST post-boundary
 /// candidate, BEFORE that candidate's forecast/leader validation. The incoming header supplies ONLY its
 /// slot + parent (which durable transition to prepare) -- never stake/nonce/authority. The promotion
@@ -649,43 +702,9 @@ pub fn prepare_authority_for_candidate_slot(
             candidate_epoch,
         });
     }
-    // Bind the N+1 view from the bridge (phase = Mark: the seed+1 leadership IS the MARK snapshot).
-    let mut stake_by_pool: std::collections::BTreeMap<PoolId, Coin> = std::collections::BTreeMap::new();
-    let mut pool_vrf_keyhashes: std::collections::BTreeMap<PoolId, Hash32> =
-        std::collections::BTreeMap::new();
-    for (keyhash, entry) in &bridge.pool_distribution {
-        let pool = PoolId(keyhash.clone());
-        stake_by_pool.insert(pool.clone(), Coin(entry.active_stake));
-        pool_vrf_keyhashes.insert(pool, entry.vrf_keyhash.clone());
-    }
-    let profile_commitment = consensus_profile_commitment(
-        &bridge.genesis_hash,
-        &bridge.protocol_params_hash,
-        bridge.active_slots_coeff,
-    );
-    let source = EpochConsensusView::bind(
-        inputs.network_magic,
-        CardanoEra::Conway,
-        bridge.target_epoch,
-        Point {
-            slot: bridge.source_point_slot,
-            hash: bridge.source_point_hash.clone(),
-        },
-        bridge.canonical_commitment.clone(),
-        bridge.epoch_nonce.0.clone(),
-        SnapshotPhase::Mark,
-        stake_by_pool,
-        pool_vrf_keyhashes,
-        Coin(bridge.total_active_stake),
-        profile_commitment,
-    );
-    let projected = source
-        .to_pool_distr_view(
-            &bridge.genesis_hash,
-            &bridge.protocol_params_hash,
-            bridge.active_slots_coeff,
-        )
-        .map_err(|e| ActivationError::BridgeProjection(format!("{e:?}")))?;
+    // Bind the N+1 view from the bridge via the SHARED binder (phase = Mark), so the LIVE promotion here
+    // and the warm-start recovery (maybe_recover_promoted_authority) bind it BYTE-IDENTICALLY.
+    let (source, projected) = bind_bridge_view(bridge, inputs.network_magic)?;
     // Durable-before-visible: write the WAL activation record BEFORE publishing the active view.
     let record = activation_record_for(&source);
     if !wal_write(&record) {
@@ -749,13 +768,23 @@ pub fn try_recover_at_boundary(
 }
 
 /// EPOCH-CONTINUITY-ACTIVATION ECA-4 (DC-EPOCH-06): warm-start recovery of a promoted authority, run
-/// BEFORE the relay loop. Given the resolved durable activation `record` (or `None`), it re-derives
-/// the candidate from the SAME first-boundary window replay + recovers (reject-non-recomputable) +
-/// promotes the ONE authority. A `None` record is a no-op (Seed stays — a crash before the durable
-/// WAL keeps the old epoch active). Idempotent: a no-op once promoted, so the live first-boundary
-/// re-fire is itself idempotent on the recovered authority. The bounds / profile are computed EXACTLY
-/// as the live `maybe_activate_first_boundary` (the recorded target epoch is the seed epoch's
-/// successor), so the re-derivation is byte-identical to the live one.
+/// BEFORE the relay loop. Given the resolved durable activation `record` (or `None`), it reproduces the
+/// recorded authority BYTE-IDENTICALLY and promotes the ONE authority, DISPATCHED by the record's target
+/// epoch so the recovery matches HOW the authority was originally promoted:
+/// - `seed_epoch + 1` => the BRIDGE twin: the seed+1 authority was promoted LIVE from the bootstrap
+///   bridge ([`prepare_authority_for_candidate_slot`]), NOT the seed+2 window replay, so recovery binds
+///   the SAME bridge view ([`bind_bridge_view`]) and recovers against the record. The bridge is REQUIRED
+///   here (a native-Mithril node persisted it at bootstrap); absent / wrong-epoch is TERMINAL.
+/// - `seed_epoch + 2` => the WINDOW-REPLAY twin: re-derive the candidate from the SAME first-boundary
+///   window replay + recover (reject-non-recomputable), byte-identical to the live activate.
+/// - any other target epoch => TERMINAL (an unexpected target is never a silent skip).
+///
+/// A node that crossed ONLY the first boundary has a seed+1 record; re-deriving the seed+2 window
+/// candidate (the pre-dispatch behavior) would mismatch the seed+1 record's epoch -- a spurious
+/// `EpochViewPostPromotionMismatch` halt on a healthy warm-start. A `None` record is a no-op (Seed stays
+/// -- a crash before the durable WAL keeps the old epoch active). Idempotent: a no-op once promoted.
+/// NO new WAL write on recovery -- the durable record is already authoritative; every failure mode is a
+/// TERMINAL `Err`, NEVER a fallback to the seed view or a different epoch.
 #[allow(clippy::too_many_arguments)]
 pub fn maybe_recover_promoted_authority(
     record: Option<&WalEntry>,
@@ -772,6 +801,7 @@ pub fn maybe_recover_promoted_authority(
     protocol_params_hash: Hash32,
     asc: ActiveSlotsCoeff,
     bootstrap_reward_update: Option<&ade_ledger::bootstrap_reward_update::BootstrapRewardUpdate>,
+    next_epoch_bridge: Option<&BootstrapNextEpochAuthority>,
     active_view: &mut ActiveEpochAuthority,
     scratch_path: &std::path::Path,
 ) -> Result<(), ActivationError> {
@@ -783,18 +813,63 @@ pub fn maybe_recover_promoted_authority(
     let Some(record) = record else {
         return Ok(());
     };
-    // Option B (B3c, DC-EPOCH-18): reproducing the recovered seed+2 authority REQUIRES the
-    // snapshot-bound bootstrap reward update; the fail-closed (absent / wrong-epoch is terminal) is
-    // enforced MECHANICALLY at the shared derivation site (derive_candidate over the seed window), so a
-    // legacy store (no rupd sidecar, e.g. a mutated post-RUPD seed) cannot re-derive this authority via
-    // the accidental-correctness path. The update is carried on the profile below.
-    // a durable record is present (checked above), so the boundary WAS crossed and its first-boundary
-    // window WAS computable when the record was written. If the bounds are now uncomputable from the
-    // SAME durable seed point/epoch, the store is inconsistent with the record -- the recorded promotion
-    // CANNOT be reproduced => TERMINAL (reject-non-recomputable surfaces at the recovery seam, louder +
-    // earlier, never a deferred no-op). (The live path's bounds-None IS a no-op -- there is no record.)
-    let bounds =
-        match compute_first_window_bounds(era_schedule, seed_point_slot, seed_point_hash, seed_epoch) {
+    // Dispatch by the record's target epoch (resolve_activation_record only yields activation records; a
+    // non-activation record here is a contradiction => TERMINAL, never a silent skip).
+    let target_epoch = match record {
+        WalEntry::EpochConsensusViewActivated { target_epoch, .. } => *target_epoch,
+        _ => {
+            return Err(ActivationError::Activate(
+                EpochViewActivationError::EpochViewPostPromotionMismatch,
+            ))
+        }
+    };
+    if target_epoch.0 == seed_epoch.0 + 1 {
+        // BRIDGE twin (DC-EPOCH-15): recover the seed+1 authority by binding the bridge view BYTE-
+        // IDENTICALLY to the live promotion (the shared bind_bridge_view) and recovering against the
+        // durable record. The bridge is REQUIRED; absent / wrong-epoch is terminal (no fallback). NO new
+        // WAL write -- the record is already authoritative. Mirrors recover_at_boundary's recover_active_view
+        // + promote shape: a present record that produces NO promoted view (Seed) is a contradiction =>
+        // terminal (honor reject-non-recomputable at the recovery seam).
+        let bridge = match next_epoch_bridge {
+            Some(b) => b,
+            None => return Err(ActivationError::BridgeMissing { target_epoch }),
+        };
+        if bridge.target_epoch.0 != target_epoch.0 {
+            return Err(ActivationError::BridgeEpochMismatch {
+                bridge_epoch: bridge.target_epoch,
+                candidate_epoch: target_epoch,
+            });
+        }
+        let (source, projected) = bind_bridge_view(bridge, network_magic)?;
+        match recover_active_view(Some(record), Some(&source)).map_err(ActivationError::Activate)? {
+            ActiveEpochView::Promoted(v) => active_view
+                .promote(v, projected)
+                .map_err(ActivationError::Activate)?,
+            ActiveEpochView::Seed => {
+                return Err(ActivationError::Activate(
+                    EpochViewActivationError::EpochViewPostPromotionMismatch,
+                ))
+            }
+        }
+        return Ok(());
+    }
+    if target_epoch.0 == seed_epoch.0 + 2 {
+        // Option B (B3c, DC-EPOCH-18): reproducing the recovered seed+2 authority REQUIRES the
+        // snapshot-bound bootstrap reward update; the fail-closed (absent / wrong-epoch is terminal) is
+        // enforced MECHANICALLY at the shared derivation site (derive_candidate over the seed window), so a
+        // legacy store (no rupd sidecar, e.g. a mutated post-RUPD seed) cannot re-derive this authority via
+        // the accidental-correctness path. The update is carried on the profile below.
+        // a durable record is present (checked above), so the boundary WAS crossed and its first-boundary
+        // window WAS computable when the record was written. If the bounds are now uncomputable from the
+        // SAME durable seed point/epoch, the store is inconsistent with the record -- the recorded promotion
+        // CANNOT be reproduced => TERMINAL (reject-non-recomputable surfaces at the recovery seam, louder +
+        // earlier, never a deferred no-op). (The live path's bounds-None IS a no-op -- there is no record.)
+        let bounds = match compute_first_window_bounds(
+            era_schedule,
+            seed_point_slot,
+            seed_point_hash,
+            seed_epoch,
+        ) {
             Some(b) => b,
             None => {
                 return Err(ActivationError::Activate(
@@ -802,26 +877,31 @@ pub fn maybe_recover_promoted_authority(
                 ))
             }
         };
-    let profile = CandidateProfile {
-        slots_per_epoch: bounds.slots_per_epoch,
-        genesis_hash,
-        protocol_params_hash,
-        asc,
-        bootstrap_reward_update: bootstrap_reward_update.cloned(),
-        seed_epoch,
-    };
-    try_recover_at_boundary(
-        live,
-        chaindb,
-        &bounds,
-        bootstrap_state,
-        network_magic,
-        nonce,
-        &profile,
-        record,
-        active_view,
-        scratch_path,
-    )
+        let profile = CandidateProfile {
+            slots_per_epoch: bounds.slots_per_epoch,
+            genesis_hash,
+            protocol_params_hash,
+            asc,
+            bootstrap_reward_update: bootstrap_reward_update.cloned(),
+            seed_epoch,
+        };
+        return try_recover_at_boundary(
+            live,
+            chaindb,
+            &bounds,
+            bootstrap_state,
+            network_magic,
+            nonce,
+            &profile,
+            record,
+            active_view,
+            scratch_path,
+        );
+    }
+    // an unexpected target epoch (neither seed+1 nor seed+2) -> terminal, never a silent skip.
+    Err(ActivationError::Activate(
+        EpochViewActivationError::EpochViewPostPromotionMismatch,
+    ))
 }
 
 #[cfg(test)]
@@ -1074,5 +1154,237 @@ mod tests {
             "a crossed boundary AUTOMATICALLY drives the activation (fail-closed on an empty window), not a flag no-op"
         );
         assert!(!av2.is_promoted(), "fail-closed: no promotion, the seed stays authoritative");
+    }
+
+    // ---- ECA-4 warm-start recovery DISPATCH: seed+1 bridge twin vs seed+2 window replay ----
+
+    struct RecoverFixture {
+        dir: tempfile::TempDir,
+        live: ReducedUtxoCheckpoint,
+        db: InMemoryChainDb,
+        state: LedgerState,
+        sched: EraSchedule,
+    }
+
+    fn recover_fixture() -> RecoverFixture {
+        use ade_core::consensus::era_schedule::{BootstrapAnchorHash, EraSchedule, EraSummary};
+        let dir = tempfile::tempdir().unwrap();
+        let live = ReducedUtxoCheckpoint::open(&dir.path().join("live.redb")).unwrap();
+        live.build_from(&std::collections::BTreeMap::new()).unwrap();
+        let db = InMemoryChainDb::new();
+        let state = LedgerState::new(CardanoEra::Conway);
+        let eras = vec![EraSummary {
+            randomness_stabilisation_window_slots: None,
+            era: CardanoEra::Conway,
+            start_slot: SlotNo(8_640_000),
+            start_epoch: EpochNo(100),
+            slot_length_ms: 1000,
+            epoch_length_slots: 86_400,
+            safe_zone_slots: 4320,
+        }];
+        let sched = EraSchedule::new(BootstrapAnchorHash(Hash32([0; 32])), 0, eras).unwrap();
+        RecoverFixture { dir, live, db, state, sched }
+    }
+
+    fn bridge_for_epoch(target_epoch: EpochNo, stake: u64) -> BootstrapNextEpochAuthority {
+        use ade_core::consensus::praos_state::Nonce;
+        use ade_ledger::bootstrap_bridge::{build_bootstrap_next_epoch_authority, BridgeSourceKind};
+        use ade_ledger::consensus_view::PoolEntry;
+        use ade_types::Hash28;
+        let mut pools = std::collections::BTreeMap::new();
+        pools.insert(
+            Hash28([0x11; 28]),
+            PoolEntry { active_stake: stake, vrf_keyhash: Hash32([0x71; 32]) },
+        );
+        build_bootstrap_next_epoch_authority(
+            Hash32([0xAA; 32]),
+            target_epoch,
+            BridgeSourceKind::ImportedMarkSnapshot,
+            SlotNo(115_676_685),
+            Hash32([0xBB; 32]),
+            Hash32([0xCC; 32]),
+            Hash32([0xDD; 32]),
+            ActiveSlotsCoeff { numer: 1, denom: 20 },
+            Nonce(Hash32([0xEE; 32])),
+            stake,
+            pools,
+        )
+    }
+
+    // The recovery call with the constant geometry (seed epoch 100, a mid-epoch-100 seed point) and the
+    // boilerplate the seed+1 bridge branch never reads (live / chaindb / state / nonce / profile /
+    // scratch) baked in; only the record + bridge + authority vary. network_magic is 2 -- the bridges
+    // below bind their source view with the SAME magic.
+    fn call_recover(
+        fx: &RecoverFixture,
+        record: Option<&WalEntry>,
+        next_epoch_bridge: Option<&BootstrapNextEpochAuthority>,
+        active_view: &mut ActiveEpochAuthority,
+    ) -> Result<(), ActivationError> {
+        maybe_recover_promoted_authority(
+            record,
+            &fx.sched,
+            EpochNo(100),
+            SlotNo(8_640_000 + 50_000),
+            Hash32([7; 32]),
+            &fx.live,
+            &fx.db,
+            &fx.state,
+            2,
+            Hash32([0; 32]),
+            Hash32([0x91; 32]),
+            Hash32([0x92; 32]),
+            ActiveSlotsCoeff { numer: 1, denom: 20 },
+            None,
+            next_epoch_bridge,
+            active_view,
+            &fx.dir.path().join("scratch.redb"),
+        )
+    }
+
+    /// A node that crossed ONLY the first boundary has a seed+1 (= seed_epoch+1) BRIDGE record.
+    /// Recovery dispatches to the bridge twin: re-bind the SAME bridge view + recover against the
+    /// record -> promote the seed+1 authority. (Pre-dispatch this re-derived the seed+2 window
+    /// candidate and halted on the epoch mismatch -- the bug this fix closes.)
+    #[test]
+    fn recover_seed_plus_one_binds_the_bridge_twin_and_promotes() {
+        let fx = recover_fixture();
+        let bridge = bridge_for_epoch(EpochNo(101), 1_000);
+        let (source, _projected) = bind_bridge_view(&bridge, 2).unwrap();
+        let record = activation_record_for(&source);
+        let sv = pdv();
+        let mut active = ActiveEpochAuthority::seed(&sv);
+        call_recover(&fx, Some(&record), Some(&bridge), &mut active)
+            .expect("the seed+1 bridge twin recovers");
+        assert!(active.is_promoted(), "the seed+1 authority is promoted from the bridge twin");
+        assert_eq!(
+            active.epoch(),
+            EpochNo(101),
+            "promoted to seed+1, NOT the seed+2 window candidate"
+        );
+        assert_eq!(
+            active.active_view_identity(),
+            (EpochNo(101), Some(source.canonical_hash())),
+            "the recovered view is byte-identical to the bridge source the record bound"
+        );
+    }
+
+    /// The seed+1 bridge is REQUIRED at recovery (a native-Mithril node persisted it at bootstrap)
+    /// and must answer for seed+1 alone -- absent => `BridgeMissing`, wrong-epoch =>
+    /// `BridgeEpochMismatch`. Both are terminal; the seed view never promotes.
+    #[test]
+    fn recover_seed_plus_one_missing_or_wrong_bridge_is_terminal() {
+        let fx = recover_fixture();
+        let bridge = bridge_for_epoch(EpochNo(101), 1_000);
+        let (source, _p) = bind_bridge_view(&bridge, 2).unwrap();
+        let record = activation_record_for(&source);
+
+        // (a) the bridge is absent -> terminal BridgeMissing, no fallback.
+        let sv0 = pdv();
+        let mut a0 = ActiveEpochAuthority::seed(&sv0);
+        let r = call_recover(&fx, Some(&record), None, &mut a0);
+        assert!(
+            matches!(r, Err(ActivationError::BridgeMissing { target_epoch: EpochNo(101) })),
+            "absent bridge at the seed+1 boundary is terminal BridgeMissing"
+        );
+        assert!(!a0.is_promoted());
+
+        // (b) a bridge bound to a DIFFERENT epoch than the record -> terminal BridgeEpochMismatch.
+        let wrong = bridge_for_epoch(EpochNo(102), 1_000);
+        let sv1 = pdv();
+        let mut a1 = ActiveEpochAuthority::seed(&sv1);
+        let r = call_recover(&fx, Some(&record), Some(&wrong), &mut a1);
+        assert!(
+            matches!(
+                r,
+                Err(ActivationError::BridgeEpochMismatch {
+                    bridge_epoch: EpochNo(102),
+                    candidate_epoch: EpochNo(101),
+                })
+            ),
+            "a bridge bound to the wrong epoch is terminal BridgeEpochMismatch"
+        );
+        assert!(!a1.is_promoted());
+    }
+
+    /// The record was written from a bridge with stake 1000; recovery is handed a same-epoch bridge
+    /// with a DIFFERENT identity (stake 2000). The re-bound view cannot reproduce the record's
+    /// canonical identity -> terminal `EpochViewPostPromotionMismatch` (reject-non-recomputable).
+    #[test]
+    fn recover_seed_plus_one_bridge_identity_mismatch_is_post_promotion_mismatch() {
+        let fx = recover_fixture();
+        let recorded = bridge_for_epoch(EpochNo(101), 1_000);
+        let (source, _p) = bind_bridge_view(&recorded, 2).unwrap();
+        let record = activation_record_for(&source);
+        let divergent = bridge_for_epoch(EpochNo(101), 2_000);
+        let sv = pdv();
+        let mut active = ActiveEpochAuthority::seed(&sv);
+        let r = call_recover(&fx, Some(&record), Some(&divergent), &mut active);
+        assert!(
+            matches!(
+                r,
+                Err(ActivationError::Activate(
+                    EpochViewActivationError::EpochViewPostPromotionMismatch
+                ))
+            ),
+            "a bridge that binds a different identity than the record cannot recover"
+        );
+        assert!(!active.is_promoted(), "a non-recomputable bridge never promotes");
+    }
+
+    /// A seed+2 (= seed_epoch+2) record dispatches to the UNCHANGED window-replay recovery, NOT the
+    /// bridge branch: an empty durable ChainDb fails the window extraction closed (`SourceWindow`),
+    /// proving seed+2 routes to the window path (a `BridgeMissing` here would be a mis-route). No
+    /// bridge is supplied -- the seed+2 path must not consult it.
+    #[test]
+    fn recover_seed_plus_two_still_routes_to_the_window_replay_path() {
+        let fx = recover_fixture();
+        let record = WalEntry::EpochConsensusViewActivated {
+            target_epoch: EpochNo(102),
+            network_magic: 2,
+            era: CardanoEra::Conway,
+            transition_point: Point { slot: SlotNo(0), hash: Hash32([0; 32]) },
+            source_checkpoint_commitment: Hash32([0; 32]),
+            snapshot_phase: SnapshotPhase::Set,
+            nonce_commitment: Hash32([0; 32]),
+            stake_view_canonical_hash: Hash32([0; 32]),
+            view_canonical_hash: Hash32([0; 32]),
+        };
+        let sv = pdv();
+        let mut active = ActiveEpochAuthority::seed(&sv);
+        let r = call_recover(&fx, Some(&record), None, &mut active);
+        assert!(
+            matches!(r, Err(ActivationError::SourceWindow(_))),
+            "seed+2 routes to the window-replay path, not the bridge branch"
+        );
+        assert!(!active.is_promoted());
+    }
+
+    /// The recovery is a no-op in the two boundary cases: no durable record (the seed stays
+    /// authoritative), and an already-promoted authority (an idempotent short-circuit even with
+    /// inputs that would otherwise act).
+    #[test]
+    fn recover_is_noop_when_already_promoted_or_no_record() {
+        let fx = recover_fixture();
+
+        // no record => Seed stays authoritative (a crash before the durable WAL).
+        let sv0 = pdv();
+        let mut a0 = ActiveEpochAuthority::seed(&sv0);
+        call_recover(&fx, None, None, &mut a0).expect("no record is a no-op");
+        assert!(!a0.is_promoted(), "no record => the seed view stays authoritative");
+
+        // already promoted => an idempotent no-op even with a seed+1 record + NO bridge (which would
+        // be a terminal BridgeMissing without the is_promoted early-return short-circuit).
+        let bridge = bridge_for_epoch(EpochNo(101), 1_000);
+        let (source, projected) = bind_bridge_view(&bridge, 2).unwrap();
+        let record = activation_record_for(&source);
+        let sv1 = pdv();
+        let mut a1 = ActiveEpochAuthority::seed(&sv1);
+        a1.promote(source, projected).unwrap();
+        assert!(a1.is_promoted());
+        call_recover(&fx, Some(&record), None, &mut a1)
+            .expect("already-promoted is an idempotent no-op");
+        assert!(a1.is_promoted(), "still promoted (unchanged)");
+        assert_eq!(a1.epoch(), EpochNo(101), "the promoted epoch is unchanged by the no-op");
     }
 }
