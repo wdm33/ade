@@ -610,6 +610,34 @@ where
         snapshot_store
             .put_bootstrap_reward_update(&rupd.manifest_commitment, &bytes)
             .map_err(|e| NativeFirstRunError::NativeBootstrap(format!("rupd persist: {e:?}")))?;
+
+        // LIVE-LEDGER-EPOCH-TRANSITION S2 (DC-EPOCH-20): seal the bootstrap SEED accumulator beside the
+        // reduced checkpoint -- the non-UTxO authority the within-epoch fold evolves on the live follow
+        // (block_production / epoch_fees / cert effects), carrying THIS reward seed (boundary-consumed;
+        // gate-protected until S3). The accumulator is OBSERVE-ONLY in S2 (S4 makes it the leadership
+        // authority), so a seal failure is NON-FATAL: logged, and the proven bootstrap continues (the
+        // follow runs via the existing bridge / reduced-checkpoint machinery; the accumulator simply stays
+        // unavailable until a clean start re-seals).
+        use ade_ledger::epoch_accumulator::EpochAccumulator;
+        match EpochAccumulator::seed_from_bootstrap_ledger(&output.ledger, s1a.epoch, Some(rupd)) {
+            Ok(seed) => match ade_runtime::chaindb::EpochAccumulatorStore::open(
+                &snapshot_dir.join("epoch-accumulator.redb"),
+            ) {
+                Ok(store) => {
+                    if let Err(e) = store.seal_bootstrap(&seed, source_point_slot) {
+                        eprintln!(
+                            "ade_node native-firstrun: epoch-accumulator seal skipped (non-fatal): {e:?}"
+                        );
+                    }
+                }
+                Err(e) => eprintln!(
+                    "ade_node native-firstrun: epoch-accumulator open skipped (non-fatal): {e:?}"
+                ),
+            },
+            Err(e) => eprintln!(
+                "ade_node native-firstrun: epoch-accumulator seed skipped (non-fatal): {e:?}"
+            ),
+        }
     }
 
     Ok(output)
