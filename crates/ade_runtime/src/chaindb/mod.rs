@@ -21,6 +21,7 @@
 mod contract;
 mod crash_safety;
 mod error;
+mod epoch_accumulator_store;
 mod in_memory;
 mod persistent;
 mod reduced_utxo_checkpoint;
@@ -33,6 +34,9 @@ mod utxo_key;
 
 pub use contract::run_contract_tests;
 pub use crash_safety::{run_crash_safety_tests, KillStrategy, NoKill};
+pub use epoch_accumulator_store::{
+    AccumulatorReadinessError, EpochAccumulatorStore, EpochAccumulatorStoreError,
+};
 pub use error::ChainDbError;
 pub use reduced_utxo_checkpoint::{
     CheckpointReadinessError, ReducedCheckpointError, ReducedUtxoCheckpoint,

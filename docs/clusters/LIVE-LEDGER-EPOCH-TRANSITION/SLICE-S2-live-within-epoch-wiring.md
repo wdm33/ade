@@ -149,10 +149,18 @@ canonical prefix.
   `plutus_eval::decode_invalid_tx_indices`, which returns an empty/truncated set on malformed CBOR and would
   silently under-report the set (applying a discarded tx's effects to authoritative state). 7 tests; 715 lib
   tests green, clippy + the DC-EPOCH-19 guard clean.
-- **PO-2 (persistence cadence + compact delta).** Pin the durable representation: a separate redb table
-  beside the reduced checkpoint vs. extending the snapshot frame; a per-block compact delta + periodic
-  full checkpoint vs. boundary-only checkpoints; the durable `LAST_SLOT` cursor. Constraint: **no
-  full-accumulator clone per block** (cluster §4) and recovery replay bounded to ≤ one epoch of blocks.
+- **PO-2 (persistence) — store LANDED (`ade_runtime/chaindb/epoch_accumulator_store.rs`).** The accumulator
+  is a SINGLE canonical value, not a per-key map, so the durable home is a single-blob redb store (simpler
+  than the reduced checkpoint): `CURRENT_BLOB` + `LAST_SLOT`, plus an immutable sealed `BOOTSTRAP_BLOB` +
+  `SEED_SLOT` for reorg-reset. `seal_bootstrap` (marker-written-LAST crash-safety), `advance` (blob +
+  `LAST_SLOT` in ONE atomic commit; strictly-forward — a reorg uses `reset_to_bootstrap` + replay, never a
+  backward advance), `load_current`, `reset_to_bootstrap`, and the fail-closed `verify_advanced_through`
+  (≥) / `verify_ready_at` (== exact) readiness gates (DC-EPOCH-20). The blob is `encode_epoch_accumulator`
+  (no second scheme). 5 hermetic tests (seal/advance/reset round-trip, strictly-forward advance, readiness
+  fail-closed, reopen-recovers). **Deferred to the live-wiring unit:** the persist *cadence* (per-block vs
+  per-boundary) — the store is cadence-agnostic; the wiring picks a cadence bounded so recovery replays ≤ 1
+  epoch (cluster §4), and applies `apply_selected_block` as an in-place delta (its by-value form is the S1
+  determinism spec) to honor "no full-accumulator clone per block."
 - **PO-3 (`nesBcur` seed binding).** Confirm the bootstrap snapshot carries the seed epoch's partial
   `block_production`, how its epoch identity is read, and the manifest it binds to; define the fail-closed
   `SeedEpochMismatch`.
