@@ -9314,3 +9314,33 @@ ci_scripts = ["ci/ci_check_epoch_accumulator_no_utxo.sh"]
 status = "declared"
 introduced_in = "LIVE-LEDGER-EPOCH-TRANSITION-S1"
 strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-20"
+tier = "derived"
+statement = """
+Atomic-or-rematerialized selected-block admission -- no RESUMED split authority. For every selected block
+admitted to the durable chain, four derived authorities advance from the SAME selected-chain prefix: the
+ChainDB/WAL block record, the Praos chain-dep state, the EpochAccumulator transition (DC-EPOCH-19), and the
+reduced-UTxO-checkpoint advancement (DC-EPOCH-11). The WAL tail is the single admission authority: recovery
+drops every block above the WAL-tail slot and reconciles the ChainDB tip TO it, so the authoritative
+selected-chain prefix is DEFINED as the WAL tail. The chain-dep, the reduced checkpoint, and the
+accumulator are derived stores -- each a pure function of that prefix. (a) IN-FLIGHT LAG ALLOWED: a derived
+store may momentarily lag the WAL tail (a torn write, a lazy advance cadence) during live admission, gated
+by DC-SYNC-01 (the tip is not advanced before the block bytes + WAL record are durable). (b) RECOVERY
+REMATERIALIZES: on any restart or rollback, every lagging derived store is rebuilt up to the WAL tail by
+folding its transition over the canonical durable blocks (the accumulator folds apply_selected_block, the
+reduced checkpoint folds reduced_block_delta, the ledger/chain-dep fold the trusted replay) -- never an ad
+hoc inverse mutation. (c) FAIL-CLOSED READINESS: validation and forging do not resume until a readiness
+gate confirms each derived store's last-advanced slot equals the WAL tail (Lagging / Ahead / SeedMismatch /
+Unsealed are terminal). The only RESUMED state is "all four at the WAL tail"; a mixed prefix (ChainDB at N,
+accumulator at N-1, checkpoint at N-2) is caught and rematerialized, never run on.
+"""
+source = "docs/clusters/LIVE-LEDGER-EPOCH-TRANSITION/SLICE-S2-live-within-epoch-wiring.md. Generalizes the WAL-is-admission-authority recovery (recovery/restart.rs) + the reduced-checkpoint LAST_SLOT lockstep (DC-EPOCH-11) + the materialize_rolled_back_state replay-equivalence pattern to INCLUDE the EpochAccumulator as a fourth derived store, so the live within-epoch wiring (S2) cannot create a recoverable split-authority prefix. The dangerous failure mode is not memory; it is a resumed mixed prefix across the four authorities."
+cross_ref = ["DC-EPOCH-19", "DC-EPOCH-11", "DC-SYNC-01", "DC-CINPUT-03"]
+code_locus = "S2 TBD: the accumulator live advance in ade_runtime forward_sync (behind the DC-SYNC-01 durable-admit boundary), the durable LAST_SLOT cursor + compact-delta persistence beside the reduced checkpoint, the recovery rematerialize fold attached to rollback::materialize_rolled_back_state, and the fail-closed readiness gate on the resume/forge path. Reuses recovery/restart.rs (WAL-tail authority), reduced_utxo_checkpoint.rs verify_advanced_through / reset_to_bootstrap (the readiness + reset pattern)."
+tests = []
+ci_scripts = []
+status = "declared"
+introduced_in = "LIVE-LEDGER-EPOCH-TRANSITION-S2"
+strengthened_in = []
