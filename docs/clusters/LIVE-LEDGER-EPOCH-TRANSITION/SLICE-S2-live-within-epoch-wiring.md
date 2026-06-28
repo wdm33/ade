@@ -192,9 +192,16 @@ canonical prefix.
 
 ## 6. Persistence + recovery design (the proven pattern, extended)
 
-- **Live advance.** In the admit step, after DC-SYNC-01's durable-admit boundary, fold
-  `apply_selected_block(prior, block_bytes, ctx)` with `ctx.boundary_mark = None`; persist the compact
-  delta + bump `LAST_SLOT` (PO-2). In-place delta, never a per-block clone.
+- **Live advance — orchestration LANDED (`chaindb/epoch_accumulator_advance.rs`).**
+  `advance_accumulator_over_block(store, block_bytes, WithinEpochCtx)` is the GREEN seam: `load_current` →
+  `apply_selected_block` with `boundary_mark = None` (forced — the caller *cannot* supply a mark, so the S2
+  boundary exclusion is structural) → `store.advance`. Outcomes: `Advanced` / `AlreadyApplied` (idempotent
+  ≤-tip skip) / **`Stalled`** (observe-only — a boundary or byte-uncertain block; the store is left at its
+  last good slot, the follow continues; only a store I/O fault is an `AdvanceError`). 4 tests (real-block
+  within-epoch advance; boundary → `MissingBoundaryStake` stall, store untouched; idempotent; unsealed →
+  error). **Remaining (2b):** call this from the live `pump_block` admit step after the DC-SYNC-01
+  durable-admit boundary (the `WithinEpochCtx` built from the verified header + `era_schedule`), seal the
+  store at bootstrap, pick the persist cadence, and a venue within-epoch run.
 - **Restart.** `recover_node_state` reconstructs to the WAL tail; the accumulator is rematerialized by
   folding `apply_selected_block` over `(last_accumulator_checkpoint, wal_tail]` (PO-4), then the readiness
   gate asserts `LAST_SLOT == wal_tail` (fail-closed otherwise).

@@ -21,6 +21,7 @@
 mod contract;
 mod crash_safety;
 mod error;
+mod epoch_accumulator_advance;
 mod epoch_accumulator_store;
 mod in_memory;
 mod persistent;
@@ -34,6 +35,9 @@ mod utxo_key;
 
 pub use contract::run_contract_tests;
 pub use crash_safety::{run_crash_safety_tests, KillStrategy, NoKill};
+pub use epoch_accumulator_advance::{
+    advance_accumulator_over_block, AdvanceError, AdvanceOutcome, WithinEpochCtx,
+};
 pub use epoch_accumulator_store::{
     AccumulatorReadinessError, EpochAccumulatorStore, EpochAccumulatorStoreError,
 };
