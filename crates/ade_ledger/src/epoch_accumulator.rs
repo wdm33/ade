@@ -108,7 +108,7 @@ use crate::bootstrap_reward_update::{
     decode_bootstrap_reward_update, encode_bootstrap_reward_update, BootstrapRewardUpdate,
     BootstrapRupdError,
 };
-use crate::delegation::{apply_bootstrap_reward_deltas, CertState};
+use crate::delegation::CertState;
 use crate::error::LedgerError;
 use crate::pparams::{ConwayOnlyDepositParams, ProtocolParameters};
 use crate::rules::{apply_epoch_boundary_with_registrations, process_block_certificates};
@@ -223,6 +223,7 @@ impl EpochAccumulator {
         ledger: &LedgerState,
         expected_epoch: EpochNo,
         pending_reward_update: Option<BootstrapRewardUpdate>,
+        current_block_production: BTreeMap<PoolId, u64>,
     ) -> Result<Self, SeedError> {
         if (ledger.era as u8) < (CardanoEra::Conway as u8) {
             return Err(SeedError::EraNotSupported {
@@ -237,10 +238,13 @@ impl EpochAccumulator {
         }
 
         // The bootstrapped epoch-state's block_production is nesBprev and its epoch_fees is the (cold-start)
-        // fee pot — both boundary-consumed reward inputs → the prev_* buffers. nesBcur starts fresh-empty.
+        // fee pot — both boundary-consumed reward inputs → the prev_* buffers. nesBcur (the current epoch's
+        // blocks-so-far at the snapshot point) seeds `epoch_state.block_production`, so the seed→seed+1
+        // boundary counts the whole seed epoch, not just the anchor+1 replayed tail.
         let mut epoch_state = ledger.epoch_state.clone();
         let prev_block_production = std::mem::take(&mut epoch_state.block_production);
         let prev_epoch_fees = std::mem::replace(&mut epoch_state.epoch_fees, Coin(0));
+        epoch_state.block_production = current_block_production;
 
         Ok(EpochAccumulator {
             epoch_state,
@@ -417,13 +421,17 @@ pub fn cross_epoch_boundary(
         return Err(LedgerTransitionError::MissingBoundaryStake { epoch: target.0 });
     }
 
-    // Bootstrap-transient reward seed (DC-EPOCH-18): applied EXACTLY ONCE at its target boundary,
-    // BEFORE the native reward, then cleared. After the seam, `pending_reward_update == None` and the
-    // native RUPD carries the chain.
-    if let Some(rupd) = acc.pending_reward_update.clone() {
+    // Bootstrap-transient reward seed (DC-EPOCH-18, CE-3d revision): CONSUMED (cleared) at its target
+    // boundary, but NO LONGER APPLIED in the accumulator. Once the bootstrap seeds the go/set/mark
+    // snapshots and nesBprev/nesBcur (the CE-3d snapshot seeding + the nesBcur seed), the NATIVE boundary
+    // reward below (`apply_epoch_boundary_with_registrations`) reproduces cardano's reward update — the
+    // reserves drawdown, the treasury split, AND the rs distribution — for THIS boundary too (verified:
+    // it draws the snapshot `nesRu`'s `deltaR` within 0.03%). Applying the seed here as well would
+    // DOUBLE-COUNT reserves/treasury/rewards. So the accumulator computes its reward natively at EVERY
+    // boundary (one uniform path); the seed remains the EVIEW window-replay authority via its own sidecar
+    // (`reduced_window_driver`), recovered + applied there, never here.
+    if let Some(rupd) = &acc.pending_reward_update {
         if rupd.target_epoch.0.checked_add(1) == Some(target.0) {
-            apply_bootstrap_reward_deltas(&mut acc.cert_state.delegation, &rupd.reward_delta)
-                .map_err(|_| LedgerTransitionError::ArithmeticOverflow)?;
             acc.pending_reward_update = None;
         }
     }
@@ -1280,15 +1288,22 @@ mod tests {
             "the test ledger must carry a non-empty nesBprev"
         );
 
-        let seed =
-            EpochAccumulator::seed_from_bootstrap_ledger(&ledger, EpochNo(1340), rupd.clone())
-                .expect("seed");
+        // nesBcur = the seed epoch's blocks-so-far at the snapshot point (distinct from nesBprev).
+        let nes_bcur: BTreeMap<PoolId, u64> = [(pool(0x77), 4u64)].into_iter().collect();
+        let seed = EpochAccumulator::seed_from_bootstrap_ledger(
+            &ledger,
+            EpochNo(1340),
+            rupd.clone(),
+            nes_bcur.clone(),
+        )
+        .expect("seed");
 
         // nesBprev + the prior fee pot seed the boundary-consumed reward buffers.
         assert_eq!(seed.prev_block_production, nes_bprev);
         assert_eq!(seed.prev_epoch_fees, fee_pot);
-        // nesBcur accumulators start FRESH (the live follow counts from the certified slot forward).
-        assert!(seed.epoch_state.block_production.is_empty());
+        // nesBcur seeds the CURRENT block-production buffer (so the seed→seed+1 boundary counts the
+        // whole seed epoch, not just the anchor+1 replayed tail). The fee pot still starts fresh.
+        assert_eq!(seed.epoch_state.block_production, nes_bcur);
         assert_eq!(seed.epoch_state.epoch_fees, Coin(0));
         // The within-epoch-consumed authority is carried faithfully.
         assert_eq!(seed.epoch_state.epoch, EpochNo(1340));
@@ -1310,8 +1325,9 @@ mod tests {
     fn seed_epoch_mismatch_is_fail_closed() {
         // CE-2f: a seed whose ledger epoch differs from the manifest-declared epoch is REFUSED.
         let ledger = populated().as_ledger_view(); // epoch 1340
-        let err = EpochAccumulator::seed_from_bootstrap_ledger(&ledger, EpochNo(1339), None)
-            .expect_err("a mis-bound seed epoch must fail closed");
+        let err =
+            EpochAccumulator::seed_from_bootstrap_ledger(&ledger, EpochNo(1339), None, BTreeMap::new())
+                .expect_err("a mis-bound seed epoch must fail closed");
         assert_eq!(
             err,
             SeedError::SeedEpochMismatch {
@@ -1326,9 +1342,13 @@ mod tests {
         // The accumulator is Conway-scoped; a pre-Conway bootstrap is refused before any field is read.
         let mut ledger = EpochAccumulator::new(CardanoEra::Conway).as_ledger_view();
         ledger.era = CardanoEra::Babbage;
-        let err =
-            EpochAccumulator::seed_from_bootstrap_ledger(&ledger, ledger.epoch_state.epoch, None)
-                .expect_err("pre-Conway must be refused");
+        let err = EpochAccumulator::seed_from_bootstrap_ledger(
+            &ledger,
+            ledger.epoch_state.epoch,
+            None,
+            BTreeMap::new(),
+        )
+        .expect_err("pre-Conway must be refused");
         assert!(matches!(
             err,
             SeedError::EraNotSupported { era_tag } if era_tag == CardanoEra::Babbage as u64
@@ -1649,10 +1669,10 @@ mod tests {
         );
     }
 
-    // ----- Bootstrap-transient reward seed: applied once at its target boundary, then cleared -----
+    // ----- Bootstrap-transient reward seed: CONSUMED (cleared) at its target boundary, NOT applied -----
 
     #[test]
-    fn pending_reward_update_applied_once_then_cleared() {
+    fn pending_reward_update_consumed_not_applied() {
         let mut acc = reward_fixture();
         acc.epoch_state.epoch = EpochNo(1339);
         let mut delta = BTreeMap::new();
@@ -1672,9 +1692,13 @@ mod tests {
             reward_delta: delta,
             canonical_commitment: commitment,
         });
-        // No prior native reward inputs → the credited balance is the seed delta (+ any native, which
-        // is small here). Cross into 1340 (= target_epoch 1339 + 1): the seed applies, then clears.
-        acc.prev_block_production.clear(); // suppress the native reward so we isolate the seed delta
+        // CE-3d revision: the bootstrap seed is CONSUMED (cleared) at its target boundary but NOT
+        // applied — the native reward (step 2) is the sole authority. Suppress the native reward
+        // (clear nesBprev → eta = 0 → no draw) so the cross's ONLY potential effect would be the (now
+        // removed) seed application; assert it leaves rewards + pots untouched and just clears the seed.
+        acc.prev_block_production.clear();
+        let reserves_before = acc.epoch_state.reserves.0;
+        let treasury_before = acc.epoch_state.treasury.0;
         let ctx = SelectedBlockCtx {
             era: CardanoEra::Conway,
             block_epoch: EpochNo(1340),
@@ -1686,12 +1710,20 @@ mod tests {
         let after = cross_epoch_boundary(acc, EpochNo(1340), &ctx).expect("boundary");
         assert_eq!(
             after.cert_state.delegation.rewards.get(&key_cred(0xCC)),
-            Some(&Coin(4_242)),
-            "the bootstrap seed delta is credited at its target boundary"
+            None,
+            "the bootstrap seed delta is NOT applied in the accumulator (the native reward owns it)"
+        );
+        assert_eq!(
+            after.epoch_state.treasury.0, treasury_before,
+            "the bootstrap seed moves no pots (treasury unchanged)"
+        );
+        assert_eq!(
+            after.epoch_state.reserves.0, reserves_before,
+            "the bootstrap seed moves no pots (reserves unchanged)"
         );
         assert!(
             after.pending_reward_update.is_none(),
-            "the bootstrap seed is cleared after a single application"
+            "the bootstrap seed is CONSUMED (cleared) at its target boundary"
         );
     }
 

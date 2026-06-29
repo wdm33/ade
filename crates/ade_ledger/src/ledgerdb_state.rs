@@ -823,6 +823,10 @@ pub struct NativeSnapshotNonUtxoState {
     pub treasury: Coin,
     /// `nesBprev`: blocks each pool made in the previous epoch.
     pub block_production: BTreeMap<PoolId, u64>,
+    /// `nesBcur`: blocks each pool made in the CURRENT (seed) epoch so far, as of the snapshot point.
+    /// Seeds the accumulator's `epoch_state.block_production` so the seed→seed+1 boundary counts the
+    /// whole seed epoch (the bootstrap follow replays only from anchor+1, never the early-epoch blocks).
+    pub current_block_production: BTreeMap<PoolId, u64>,
     /// `nesRu` Complete reward update's `rs`, aggregated per credential = the reward deltas the real
     /// chain applies at the NEXT epoch boundary (the seed-window-end RUPD that authority(N+2) needs).
     /// Empty when SNothing or mid-pulse.
@@ -1007,7 +1011,11 @@ pub fn decode_native_nonutxo_state(
     }
     // nes[1] = nesBprev (previous-epoch block production) — decoded, not skipped.
     let block_production = read_block_production(d, o)?;
-    skip_item(d, o)?; // nes[2] nesBcur (current-epoch blocks; not authoritative for this slice)
+    // nes[2] = nesBcur (CURRENT-epoch block production so far, as of the snapshot point). Seeds the
+    // accumulator's `epoch_state.block_production` so the seed→seed+1 boundary counts the WHOLE seed
+    // epoch — including the early-epoch blocks the bootstrap follow never replays (it starts at
+    // anchor+1). Without it the first self-derived reward update under-counts blocks → low eta.
+    let current_block_production = read_block_production(d, o)?;
     // EpochState = array(4)[esAccountState, LedgerState, snapshots, nonMyopic]
     nn_expect_array(d, o, 4, "EpochState")?;
     // esAccountState = array(2)[treasury, reserves] (cardano-ledger order: treasury FIRST).
@@ -1067,8 +1075,8 @@ pub fn decode_native_nonutxo_state(
             }
         }
     }
-    // Coherence: every block producer in the previous epoch must be a known CertState pool.
-    for pid in block_production.keys() {
+    // Coherence: every block producer in the previous AND current epoch must be a known CertState pool.
+    for pid in block_production.keys().chain(current_block_production.keys()) {
         if !cert_state.pool.pools.contains_key(pid) {
             return Err(NativeNonUtxoError::BlockProductionUnknownPool(pid.clone()));
         }
@@ -1112,6 +1120,7 @@ pub fn decode_native_nonutxo_state(
         reserves,
         treasury,
         block_production,
+        current_block_production,
         reward_deltas,
         reward_nibble_observation,
     };
@@ -1359,7 +1368,8 @@ fn read_raw_item(d: &[u8], o: &mut usize, _what: &str) -> Rn<Vec<u8>> {
 /// deterministic; fixed big-endian widths => an identical state serializes identically.
 fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
     let mut v: Vec<u8> = Vec::new();
-    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v2");
+    // v3: binds `current_block_production` (nesBcur) alongside the existing `block_production` (nesBprev).
+    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v3");
     v.push(s.era.as_u8());
     // The manifest-derived network id (a network identity perturbation flips the commitment).
     v.push(s.network_id);
@@ -1403,9 +1413,15 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
     // pots.
     v.extend_from_slice(&s.reserves.0.to_be_bytes());
     v.extend_from_slice(&s.treasury.0.to_be_bytes());
-    // block production.
+    // block production (nesBprev).
     v.extend_from_slice(&(s.block_production.len() as u64).to_be_bytes());
     for (pid, blocks) in &s.block_production {
+        v.extend_from_slice(&pid.0 .0);
+        v.extend_from_slice(&blocks.to_be_bytes());
+    }
+    // current block production (nesBcur) — bound symmetrically with nesBprev (v3).
+    v.extend_from_slice(&(s.current_block_production.len() as u64).to_be_bytes());
+    for (pid, blocks) in &s.current_block_production {
         v.extend_from_slice(&pid.0 .0);
         v.extend_from_slice(&blocks.to_be_bytes());
     }

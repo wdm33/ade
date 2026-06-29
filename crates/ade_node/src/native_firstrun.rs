@@ -619,7 +619,12 @@ where
         // follow runs via the existing bridge / reduced-checkpoint machinery; the accumulator simply stays
         // unavailable until a clean start re-seals).
         use ade_ledger::epoch_accumulator::EpochAccumulator;
-        match EpochAccumulator::seed_from_bootstrap_ledger(&output.ledger, s1a.epoch, Some(rupd)) {
+        match EpochAccumulator::seed_from_bootstrap_ledger(
+            &output.ledger,
+            s1a.epoch,
+            Some(rupd),
+            s1a.current_block_production.clone(),
+        ) {
             Ok(seed) => match ade_runtime::chaindb::EpochAccumulatorStore::open(
                 &snapshot_dir.join("epoch-accumulator.redb"),
             ) {

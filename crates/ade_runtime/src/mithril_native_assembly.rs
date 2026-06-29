@@ -612,6 +612,9 @@ mod tests {
 
         let mut block_production: BTreeMap<PoolId, u64> = BTreeMap::new();
         block_production.insert(pool(0x01), 3);
+        // nesBcur: current-epoch blocks so far (distinct from the nesBprev count above).
+        let mut current_block_production: BTreeMap<PoolId, u64> = BTreeMap::new();
+        current_block_production.insert(pool(0x01), 2);
 
         // CE-3d: a non-empty mark/set/go snapshot pipeline so the assembled ledger's
         // `epoch_state.snapshots` is verifiably threaded (not a cold-start empty default).
@@ -655,6 +658,7 @@ mod tests {
             reserves: Coin(13_000_000_000_000_000),
             treasury: Coin(1_000_000_000_000),
             block_production,
+            current_block_production,
             reward_deltas: std::collections::BTreeMap::new(),
             reward_nibble_observation: RewardNibbleObservation::Mixed,
         }
