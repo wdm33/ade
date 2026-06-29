@@ -1612,15 +1612,17 @@ fn forge_mode_kind(m: &ForgeMode) -> crate::live_log::ForgeModeKind {
     }
 }
 
-/// S3f-4d-mat-2c (DC-EPOCH-11): advance the live reduced checkpoint to the current durable
-/// ChainDB tip after an admit. No-op when EVIEW is not configured (`None`) -> the follow/forge
-/// path is byte-identical. Reads ONLY the durable ChainDB (the selected chain) -- replay-
-/// equivalent, in admission order -- and FAIL-CLOSES any advance error: the checkpoint stays
-/// at its last good slot, so the lagging check blocks EpochConsensusView production rather
-/// than producing from a stale/partial checkpoint.
-fn advance_reduced_checkpoint_to_durable_tip(
+/// EPOCH-CONSENSUS-VIEW S3f-4d-mat-2c / LIVE-LEDGER-EPOCH-TRANSITION S3 (DC-EPOCH-11 / DC-EPOCH-22):
+/// advance the live reduced checkpoint FORWARD to `target_slot` over the durable ChainDB. No reorg reset
+/// here -- the co-advancer hoists the reset so every segment is purely forward, and idempotent-resume
+/// makes folding seed->s_prev->tip in segments byte-identical to seed->tip in one shot. No-op when EVIEW
+/// is not configured (`None`). FAIL-CLOSED: a malformed (unsealed) checkpoint or an advance fault leaves
+/// the checkpoint at its last good slot and propagates, so EpochConsensusView never produces from a
+/// stale/partial checkpoint.
+fn advance_reduced_checkpoint_forward_to(
     reduced_checkpoint: Option<&ade_runtime::chaindb::ReducedUtxoCheckpoint>,
-    chaindb: &PersistentChainDb,
+    chaindb: &dyn ChainDb,
+    target_slot: SlotNo,
 ) -> Result<(), NodeLifecycleError> {
     let Some(cp) = reduced_checkpoint else {
         return Ok(());
@@ -1636,16 +1638,36 @@ fn advance_reduced_checkpoint_to_durable_tip(
                 "reduced checkpoint has no sealed bootstrap baseline (malformed)".to_string(),
             )
         })?;
-    let Some(tip) = chaindb.tip().map_err(|e| {
-        NodeLifecycleError::RelaySync(format!("reduced-checkpoint tip read: {e:?}"))
-    })?
-    else {
+    ade_runtime::chaindb::advance_reduced_checkpoint_over_chaindb(
+        cp,
+        chaindb,
+        seed_slot,
+        target_slot,
+        ade_types::CardanoEra::Conway,
+    )
+    .map_err(|e| NodeLifecycleError::RelaySync(format!("reduced-checkpoint advance: {e:?}")))
+}
+
+/// S3f-4d-mat-3 (DC-EPOCH-11): reorg reset for the reduced checkpoint. If the checkpoint advanced PAST
+/// the current durable tip, a rollback shortened the chain -- re-materialize to the sealed seed baseline
+/// (the reduced delta is not invertible); the forward advance then replays from seed+1. Fail-closed
+/// (malformed seed / reset fault). Hoisted out of the forward advance so the co-advancer's segmented walk
+/// is purely forward.
+fn reduced_checkpoint_reset_if_ahead(
+    reduced_checkpoint: Option<&ade_runtime::chaindb::ReducedUtxoCheckpoint>,
+    tip: &ChainTip,
+) -> Result<(), NodeLifecycleError> {
+    let Some(cp) = reduced_checkpoint else {
         return Ok(());
     };
-    // S3f-4d-mat-3 (DC-EPOCH-11): reorg detection. If the checkpoint advanced PAST the current
-    // durable tip, a rollback shortened the chain -- re-materialize to the sealed seed baseline
-    // (the reduced delta is not invertible), then the advancer replays the rolled-back chain
-    // forward from seed_slot+1. Fail-closed.
+    let seed_slot = cp
+        .seed_slot()
+        .map_err(|e| NodeLifecycleError::RelaySync(format!("reduced-checkpoint seed slot: {e:?}")))?
+        .ok_or_else(|| {
+            NodeLifecycleError::RelaySync(
+                "reduced checkpoint has no sealed bootstrap baseline (malformed)".to_string(),
+            )
+        })?;
     let advanced = cp
         .last_advanced_slot()
         .map_err(|e| NodeLifecycleError::RelaySync(format!("reduced-checkpoint slot: {e:?}")))?
@@ -1655,89 +1677,228 @@ fn advance_reduced_checkpoint_to_durable_tip(
             NodeLifecycleError::RelaySync(format!("reduced-checkpoint re-materialize: {e:?}"))
         })?;
     }
-    ade_runtime::chaindb::advance_reduced_checkpoint_over_chaindb(
-        cp,
-        chaindb,
-        seed_slot,
-        tip.slot,
-        ade_types::CardanoEra::Conway,
-    )
-    .map_err(|e| NodeLifecycleError::RelaySync(format!("reduced-checkpoint advance: {e:?}")))
+    Ok(())
 }
 
-/// LIVE-LEDGER-EPOCH-TRANSITION S2 (DC-EPOCH-20 / PO-4): reconcile the durable EpochAccumulator to
-/// the current durable ChainDB tip, called after each durable admit beside the reduced checkpoint.
-/// This is the SINGLE accumulator-advance authority -- it folds the within-epoch ledger facts
-/// (issuance / fees / withdrawals) over the canonical selected chain, in admission order, reading
-/// ONLY the durable ChainDB. It subsumes any per-block advance: a no-op in steady state (the prior
-/// tick already reached the tip), it does the real work on (a) warm-start -- catch a lagging
-/// accumulator up to the WAL-tail prefix without re-following -- and (b) reorg -- rematerialize from
-/// the sealed seed baseline then replay forward (no inverse mutation; the accumulator codec exposes
-/// no subtractive op).
+/// LIVE-LEDGER-EPOCH-TRANSITION S2/S3 (DC-EPOCH-20 / PO-4): reorg reset for the durable EpochAccumulator,
+/// OBSERVE-ONLY. If the accumulator advanced PAST the durable tip -> a rollback shortened the chain;
+/// rematerialize to the sealed seed baseline (the within-epoch delta is not invertible), and the forward
+/// fold replays from seed+1. A reset fault is swallowed (the accumulator is non-authoritative in S3) -- a
+/// still-ahead accumulator simply folds nothing on the forward walk. Skipped if unsealed (a present-but-
+/// unsealed store is malformed; the fold's skip-if-unsealed handles it too). Hoisted to the co-advancer's
+/// top so the segmented walk is purely forward.
 ///
-/// OBSERVE-ONLY (DC-EPOCH-20 / PO-6): in S2 the accumulator is NOT yet consensus authority (S4 flips
-/// it), so a stall (a boundary whose mark the S2 path withholds -> `MissingBoundaryStake`) or a store
-/// fault NEVER halts the proven follow. It breaks the walk at the last good within-epoch slot and
-/// returns; the durable accumulator simply trails the durable tip (`LAST_SLOT < wal_tail` is the
-/// stall signal a later slice reads). An unsealed-but-present store is malformed -> skip (never
-/// advance from slot 0 over a seed that already folded those blocks).
-fn advance_accumulator_to_durable_tip(
+/// S4 OBLIGATION (S2 IDD review, MEDIUM-2): this HEIGHT check (advanced > tip) suffices ONLY because the
+/// sole driver is the fail-closed, forward-only run_node_sync path (every non-anchor rollback fail-closes
+/// before this is reached). A later reorging fork-choice / participant driver MUST replace it with a
+/// LINEAGE check (the durable hash at last_advanced) -- a longer chain diverging BELOW last_advanced is
+/// height-invisible and would fold a new suffix onto a stale prefix (a split-lineage accumulator).
+fn accumulator_reset_if_ahead(
     epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
-    chaindb: &PersistentChainDb,
-    era_schedule: &EraSchedule,
+    tip: &ChainTip,
 ) {
-    use ade_runtime::chaindb::{advance_accumulator_over_chaindb, AccumulatorChaindbOutcome};
     let Some(store) = epoch_accumulator else {
         return;
     };
-    // The seal MUST precede any advance (native_firstrun seals at bootstrap). A present-but-unsealed
-    // store is malformed -- advancing from slot 0 would re-fold blocks already in the seed. Skip.
-    let seed_slot = match store.seed_slot() {
-        Ok(Some(s)) => s,
-        _ => return,
-    };
-    let Some(tip) = chaindb.tip().ok().flatten() else {
+    let Ok(Some(seed_slot)) = store.seed_slot() else {
         return;
     };
-    // Reorg: the accumulator advanced PAST the durable tip -> a rollback shortened the chain.
-    // Rematerialize to the sealed seed baseline (the within-epoch delta is not invertible), then the
-    // forward walk below replays the canonical chain from seed_slot+1. No ad hoc inverse mutation.
-    //
-    // S4 OBLIGATION (S2 IDD review, MEDIUM-2): this HEIGHT check (advanced > tip) suffices ONLY because
-    // the sole caller is the fail-closed, forward-only run_node_sync path (every non-anchor rollback
-    // fail-closes before this is reached). If a later slice ever drives the accumulator from a reorging
-    // fork-choice / participant path, replace it with a LINEAGE check (compare the durable hash at
-    // last_advanced) -- a longer chain diverging BELOW last_advanced is height-invisible and would fold
-    // a new suffix onto a stale prefix (a split-lineage accumulator).
     let advanced = store
         .last_advanced_slot()
         .ok()
         .flatten()
         .unwrap_or(seed_slot);
-    if advanced.0 > tip.slot.0 && store.reset_to_bootstrap().is_err() {
-        return;
+    if advanced.0 > tip.slot.0 {
+        let _ = store.reset_to_bootstrap();
     }
-    // The single forward-fold authority (tested in ade_runtime): resume at last+1, fold to the tip,
-    // stop at an observe-only boundary stall. Swallow stalls + faults -- this NEVER halts the follow.
-    //
-    // S4 OBLIGATION (S2 IDD review, MEDIUM-1): swallowing a REAL fault (the Err arm: redb I/O corruption,
-    // an undecodable durable block) is IDD-§8-compliant ONLY in S2, where the accumulator is
-    // non-authoritative + readiness-gated. At the S4 authority flip the Err arm MUST halt (keep swallowing
-    // only StalledAt) -- a persistent fault that silently froze a consensus-authority accumulator is a §8
-    // violation.
-    match advance_accumulator_over_chaindb(store, chaindb, era_schedule, seed_slot, tip.slot) {
-        Ok(AccumulatorChaindbOutcome::ReachedTip { .. }) => {}
-        Ok(AccumulatorChaindbOutcome::StalledAt { slot, reason }) => {
-            crate::node_log!(
-                "epoch-accumulator: stalled at slot {} (observe-only): {}",
-                slot.0,
-                reason
-            );
-        }
-        Err(e) => {
-            crate::node_log!("epoch-accumulator: reconcile fault (observe-only): {:?}", e);
+}
+
+/// LIVE-LEDGER-EPOCH-TRANSITION S3 (DC-EPOCH-22, BOUNDARY-ALIGNED-MARK-CAPTURE): the co-advancer called
+/// after each durable admit. It reconciles BOTH derived stores -- the EVIEW reduced checkpoint and the
+/// durable EpochAccumulator -- to the durable ChainDB tip in ONE pass that SEGMENTS at each epoch boundary.
+///
+/// The accumulator's within-epoch fold STALLS at a boundary block `s_bb` with its cursor left at `s_prev`
+/// (the last within-epoch block of the closing epoch). To cross, it needs the SNAP stake mark captured at
+/// the EXACT boundary point `s_prev` -- never the post-pass tip (byte-wrong: catch-up is already past the
+/// boundary; even steady-state's tip is the FIRST block of the new epoch, whose UTxO delta must NOT be in
+/// the mark). So at each stall this advances the reduced checkpoint EXACTLY to `s_prev`, captures
+/// `sum_base_credential_stake()` there, durably binds the BoundaryMark witness (point + lineage) BEFORE
+/// the cross, then crosses the accumulator over `s_bb` with that mark; the loop resumes folding the new
+/// epoch (so multi-boundary catch-up crosses every boundary in one call).
+///
+/// TWO fault classes: the reduced-checkpoint advances are FAIL-CLOSED (`?` -- a checkpoint I/O fault is a
+/// real EVIEW problem that halts the follow); every ACCUMULATOR operation (fold / capture / bind / cross)
+/// is OBSERVE-ONLY (log + stop, never halt) -- S3 keeps the accumulator non-authoritative (S4 flips it).
+/// Regardless of the accumulator outcome the checkpoint is GUARANTEED to reach the durable tip (EVIEW
+/// currency: `maybe_activate_epoch_boundary` reads it there). With `epoch_accumulator = None` this reduces
+/// to the pre-S3 reduced-checkpoint-reset-then-advance-to-tip (byte-identical).
+fn advance_ledger_state_to_durable_tip(
+    reduced_checkpoint: Option<&ade_runtime::chaindb::ReducedUtxoCheckpoint>,
+    epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
+    chaindb: &dyn ChainDb,
+    era_schedule: &EraSchedule,
+) -> Result<(), NodeLifecycleError> {
+    use ade_runtime::chaindb::{
+        advance_accumulator_over_chaindb, cross_accumulator_over_boundary_block,
+        AccumulatorBoundaryOutcome, AccumulatorChaindbOutcome,
+    };
+
+    let Some(tip) = chaindb
+        .tip()
+        .map_err(|e| NodeLifecycleError::RelaySync(format!("ledger-advance tip read: {e:?}")))?
+    else {
+        return Ok(());
+    };
+
+    // Hoist the reorg reset for BOTH stores so the segmented walk below is purely forward.
+    reduced_checkpoint_reset_if_ahead(reduced_checkpoint, &tip)?;
+    accumulator_reset_if_ahead(epoch_accumulator, &tip);
+
+    // The boundary-segmented accumulator cross loop (observe-only). Skipped when no accumulator is
+    // configured -> the EVIEW-only advance below is byte-identical to the pre-S3 path.
+    if let Some(store) = epoch_accumulator {
+        // Skip-if-unsealed: a present-but-unsealed store is malformed (never fold from slot 0 over a seed
+        // that already absorbed those blocks). The checkpoint still reaches tip below.
+        if let Ok(Some(seed_slot)) = store.seed_slot() {
+            loop {
+                match advance_accumulator_over_chaindb(
+                    store,
+                    chaindb,
+                    era_schedule,
+                    seed_slot,
+                    tip.slot,
+                ) {
+                    Ok(AccumulatorChaindbOutcome::ReachedTip { .. }) => break,
+                    Ok(AccumulatorChaindbOutcome::StalledAt { slot: s_bb, reason }) => {
+                        // s_prev: the accumulator's cursor after the within-epoch fold -- the boundary point
+                        // (the last within-epoch block of the closing epoch).
+                        let s_prev = match store.last_advanced_slot() {
+                            Ok(Some(s)) => s,
+                            _ => {
+                                crate::node_log!(
+                                    "epoch-accumulator: boundary at {} but no durable cursor (observe-only stall): {}",
+                                    s_bb.0,
+                                    reason
+                                );
+                                break;
+                            }
+                        };
+                        let Some(cp) = reduced_checkpoint else {
+                            crate::node_log!(
+                                "epoch-accumulator: boundary at {} but no reduced checkpoint -> observe-only stall: {}",
+                                s_bb.0,
+                                reason
+                            );
+                            break;
+                        };
+                        // FAIL-CLOSED (EVIEW): bring the checkpoint EXACTLY to the boundary point so the mark
+                        // is the end-of-epoch stake, before the new epoch's first block.
+                        advance_reduced_checkpoint_forward_to(Some(cp), chaindb, s_prev)?;
+                        // Capture the per-credential SNAP mark at s_prev (observe-only on a sum fault).
+                        let mark = match cp.sum_base_credential_stake() {
+                            Ok(m) => m,
+                            Err(e) => {
+                                crate::node_log!(
+                                    "epoch-accumulator: boundary mark capture at {} failed (observe-only): {:?}",
+                                    s_prev.0,
+                                    e
+                                );
+                                break;
+                            }
+                        };
+                        // The boundary point's canonical lineage hash (observe-only on a missing/failed read).
+                        let boundary_hash = match chaindb.get_block_by_slot(s_prev) {
+                            Ok(Some(b)) => b.hash,
+                            Ok(None) => {
+                                crate::node_log!(
+                                    "epoch-accumulator: boundary point {} has no durable block (observe-only stall)",
+                                    s_prev.0
+                                );
+                                break;
+                            }
+                            Err(e) => {
+                                crate::node_log!(
+                                    "epoch-accumulator: boundary point {} hash read failed (observe-only): {:?}",
+                                    s_prev.0,
+                                    e
+                                );
+                                break;
+                            }
+                        };
+                        // DURABLE: bind the witness (point + lineage) BEFORE the cross -- a crash here recovers
+                        // the binding and the cross re-derives + crosses (DC-EPOCH-22).
+                        if let Err(e) = store.bind_boundary_mark(s_prev, &boundary_hash) {
+                            crate::node_log!(
+                                "epoch-accumulator: boundary mark bind at {} failed (observe-only): {:?}",
+                                s_prev.0,
+                                e
+                            );
+                            break;
+                        }
+                        match cross_accumulator_over_boundary_block(
+                            store,
+                            chaindb,
+                            era_schedule,
+                            s_bb,
+                            &mark,
+                        ) {
+                            Ok(AccumulatorBoundaryOutcome::Crossed {
+                                from_epoch,
+                                to_epoch,
+                                slot,
+                            }) => {
+                                let _ = store.clear_boundary_mark();
+                                // Observable proof of self-derived ledger continuity across a boundary
+                                // (CE-3c): the mark was captured at the boundary point s_prev, not the tip.
+                                crate::node_log!(
+                                    "epoch-accumulator: CROSSED boundary {} -> {} at slot {} (mark from s_prev {})",
+                                    from_epoch.0,
+                                    to_epoch.0,
+                                    slot.0,
+                                    s_prev.0
+                                );
+                                // Loop: resume the within-epoch fold in the new epoch (s_bb+1 onward).
+                            }
+                            Ok(AccumulatorBoundaryOutcome::AlreadyCrossed { .. }) => {
+                                // Idempotent re-entry (already crossed) -- silent; loop to resume folding.
+                                let _ = store.clear_boundary_mark();
+                            }
+                            Ok(AccumulatorBoundaryOutcome::Stalled { slot, reason }) => {
+                                crate::node_log!(
+                                    "epoch-accumulator: boundary cross stalled at {} (observe-only): {}",
+                                    slot.0,
+                                    reason
+                                );
+                                break;
+                            }
+                            Err(e) => {
+                                crate::node_log!(
+                                    "epoch-accumulator: boundary cross fault (observe-only): {:?}",
+                                    e
+                                );
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // S4 OBLIGATION (S2 IDD review, MEDIUM-1): swallowing a REAL fault is IDD-§8-compliant
+                        // ONLY while the accumulator is non-authoritative + readiness-gated. At the S4
+                        // authority flip this Err arm MUST halt (swallow only stalls).
+                        crate::node_log!(
+                            "epoch-accumulator: within-epoch reconcile fault (observe-only): {:?}",
+                            e
+                        );
+                        break;
+                    }
+                }
+            }
         }
     }
+
+    // GUARANTEE the EVIEW checkpoint reaches the durable tip (fail-closed), regardless of the accumulator
+    // outcome. Forward-only -- the reorg reset was hoisted above.
+    advance_reduced_checkpoint_forward_to(reduced_checkpoint, chaindb, tip.slot)?;
+    Ok(())
 }
 
 /// EPOCH-CONTINUITY-ACTIVATION ECA-1 (DC-EPOCH-13): the first-boundary epoch-view activation,
@@ -2298,15 +2459,19 @@ pub async fn run_relay_loop_with_sched(
                             from_epoch.0, to_epoch.0, promotion_commitment
                         );
                     }
-                    // S3f-4d-mat-2c (DC-EPOCH-11): after the durable admit, advance the live
-                    // reduced checkpoint to the ChainDB tip (EVIEW only; None elsewhere ->
-                    // no-op, byte-identical). Reads only the durable ChainDB; fail-closed.
-                    advance_reduced_checkpoint_to_durable_tip(reduced_checkpoint, chaindb)?;
-                    // LIVE-LEDGER-EPOCH-TRANSITION S2 (DC-EPOCH-20): after the same durable admit,
-                    // reconcile the EpochAccumulator to the ChainDB tip -- catch-up on warm-start,
-                    // rematerialize on reorg. OBSERVE-ONLY (PO-6): never `?` -- a boundary stall or
-                    // store fault must not halt the proven follow (None elsewhere -> no-op).
-                    advance_accumulator_to_durable_tip(epoch_accumulator, chaindb, &era_schedule);
+                    // LIVE-LEDGER-EPOCH-TRANSITION S3 (DC-EPOCH-22): after the durable admit, the
+                    // co-advancer reconciles BOTH derived stores -- the EVIEW reduced checkpoint and
+                    // the durable EpochAccumulator -- to the ChainDB tip in ONE pass that SEGMENTS at
+                    // each epoch boundary, capturing the SNAP mark at the exact boundary point so the
+                    // accumulator CROSSES instead of stalling. The checkpoint advances are fail-closed
+                    // (EVIEW currency); the accumulator is observe-only (a stall/fault never halts the
+                    // follow). None/None -> byte-identical no-op.
+                    advance_ledger_state_to_durable_tip(
+                        reduced_checkpoint,
+                        epoch_accumulator,
+                        chaindb,
+                        &era_schedule,
+                    )?;
                     // EPOCH-CONTINUITY-ACTIVATION ECA-1 (DC-EPOCH-13): the AUTOMATIC first-boundary
                     // activation (no arming flag). A strict no-op (byte-identical) until EVIEW is
                     // configured + the seed epoch completes; then it derives the bound view
@@ -5093,6 +5258,176 @@ mod tests {
                 assert_eq!(loc.epoch, EpochNo(N + off));
                 assert!(matches!(loc.era, CardanoEra::Conway));
             }
+        }
+    }
+
+    // ===== LIVE-LEDGER-EPOCH-TRANSITION S3 (DC-EPOCH-22): the boundary-aligned co-advancer =====
+    // The node_lifecycle co-advancer that SEGMENTS the reduced-checkpoint + accumulator advance at each
+    // epoch boundary: at a boundary stall it brings the checkpoint to the boundary point `s_prev`, captures
+    // the SNAP mark there, durably binds the BoundaryMark witness, and crosses the accumulator. Hermetic
+    // (InMemoryChainDb + real redb stores via tempfile). The mark VALUE is CE-3c's job -- these prove the
+    // ORCHESTRATION (cross / multi-boundary catch-up / EVIEW currency / observe-only).
+    mod co_advance_ledger_state {
+        use super::super::*;
+        use ade_ledger::epoch_accumulator::EpochAccumulator;
+        use ade_ledger::reduced_utxo::ReducedStakeRef;
+        use ade_runtime::chaindb::{
+            EpochAccumulatorStore, InMemoryChainDb, ReducedUtxoCheckpoint, StoredBlock,
+        };
+        use ade_types::shelley::cert::StakeCredential;
+        use ade_types::tx::{Coin, TxIn};
+        use std::collections::BTreeMap;
+        use tempfile::TempDir;
+
+        const RAW_CONWAY_BLOCK: &[u8] =
+            include_bytes!("../tests/fixtures/raw_era_block_conway.cbor");
+
+        /// A from-genesis Conway schedule with 86_000-slot epochs: `locate(86_000 * E).epoch == E`, so slot
+        /// 43_000_000 is epoch 500 (within-epoch vs the sealed store), 43_086_000 epoch 501 (a boundary),
+        /// 43_172_000 epoch 502 (the next boundary). Reuses the node's own `make_node_schedule` builder.
+        fn schedule_86k() -> EraSchedule {
+            make_node_schedule(SlotNo(0), EpochNo(0), 86_000, None)
+        }
+
+        fn cred(b: u8) -> StakeCredential {
+            StakeCredential::KeyHash(Hash28([b; 28]))
+        }
+
+        /// A sealed EpochAccumulator at epoch 500 with reserves -- the accumulator the real Conway block
+        /// applies cleanly to (mirrors the ade_runtime advance tests' `sealed_store_at_epoch_500`).
+        fn sealed_store_at_epoch_500(tmp: &TempDir, seed_slot: SlotNo) -> EpochAccumulatorStore {
+            let mut acc = EpochAccumulator::new(CardanoEra::Conway);
+            acc.epoch_state.epoch = EpochNo(500);
+            acc.epoch_state.reserves = Coin(1_000_000_000_000_000);
+            let s = EpochAccumulatorStore::open(&tmp.path().join("acc.redb")).unwrap();
+            s.seal_bootstrap(&acc, seed_slot).unwrap();
+            s
+        }
+
+        /// A sealed reduced checkpoint with two delegated base creds, so the captured mark is non-empty
+        /// (mirroring the #2b-i proven mark). The advancer folds the real Conway block cleanly over it.
+        fn sealed_checkpoint(tmp: &TempDir, seed_slot: SlotNo) -> ReducedUtxoCheckpoint {
+            let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("cp.redb")).unwrap();
+            let mut reduced: BTreeMap<TxIn, (Coin, ReducedStakeRef)> = BTreeMap::new();
+            reduced.insert(
+                TxIn {
+                    tx_hash: Hash32([1; 32]),
+                    index: 0,
+                },
+                (Coin(5_000_000), ReducedStakeRef::Base(cred(0x11))),
+            );
+            reduced.insert(
+                TxIn {
+                    tx_hash: Hash32([2; 32]),
+                    index: 0,
+                },
+                (Coin(7_000_000), ReducedStakeRef::Base(cred(0x22))),
+            );
+            cp.build_from(&reduced).unwrap();
+            cp.seal_bootstrap(seed_slot).unwrap();
+            cp
+        }
+
+        fn put_raw(db: &InMemoryChainDb, slot: u64) {
+            db.put_block(&StoredBlock {
+                hash: Hash32([(slot & 0xff) as u8; 32]),
+                slot: SlotNo(slot),
+                bytes: RAW_CONWAY_BLOCK.to_vec(),
+            })
+            .unwrap();
+        }
+
+        /// CE-3c hermetic prerequisite: the co-advancer crosses ONE epoch boundary -- it captures the mark
+        /// at the boundary point `s_prev`, binds the witness, crosses the accumulator into the new epoch,
+        /// and leaves the reduced checkpoint at the durable tip with the binding consumed + cleared.
+        #[test]
+        fn co_advance_crosses_a_boundary() {
+            let tmp = TempDir::new().unwrap();
+            let cp = sealed_checkpoint(&tmp, SlotNo(42_000_000));
+            let store = sealed_store_at_epoch_500(&tmp, SlotNo(42_000_000));
+            let db = InMemoryChainDb::new();
+            put_raw(&db, 43_000_000); // epoch 500, within-epoch -> s_prev
+            put_raw(&db, 43_086_000); // epoch 501, the boundary block -> s_bb
+            let sched = schedule_86k();
+
+            advance_ledger_state_to_durable_tip(Some(&cp), Some(&store), &db, &sched).unwrap();
+
+            // The accumulator CROSSED into epoch 501 at the boundary slot.
+            let (slot, acc) = store.load_current().unwrap().unwrap();
+            assert_eq!(
+                acc.epoch_state.epoch,
+                EpochNo(501),
+                "the accumulator crossed the boundary"
+            );
+            assert_eq!(slot, SlotNo(43_086_000), "advanced to the boundary block slot");
+            // EVIEW currency: the reduced checkpoint reached the durable tip.
+            assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(43_086_000)));
+            // The boundary-mark binding was consumed + cleared by the cross.
+            assert_eq!(store.boundary_mark_binding().unwrap(), None);
+        }
+
+        /// EVIEW-preservation: with NO accumulator the co-advancer reduces to the pre-S3 reduced-checkpoint
+        /// advance -- it brings the checkpoint to the durable tip and nothing else.
+        #[test]
+        fn co_advance_checkpoint_only_when_no_accumulator() {
+            let tmp = TempDir::new().unwrap();
+            let cp = sealed_checkpoint(&tmp, SlotNo(42_000_000));
+            let db = InMemoryChainDb::new();
+            put_raw(&db, 43_000_000);
+            put_raw(&db, 43_086_000);
+            let sched = schedule_86k();
+
+            advance_ledger_state_to_durable_tip(Some(&cp), None, &db, &sched).unwrap();
+
+            assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(43_086_000)));
+        }
+
+        /// Multi-boundary catch-up: TWO boundaries (501 then 502) in `(seed, tip]` -> ONE call crosses BOTH.
+        #[test]
+        fn co_advance_multi_boundary_catch_up() {
+            let tmp = TempDir::new().unwrap();
+            let cp = sealed_checkpoint(&tmp, SlotNo(42_000_000));
+            let store = sealed_store_at_epoch_500(&tmp, SlotNo(42_000_000));
+            let db = InMemoryChainDb::new();
+            put_raw(&db, 43_000_000); // epoch 500, within-epoch
+            put_raw(&db, 43_086_000); // epoch 501, boundary #1
+            put_raw(&db, 43_100_000); // epoch 501, within-epoch
+            put_raw(&db, 43_172_000); // epoch 502, boundary #2
+            let sched = schedule_86k();
+
+            advance_ledger_state_to_durable_tip(Some(&cp), Some(&store), &db, &sched).unwrap();
+
+            let (slot, acc) = store.load_current().unwrap().unwrap();
+            assert_eq!(
+                acc.epoch_state.epoch,
+                EpochNo(502),
+                "ONE call crossed BOTH boundaries"
+            );
+            assert_eq!(slot, SlotNo(43_172_000));
+            assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(43_172_000)));
+            assert_eq!(store.boundary_mark_binding().unwrap(), None);
+        }
+
+        /// Observe-only: an accumulator but NO checkpoint (no mark source) -> the boundary STALLS; the call
+        /// returns Ok (never halts the follow) and the accumulator does NOT cross.
+        #[test]
+        fn co_advance_observe_only_when_no_checkpoint() {
+            let tmp = TempDir::new().unwrap();
+            let store = sealed_store_at_epoch_500(&tmp, SlotNo(42_000_000));
+            let db = InMemoryChainDb::new();
+            put_raw(&db, 43_000_000); // epoch 500, within-epoch
+            put_raw(&db, 43_086_000); // epoch 501, boundary
+            let sched = schedule_86k();
+
+            advance_ledger_state_to_durable_tip(None, Some(&store), &db, &sched).unwrap();
+
+            let (slot, acc) = store.load_current().unwrap().unwrap();
+            assert_eq!(acc.epoch_state.epoch, EpochNo(500), "no mark source -> no cross");
+            assert_eq!(
+                slot,
+                SlotNo(43_000_000),
+                "folded within-epoch up to s_prev, then stalled observe-only"
+            );
         }
     }
 
