@@ -52,7 +52,8 @@
 //! within-epoch cert/governance half reuses `rules::process_block_certificates`; the bootstrap-transient
 //! reward seed reuses `delegation::apply_bootstrap_reward_deltas`. The contract is the deterministic
 //! orchestration of these single-authority primitives over the accumulator's non-UTxO state — the new
-//! stake for the boundary mark comes from `ctx` (the reduced-checkpoint aggregate), never a full UTxO map.
+//! stake for the boundary mark comes from `ctx` (the reduced-checkpoint per-credential base-UTxO stake,
+//! built into the mark with the held delegation state), never a full UTxO map.
 //!
 //! ## Field ownership (what the accumulator OWNS, DEFERS, and FORBIDS)
 //!
@@ -67,9 +68,9 @@
 //!   `protocol_params`, `gov_state`, `conway_deposit_params`, `max_lovelace_supply`, and the
 //!   bootstrap-transient `pending_reward_update`.
 //! - **DEFERRED to the reduced checkpoint (read via `ctx`, NEVER stored here):** the per-credential
-//!   UTxO stake and the per-pool active-stake aggregate. A boundary's new MARK arrives as
-//!   `ctx.boundary_mark` (`StakeByPool`, aggregated over the reduced checkpoint at the prior tip); the
-//!   accumulator never holds the UTxO set or recomputes stake from it.
+//!   UTxO stake. A boundary's new MARK is BUILT from `ctx.boundary_mark` (the per-credential base-UTxO
+//!   stake, `sum_base_credential_stake` over the reduced checkpoint at the prior tip) plus the held
+//!   `cert_state.delegation`; the accumulator never holds the UTxO set or recomputes stake from it.
 //! - **FORBIDDEN (structurally unrepresentable):** a `UTxOState` / full UTxO map; a full per-credential
 //!   stake map; anything that would answer a UTxO query without the reduced checkpoint. The type has no
 //!   UTxO field, and `as_ledger_view` always materializes an EMPTY UTxO — so "an accumulator holding a
@@ -110,7 +111,6 @@ use crate::bootstrap_reward_update::{
 use crate::delegation::{apply_bootstrap_reward_deltas, CertState};
 use crate::error::LedgerError;
 use crate::pparams::{ConwayOnlyDepositParams, ProtocolParameters};
-use crate::reduced_aggregate::StakeByPool;
 use crate::rules::{apply_epoch_boundary_with_registrations, process_block_certificates};
 use crate::snapshot::{
     decode_cert_state, decode_conway_deposit_params, decode_epoch_state, decode_gov_state,
@@ -292,12 +292,16 @@ pub struct SelectedBlockCtx {
     /// The block's issuer pool (live: the already-validated `header_input.issuer_pool`). Used for
     /// `block_production[issuer] += 1` — the producer is the header issuer; NO leader-schedule lookup.
     pub issuer_pool: PoolId,
-    /// The new MARK stake aggregate for a crossed boundary (live: `aggregate_pool_stake` over the
-    /// reduced checkpoint at the prior tip). `None` is a fail-closed boundary error — the accumulator,
-    /// being UTxO-free, has no way to recompute the mark, so a boundary REQUIRES it. For multiple
-    /// crossed boundaries (the degenerate empty-epoch case) the same prior-tip aggregate applies (no
-    /// intervening stake change).
-    pub boundary_mark: Option<StakeByPool>,
+    /// The per-credential BASE UTxO stake for a crossed boundary (live: the advancer supplies
+    /// `reduced_utxo_checkpoint::sum_base_credential_stake()` over the reduced checkpoint at the prior
+    /// tip — item #2b). `cross_epoch_boundary` BUILDS the new MARK snapshot from it plus the held
+    /// `cert_state.delegation`, RETAINING the per-credential `delegations` the reward computation reads
+    /// (the operator's `op_stake` and each member's pro-rata share); a per-pool mark dropped those, so
+    /// member rewards went to zero once it rotated into `go`. `None` is a fail-closed boundary error —
+    /// the accumulator, being UTxO-free, has no way to recompute the stake, so a boundary REQUIRES it.
+    /// For multiple crossed boundaries (the degenerate empty-epoch case) the same prior-tip stake
+    /// applies (no intervening change).
+    pub boundary_mark: Option<BTreeMap<StakeCredential, Coin>>,
 }
 
 /// Closed, fail-closed error sum for the authority transition. A malformed block, an unknown
@@ -382,13 +386,14 @@ pub fn apply_selected_block(
 /// Cross ONE epoch boundary into `target`. Reuses the validated `apply_epoch_boundary_with_registrations`
 /// for the reward + pots + snapshot rotation, feeding it the held `prev_block_production`/`prev_epoch_fees`
 /// (the `nesBprev` reward inputs), then rotates `prev := <just-finished nesBcur>`, `cur := ∅`. The new
-/// MARK comes from `ctx.boundary_mark` (the reduced-checkpoint aggregate) — fail-closed if absent.
+/// MARK is BUILT (`build_boundary_mark_snapshot`) from `ctx.boundary_mark` (the per-credential base-UTxO
+/// stake) plus the held delegation state — fail-closed if `ctx.boundary_mark` is absent.
 pub fn cross_epoch_boundary(
     mut acc: EpochAccumulator,
     target: EpochNo,
     ctx: &SelectedBlockCtx,
 ) -> Result<EpochAccumulator, LedgerTransitionError> {
-    let mark = ctx
+    let base_utxo = ctx
         .boundary_mark
         .as_ref()
         .ok_or(LedgerTransitionError::MissingBoundaryStake { epoch: target.0 })?;
@@ -404,6 +409,11 @@ pub fn cross_epoch_boundary(
         }
     }
 
+    // Build the new PER-CREDENTIAL mark from the supplied base-UTxO stake + the held (post-seed)
+    // delegation state. The boundary fn consumes it DIRECTLY as the new mark, so its per-credential
+    // `delegations` survive into `go` and pay member rewards two boundaries later.
+    let new_mark = build_boundary_mark_snapshot(base_utxo, &acc.cert_state.delegation);
+
     // Capture the just-finished epoch's nesBcur (it becomes nesBprev after this boundary).
     let finished_blocks = std::mem::take(&mut acc.epoch_state.block_production);
     let finished_fees = acc.epoch_state.epoch_fees;
@@ -415,7 +425,7 @@ pub fn cross_epoch_boundary(
     view.epoch_state.epoch_fees = acc.prev_epoch_fees;
 
     let (new_view, _accounting) =
-        apply_epoch_boundary_with_registrations(&view, target, None, Some(mark));
+        apply_epoch_boundary_with_registrations(&view, target, None, Some(&new_mark));
 
     // Read back. `new_view.epoch_state` already has epoch=target, rotated snapshots, updated pots, and
     // block_production/epoch_fees reset to empty/0 (the new epoch's fresh nesBcur). POOLREAP — future-pool
@@ -428,6 +438,35 @@ pub fn cross_epoch_boundary(
     acc.prev_block_production = finished_blocks;
     acc.prev_epoch_fees = finished_fees;
     Ok(acc)
+}
+
+/// Build the new PER-CREDENTIAL mark [`crate::epoch::StakeSnapshot`] for an epoch boundary from the
+/// canonical per-credential BASE UTxO stake (`ctx.boundary_mark`, what
+/// `reduced_utxo_checkpoint::sum_base_credential_stake` returns) and the held delegation state. For each
+/// registered+delegated credential its instant stake is its base-UTxO coin + its reward-account balance,
+/// grouped by its delegated pool — the same inputs `reduced_aggregate::aggregate_pool_stake` consumes,
+/// but RETAINING the per-credential `delegations` the reward computation reads (the operator's `op_stake`
+/// and each member's pro-rata share). A per-pool mark dropped `delegations`, leaving an empty `go` two
+/// boundaries later → zero member rewards. Pure, deterministic (`BTreeMap`), saturating on the supply-
+/// bounded stake sums.
+fn build_boundary_mark_snapshot(
+    base_utxo: &BTreeMap<StakeCredential, Coin>,
+    delegation: &crate::delegation::DelegationState,
+) -> crate::epoch::StakeSnapshot {
+    let mut delegations = BTreeMap::new();
+    let mut pool_stakes: BTreeMap<PoolId, Coin> = BTreeMap::new();
+    for (cred, pool) in &delegation.delegations {
+        let base = base_utxo.get(cred).copied().unwrap_or(Coin(0)).0;
+        let reward = delegation.rewards.get(cred).copied().unwrap_or(Coin(0)).0;
+        let stake = base.saturating_add(reward);
+        delegations.insert(cred.hash().clone(), (pool.clone(), Coin(stake)));
+        let entry = pool_stakes.entry(pool.clone()).or_insert(Coin(0));
+        entry.0 = entry.0.saturating_add(stake);
+    }
+    crate::epoch::StakeSnapshot {
+        delegations,
+        pool_stakes,
+    }
 }
 
 /// Apply this block's within-epoch effects: certificates + governance (the ledger's own authority),
@@ -1117,13 +1156,14 @@ mod tests {
         pp
     }
 
-    fn sample_mark(p: u8, stake: u64) -> StakeByPool {
-        let mut pool_stakes = BTreeMap::new();
-        pool_stakes.insert(pool(p), Coin(stake));
-        StakeByPool {
-            pool_stakes,
-            total_active_stake: Coin(stake),
-        }
+    /// A sample per-credential base-UTxO stake map (`ctx.boundary_mark`) for boundary tests that
+    /// exercise the crossing machinery but do not assert on the rotated-in mark's content (`p` names a
+    /// credential). The per-credential reward effect is proven by
+    /// `cross_epoch_boundary_per_credential_mark_pays_member_rewards`.
+    fn sample_mark(p: u8, stake: u64) -> BTreeMap<StakeCredential, Coin> {
+        let mut m = BTreeMap::new();
+        m.insert(key_cred(p), Coin(stake));
+        m
     }
 
     // A fully populated Conway accumulator exercising every codec field.
@@ -1461,6 +1501,124 @@ mod tests {
         assert!(
             bal.0 > 0,
             "the boundary must credit a fresh reward to the within-epoch withdrawer, got {bal:?}"
+        );
+    }
+
+    // ----- Per-credential boundary mark pays member rewards (S3 item #2a, DC-EPOCH-21) -----
+
+    #[test]
+    fn cross_epoch_boundary_per_credential_mark_pays_member_rewards() {
+        // The boundary mark is now PER-CREDENTIAL. `ctx.boundary_mark` is the per-credential base-UTxO
+        // stake (`sum_base_credential_stake`); `build_boundary_mark_snapshot` turns it into a mark whose
+        // `delegations` the reward computation reads — the operator's `op_stake` and each member's
+        // pro-rata share. The OLD per-pool mark dropped `delegations` → an empty `go` two boundaries
+        // later → ZERO member rewards. Same setup, two `go` snapshots: per-credential PAYS, per-pool ZERO.
+        let pool_aa = pool(0xAA);
+        let member = key_cred(0xCC); // a delegator (not the operator)
+        let op = key_cred(0x0B); // the operator's reward-account credential (key_account(0x0B))
+        let base = 1_000_000_000_000u64;
+
+        let mut acc = EpochAccumulator::new(CardanoEra::Conway);
+        acc.epoch_state.epoch = EpochNo(500);
+        acc.protocol_params = conway_params();
+        acc.max_lovelace_supply = 45_000_000_000_000_000;
+        acc.epoch_state.reserves = Coin(1_000_000_000_000_000);
+        acc.cert_state
+            .pool
+            .pools
+            .insert(pool_aa.clone(), sample_pool_params(0xAA, key_account(0x0B)));
+        for c in [member.clone(), op.clone()] {
+            acc.cert_state
+                .delegation
+                .registrations
+                .insert(c.clone(), Coin(2_000_000));
+            acc.cert_state
+                .delegation
+                .delegations
+                .insert(c, pool_aa.clone());
+        }
+        // The pool produced blocks in the to-be-rewarded epoch (nesBprev).
+        acc.prev_block_production.insert(pool_aa.clone(), 100);
+
+        // The per-credential base-UTxO stake the advancer supplies (item #2b): member + operator.
+        let mut base_utxo: BTreeMap<StakeCredential, Coin> = BTreeMap::new();
+        base_utxo.insert(member.clone(), Coin(base));
+        base_utxo.insert(op.clone(), Coin(base));
+
+        // The builder produces a PER-CREDENTIAL mark: delegations populated, pool_stakes summed.
+        let built = build_boundary_mark_snapshot(&base_utxo, &acc.cert_state.delegation);
+        assert_eq!(
+            built.delegations.get(member.hash()),
+            Some(&(pool_aa.clone(), Coin(base))),
+            "the member's per-credential stake is carried into the mark"
+        );
+        assert_eq!(
+            built.delegations.get(op.hash()),
+            Some(&(pool_aa.clone(), Coin(base))),
+            "the operator's per-credential stake is carried into the mark"
+        );
+        assert_eq!(built.pool_stakes.get(&pool_aa), Some(&Coin(2 * base)));
+
+        let ctx = SelectedBlockCtx {
+            era: CardanoEra::Conway,
+            block_epoch: EpochNo(501),
+            block_slot: SlotNo(0),
+            issuer_pool: pool_aa.clone(),
+            boundary_mark: Some(base_utxo.clone()),
+        };
+
+        // PER-CREDENTIAL `go` (the mark, two boundaries on): member + operator rewards are non-zero.
+        let mut acc_pc = acc.clone();
+        acc_pc.epoch_state.snapshots.go = GoSnapshot(built.clone());
+        let after_pc =
+            cross_epoch_boundary(acc_pc, EpochNo(501), &ctx).expect("per-credential boundary");
+        let member_reward = after_pc
+            .cert_state
+            .delegation
+            .rewards
+            .get(&member)
+            .copied()
+            .unwrap_or(Coin(0));
+        let op_reward = after_pc
+            .cert_state
+            .delegation
+            .rewards
+            .get(&op)
+            .copied()
+            .unwrap_or(Coin(0));
+        assert!(
+            member_reward.0 > 0,
+            "the per-credential mark must pay a member reward, got {member_reward:?}"
+        );
+        assert!(
+            op_reward.0 > 0,
+            "the operator's op_stake must drive a non-zero leader reward, got {op_reward:?}"
+        );
+        // The cross also rotates in a per-credential mark (the wiring uses the builder).
+        assert!(
+            !after_pc.epoch_state.snapshots.mark.0.delegations.is_empty(),
+            "the rotated-in mark is per-credential"
+        );
+
+        // CONTRAST: the OLD per-pool mark — same pool_stakes, EMPTY delegations — pays ZERO member
+        // rewards on the identical setup. This is the byte-insufficiency the reshape fixes.
+        let per_pool_go = StakeSnapshot {
+            delegations: BTreeMap::new(),
+            pool_stakes: built.pool_stakes.clone(),
+        };
+        let mut acc_pp = acc.clone();
+        acc_pp.epoch_state.snapshots.go = GoSnapshot(per_pool_go);
+        let after_pp = cross_epoch_boundary(acc_pp, EpochNo(501), &ctx).expect("per-pool boundary");
+        let member_pp = after_pp
+            .cert_state
+            .delegation
+            .rewards
+            .get(&member)
+            .copied()
+            .unwrap_or(Coin(0));
+        assert_eq!(
+            member_pp.0, 0,
+            "a per-pool mark (empty delegations) pays ZERO member rewards"
         );
     }
 

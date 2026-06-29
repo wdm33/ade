@@ -7,8 +7,11 @@ LIVE-LEDGER-EPOCH-TRANSITION.
 within-epoch fold + the durable accumulator store + the observe-only stall the boundary currently hits),
 DC-EPOCH-18 (the seed+2 byte-exact stake — the bootstrap-transient reward seed the native RUPD takes over
 from), the reduced-checkpoint stake aggregate (`aggregate_pool_stake`).
-**Status:** In progress — item #1 (BLUE POOLREAP reconciliation + discriminant) DONE (CE-3a/CE-3b/CI green;
-DC-EPOCH-21 declared). Items #2 (live `boundary_mark` wiring) + #3 (CE-3 byte-exact differential gate) pending.
+**Status:** In progress — item #1 (POOLREAP reconciliation + discriminant) + item #2a (the BLUE
+per-credential mark, `build_boundary_mark_snapshot`; oracle 27/27 byte-preserved, +1 test) DONE (CE-3a/CE-3b/CI
+green; DC-EPOCH-21 declared). Item #2b (the live wiring — thread the reduced-checkpoint handle + supply
+`sum_base_credential_stake` at the boundary so the accumulator CROSSES) + #3 (CE-3d byte-exact differential
+gate) pending.
 
 > S2 made the accumulator track every within-epoch block and **stall, observe-only, at the boundary**
 > (`MissingBoundaryStake`, because the live driver supplies `ctx.boundary_mark = None`). S3 supplies the

@@ -629,12 +629,14 @@ pub fn apply_epoch_boundary_with_registrations(
     state: &LedgerState,
     new_epoch: ade_types::EpochNo,
     registration_override: Option<&std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, ()>>,
-    // EPOCH-CONSENSUS-VIEW S3f-1 (DC-EVIEW-08): the activation consumption point. When
-    // `Some(agg)`, the new MARK snapshot is the real per-pool aggregate (S3c, via
-    // form_mark_snapshot); when `None` (the live path, track_utxo=false), the existing
-    // stub is used UNCHANGED -- so the live boundary behaviour does not change until the
-    // window driver (S3f-2) actually produces an aggregate. Fail-safe by construction.
-    precomputed_mark: Option<&crate::reduced_aggregate::StakeByPool>,
+    // The new MARK snapshot for the boundary. When `Some(mark)` (the accumulator path,
+    // LIVE-LEDGER-EPOCH-TRANSITION S3) it is a fully-built PER-CREDENTIAL snapshot
+    // (`cred -> (pool, base-UTxO + reward stake)`), used DIRECTLY as the new mark so its
+    // `delegations` survive into `go` and pay member rewards two boundaries later; when
+    // `None` (the full-ledger path) the existing per-credential cert-state stub is used
+    // UNCHANGED. (The EVIEW leadership path still forms a per-pool mark via
+    // `reduced_snapshot::form_mark_snapshot`, but consumes it elsewhere.)
+    precomputed_mark: Option<&crate::epoch::StakeSnapshot>,
 ) -> (LedgerState, EpochBoundaryAccounting) {
     // 1. Reward computation from PRE-rotation go snapshot
     //    Rewards must be computed before rotation — after rotation,
@@ -1107,7 +1109,9 @@ pub fn apply_epoch_boundary_with_registrations(
     //    S3c per-pool aggregate when one is provided (activation); otherwise the existing
     //    stub (the unchanged live path).
     let new_mark = match precomputed_mark {
-        Some(agg) => crate::reduced_snapshot::form_mark_snapshot(agg),
+        // The accumulator path supplies a fully-built per-credential mark; use it directly so the
+        // per-credential `delegations` survive into `go` (a per-pool mark would drop them).
+        Some(mark) => mark.clone(),
         None => crate::epoch::StakeSnapshot {
             delegations: state.cert_state.delegation.delegations.iter()
                 .map(|(cred, pool)| {
@@ -2698,14 +2702,14 @@ mod cert_state_dispatch {
         );
     }
 
-    /// EPOCH-CONSENSUS-VIEW S3f-1 (DC-EVIEW-08): the epoch boundary consumes the S3c
-    /// per-pool aggregate as the new MARK when one is provided (activation), and uses the
-    /// existing stub UNCHANGED when `None` (the live path). Fail-safe: the live boundary
-    /// behaviour does not change until the window driver (S3f-2) supplies an aggregate.
+    /// LIVE-LEDGER-EPOCH-TRANSITION S3 (DC-EPOCH-21): the epoch boundary consumes a fully-built
+    /// PER-CREDENTIAL mark as the new MARK when one is provided (the accumulator path), used DIRECTLY
+    /// so its `delegations` survive (no per-pool `form_mark_snapshot`), and uses the existing
+    /// cert-state stub UNCHANGED when `None` (the full-ledger path).
     #[test]
     fn epoch_boundary_consumes_precomputed_aggregate_mark() {
         use super::apply_epoch_boundary_with_registrations;
-        use crate::reduced_aggregate::StakeByPool;
+        use crate::epoch::StakeSnapshot;
         use crate::state::LedgerState;
         use ade_types::tx::PoolId;
         use ade_types::{EpochNo, Hash28};
@@ -2714,28 +2718,43 @@ mod cert_state_dispatch {
         let mut state = LedgerState::new(CardanoEra::Conway);
         state.epoch_state.epoch = EpochNo(500);
 
+        let pool_a = PoolId(Hash28([0x11; 28]));
+        let pool_b = PoolId(Hash28([0x22; 28]));
         let mut pool_stakes = BTreeMap::new();
-        pool_stakes.insert(PoolId(Hash28([0x11; 28])), Coin(1000));
-        pool_stakes.insert(PoolId(Hash28([0x22; 28])), Coin(2000));
-        let agg = StakeByPool { pool_stakes: pool_stakes.clone(), total_active_stake: Coin(3000) };
+        pool_stakes.insert(pool_a.clone(), Coin(1000));
+        pool_stakes.insert(pool_b.clone(), Coin(2000));
+        let mut delegations = BTreeMap::new();
+        delegations.insert(Hash28([0xA1; 28]), (pool_a, Coin(1000)));
+        delegations.insert(Hash28([0xB2; 28]), (pool_b, Coin(2000)));
+        let mark = StakeSnapshot {
+            delegations: delegations.clone(),
+            pool_stakes: pool_stakes.clone(),
+        };
 
-        // Some(agg) -> the new MARK is the aggregate's per-pool stake.
-        let (with_agg, _) =
-            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&agg));
+        // Some(mark) -> the new MARK is the per-credential snapshot, used directly.
+        let (with_mark, _) =
+            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&mark));
         assert_eq!(
-            with_agg.epoch_state.snapshots.mark.0.pool_stakes, pool_stakes,
-            "the precomputed aggregate becomes the new MARK"
+            with_mark.epoch_state.snapshots.mark.0.pool_stakes, pool_stakes,
+            "the precomputed mark becomes the new MARK (pool_stakes)"
+        );
+        assert_eq!(
+            with_mark.epoch_state.snapshots.mark.0.delegations, delegations,
+            "the per-credential delegations survive into the new MARK (not dropped as a per-pool mark)"
         );
 
-        // None -> the existing stub (the live path UNCHANGED): the empty cert-state here
-        // yields an empty stub mark, NOT the aggregate.
-        let (no_agg, _) =
+        // None -> the existing stub (the full-ledger path UNCHANGED): the empty cert-state here
+        // yields an empty stub mark, NOT the precomputed mark.
+        let (no_mark, _) =
             apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None);
         assert!(
-            no_agg.epoch_state.snapshots.mark.0.pool_stakes.is_empty(),
-            "None uses the stub (empty cert-state -> empty mark), not the aggregate"
+            no_mark.epoch_state.snapshots.mark.0.pool_stakes.is_empty(),
+            "None uses the stub (empty cert-state -> empty mark), not the precomputed mark"
         );
-        assert_ne!(no_agg.epoch_state.snapshots.mark.0.pool_stakes, pool_stakes);
+        assert_ne!(
+            no_mark.epoch_state.snapshots.mark.0.pool_stakes,
+            pool_stakes
+        );
     }
 
     /// ENACTMENT-COMMITTEE-WRITEBACK S2: the epoch-boundary apply site now writes
