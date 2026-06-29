@@ -1017,15 +1017,26 @@ pub fn apply_epoch_boundary_with_registrations(
                 .checked_sub(&margin)
                 .unwrap_or_else(crate::rational::Rational::one);
 
-            // Operator's stake share: Haskell uses the full go snapshot stake
-            // (not filtered by pool) so an operator's stake counts even if they
-            // delegate elsewhere. This matches s/σ in the leader reward formula.
-            let op_stake = op_cred.as_ref()
-                .and_then(|oc| go.0.delegations.get(oc))
-                .map(|(_, c)| c.0)
-                .unwrap_or(0);
+            // Operator's stake share s/σ in the leader reward. Cardano's `s` is the POOL OWNERS'
+            // stake (the `poolOwners` set), summed from the go snapshot — NOT the reward account's own
+            // delegation. The owners are also EXCLUDED from member rewards below (their share rides in
+            // the leader term); paying a non-owner reward account as both leader and member, and an
+            // owner as a member, mis-attributes the per-account split (the totals are unchanged, so the
+            // pots are not). Gated to Mary+ where owner parsing is reliable; pre-Mary keeps the proven
+            // reward-account projection.
+            let use_owners = state.protocol_params.protocol_major >= 4 && !params.owners.is_empty();
+            let owner_stake: u64 = if use_owners {
+                params.owners.iter()
+                    .map(|o| go.0.delegations.get(o).map(|(_, c)| c.0).unwrap_or(0))
+                    .sum()
+            } else {
+                op_cred.as_ref()
+                    .and_then(|oc| go.0.delegations.get(oc))
+                    .map(|(_, c)| c.0)
+                    .unwrap_or(0)
+            };
             let op_share = crate::rational::Rational::new(
-                op_stake as i128, pool_stake.0 as i128,
+                owner_stake as i128, pool_stake.0 as i128,
             ).unwrap_or_else(crate::rational::Rational::zero);
 
             // leaderReward = c + floor((f-c) * (m + (1-m)*s_op/σ))
@@ -1065,8 +1076,15 @@ pub fn apply_epoch_boundary_with_registrations(
             let mut member_distributed = 0u64;
             if pool_stake.0 > 0 {
                 for (cred, stake) in &delegator_stakes {
-                    // Skip operator — already got their share via leaderReward
-                    if op_cred.as_ref() == Some(cred) { continue; }
+                    // Skip the pool OWNERS — their stake rides in the leader term (s), so cardano
+                    // excludes them from member rewards. Pre-Mary (no reliable owners) falls back to
+                    // excluding the reward account, matching the proven pre-Mary path.
+                    let is_owner = if use_owners {
+                        params.owners.contains(cred)
+                    } else {
+                        op_cred.as_ref() == Some(cred)
+                    };
+                    if is_owner { continue; }
                     if stake.0 == 0 { continue; }
                     // PV≤6 pre-filter: skip unregistered members
                     if pv_prefilter && !is_cred_registered(cred) {
@@ -1106,19 +1124,39 @@ pub fn apply_epoch_boundary_with_registrations(
     let mut delegation = state.cert_state.delegation.clone();
 
     for (cred, reward) in &reward_deltas {
-        let stake_cred = ade_types::shelley::cert::StakeCredential::KeyHash(cred.clone());
-        let is_registered = if let Some(override_regs) = registration_override {
-            override_regs.contains_key(&stake_cred)
+        // The reward distribution keys by Hash28 (no key/script discriminant), but registrations carry
+        // it. Resolve to the REGISTERED stake credential — key-hash first, then script-hash — and credit
+        // THAT one. A script-hash staker is registered as ScriptHash; projecting every hash to KeyHash
+        // (the old behaviour) failed the lookup for script stakers and routed their reward to the
+        // treasury (a treasury-vs-member-rewards split error). A given hash is registered as at most one
+        // discriminant; if neither is registered the reward goes to the treasury (deltaT2), as before.
+        let as_key = ade_types::shelley::cert::StakeCredential::KeyHash(cred.clone());
+        let as_script = ade_types::shelley::cert::StakeCredential::ScriptHash(cred.clone());
+        let registered = if let Some(override_regs) = registration_override {
+            if override_regs.contains_key(&as_key) {
+                Some(as_key)
+            } else if override_regs.contains_key(&as_script) {
+                Some(as_script)
+            } else {
+                None
+            }
+        } else if delegation.registrations.contains_key(&as_key) {
+            Some(as_key)
+        } else if delegation.registrations.contains_key(&as_script) {
+            Some(as_script)
         } else {
-            delegation.registrations.contains_key(&stake_cred)
+            None
         };
-        if is_registered {
-            let entry = delegation.rewards
-                .entry(stake_cred)
-                .or_insert(ade_types::tx::Coin(0));
-            entry.0 = entry.0.saturating_add(reward.0);
-        } else {
-            delta_t2 = delta_t2.saturating_add(reward.0);
+        match registered {
+            Some(stake_cred) => {
+                let entry = delegation.rewards
+                    .entry(stake_cred)
+                    .or_insert(ade_types::tx::Coin(0));
+                entry.0 = entry.0.saturating_add(reward.0);
+            }
+            None => {
+                delta_t2 = delta_t2.saturating_add(reward.0);
+            }
         }
     }
 
