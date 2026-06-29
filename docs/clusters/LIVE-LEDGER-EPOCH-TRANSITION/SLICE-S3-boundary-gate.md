@@ -12,8 +12,11 @@ per-credential mark, `build_boundary_mark_snapshot`; oracle 27/27 byte-preserved
 green; DC-EPOCH-21 declared). Item #2b reframed as **BOUNDARY-ALIGNED-MARK-CAPTURE** (declares DC-EPOCH-22):
 the live mark is captured at the EXACT boundary point from the lineage-matched reduced checkpoint, via a
 co-advancer that segments the checkpoint+accumulator advance at each boundary — NOT a naive read at the
-post-pass tip (byte-wrong in catch-up AND steady-state). #2b (three hermetic sub-commits + the CE-3c venue
-crossing) + #3 (CE-3d byte-exact differential gate) pending.
+post-pass tip (byte-wrong in catch-up AND steady-state). #2b DONE (three hermetic sub-commits `8d047dee` /
+`ee33cc4c` / `8232fe73` + **CE-3c PROVEN LIVE 2026-06-29**: two preview crossings 1338→1339 seam + 1339→1340
+native, mark at the boundary point 70,655 slots behind the catch-up tip). #3 (CE-3d byte-exact differential
+gate) pending. DC-EPOCH-22 stays `declared` (live-proven; the formal flip is a cluster-close event with the
+accumulator-as-authority S4 + CE-3d), in step with siblings DC-EPOCH-19/20/21.
 
 > S2 made the accumulator track every within-epoch block and **stall, observe-only, at the boundary**
 > (`MissingBoundaryStake`, because the live driver supplies `ctx.boundary_mark = None`). S3 supplies the
@@ -280,13 +283,31 @@ proof with restarts (S6); operational reconnect/forge gates (alongside S6).
   4/4 — real Shelley→Conway retiring-pool boundaries; oracle `conway_/alonzo_epoch_boundary_end_to_end`
   2/2). NO existing expectation changed (existing tests use `0xE0` key-hash accounts — for which the
   discriminant decode yields the identical credential — and set up no boundary-level retiring pools).
-- [ ] **CE-3c (live crossing, BOUNDARY-ALIGNED):** on a real preview boundary the accumulator CROSSES (no
-  `MissingBoundaryStake` stall) — the mark captured at `s_prev` from the reduced checkpoint via the
-  co-advancer (DC-EPOCH-22), durably bound, then consumed by the cross — writes the boundary checkpoint, and
-  resumes within-epoch folding with non-zero member rewards (venue FirstRun). Hermetic prerequisites
-  (#2b-i/ii/iii): the boundary-cross entry point, the durable witness + lineage validation, and the
-  co-advancer's segment→capture→bind→cross→tip, each green with steady-state + multi-boundary-catch-up +
-  mark-at-boundary-not-tip + reorg-invalidation + observe-only-stall tests, plus the DC-EPOCH-22 CI guard.
+- [x] **CE-3c (live crossing, BOUNDARY-ALIGNED) — DONE (preview, 2026-06-29):** on real preview boundaries
+  the accumulator CROSSES (no `MissingBoundaryStake` stall) — the mark captured at `s_prev` from the reduced
+  checkpoint via the co-advancer (DC-EPOCH-22), durably bound, then consumed by the cross — and resumes
+  within-epoch folding. **Two distinct live crossings, seed=1338** (native Mithril FirstRun then warm-start
+  resume; venue `~/.cardano-ce3c-firstrun`, peer `127.0.0.1:3002`; proof `~/.cardano-ce3c-proof/`):
+  - `CROSSED boundary 1338 -> 1339 at slot 115689630 (mark from s_prev 115689595)` — the seed→seed+1 seam
+    (FirstRun).
+  - `CROSSED boundary 1339 -> 1340 at slot 115776011 (mark from s_prev 115775977)` — the first FULLY NATIVE
+    crossing (warm-start resume; the mark derived from a checkpoint advanced PAST bootstrap, not the seam
+    bridge). The node then caught up to slot **115846632 — 70,655 slots past `s_prev`** — yet the mark was
+    captured at `s_prev` (the boundary point), DECISIVELY demonstrating the co-advancer segments at the
+    boundary, NOT the catch-up tip (a tip read would be byte-wrong by a whole epoch of UTxO deltas).
+  Non-zero member rewards are proven hermetically by item #2a's `build_boundary_mark_snapshot` per-credential
+  reward test (no accumulator-store dump CLI exists; the live CROSSED logs + the hermetic per-credential
+  reward proof together establish CE-3c). Hermetic prerequisites (#2b-i/ii/iii) green + the DC-EPOCH-22 CI
+  guard.
+
+  > **Continuous-op ceiling found — SEPARATE cluster, NOT this slice:** after crossing seed+2 (1340) the node
+  > fail-closes `rc=43` at `eview prepare: WindowReplayPrepare("window-replay beyond seed+2 not yet wired
+  > (candidate 1341, seed 1338)")` — the **EVIEW** (EpochConsensusView) seed-anchored window-replay's known
+  > limit (`epoch_wire.rs:627`, commit `23829091`, ECA-B3). This live-confirms the cluster's MOTIVATING
+  > problem (the seed-anchored re-derive runs out of future authority at seed+3) — exactly what the
+  > accumulator removes at S4. The observe-only accumulator crossed every boundary that reached chain.db; the
+  > EVIEW ceiling halted the follow before chain.db got the 1341 boundary, so it bounds how far CE-3c reaches
+  > live, NOT the accumulator's correctness.
 - [ ] **CE-3d (byte-exact RUPD + go-snapshot, the cluster CE-3 gate):** Ade's self-computed reward update
   + rotated go-snapshot == the live cardano-node's at ≥2 self-derived boundaries (the live differential).
 - [x] **CI — DONE:** `ci/ci_check_poolreap_single_canonical.sh` asserts the single-POOLREAP structure —
