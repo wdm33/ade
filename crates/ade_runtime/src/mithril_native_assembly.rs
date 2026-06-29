@@ -335,9 +335,11 @@ pub fn assemble_native_mithril_seed(
         epoch: s1a.epoch,
         // slot <- manifest point (the certified tip the snapshot is bound to).
         slot: binding.certified_point.slot,
-        // cold-start: the mark/set/go snapshot pipeline is empty (S1b owns the
-        // cold-start defaults; S1a never decodes esSnapshots).
-        snapshots: ade_ledger::epoch::SnapshotState::new(),
+        // CE-3d: the mark/set/go stake snapshots decoded from the certified snapshot's esSnapshots —
+        // the reward + leadership stake authority the EpochAccumulator seeds. NOT a cold-start empty
+        // default: an empty `go` makes the accumulator compute zero member rewards for the first ~3
+        // boundaries after bootstrap. Bound to the same certified point/network/era as the rest of S1a.
+        snapshots: s1a.snapshots.clone(),
         reserves: s1a.reserves,
         treasury: s1a.treasury,
         block_production: pool_keyed_block_production(&s1a.block_production),
@@ -611,6 +613,25 @@ mod tests {
         let mut block_production: BTreeMap<PoolId, u64> = BTreeMap::new();
         block_production.insert(pool(0x01), 3);
 
+        // CE-3d: a non-empty mark/set/go snapshot pipeline so the assembled ledger's
+        // `epoch_state.snapshots` is verifiably threaded (not a cold-start empty default).
+        use ade_ledger::epoch::{GoSnapshot, MarkSnapshot, SetSnapshot, SnapshotState, StakeSnapshot};
+        let stake_snapshot = |pid: PoolId, coin: u64| {
+            let mut delegations = BTreeMap::new();
+            delegations.insert((pid.0).clone(), (pid.clone(), Coin(coin)));
+            let mut pool_stakes = BTreeMap::new();
+            pool_stakes.insert(pid, Coin(coin));
+            StakeSnapshot {
+                delegations,
+                pool_stakes,
+            }
+        };
+        let snapshots = SnapshotState {
+            mark: MarkSnapshot(stake_snapshot(pool(0x01), 1_100)),
+            set: SetSnapshot(stake_snapshot(pool(0x01), 1_050)),
+            go: GoSnapshot(stake_snapshot(pool(0x01), 1_000)),
+        };
+
         NativeSnapshotNonUtxoState {
             era: CardanoEra::Conway,
             network_id: 0,
@@ -629,6 +650,7 @@ mod tests {
             },
             pool_distr,
             mark_pool_distr,
+            snapshots,
             protocol_params: pp,
             reserves: Coin(13_000_000_000_000_000),
             treasury: Coin(1_000_000_000_000),
@@ -793,10 +815,12 @@ mod tests {
         assert_eq!(seed.ledger.epoch_state.treasury, s1a.treasury);
         assert_eq!(seed.ledger.epoch_state.block_production, s1a.block_production);
         assert_eq!(seed.ledger.epoch_state.epoch_fees, Coin(0), "epoch_fees = 0");
-        // Snapshots are cold-start empty (default).
-        assert_eq!(
-            seed.ledger.epoch_state.snapshots,
-            ade_ledger::epoch::SnapshotState::new()
+        // CE-3d: the mark/set/go snapshots are threaded from S1a (the certified snapshot's
+        // esSnapshots), NOT a cold-start empty default. This is what seeds the accumulator's `go`.
+        assert_eq!(seed.ledger.epoch_state.snapshots, s1a.snapshots);
+        assert!(
+            !seed.ledger.epoch_state.snapshots.go.0.pool_stakes.is_empty(),
+            "go snapshot must be non-empty (the reward/leadership stake authority)"
         );
         // UTxO <- Stage-2 (the single ada-only entry).
         assert_eq!(seed.ledger.utxo_state.len(), 1, "utxo_state <- Stage-2");

@@ -237,9 +237,10 @@ fn build_state(k: &Knobs) -> Vec<u8> {
         .clone()
         .unwrap_or_else(|| concat(&[arr(2), uint(k.treasury), uint(k.reserves)]));
     // EpochState = [acct, LedgerState, snaps, nonmyopic]
-    // SnapShots = array(4)[ssStakeMark, ssStakeSet, ssStakeGo, ssFee]; the MARK = array(2)[ssStake:
-    // map(StakeCredential -> [Coin, PoolId]), ssPoolParams]. The decode reads the mark's ssStake (the
-    // seed+1 leadership, here one credential delegating COIN to POOL_ID) and skips set/go/fee.
+    // SnapShots = array(4)[ssStakeMark, ssStakeSet, ssStakeGo, ssFee]; each StakeSnapshot =
+    // array(2)[ssStake: map(StakeCredential -> [Coin, PoolId]), ssPoolParams]. The decode reads the
+    // FULL mark/set/go ssStake (here the mark carries one credential delegating COIN to POOL_ID; set/go
+    // are valid-but-empty) and derives the seed+1 mark PoolDistr from the decoded mark.
     let mark = concat(&[
         arr(2),
         concat(&[
@@ -247,9 +248,11 @@ fn build_state(k: &Knobs) -> Vec<u8> {
             concat(&[arr(2), uint(0), bytes(&[0x33; 28])]),
             concat(&[arr(2), uint(1_000_000), bytes(&POOL_ID)]),
         ]),
-        map(0), // ssPoolParams (skipped; the VRF comes from the cert-state registration)
+        map(0), // ssPoolParams (the VRF comes from the cert-state registration)
     ]);
-    let snaps = concat(&[arr(4), mark, map(0), map(0), uint(0)]);
+    // ssStakeSet / ssStakeGo: valid-but-empty StakeSnapshots = array(2)[map(0) ssStake, map(0) ssPoolParams].
+    let empty_snap = concat(&[arr(2), map(0), map(0)]);
+    let snaps = concat(&[arr(4), mark, empty_snap.clone(), empty_snap, uint(0)]);
     let es = concat(&[arr(4), acct, ls, snaps, arr(0)]);
 
     // PoolDistr wrapper = [poolDistr_map(1), totalActiveStake]

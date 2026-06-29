@@ -38,6 +38,7 @@ use ade_types::{CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
 use crate::bootstrap_anchor::SeedPoint;
 use crate::consensus_input_extract::{Nonce, PraosNonces};
 use crate::delegation::{CertState, DelegationState, PoolParams, PoolState};
+use crate::epoch::{GoSnapshot, MarkSnapshot, SetSnapshot, SnapshotState, StakeSnapshot};
 use crate::pparams::{MinUtxoRule, ProtocolParameters};
 use crate::rational::Rational;
 use crate::snapshot::cert_state::{decode_cert_state, encode_cert_state};
@@ -362,6 +363,64 @@ mod tip_tests {
         // headerState = [ Origin=a(0), chainDep=a(0) ]
         let s: Vec<u8> = vec![0x82, 0x01, 0x82, 0x80, 0x82, 0x80, 0x80];
         assert!(decode_ledgerdb_tip(&s).is_err());
+    }
+
+    /// CE-3d acceptance #1 + #3 (hermetic): a SnapShot's combined `ssStake` (cred -> [coin, pool])
+    /// decodes to the full `StakeSnapshot` (delegations + `calculatePoolDistr` pool_stakes), and the
+    /// result round-trips through the accumulator's `epoch_state` codec byte-identically (restart).
+    #[test]
+    fn read_stake_snapshot_full_decodes_combined_stake_and_delegation() {
+        // SnapShot = array(2)[ ssStake: map(cred -> [coin, pool]), ssPoolParams: map(0) ].
+        // aa,bb -> pool11 (aggregate to 3000); cc -> pool22 (500). ssPoolParams skipped.
+        let mut s: Vec<u8> = vec![0x82, 0xa3]; // SnapShot a(2) ; ssStake map(3)
+        let mut entry = |cred: u8, hi: u8, lo: u8, pool: u8| {
+            s.extend_from_slice(&[0x82, 0x00, 0x58, 0x1c]); // key cred = a(2)[tag0, bytes(28)]
+            s.extend_from_slice(&[cred; 28]);
+            s.extend_from_slice(&[0x82, 0x19, hi, lo, 0x58, 0x1c]); // val a(2)[coin u16, bytes(28) pool]
+            s.extend_from_slice(&[pool; 28]);
+        };
+        entry(0xaa, 0x03, 0xe8, 0x11); // 1000 -> pool11
+        entry(0xbb, 0x07, 0xd0, 0x11); // 2000 -> pool11
+        entry(0xcc, 0x01, 0xf4, 0x22); // 500  -> pool22
+        s.push(0xa0); // ssPoolParams map(0) -- skipped
+
+        let mut o = 0usize;
+        let snap = read_stake_snapshot_full(&s, &mut o, "test").expect("decode");
+        assert_eq!(o, s.len(), "consumes the whole SnapShot (ssStake + skipped ssPoolParams)");
+        assert_eq!(snap.delegations.len(), 3);
+        assert_eq!(
+            snap.delegations.get(&Hash28([0xaa; 28])),
+            Some(&(PoolId(Hash28([0x11; 28])), Coin(1000)))
+        );
+        assert_eq!(
+            snap.delegations.get(&Hash28([0xcc; 28])),
+            Some(&(PoolId(Hash28([0x22; 28])), Coin(500)))
+        );
+        assert_eq!(snap.pool_stakes.get(&PoolId(Hash28([0x11; 28]))), Some(&Coin(3000)));
+        assert_eq!(snap.pool_stakes.get(&PoolId(Hash28([0x22; 28]))), Some(&Coin(500)));
+
+        // Acceptance #3: the snapshots survive the accumulator's encode/decode byte-identically.
+        use crate::epoch::{GoSnapshot, MarkSnapshot, SetSnapshot, SnapshotState};
+        use crate::snapshot::epoch_state::{decode_epoch_state, encode_epoch_state};
+        use crate::state::EpochState;
+        let mut es = EpochState::new();
+        es.snapshots = SnapshotState {
+            mark: MarkSnapshot(snap.clone()),
+            set: SetSnapshot(snap.clone()),
+            go: GoSnapshot(snap.clone()),
+        };
+        let rt = decode_epoch_state(&encode_epoch_state(&es)).expect("round-trip");
+        assert_eq!(rt.snapshots.go.0, snap, "go survives encode/decode byte-identically");
+        assert_eq!(rt.snapshots.mark.0, snap);
+        assert_eq!(rt.snapshots.set.0, snap);
+    }
+
+    /// CE-3d fail-closed: a structurally short SnapShot is TERMINAL (never empty-substituted).
+    #[test]
+    fn read_stake_snapshot_full_rejects_short_snapshot() {
+        let s: Vec<u8> = vec![0x81, 0xa0]; // SnapShot a(1)[ map(0) ] -- missing ssPoolParams
+        let mut o = 0usize;
+        assert!(read_stake_snapshot_full(&s, &mut o, "test").is_err());
     }
 }
 
@@ -751,6 +810,11 @@ pub struct NativeSnapshotNonUtxoState {
     /// ECA-5 (DC-EPOCH-15): the MARK stake snapshot's PoolDistr — the seed+1 (next-epoch) leadership,
     /// the BOOTSTRAP BRIDGE authority. `calculatePoolDistr(ssStakeMark)`: pool -> (active stake, VRF).
     pub mark_pool_distr: BTreeMap<PoolId, (u64, Hash32)>,
+    /// LIVE-LEDGER-EPOCH-TRANSITION (CE-3d): the FULL mark/set/go stake snapshots decoded from
+    /// `esSnapshots` — the reward + leadership stake authority the `EpochAccumulator` must seed (NOT
+    /// the cold-start empty default). Without these, the accumulator's `go` is empty for the first ~3
+    /// boundaries after bootstrap → zero member rewards. Decoded from the certified snapshot ALONE.
+    pub snapshots: SnapshotState,
     /// The Conway current protocol parameters (`utxosGovState.curPParams`).
     pub protocol_params: ProtocolParameters,
     /// `esAccountState.reserves`.
@@ -768,68 +832,72 @@ pub struct NativeSnapshotNonUtxoState {
     pub reward_nibble_observation: RewardNibbleObservation,
 }
 
-/// ECA-5 piece (a): decode the MARK stake snapshot (`ssStakeMark`, the seed+1 leadership) and compute
-/// its PoolDistr. In this ledger version `SnapShot = array(2)[ssStake: map(StakeCredential -> [Coin,
-/// PoolId]), ssPoolParams: map(PoolId -> PoolParams)]` -- stake + delegation are COMBINED in ssStake.
-/// Active stake per pool is `calculatePoolDistr`: sum the coin of every credential delegated to the
-/// pool. The per-pool VRF is taken from the durable cert-state registrations (`cert_pool_vrf`) because
-/// this version's ssPoolParams is not vrf-first like the cert-state encoding; that coherence is the
-/// mark<->nesPd VRF cross-check. Pools with zero stake (or no cert-state registration) are dropped.
-/// Derived from the MARK snapshot + the durable cert-state ALONE -- never nesPd / window-replay / an oracle.
-fn read_mark_snapshot_pool_distr(
-    d: &[u8],
-    o: &mut usize,
-    cert_pool_vrf: &BTreeMap<PoolId, Hash32>,
-) -> R<BTreeMap<PoolId, (u64, Hash32)>> {
-    let sn = array_len(d, o, "mark.SnapShot")?;
-    // This ledger version's SnapShot = array(2)[ssStake, ssPoolParams] (stake + delegation COMBINED).
+/// Decode a cardano `SnapShot = array(2)[ssStake: map(StakeCredential -> [Coin, PoolId]),
+/// ssPoolParams: map(PoolId -> PoolParams)]` (stake + delegation COMBINED in ssStake, this ledger
+/// version) into Ade's `StakeSnapshot`: `delegations` = credential-hash -> (pool, coin); `pool_stakes`
+/// = the `calculatePoolDistr` per-pool sum. `ssPoolParams` is SKIPPED — pool params live in the durable
+/// cert state, and this version's ssPoolParams is not vrf-first; the per-pool VRF comes from the
+/// cert-state registrations (the mark<->nesPd VRF cross-check, see [`derive_mark_pool_distr`]). Faithful
+/// to the certified snapshot ALONE — never the UTxO checkpoint, a live capture, nesPd, window-replay,
+/// or an oracle. A malformed / short SnapShot is TERMINAL (no empty-substitution).
+fn read_stake_snapshot_full(d: &[u8], o: &mut usize, label: &'static str) -> R<StakeSnapshot> {
+    let sn = array_len(d, o, label)?;
+    // SnapShot = array(2)[ssStake, ssPoolParams] (stake + delegation COMBINED).
     if sn < 2 {
-        return Err(malformed(format!("mark.SnapShot arity {sn} < 2")));
+        return Err(malformed(format!("{label}.SnapShot arity {sn} < 2")));
     }
     // map0 = ssStake: map(StakeCredential -> [Coin, PoolId]) -- stake + delegation in one entry.
-    // `calculatePoolDistr`: sum each delegated credential's coin into its pool.
-    let mut pool_stake: BTreeMap<PoolId, u64> = BTreeMap::new();
-    map_each(d, o, "mark.stake", |o| {
-        let _cred = read_credential(d, o)?; // key: array(2)[tag, hash28] (skipped; pool is in the value)
-        expect_array(d, o, 2, "mark.stake.val")?; // value: [coin, pool]
-        let coin = read_u64(d, o, "mark.stake.coin")?;
-        let pool = PoolId(hash28(read_fixed_bytes(d, o, 28, "mark.stake.pool")?));
-        let e = pool_stake.entry(pool).or_insert(0u64);
+    let mut delegations: BTreeMap<Hash28, (PoolId, Coin)> = BTreeMap::new();
+    let mut pool_stakes: BTreeMap<PoolId, u64> = BTreeMap::new();
+    map_each(d, o, label, |o| {
+        let cred = read_credential(d, o)?; // key: array(2)[tag, hash28]
+        expect_array(d, o, 2, "snap.stake.val")?; // value: [coin, pool]
+        let coin = read_u64(d, o, "snap.stake.coin")?;
+        let pool = PoolId(hash28(read_fixed_bytes(d, o, 28, "snap.stake.pool")?));
+        // StakeSnapshot is Hash28-keyed (discriminant-erased), matching how the boundary fold reads it.
+        delegations.insert(cred.hash().clone(), (pool.clone(), Coin(coin)));
+        let e = pool_stakes.entry(pool).or_insert(0u64);
         *e = e.saturating_add(coin);
         Ok(())
     })?;
-    // map1 = ssPoolParams: this ledger version encodes it differently (NOT vrf-first like the cert-state
-    // pool registrations), so the VRF is taken from the durable cert-state registrations -- which decode
-    // correctly and whose coherence with this PoolDistr is the mark<->nesPd VRF cross-check. Skip map1.
+    // map1 = ssPoolParams (+ any trailing): skipped (see the fn doc).
     for _ in 1..sn {
         skip_item(d, o)?;
     }
-    // build pool -> (active_stake, vrf). A staked pool with no cert-state registration (retired between the
-    // mark snapshot and the seed point) cannot lead in seed+1 -> omit it (never fabricate a VRF).
-    let mut out: BTreeMap<PoolId, (u64, Hash32)> = BTreeMap::new();
-    for (pool, st) in pool_stake {
-        if st == 0 {
-            continue;
-        }
-        if let Some(vrf) = cert_pool_vrf.get(&pool) {
-            out.insert(pool, (st, vrf.clone()));
-        }
-    }
-    Ok(out)
+    Ok(StakeSnapshot {
+        delegations,
+        pool_stakes: pool_stakes.into_iter().map(|(p, c)| (p, Coin(c))).collect(),
+    })
 }
 
-
-/// `nn`-error wrapper for [`read_mark_snapshot_pool_distr`] (mirrors `read_pool_distr_nn`).
-fn read_mark_snapshot_pool_distr_nn(
-    d: &[u8],
-    o: &mut usize,
-    cert_pool_vrf: &BTreeMap<PoolId, Hash32>,
-) -> Rn<BTreeMap<PoolId, (u64, Hash32)>> {
-    read_mark_snapshot_pool_distr(d, o, cert_pool_vrf).map_err(|e| match e {
+/// `nn`-error wrapper for [`read_stake_snapshot_full`].
+fn read_stake_snapshot_full_nn(d: &[u8], o: &mut usize, label: &'static str) -> Rn<StakeSnapshot> {
+    read_stake_snapshot_full(d, o, label).map_err(|e| match e {
         LedgerDbStateError::ZeroVrf(p) => NativeNonUtxoError::ZeroVrf(p),
         LedgerDbStateError::MalformedCbor(s) => NativeNonUtxoError::MalformedCbor(s),
-        other => nn_malformed(format!("mark snapshot: {other:?}")),
+        other => nn_malformed(format!("{label} snapshot: {other:?}")),
     })
+}
+
+/// ECA-5 (DC-EPOCH-15): `calculatePoolDistr(ssStakeMark)` — pool -> (active stake, VRF) — derived from
+/// the FULL decoded MARK snapshot's `pool_stakes` + the durable cert-state VRF registrations
+/// (`cert_pool_vrf`). A staked pool with no cert-state registration (retired between the mark snapshot
+/// and the seed point) cannot lead in seed+1 -> omitted (never fabricate a VRF). Byte-identical to the
+/// pre-CE-3d `read_mark_snapshot_pool_distr` (same per-pool sum, same zero-stake + missing-VRF drops).
+fn derive_mark_pool_distr(
+    mark: &StakeSnapshot,
+    cert_pool_vrf: &BTreeMap<PoolId, Hash32>,
+) -> BTreeMap<PoolId, (u64, Hash32)> {
+    let mut out: BTreeMap<PoolId, (u64, Hash32)> = BTreeMap::new();
+    for (pool, st) in &mark.pool_stakes {
+        if st.0 == 0 {
+            continue;
+        }
+        if let Some(vrf) = cert_pool_vrf.get(pool) {
+            out.insert(pool.clone(), (st.0, vrf.clone()));
+        }
+    }
+    out
 }
 
 /// Decode the V2 LedgerDB `state` CBOR into the COMPLETE native non-UTxO ledger state +
@@ -950,20 +1018,22 @@ pub fn decode_native_nonutxo_state(
     // UTxOState = array(6)[utxo, deposited, fees, govState, incrStake, donation]
     let protocol_params = read_conway_pparams_from_utxo_state(d, o, network_id)?;
     // EpochState.snapshots = SnapShots = array(4)[ssStakeMark, ssStakeSet, ssStakeGo, ssFee] (this ledger
-    // version caches NO mark PoolDistr). ECA-5 piece (a): decode ssStakeMark -> the seed+1 leadership
-    // bridge (calculatePoolDistr); skip set/go/fee.
-    // SnapShots = array(4)[ssStakeMark, ssStakeSet, ssStakeGo, ssFee]; ssStakeMark -> the seed+1 bridge.
-    // The seed+1 leadership VRFs come from the durable cert-state pool registrations.
+    // version caches NO mark PoolDistr). CE-3d: decode the FULL mark/set/go stake snapshots (the reward +
+    // leadership stake authority the EpochAccumulator seeds) — NOT just the ECA-5 mark PoolDistr, and
+    // never a cold-start empty default (which leaves the accumulator's `go` empty for ~3 boundaries ->
+    // zero member rewards). The seed+1 leadership VRFs come from the durable cert-state pool registrations.
     let cert_pool_vrf: BTreeMap<PoolId, Hash32> = pool
         .pools
         .iter()
         .map(|(p, pp)| (p.clone(), pp.vrf_hash.clone()))
         .collect();
     nn_expect_array(d, o, 4, "EpochState.snapshots")?;
-    let mark_pool_distr = read_mark_snapshot_pool_distr_nn(d, o, &cert_pool_vrf)?;
-    skip_item(d, o)?; // ssStakeSet
-    skip_item(d, o)?; // ssStakeGo
+    let mark_snapshot = read_stake_snapshot_full_nn(d, o, "ssStakeMark")?;
+    let set_snapshot = read_stake_snapshot_full_nn(d, o, "ssStakeSet")?;
+    let go_snapshot = read_stake_snapshot_full_nn(d, o, "ssStakeGo")?;
     skip_item(d, o)?; // ssFee
+    // ECA-5 mark PoolDistr: derived from the FULL mark snapshot (byte-identical to the prior dedicated read).
+    let mark_pool_distr = derive_mark_pool_distr(&mark_snapshot, &cert_pool_vrf);
     skip_item(d, o)?; // EpochState.nonMyopic
     // nes.rewardUpdate (nesRu): decode the Complete RUPD's per-credential reward deltas — the
     // seed-window-end reward distribution that authority(N+2)'s stake needs. R-error -> Rn.
@@ -1033,6 +1103,11 @@ pub fn decode_native_nonutxo_state(
         praos_nonces,
         pool_distr,
         mark_pool_distr,
+        snapshots: SnapshotState {
+            mark: MarkSnapshot(mark_snapshot),
+            set: SetSnapshot(set_snapshot),
+            go: GoSnapshot(go_snapshot),
+        },
         protocol_params,
         reserves,
         treasury,
