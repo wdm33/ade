@@ -9373,3 +9373,38 @@ ci_scripts = ["ci/ci_check_poolreap_single_canonical.sh"]
 status = "declared"
 introduced_in = "LIVE-LEDGER-EPOCH-TRANSITION-S3"
 strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-22"
+tier = "derived"
+statement = """
+BOUNDARY-ALIGNED-MARK-CAPTURE. The live epoch-boundary stake mark is captured ONLY from the durable reduced
+checkpoint materialized at the EXACT selected-chain boundary point -- the last durable block of the closing
+epoch (s_prev) -- never at a later catch-up tip and never via a per-block stake scan. The capture is durably
+bound as a BoundaryMark keyed by the canonical boundary chain point (slot, hash) and the checkpoint lineage
+at that point, persisted BEFORE the accumulator boundary transition consumes it. The transition consumes a
+mark only when the binding is present and its point + lineage match the canonical chain; a reorg that
+removes or replaces the boundary point INVALIDATES the mark and forces deterministic rematerialization
+(reset-to-seed + replay) -- a mark is NEVER reused on an epoch-number match alone. This protects the
+boundary transition's INPUT (DC-EPOCH-21 governs the transition's OUTPUT given a correct mark): a mark read
+at the catch-up tip is byte-wrong (the checkpoint is already past the boundary), and even at the
+steady-state tip it wrongly includes the first block of the new epoch (SNAP captures the end-of-epoch stake,
+BEFORE that block). A co-advancer segments the reduced-checkpoint + accumulator advance at each boundary
+(idempotent-resume, byte-identical to advance-to-tip), captures sum_base_credential_stake() at the boundary
+point, durably binds the BoundaryMark before the cross, then crosses the accumulator over the boundary block
+with the bound mark; finally it advances the checkpoint the rest of the way to the durable tip (EVIEW
+currency preserved). OBSERVE-ONLY in S3: a capture/cross fault STALLS the accumulator (it stays at s_prev),
+never halting the proven follow; the EVIEW checkpoint still reaches tip fail-closed. Enforced PROGRESSIVELY:
+#2b-i wires the accumulator boundary-cross entry point (this sub-commit, cross_accumulator_over_boundary_block,
+the ONLY place the S2 mark-exclusion is lifted); the durable BoundaryMark witness + the point/lineage
+validation (#2b-ii), the node_lifecycle co-advancer segment->capture->bind->cross->tip (#2b-iii), the
+DC-EPOCH-22 CI guard, and the CE-3c live venue crossing land next -- status stays declared until they do.
+"""
+source = "docs/clusters/LIVE-LEDGER-EPOCH-TRANSITION/SLICE-S3-boundary-gate.md section 3 + section 5 item #2b (BOUNDARY-ALIGNED-MARK-CAPTURE). The boundary mark is the only NEW live input the boundary transition needs; a naive read at the post-pass tip is byte-wrong in BOTH catch-up (the checkpoint is already past the boundary) and steady-state (the tip is the first block of the new epoch, whose UTxO delta must NOT be in the mark). The mark is sourced at the exact boundary point via the co-advancer, NOT the EVIEW BoundaryPromoted yield (which is EVIEW-gated and fires one block too late). Resolves the S2 observe-only boundary stall (MissingBoundaryStake, the forced ctx.boundary_mark = None)."
+cross_ref = ["DC-EPOCH-21", "DC-EPOCH-20", "DC-EPOCH-19", "DC-EPOCH-11"]
+code_locus = "ade_runtime/chaindb/epoch_accumulator_advance.rs (cross_accumulator_over_boundary_block -- the accumulator boundary-cross entry point, #2b-i: load_current -> idempotent AlreadyCrossed at/before tip [never re-decoded/re-applied] -> get_block_by_slot [MissingBlock fault if a directed boundary slot has no durable block] -> decode + era_schedule.locate the boundary epoch -> SelectedBlockCtx with boundary_mark = Some(mark) [the S2 mark-exclusion lifted ONLY here; WithinEpochCtx + advance_accumulator_over_block stay structurally mark-free] -> apply_selected_block -> store.advance on Crossed, observe-only Stalled on a contract fail-close; new AccumulatorBoundaryOutcome = Crossed/AlreadyCrossed/Stalled + AccumulatorChaindbError::MissingBlock; re-exported via chaindb/mod.rs). The durable BoundaryMark witness + the point/lineage validation (EpochAccumulatorStore bind_boundary_mark / take_boundary_mark_for, #2b-ii), the node_lifecycle co-advancer (segment -> checkpoint-to-s_prev -> capture sum_base_credential_stake -> bind -> cross -> checkpoint-to-tip, the call-site swap of the two advance-to-tip calls, #2b-iii), and the DC-EPOCH-22 CI guard land next -- status stays declared until #2b-ii/#2b-iii + the CE-3c live crossing do."
+tests = ["ade_runtime::chaindb::epoch_accumulator_advance::tests::boundary_block_crosses_with_mark", "ade_runtime::chaindb::epoch_accumulator_advance::tests::boundary_cross_is_idempotent", "ade_runtime::chaindb::epoch_accumulator_advance::tests::boundary_cross_missing_block_is_a_fault"]
+ci_scripts = []
+status = "declared"
+introduced_in = "LIVE-LEDGER-EPOCH-TRANSITION-S3"
+strengthened_in = []

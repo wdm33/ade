@@ -27,8 +27,12 @@
 //! authoritative read until S3 resolves it. A genuine STORE fault (durability I/O) is distinct — it is an
 //! [`AdvanceError`], a real error the caller must not paper over.
 
+use std::collections::BTreeMap;
+
 use ade_core::consensus::era_schedule::EraSchedule;
 use ade_ledger::epoch_accumulator::{apply_selected_block, SelectedBlockCtx};
+use ade_types::shelley::cert::StakeCredential;
+use ade_types::tx::Coin;
 use ade_types::{CardanoEra, EpochNo, PoolId, SlotNo};
 
 use super::epoch_accumulator_store::{EpochAccumulatorStore, EpochAccumulatorStoreError};
@@ -151,6 +155,10 @@ pub enum AccumulatorChaindbError {
     Locate(String),
     /// A store I/O fault or unsealed store surfaced by the per-block advancer.
     Advance(AdvanceError),
+    /// A boundary slot the caller KNOWS is a boundary has no durable block. This is a real fault, not an
+    /// observe-only stall: the within-epoch walk simply never reaches an absent slot, but a boundary cross
+    /// is directed AT a specific slot, so its absence is a durable-store inconsistency.
+    MissingBlock(SlotNo),
 }
 
 /// Reconcile the durable accumulator over the canonical selected chain in `(from, to_slot]`, where
@@ -212,6 +220,102 @@ pub fn advance_accumulator_over_chaindb(
         .last_advanced_slot()
         .map_err(|e| AccumulatorChaindbError::Advance(AdvanceError::Store(e)))?;
     Ok(AccumulatorChaindbOutcome::ReachedTip { last_slot })
+}
+
+/// The outcome of crossing the accumulator over ONE durable boundary block (LIVE-LEDGER-EPOCH-TRANSITION
+/// S3 / DC-EPOCH-22, item #2b-i). `Crossed` / `AlreadyCrossed` / `Stalled` are all NON-error outcomes — the
+/// follow continues regardless (the accumulator is observe-only in S3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccumulatorBoundaryOutcome {
+    /// The boundary block applied WITH the mark: the NEWEPOCH transition fired and the store advanced into
+    /// the new epoch (`to_epoch`) at `slot`.
+    Crossed {
+        from_epoch: EpochNo,
+        to_epoch: EpochNo,
+        slot: SlotNo,
+    },
+    /// The boundary block is at or before the store's tip — already crossed (idempotent re-entry); no-op.
+    AlreadyCrossed { slot: SlotNo, last: SlotNo },
+    /// OBSERVE-ONLY: `apply_selected_block` fail-closed crossing this block. Store untouched; follow continues.
+    Stalled { slot: SlotNo, reason: String },
+}
+
+/// Cross the durable accumulator over ONE durable boundary block, supplying the boundary MARK
+/// (LIVE-LEDGER-EPOCH-TRANSITION S3 / DC-EPOCH-22, item #2b-i).
+///
+/// This is the ONLY place the S2 structural mark-exclusion is lifted: [`WithinEpochCtx`] /
+/// [`advance_accumulator_over_block`] stay mark-free, so a boundary reached through them STALLS
+/// (`MissingBoundaryStake`). A boundary the co-advancer has positioned — the accumulator's cursor at the
+/// last within-epoch slot `s_prev`, the boundary block at `boundary_block_slot` — is crossed HERE: the
+/// caller supplies the per-credential `boundary_mark` captured at `s_prev` (`sum_base_credential_stake()`
+/// over the reduced checkpoint), and the BLUE `apply_selected_block` runs the NEWEPOCH transition then the
+/// block's within-epoch effects.
+///
+/// Outcomes: an at-or-before-tip block is an idempotent [`AccumulatorBoundaryOutcome::AlreadyCrossed`]
+/// (never re-decoded / re-applied — the BLUE cross is not itself idempotent, only this guard is); a contract
+/// fail-close is an observe-only [`AccumulatorBoundaryOutcome::Stalled`] (store untouched). A boundary slot
+/// with NO durable block is a real [`AccumulatorChaindbError::MissingBlock`] (the cross was directed AT that
+/// slot), distinct from the within-epoch walk that simply never reaches an absent slot.
+pub fn cross_accumulator_over_boundary_block(
+    store: &EpochAccumulatorStore,
+    chaindb: &dyn ChainDb,
+    era_schedule: &EraSchedule,
+    boundary_block_slot: SlotNo,
+    boundary_mark: &BTreeMap<StakeCredential, Coin>,
+) -> Result<AccumulatorBoundaryOutcome, AccumulatorChaindbError> {
+    let (last_slot, acc) = store
+        .load_current()
+        .map_err(|e| AccumulatorChaindbError::Advance(AdvanceError::Store(e)))?
+        .ok_or(AccumulatorChaindbError::Advance(AdvanceError::Unsealed))?;
+
+    // Idempotent re-entry: a boundary at or before the store's tip was already crossed — never re-decode or
+    // re-apply (the cross mutates pots/snapshots; only this guard makes the call idempotent).
+    if boundary_block_slot.0 <= last_slot.0 {
+        return Ok(AccumulatorBoundaryOutcome::AlreadyCrossed {
+            slot: boundary_block_slot,
+            last: last_slot,
+        });
+    }
+
+    let stored = chaindb
+        .get_block_by_slot(boundary_block_slot)
+        .map_err(AccumulatorChaindbError::ChainDb)?
+        .ok_or(AccumulatorChaindbError::MissingBlock(boundary_block_slot))?;
+
+    let decoded = ade_ledger::block_validity::decode_block(&stored.bytes)
+        .map_err(|e| AccumulatorChaindbError::Decode(format!("{e:?}")))?;
+    let block_epoch = era_schedule
+        .locate(boundary_block_slot)
+        .map_err(|e| AccumulatorChaindbError::Locate(format!("{e:?}")))?
+        .epoch;
+
+    let ctx = SelectedBlockCtx {
+        era: decoded.era,
+        block_epoch,
+        block_slot: boundary_block_slot,
+        issuer_pool: PoolId(decoded.header_input.issuer_pool.clone()),
+        // S3 / DC-EPOCH-22: the boundary mark captured at the prior tip — the ONLY point the S2
+        // mark-exclusion is lifted.
+        boundary_mark: Some(boundary_mark.clone()),
+    };
+
+    let from_epoch = acc.epoch_state.epoch;
+    match apply_selected_block(&acc, &stored.bytes, &ctx) {
+        Ok(next) => {
+            store
+                .advance(&next, boundary_block_slot)
+                .map_err(|e| AccumulatorChaindbError::Advance(AdvanceError::Store(e)))?;
+            Ok(AccumulatorBoundaryOutcome::Crossed {
+                from_epoch,
+                to_epoch: block_epoch,
+                slot: boundary_block_slot,
+            })
+        }
+        Err(e) => Ok(AccumulatorBoundaryOutcome::Stalled {
+            slot: boundary_block_slot,
+            reason: format!("{e:?}"),
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -487,6 +591,102 @@ mod tests {
             s.last_advanced_slot().unwrap(),
             Some(SlotNo(43_000_000)),
             "replay restores the same tip"
+        );
+    }
+
+    fn cred(b: u8) -> StakeCredential {
+        StakeCredential::KeyHash(Hash28([b; 28]))
+    }
+
+    /// LIVE-LEDGER-EPOCH-TRANSITION S3 (DC-EPOCH-22 / #2b-i): the boundary block CROSSES when the mark is
+    /// supplied — the counterpart of `over_chaindb_stops_at_boundary_observe_only` (mark=None stalls). The
+    /// NEWEPOCH transition fires and the store advances into the new epoch.
+    #[test]
+    fn boundary_block_crosses_with_mark() {
+        use crate::chaindb::InMemoryChainDb;
+        let tmp = TempDir::new().unwrap();
+        let s = sealed_store_at_epoch_500(&tmp, SlotNo(42_000_000));
+        let db = InMemoryChainDb::new();
+        put_raw(&db, 43_086_000); // 86_000 * 501 -> epoch 501, a boundary crossing
+        let mut mark: BTreeMap<StakeCredential, Coin> = BTreeMap::new();
+        mark.insert(cred(0x11), Coin(5_000_000));
+        mark.insert(cred(0x22), Coin(7_000_000));
+        let outcome = cross_accumulator_over_boundary_block(
+            &s,
+            &db,
+            &schedule_86k(),
+            SlotNo(43_086_000),
+            &mark,
+        )
+        .unwrap();
+        assert_eq!(
+            outcome,
+            AccumulatorBoundaryOutcome::Crossed {
+                from_epoch: EpochNo(500),
+                to_epoch: EpochNo(501),
+                slot: SlotNo(43_086_000),
+            }
+        );
+        // The store advanced into epoch 501 at the boundary slot.
+        let (slot, acc) = s.load_current().unwrap().unwrap();
+        assert_eq!(slot, SlotNo(43_086_000));
+        assert_eq!(acc.epoch_state.epoch, EpochNo(501));
+    }
+
+    /// A boundary at or before the store's tip is an idempotent no-op — the cross is never re-decoded or
+    /// re-applied (proven by an EMPTY chaindb: if the guard didn't short-circuit, the read would fault).
+    #[test]
+    fn boundary_cross_is_idempotent() {
+        use crate::chaindb::InMemoryChainDb;
+        let tmp = TempDir::new().unwrap();
+        // The store's tip is already AT the boundary slot.
+        let s = sealed_store_at_epoch_500(&tmp, SlotNo(43_086_000));
+        let db = InMemoryChainDb::new(); // empty — the idempotent arm must not read it
+        let mark: BTreeMap<StakeCredential, Coin> = BTreeMap::new();
+        let outcome = cross_accumulator_over_boundary_block(
+            &s,
+            &db,
+            &schedule_86k(),
+            SlotNo(43_086_000),
+            &mark,
+        )
+        .unwrap();
+        assert_eq!(
+            outcome,
+            AccumulatorBoundaryOutcome::AlreadyCrossed {
+                slot: SlotNo(43_086_000),
+                last: SlotNo(43_086_000),
+            }
+        );
+        // Nothing re-applied: still epoch 500 (the cross never ran).
+        let (slot, acc) = s.load_current().unwrap().unwrap();
+        assert_eq!(slot, SlotNo(43_086_000));
+        assert_eq!(acc.epoch_state.epoch, EpochNo(500));
+    }
+
+    /// A boundary cross directed at a slot with no durable block is a REAL fault (`MissingBlock`), not an
+    /// observe-only stall — the caller asserted that slot is a boundary, so its absence is a store fault.
+    #[test]
+    fn boundary_cross_missing_block_is_a_fault() {
+        use crate::chaindb::InMemoryChainDb;
+        let tmp = TempDir::new().unwrap();
+        let s = sealed_store_at_epoch_500(&tmp, SlotNo(42_000_000));
+        let db = InMemoryChainDb::new(); // empty — no block at the boundary slot
+        let mark: BTreeMap<StakeCredential, Coin> = BTreeMap::new();
+        let err = cross_accumulator_over_boundary_block(
+            &s,
+            &db,
+            &schedule_86k(),
+            SlotNo(43_086_000),
+            &mark,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AccumulatorChaindbError::MissingBlock(SlotNo(43_086_000))
+            ),
+            "expected MissingBlock at the boundary slot, got {err:?}"
         );
     }
 }

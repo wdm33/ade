@@ -9,9 +9,11 @@ DC-EPOCH-18 (the seed+2 byte-exact stake — the bootstrap-transient reward seed
 from), the reduced-checkpoint stake aggregate (`aggregate_pool_stake`).
 **Status:** In progress — item #1 (POOLREAP reconciliation + discriminant) + item #2a (the BLUE
 per-credential mark, `build_boundary_mark_snapshot`; oracle 27/27 byte-preserved, +1 test) DONE (CE-3a/CE-3b/CI
-green; DC-EPOCH-21 declared). Item #2b (the live wiring — thread the reduced-checkpoint handle + supply
-`sum_base_credential_stake` at the boundary so the accumulator CROSSES) + #3 (CE-3d byte-exact differential
-gate) pending.
+green; DC-EPOCH-21 declared). Item #2b reframed as **BOUNDARY-ALIGNED-MARK-CAPTURE** (declares DC-EPOCH-22):
+the live mark is captured at the EXACT boundary point from the lineage-matched reduced checkpoint, via a
+co-advancer that segments the checkpoint+accumulator advance at each boundary — NOT a naive read at the
+post-pass tip (byte-wrong in catch-up AND steady-state). #2b (three hermetic sub-commits + the CE-3c venue
+crossing) + #3 (CE-3d byte-exact differential gate) pending.
 
 > S2 made the accumulator track every within-epoch block and **stall, observe-only, at the boundary**
 > (`MissingBoundaryStake`, because the live driver supplies `ctx.boundary_mark = None`). S3 supplies the
@@ -152,6 +154,24 @@ cardano semantics (registered/unclaimed split, refund-before-clear, `== e`, scri
 preserved full-ledger boundary corpus; and the CE-3 live differential gate vs cardano-node at ≥2 self-
 derived boundaries.
 
+**DC-EPOCH-22 (BOUNDARY-ALIGNED-MARK-CAPTURE — item #2b declares it).** *The live epoch-boundary stake mark
+is captured ONLY from the durable reduced checkpoint materialized at the EXACT selected-chain boundary point
+(the last durable block of the closing epoch) — never at a later catch-up tip, never via a per-block stake
+scan. The capture is durably bound as a BoundaryMark keyed by the canonical boundary chain point `(slot,
+hash)` and the checkpoint lineage at that point, persisted BEFORE the accumulator boundary transition
+consumes it. The transition consumes a mark only when the binding is present and its point+lineage match the
+canonical chain; a reorg that removes or replaces the boundary point INVALIDATES the mark and forces
+deterministic rematerialization (reset-to-seed + replay) — a mark is NEVER reused on an epoch-number match
+alone.* This protects the boundary transition's INPUT (DC-EPOCH-21 governs the transition's output given a
+correct mark): a mark read at the catch-up tip is byte-wrong (the checkpoint is past the boundary), and even
+at the steady-state tip it wrongly includes the first block of the new epoch (SNAP captures the end-of-epoch
+stake, before that block). Enforced by: the co-advancer that segments the reduced-checkpoint advance at each
+boundary (idempotent-resume, byte-identical to advance-to-tip) and captures `sum_base_credential_stake()` at
+the boundary point before the cross; the durable BoundaryMark witness written before the cross + the
+point+lineage validation on consume; hermetic tests (steady-state crossing; multi-boundary catch-up crossing;
+mark-captured-at-boundary-not-tip; reorg invalidation; observe-only stall on fault); the CI guard; and the
+CE-3c live venue crossing.
+
 ---
 
 ## 4. Scope — what S3 wires, what it defers
@@ -184,16 +204,44 @@ proof with restarts (S6); operational reconnect/forge gates (alongside S6).
    tests (registered/unclaimed→treasury split; refund-before-clear at the overlap; `== e` not `≤ e`;
    script-hash reward-account routing; delegation-clear actually clears). Strengthens DC-EPOCH-19;
    declares DC-EPOCH-21 + the CI guard.
-2. **Live PER-CREDENTIAL `boundary_mark` wiring** (RESHAPED by the PO-S3-3 verdict — was "compute
-   `aggregate_pool_stake` → `form_mark_snapshot`", which is byte-insufficient). The reward-bearing mark
-   must be PER-CREDENTIAL (`cred → (pool, stake)`), built from the reduced checkpoint's
-   `sum_base_credential_stake()` + `cert_state.delegation` (the inputs `aggregate_pool_stake` consumes
-   before it aggregates to per-pool), and stored as mark/set/go in the accumulator (the MEM-OPT tension —
-   the `go` snapshot is 2–3 epochs stale, so it cannot be recomputed; it must be held). At the durable-admit
-   boundary the advancer builds the per-credential mark from the reduced checkpoint at the prior tip →
-   `ctx.boundary_mark`; the advancer crosses (no longer forces `None`), writes the boundary checkpoint,
-   resumes folding. Non-native/test callers unchanged. Venue FirstRun proof: the accumulator CROSSES a real
-   preview boundary (no stall) and keeps folding with non-zero member rewards.
+2. **Live boundary-mark wiring — BOUNDARY-ALIGNED-MARK-CAPTURE (declares DC-EPOCH-22).**
+   - **#2a — the BLUE per-credential mark BUILD — DONE** (`c1a0ec85`). `build_boundary_mark_snapshot` =
+     per delegated credential `base UTxO + reward` → a per-credential `StakeSnapshot`; the boundary fn
+     consumes it directly. (Was per-pool `form_mark_snapshot`, byte-insufficient per PO-S3-3: the reward
+     reads `go.delegations` per-credential.) Oracle 27/27 byte-preserved (the `None` full-ledger path) + a
+     non-zero-member-reward test. The per-credential mark/set/go is held in the accumulator (the MEM-OPT
+     tension — the `go` snapshot is 2–3 epochs stale, cannot be recomputed; the accumulator already stores it).
+   - **#2b — the LIVE capture + crossing (BOUNDARY-ALIGNED).** The mark is a NEW live input sourced from the
+     reduced checkpoint, and it MUST be captured at the EXACT boundary point — `s_prev`, the last durable
+     block of the closing epoch — NOT at a later catch-up tip and NOT via a per-block scan. A naive read at
+     the post-pass tip is byte-WRONG (catch-up: the checkpoint is already past the boundary; steady-state:
+     the tip is the FIRST block of the new epoch, whose UTxO delta must NOT be in the mark). So #2b replaces
+     the two independent advance-to-tip calls (`node_lifecycle.rs:2304` reduced checkpoint + `:2309`
+     accumulator) with ONE **co-advancer** that SEGMENTS at every boundary:
+       - within-epoch: fold the accumulator forward — it already STALLS at the boundary block `s_bb`,
+         leaving its cursor at `s_prev` (so the boundary point is free, no predecessor search);
+       - at the stall: advance the reduced checkpoint EXACTLY to `s_prev` (`advance_reduced_checkpoint_over_chaindb`
+         takes an arbitrary `to_slot`; idempotent-resume → byte-identical to advance-to-tip, only adds a
+         read-only `sum_base_credential_stake()`), build the per-credential mark, **durably bind** the
+         BoundaryMark (point `(s_prev, hash@s_prev)` from `chaindb.get_block_by_slot` + the mark value) BEFORE
+         the cross, then cross the accumulator over `s_bb` with `boundary_mark = Some(mark)`;
+       - finally advance the checkpoint the rest of the way to the durable tip (EVIEW currency preserved —
+         the checkpoint ends at tip exactly as today, only passing through boundary points en route).
+     Identical for steady-state and multi-boundary catch-up (the co-advancer re-derives the segmentation from
+     the durable ChainDB + era schedule; it does NOT depend on the EVIEW `BoundaryPromoted` yield, which is
+     EVIEW-gated and fires one block too late). REORG: the BoundaryMark's `(slot, hash)` lineage key is
+     re-validated against the canonical ChainDB on consume; a removed/replaced boundary point invalidates it →
+     the existing reset-to-seed + replay rematerializes — never reused on epoch-number match. OBSERVE-ONLY
+     preserved (S2/PO-6): a capture/cross fault STALLS (the accumulator stays at `s_prev`), it never halts the
+     proven follow; the EVIEW checkpoint still reaches tip fail-closed.
+     **Sub-commits:** **#2b-i** the accumulator boundary-cross entry point (`cross_accumulator_over_boundary_block`,
+     `epoch_accumulator_advance.rs`; the S2 mark-exclusion lifted ONLY here via a distinct typed ctx — the
+     within-epoch `WithinEpochCtx` stays mark-free) + tests; **#2b-ii** the durable BoundaryMark witness
+     (`EpochAccumulatorStore`: `bind_boundary_mark` / `take_boundary_mark_for` + the point+lineage validation
+     + schema) + tests; **#2b-iii** the co-advancer in `node_lifecycle` (segment → checkpoint-to-`s_prev` →
+     capture → bind → cross → checkpoint-to-tip; the call-site swap) + tests. Then the CE-3c venue proof: the
+     accumulator CROSSES a real preview boundary (no `MissingBoundaryStake` stall) and keeps folding with
+     non-zero member rewards.
 3. **CE-3 byte-exact differential gate** (the decisive proof). Capture cardano-node's reward update +
    stake snapshot at a self-derived boundary (the existing reward_provenance / LedgerDB dump tooling),
    assert Ade's self-computed == it at ≥2 boundaries. Surface any go-snapshot stake drift (the B3c risk
@@ -232,8 +280,13 @@ proof with restarts (S6); operational reconnect/forge gates (alongside S6).
   4/4 — real Shelley→Conway retiring-pool boundaries; oracle `conway_/alonzo_epoch_boundary_end_to_end`
   2/2). NO existing expectation changed (existing tests use `0xE0` key-hash accounts — for which the
   discriminant decode yields the identical credential — and set up no boundary-level retiring pools).
-- [ ] **CE-3c (live crossing):** on a real preview boundary the accumulator CROSSES (no
-  `MissingBoundaryStake` stall), writes the boundary checkpoint, and resumes within-epoch folding (venue).
+- [ ] **CE-3c (live crossing, BOUNDARY-ALIGNED):** on a real preview boundary the accumulator CROSSES (no
+  `MissingBoundaryStake` stall) — the mark captured at `s_prev` from the reduced checkpoint via the
+  co-advancer (DC-EPOCH-22), durably bound, then consumed by the cross — writes the boundary checkpoint, and
+  resumes within-epoch folding with non-zero member rewards (venue FirstRun). Hermetic prerequisites
+  (#2b-i/ii/iii): the boundary-cross entry point, the durable witness + lineage validation, and the
+  co-advancer's segment→capture→bind→cross→tip, each green with steady-state + multi-boundary-catch-up +
+  mark-at-boundary-not-tip + reorg-invalidation + observe-only-stall tests, plus the DC-EPOCH-22 CI guard.
 - [ ] **CE-3d (byte-exact RUPD + go-snapshot, the cluster CE-3 gate):** Ade's self-computed reward update
   + rotated go-snapshot == the live cardano-node's at ≥2 self-derived boundaries (the live differential).
 - [x] **CI — DONE:** `ci/ci_check_poolreap_single_canonical.sh` asserts the single-POOLREAP structure —
