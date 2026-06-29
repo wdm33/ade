@@ -113,6 +113,9 @@ pub fn advance_accumulator_over_block(
         issuer_pool: ctx.issuer_pool.clone(),
         // S2: the boundary is structurally excluded — a crossing fail-closes MissingBoundaryStake → Stalled.
         boundary_mark: None,
+        // Within-epoch: no boundary fires here (a crossing fail-closes on `boundary_mark = None`
+        // before the reward calc reads the eta denominator), so this is never consumed — carry 0.
+        active_slots_per_epoch: 0,
     };
 
     match apply_selected_block(&acc, block_bytes, &selected_ctx) {
@@ -289,6 +292,21 @@ pub fn cross_accumulator_over_boundary_block(
         .map_err(|e| AccumulatorChaindbError::Locate(format!("{e:?}")))?
         .epoch;
 
+    // The monetary-expansion expected-blocks denominator = `epochLength × activeSlotCoeff`, derived
+    // from the era schedule's REAL per-era epoch length (preview 86_400, mainnet/preprod 432_000).
+    // The reward calc previously hardcoded the mainnet `21_600`, under-expanding preview 5×.
+    //
+    // FOLLOW-UP (canonical sourcing): `f` is fixed here at 1/20 — the Cardano active-slot coefficient,
+    // identical across mainnet/preprod/preview, so no current target diverges. The CANONICAL source is
+    // `SeedConsensusInputs.active_slots_coeff` (persisted in the seed sidecar, already consumed by the
+    // leader schedule via `ledger_view.active_slots_coeff`); a refinement should thread that here
+    // instead of the literal `/ 20` so a non-1/20 network can never silently mis-expand.
+    let active_slots_per_epoch = u64::from(
+        era_schedule
+            .epoch_length_slots(boundary_block_slot)
+            .map_err(|e| AccumulatorChaindbError::Locate(format!("{e:?}")))?,
+    ) / 20;
+
     let ctx = SelectedBlockCtx {
         era: decoded.era,
         block_epoch,
@@ -297,6 +315,7 @@ pub fn cross_accumulator_over_boundary_block(
         // S3 / DC-EPOCH-22: the boundary mark captured at the prior tip — the ONLY point the S2
         // mark-exclusion is lifted.
         boundary_mark: Some(boundary_mark.clone()),
+        active_slots_per_epoch,
     };
 
     let from_epoch = acc.epoch_state.epoch;

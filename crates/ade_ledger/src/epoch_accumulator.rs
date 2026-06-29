@@ -302,6 +302,14 @@ pub struct SelectedBlockCtx {
     /// For multiple crossed boundaries (the degenerate empty-epoch case) the same prior-tip stake
     /// applies (no intervening change).
     pub boundary_mark: Option<BTreeMap<StakeCredential, Coin>>,
+    /// The network's expected block-producing slots per epoch = `epochLength × activeSlotCoeff`
+    /// (preview 86_400 × 1/20 = 4_320; mainnet/preprod 432_000 × 1/20 = 21_600). Feeds the boundary
+    /// reward update's monetary-expansion performance factor `eta = min(1, blocksMade / floor((1-d) ×
+    /// this))`. The advancer derives it from the era schedule's REAL per-era epoch length, so
+    /// expansion is correct on every network (a mainnet constant here under-expanded preview 5×).
+    /// Consumed ONLY on a boundary cross; on the within-epoch path (`boundary_mark = None`) a crossing
+    /// fail-closes before this is read, so that path carries `0`.
+    pub active_slots_per_epoch: u64,
 }
 
 /// Closed, fail-closed error sum for the authority transition. A malformed block, an unknown
@@ -398,6 +406,17 @@ pub fn cross_epoch_boundary(
         .as_ref()
         .ok_or(LedgerTransitionError::MissingBoundaryStake { epoch: target.0 })?;
 
+    // The eta denominator (`active_slots_per_epoch = epochLength × activeSlotCoeff`) is a REQUIRED
+    // canonical boundary input. It is 0 ONLY on the within-epoch sentinel — which already fail-closed
+    // just above on the absent mark — so a 0 reaching a real cross is a miswire. Halt deterministically
+    // rather than absorb it: `active_slots_per_epoch = 0` would make the reward calc's
+    // `expected_blocks = max(1, floor((1-d)·0)) = 1` -> `eta = 1` (FULL monetary expansion), silently
+    // over-drawing reserves. (IDD §2/§8: the field's validity is coupled to the mark; a follow-up may
+    // group them into a single boundary-only sum-type variant so this is unrepresentable.)
+    if ctx.active_slots_per_epoch == 0 {
+        return Err(LedgerTransitionError::MissingBoundaryStake { epoch: target.0 });
+    }
+
     // Bootstrap-transient reward seed (DC-EPOCH-18): applied EXACTLY ONCE at its target boundary,
     // BEFORE the native reward, then cleared. After the seam, `pending_reward_update == None` and the
     // native RUPD carries the chain.
@@ -424,8 +443,13 @@ pub fn cross_epoch_boundary(
     view.epoch_state.block_production = acc.prev_block_production.clone();
     view.epoch_state.epoch_fees = acc.prev_epoch_fees;
 
-    let (new_view, _accounting) =
-        apply_epoch_boundary_with_registrations(&view, target, None, Some(&new_mark));
+    let (new_view, _accounting) = apply_epoch_boundary_with_registrations(
+        &view,
+        target,
+        None,
+        Some(&new_mark),
+        ctx.active_slots_per_epoch,
+    );
 
     // Read back. `new_view.epoch_state` already has epoch=target, rotated snapshots, updated pots, and
     // block_production/epoch_fees reset to empty/0 (the new epoch's fresh nesBcur). POOLREAP — future-pool
@@ -1419,6 +1443,7 @@ mod tests {
             block_slot: SlotNo(0),
             issuer_pool: pool(0xBB),
             boundary_mark: Some(sample_mark(0xBB, 1_000)),
+            active_slots_per_epoch: 21_600,
         };
         let after = cross_epoch_boundary(acc, EpochNo(101), &ctx).expect("boundary");
 
@@ -1487,6 +1512,7 @@ mod tests {
             block_slot: SlotNo(0),
             issuer_pool: pool(0xAA),
             boundary_mark: Some(sample_mark(0xAA, 1_000_000_000_000)),
+            active_slots_per_epoch: 21_600,
         };
         let after = cross_epoch_boundary(acc, EpochNo(501), &ctx).expect("boundary");
 
@@ -1565,6 +1591,7 @@ mod tests {
             block_slot: SlotNo(0),
             issuer_pool: pool_aa.clone(),
             boundary_mark: Some(base_utxo.clone()),
+            active_slots_per_epoch: 21_600,
         };
 
         // PER-CREDENTIAL `go` (the mark, two boundaries on): member + operator rewards are non-zero.
@@ -1654,6 +1681,7 @@ mod tests {
             block_slot: SlotNo(0),
             issuer_pool: pool(0xAA),
             boundary_mark: Some(sample_mark(0xAA, 1_000_000_000_000)),
+            active_slots_per_epoch: 21_600,
         };
         let after = cross_epoch_boundary(acc, EpochNo(1340), &ctx).expect("boundary");
         assert_eq!(
@@ -1678,10 +1706,32 @@ mod tests {
             block_slot: SlotNo(0),
             issuer_pool: pool(0xAA),
             boundary_mark: None, // the UTxO-free accumulator cannot recompute the mark
+            active_slots_per_epoch: 21_600,
         };
         match cross_epoch_boundary(acc, EpochNo(501), &ctx) {
             Err(LedgerTransitionError::MissingBoundaryStake { epoch: 501 }) => {}
             other => panic!("expected MissingBoundaryStake, got {other:?}"),
+        }
+    }
+
+    /// IDD §2/§8 guard (CE-3d): the eta denominator `active_slots_per_epoch` is a REQUIRED boundary
+    /// input. A 0 reaching a real cross with a mark PRESENT (a miswire — the within-epoch sentinel
+    /// escaping its path) HALTS deterministically instead of silently yielding `eta = 1` (full
+    /// monetary expansion, over-drawing reserves).
+    #[test]
+    fn zero_active_slots_at_boundary_is_fail_closed() {
+        let acc = reward_fixture();
+        let ctx = SelectedBlockCtx {
+            era: CardanoEra::Conway,
+            block_epoch: EpochNo(501),
+            block_slot: SlotNo(0),
+            issuer_pool: pool(0xAA),
+            boundary_mark: Some(sample_mark(0xAA, 1_000_000_000_000)), // mark present...
+            active_slots_per_epoch: 0,                                 // ...but the eta denom is 0
+        };
+        match cross_epoch_boundary(acc, EpochNo(501), &ctx) {
+            Err(LedgerTransitionError::MissingBoundaryStake { epoch: 501 }) => {}
+            other => panic!("expected fail-close on 0 active_slots, got {other:?}"),
         }
     }
 
@@ -1695,6 +1745,7 @@ mod tests {
             block_slot: SlotNo(0),
             issuer_pool: pool(0xAA),
             boundary_mark: None,
+            active_slots_per_epoch: 21_600,
         };
         match apply_selected_block(&acc, RAW_CONWAY_BLOCK, &ctx) {
             Err(LedgerTransitionError::BoundaryGap {
@@ -1718,6 +1769,7 @@ mod tests {
             block_slot: SlotNo(1),
             issuer_pool: pool(0x77),
             boundary_mark: None,
+            active_slots_per_epoch: 21_600,
         };
         let after = apply_selected_block(&acc, RAW_CONWAY_BLOCK, &ctx).expect("total at max epoch");
         assert_eq!(after.epoch_state.epoch, EpochNo(u64::MAX));
@@ -1767,6 +1819,7 @@ mod tests {
             block_slot: SlotNo(43_000_000),
             issuer_pool: pool(0x77),
             boundary_mark: None,
+            active_slots_per_epoch: 21_600,
         };
         let a = apply_selected_block(&acc, RAW_CONWAY_BLOCK, &ctx).expect("apply a");
         let b = apply_selected_block(&acc, RAW_CONWAY_BLOCK, &ctx).expect("apply b");
@@ -1801,6 +1854,7 @@ mod tests {
             block_slot: SlotNo(43_000_000),
             issuer_pool: pool(0x77),
             boundary_mark: None,
+            active_slots_per_epoch: 21_600,
         };
         let acc1 = apply_selected_block(&acc0, RAW_CONWAY_BLOCK, &ctx).expect("admit 1");
         assert_eq!(
@@ -1819,6 +1873,7 @@ mod tests {
             block_slot: SlotNo(43_000_001),
             issuer_pool: pool(0x77),
             boundary_mark: None,
+            active_slots_per_epoch: 21_600,
         };
         let acc2 = apply_selected_block(&acc1, RAW_CONWAY_BLOCK, &ctx2).expect("admit 2");
         assert_eq!(
@@ -1840,6 +1895,7 @@ mod tests {
             block_slot: SlotNo(43_000_000),
             issuer_pool: pool(0x77),
             boundary_mark: None,
+            active_slots_per_epoch: 21_600,
         };
         let ctx_e1 = SelectedBlockCtx {
             era: CardanoEra::Conway,
@@ -1847,6 +1903,7 @@ mod tests {
             block_slot: SlotNo(43_100_000),
             issuer_pool: pool(0x88),
             boundary_mark: Some(sample_mark(0x77, 1_000_000_000_000)),
+            active_slots_per_epoch: 21_600,
         };
 
         let acc1 = apply_selected_block(&acc0, RAW_CONWAY_BLOCK, &ctx_e).expect("block 1");

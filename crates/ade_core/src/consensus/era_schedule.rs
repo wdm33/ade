@@ -224,6 +224,32 @@ impl EraSchedule {
         })
     }
 
+    /// The epoch length in slots of the era covering `slot` (same era selection as [`locate`]).
+    /// The reward update derives its monetary-expansion expected-block denominator
+    /// (`epochLength × activeSlotCoeff`) from this, so expansion uses the network's REAL epoch
+    /// geometry — preview's 86_400-slot epoch, not the mainnet 432_000 constant the reward math
+    /// previously hardcoded.
+    pub fn epoch_length_slots(&self, slot: SlotNo) -> Result<u32, HFCError> {
+        if self.eras.is_empty() {
+            return Err(HFCError::EmptyEraList);
+        }
+        let first_start = self.eras[0].start_slot;
+        if slot.0 < first_start.0 {
+            return Err(HFCError::SlotBeforeSystemStart {
+                slot,
+                first_era_start: first_start,
+            });
+        }
+        let mut chosen_idx: usize = self.eras.len() - 1;
+        for (idx, pair) in self.eras.windows(2).enumerate() {
+            if slot.0 >= pair[0].start_slot.0 && slot.0 < pair[1].start_slot.0 {
+                chosen_idx = idx;
+                break;
+            }
+        }
+        Ok(self.eras[chosen_idx].epoch_length_slots)
+    }
+
     /// Slot to UTC instant in milliseconds since the unix epoch.
     /// Pure of wall-clock. Returns structured `Overflow` on integer
     /// overflow.

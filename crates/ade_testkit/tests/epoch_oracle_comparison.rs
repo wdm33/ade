@@ -3761,7 +3761,7 @@ fn conway_epoch_boundary_end_to_end() {
 
     for (label, regs) in [("PRE", None), ("ALL", Some(&all_registered))] {
         let (rs, ac) = ade_ledger::rules::apply_epoch_boundary_with_registrations(
-            &pre_state, new_epoch, regs, None,
+            &pre_state, new_epoch, regs, None, 21_600,
         );
         let our_res_decr = pre_state.epoch_state.reserves.0.saturating_sub(rs.epoch_state.reserves.0);
         let oracle_res_decr = pre_state.epoch_state.reserves.0.saturating_sub(post_state.epoch_state.reserves.0);
@@ -3846,7 +3846,7 @@ fn conway_epoch_boundary_end_to_end() {
 
     let regs_override = if oracle_regs.is_empty() { None } else { Some(&oracle_regs) };
     let (result_state, accounting) = ade_ledger::rules::apply_epoch_boundary_with_registrations(
-        &adjusted_state, new_epoch, regs_override, None,
+        &adjusted_state, new_epoch, regs_override, None, 21_600,
     );
 
     eprintln!("  RESULT: epoch={} reserves={} ADA  treasury={} ADA",
@@ -4013,7 +4013,7 @@ fn alonzo_epoch_boundary_end_to_end() {
 
     for (label, regs_override) in variants {
         let (rs, ac) = ade_ledger::rules::apply_epoch_boundary_with_registrations(
-            &pre_state, new_epoch, *regs_override, None,
+            &pre_state, new_epoch, *regs_override, None, 21_600,
         );
         let our_res_decr = pre_state.epoch_state.reserves.0.saturating_sub(rs.epoch_state.reserves.0);
         let res_ratio = if oracle_res_decr > 0 {
@@ -4051,7 +4051,7 @@ fn alonzo_epoch_boundary_end_to_end() {
                 .collect();
         eprintln!("  oracle tick registrations: {}", oracle_regs.len());
         let (rs, ac) = ade_ledger::rules::apply_epoch_boundary_with_registrations(
-            &pre_state, new_epoch, Some(&oracle_regs), None,
+            &pre_state, new_epoch, Some(&oracle_regs), None, 21_600,
         );
         let our_res_decr = pre_state.epoch_state.reserves.0.saturating_sub(rs.epoch_state.reserves.0);
         let res_ratio = if oracle_res_decr > 0 {

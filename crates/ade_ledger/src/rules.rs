@@ -616,7 +616,18 @@ pub fn apply_epoch_boundary_full(
     // The live path passes `None` for the precomputed mark -> the boundary uses the
     // existing stub, UNCHANGED. Activation (S3f-4) calls _with_registrations with the
     // real aggregate via a distinct entry point, never through _full.
-    apply_epoch_boundary_with_registrations(state, new_epoch, None, None)
+    //
+    // The full-ledger path is mainnet/Shelley-schedule (epoch detection uses SHELLEY_EPOCH_LENGTH),
+    // so its monetary-expansion expected-blocks denominator is the mainnet `432_000 × 1/20 = 21_600`.
+    // The accumulator path (preview / multi-network) sources the REAL per-era epoch length from the
+    // era schedule instead — see `SelectedBlockCtx::active_slots_per_epoch`.
+    apply_epoch_boundary_with_registrations(
+        state,
+        new_epoch,
+        None,
+        None,
+        crate::state::SHELLEY_EPOCH_LENGTH / 20,
+    )
 }
 
 /// Apply epoch boundary with an optional override for the credential registration set.
@@ -637,6 +648,13 @@ pub fn apply_epoch_boundary_with_registrations(
     // UNCHANGED. (The EVIEW leadership path still forms a per-pool mark via
     // `reduced_snapshot::form_mark_snapshot`, but consumes it elsewhere.)
     precomputed_mark: Option<&crate::epoch::StakeSnapshot>,
+    // The network's expected block-producing slots per epoch = `epochLength × activeSlotCoeff`
+    // (preview 86_400 × 1/20 = 4_320; mainnet/preprod 432_000 × 1/20 = 21_600). The monetary-
+    // expansion performance factor is `eta = min(1, blocksMade / floor((1-d) × this))`. Passed in
+    // from the caller (the accumulator advancer derives it from the era schedule's real per-era
+    // epoch length) — NOT a hardcoded mainnet constant. Preview's shorter epoch making this 5×
+    // too large was the CE-3d reward-magnitude residual.
+    active_slots_per_epoch: u64,
 ) -> (LedgerState, EpochBoundaryAccounting) {
     // 1. Reward computation from PRE-rotation go snapshot
     //    Rewards must be computed before rotation — after rotation,
@@ -662,12 +680,13 @@ pub fn apply_epoch_boundary_with_registrations(
         // d >= 0.8: eta = 1 (highly centralized, use full expansion)
         crate::rational::Rational::one()
     } else {
-        // expectedBlocks = floor((1-d) * 432000 * 1/20)
-        // = floor((1-d) * 21600)
+        // expectedBlocks = floor((1-d) * epochLength * activeSlotCoeff)
+        // = floor((1-d) * active_slots_per_epoch)  [preview 4_320, mainnet/preprod 21_600]
         let one_minus_d = crate::rational::Rational::one()
             .checked_sub(d)
             .unwrap_or_else(crate::rational::Rational::one);
-        let epoch_slots = crate::rational::Rational::from_integer(21600);
+        let epoch_slots =
+            crate::rational::Rational::from_integer(active_slots_per_epoch as i128);
         let expected_rat = one_minus_d.checked_mul(&epoch_slots)
             .unwrap_or_else(crate::rational::Rational::one);
         let expected_blocks = expected_rat.floor().max(1) as u64;
@@ -2733,7 +2752,7 @@ mod cert_state_dispatch {
 
         // Some(mark) -> the new MARK is the per-credential snapshot, used directly.
         let (with_mark, _) =
-            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&mark));
+            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&mark), 21_600);
         assert_eq!(
             with_mark.epoch_state.snapshots.mark.0.pool_stakes, pool_stakes,
             "the precomputed mark becomes the new MARK (pool_stakes)"
@@ -2746,7 +2765,7 @@ mod cert_state_dispatch {
         // None -> the existing stub (the full-ledger path UNCHANGED): the empty cert-state here
         // yields an empty stub mark, NOT the precomputed mark.
         let (no_mark, _) =
-            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None);
+            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600);
         assert!(
             no_mark.epoch_state.snapshots.mark.0.pool_stakes.is_empty(),
             "None uses the stub (empty cert-state -> empty mark), not the precomputed mark"
@@ -2754,6 +2773,59 @@ mod cert_state_dispatch {
         assert_ne!(
             no_mark.epoch_state.snapshots.mark.0.pool_stakes,
             pool_stakes
+        );
+    }
+
+    /// LIVE-LEDGER-EPOCH-TRANSITION (CE-3d): the monetary-expansion performance factor `eta` uses the
+    /// NETWORK's epoch length via `active_slots_per_epoch`, NOT a hardcoded mainnet constant. Preview's
+    /// epoch is 86_400 slots (active_slots = 4_320) vs mainnet's 432_000 (21_600); for the SAME
+    /// under-target block count the preview boundary must draw ~5× the reserves into the reward pot
+    /// (eta is 5× larger), where the old hardcode made the two identical. Guards the CE-3d reward-
+    /// magnitude residual (the preview boundary previously under-expanded 5×).
+    #[test]
+    fn monetary_expansion_tracks_network_epoch_length() {
+        use super::apply_epoch_boundary_with_registrations;
+        use crate::rational::Rational;
+        use crate::state::LedgerState;
+        use ade_types::tx::PoolId;
+        use ade_types::{EpochNo, Hash28};
+
+        let mut state = LedgerState::new(CardanoEra::Conway);
+        state.epoch_state.epoch = EpochNo(500);
+        state.epoch_state.reserves = Coin(1_000_000_000_000_000); // 1e15
+        state.epoch_state.treasury = Coin(0);
+        // Fully decentralized (d = 0) so eta = blocksMade / expectedBlocks (not the d >= 0.8 -> 1 cap),
+        // with a block count well below either expected-blocks target so eta < 1 on BOTH networks.
+        state.protocol_params.decentralization = Rational::zero();
+        state.protocol_params.monetary_expansion = Rational::new(3, 1000).unwrap();
+        state.protocol_params.treasury_growth = Rational::new(1, 5).unwrap();
+        state
+            .epoch_state
+            .block_production
+            .insert(PoolId(Hash28([0x11; 28])), 100);
+
+        // The go snapshot is empty -> no member rewards; the pool pot returns to reserves, so the
+        // treasury increase is exactly floor(deltaR1 * tau) -- a clean readout of the eta-scaled pot.
+        let preview =
+            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 4_320).0;
+        let mainnet =
+            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).0;
+
+        let t_preview = preview.epoch_state.treasury.0;
+        let t_mainnet = mainnet.epoch_state.treasury.0;
+        assert!(t_preview > 0 && t_mainnet > 0, "both expand (eta < 1, not zero)");
+        assert!(
+            t_preview > t_mainnet,
+            "preview's shorter epoch expands MORE for the same blocks (the bug made them equal): \
+             preview={t_preview} mainnet={t_mainnet}"
+        );
+        // eta_preview / eta_mainnet = 21_600 / 4_320 = 5 -> the pot (and treasury cut) is ~5× larger.
+        let ratio_x100 = t_preview.saturating_mul(100) / t_mainnet;
+        assert!(
+            (495..=505).contains(&ratio_x100),
+            "expansion ratio must be ~5x (21600/4320): got {}.{:02}x (preview={t_preview} mainnet={t_mainnet})",
+            ratio_x100 / 100,
+            ratio_x100 % 100,
         );
     }
 
@@ -2859,7 +2931,7 @@ mod cert_state_dispatch {
             retiring.insert(pid(0xC3), EpochNo(499)); // < e (stale) → kept under `==`, reaped under `<=`
 
             let (out, _ac) =
-                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None);
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600);
             let pool = &out.cert_state.pool;
 
             assert!(
@@ -2894,7 +2966,7 @@ mod cert_state_dispatch {
             regs.insert(registered.clone(), Coin(2_000_000));
 
             let (out, _ac) =
-                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None);
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600);
 
             assert_eq!(
                 out.cert_state.delegation.rewards.get(&registered),
@@ -2927,7 +2999,7 @@ mod cert_state_dispatch {
             delegs.insert(e.clone(), pid(0xB2));
 
             let (out, _ac) =
-                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None);
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600);
             let deleg = &out.cert_state.delegation;
 
             assert_eq!(
@@ -2960,7 +3032,7 @@ mod cert_state_dispatch {
             regs.insert(script_cred.clone(), Coin(2_000_000));
 
             let (out, _ac) =
-                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None);
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600);
             let rewards = &out.cert_state.delegation.rewards;
 
             assert_eq!(
@@ -2995,7 +3067,7 @@ mod cert_state_dispatch {
             future.insert(pid(0xB2), pool_with_account(0xB2, 0xE0, 0x02));
 
             let (out, _ac) =
-                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None);
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600);
             let pool = &out.cert_state.pool;
 
             assert_eq!(
