@@ -35,7 +35,7 @@ use std::path::Path;
 use ade_ledger::epoch_accumulator::{
     decode_epoch_accumulator, encode_epoch_accumulator, EpochAccumulator,
 };
-use ade_types::SlotNo;
+use ade_types::{Hash32, SlotNo};
 use redb::{Database, ReadableTable, TableDefinition};
 
 const META_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("epoch_acc_meta");
@@ -49,6 +49,13 @@ const BOOTSTRAP_BLOB_KEY: &str = "bootstrap_blob";
 const SEED_SLOT_KEY: &str = "seed_slot";
 /// Present iff `seal_bootstrap` completed (written LAST). A partial seal has `is_complete() == false`.
 const COMPLETE_KEY: &str = "complete";
+/// LIVE-LEDGER-EPOCH-TRANSITION S3 (DC-EPOCH-22): the PENDING boundary-mark WITNESS — the canonical boundary
+/// point + lineage the co-advancer committed to crossing at, persisted BEFORE the accumulator crosses. 40
+/// bytes: `boundary_slot` (8 BE) ++ `boundary_hash` (32). The mark VALUE is NOT stored — it is the
+/// deterministic projection of the lineage-matched reduced checkpoint at that point (re-derived on consume,
+/// never double-stored; MEM-OPT). The witness is the durable commitment + the reorg lineage key: a reorg
+/// that removes/replaces the boundary point yields a different `boundary_hash`, invalidating the binding.
+const PENDING_BOUNDARY_MARK_KEY: &str = "pending_boundary_mark";
 
 /// Closed store-failure surface.
 #[derive(Debug)]
@@ -98,6 +105,19 @@ fn parse_slot(b: &[u8]) -> Result<SlotNo, EpochAccumulatorStoreError> {
     let mut arr = [0u8; 8];
     arr.copy_from_slice(b);
     Ok(SlotNo(u64::from_be_bytes(arr)))
+}
+
+/// Parse the 40-byte boundary-mark witness (`boundary_slot` 8 BE ++ `boundary_hash` 32). A wrong length is
+/// a corrupt store (`CorruptSlot` — the closed fixed-width-value-malformed surface).
+fn parse_boundary_witness(b: &[u8]) -> Result<(SlotNo, Hash32), EpochAccumulatorStoreError> {
+    if b.len() != 40 {
+        return Err(EpochAccumulatorStoreError::CorruptSlot);
+    }
+    let mut slot = [0u8; 8];
+    slot.copy_from_slice(&b[..8]);
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(&b[8..]);
+    Ok((SlotNo(u64::from_be_bytes(slot)), Hash32(hash)))
 }
 
 /// The durable single-value `EpochAccumulator` store (DC-EPOCH-20).
@@ -229,6 +249,66 @@ impl EpochAccumulatorStore {
             meta.insert(CURRENT_BLOB_KEY, boot.as_slice())
                 .map_err(rerr)?;
             meta.insert(LAST_SLOT_KEY, seed.as_slice()).map_err(rerr)?;
+            // DC-EPOCH-22: a reorg reset invalidates any pending boundary-mark binding (its lineage no longer
+            // holds) — drop it so the rematerialized chain re-binds at its OWN boundary point.
+            let _ = meta.remove(PENDING_BOUNDARY_MARK_KEY).map_err(rerr)?;
+        }
+        txn.commit().map_err(rerr)?;
+        Ok(())
+    }
+
+    /// DC-EPOCH-22 (BOUNDARY-ALIGNED-MARK-CAPTURE): durably BIND the boundary-mark witness — the canonical
+    /// boundary point `(boundary_slot, boundary_hash)` the co-advancer is about to cross at — in ONE redb
+    /// commit, BEFORE the accumulator crosses. The mark VALUE is not stored: it is the deterministic
+    /// projection of the lineage-matched reduced checkpoint at `boundary_slot` (re-derived on consume, never
+    /// double-stored). Fail-closed if unsealed. A later `bind` overwrites (the next boundary).
+    pub fn bind_boundary_mark(
+        &self,
+        boundary_slot: SlotNo,
+        boundary_hash: &Hash32,
+    ) -> Result<(), EpochAccumulatorStoreError> {
+        if !self.is_complete()? {
+            return Err(EpochAccumulatorStoreError::NotSealed);
+        }
+        let mut witness = [0u8; 40];
+        witness[..8].copy_from_slice(&boundary_slot.0.to_be_bytes());
+        witness[8..].copy_from_slice(&boundary_hash.0);
+        let txn = self.db.begin_write().map_err(rerr)?;
+        {
+            let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            meta.insert(PENDING_BOUNDARY_MARK_KEY, witness.as_slice())
+                .map_err(rerr)?;
+        }
+        txn.commit().map_err(rerr)?;
+        Ok(())
+    }
+
+    /// DC-EPOCH-22: the pending boundary-mark witness `(boundary_slot, boundary_hash)`, or `None` if absent
+    /// (no boundary pending / cleared / reorg-dropped). The co-advancer validates `boundary_hash` against the
+    /// canonical durable block at `boundary_slot` before consuming the mark — a mismatch is a stale (reorged)
+    /// binding, never reused on an epoch-number match alone.
+    pub fn boundary_mark_binding(
+        &self,
+    ) -> Result<Option<(SlotNo, Hash32)>, EpochAccumulatorStoreError> {
+        let txn = self.db.begin_read().map_err(rerr)?;
+        let meta = match txn.open_table(META_TABLE) {
+            Ok(t) => t,
+            Err(_) => return Ok(None),
+        };
+        match meta.get(PENDING_BOUNDARY_MARK_KEY).map_err(rerr)? {
+            Some(v) => Ok(Some(parse_boundary_witness(v.value())?)),
+            None => Ok(None),
+        }
+    }
+
+    /// DC-EPOCH-22: clear the pending boundary-mark witness once the cross has consumed it (one commit;
+    /// idempotent — a no-op if absent). The binding is transient: it lives only between `bind_boundary_mark`
+    /// and the cross that consumes it.
+    pub fn clear_boundary_mark(&self) -> Result<(), EpochAccumulatorStoreError> {
+        let txn = self.db.begin_write().map_err(rerr)?;
+        {
+            let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            let _ = meta.remove(PENDING_BOUNDARY_MARK_KEY).map_err(rerr)?;
         }
         txn.commit().map_err(rerr)?;
         Ok(())
@@ -473,5 +553,76 @@ mod tests {
         assert!(s2.is_complete().unwrap());
         assert_eq!(s2.load_current().unwrap(), Some((SlotNo(200), adv)));
         assert_eq!(s2.seed_slot().unwrap(), Some(SlotNo(100)));
+    }
+
+    /// DC-EPOCH-22 (#2b-ii): the durable boundary-mark witness round-trips — absent → bind → read → rebind
+    /// (overwrites) → clear → absent. The witness carries ONLY the point + lineage `(slot, hash)`; the mark
+    /// value is re-derived from the lineage-matched checkpoint, never stored here.
+    #[test]
+    fn boundary_mark_witness_bind_read_clear_round_trip() {
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+        assert_eq!(s.boundary_mark_binding().unwrap(), None);
+
+        let h = Hash32([0xAB; 32]);
+        s.bind_boundary_mark(SlotNo(500), &h).unwrap();
+        assert_eq!(s.boundary_mark_binding().unwrap(), Some((SlotNo(500), h)));
+
+        // A later bind overwrites (the next boundary's point + lineage).
+        let h2 = Hash32([0xCD; 32]);
+        s.bind_boundary_mark(SlotNo(600), &h2).unwrap();
+        assert_eq!(s.boundary_mark_binding().unwrap(), Some((SlotNo(600), h2)));
+
+        // Clear once the cross consumed it — then idempotent.
+        s.clear_boundary_mark().unwrap();
+        assert_eq!(s.boundary_mark_binding().unwrap(), None);
+        s.clear_boundary_mark().unwrap();
+        assert_eq!(s.boundary_mark_binding().unwrap(), None);
+    }
+
+    /// DC-EPOCH-22 (#2b-ii): binding fails closed on an unsealed store (the seal must precede any binding).
+    #[test]
+    fn boundary_mark_bind_requires_sealed() {
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        let err = s
+            .bind_boundary_mark(SlotNo(500), &Hash32([1; 32]))
+            .unwrap_err();
+        assert!(matches!(err, EpochAccumulatorStoreError::NotSealed));
+    }
+
+    /// DC-EPOCH-22 (#2b-ii): a reorg reset DROPS the pending binding — its lineage no longer holds, so the
+    /// rematerialized chain must re-bind at its own boundary point (never reuse a stale, reorged mark).
+    #[test]
+    fn reset_to_bootstrap_drops_the_boundary_mark_binding() {
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+        s.advance(&acc_advanced(), SlotNo(200)).unwrap();
+        s.bind_boundary_mark(SlotNo(199), &Hash32([0xEE; 32]))
+            .unwrap();
+        assert!(s.boundary_mark_binding().unwrap().is_some());
+
+        s.reset_to_bootstrap().unwrap();
+        assert_eq!(s.boundary_mark_binding().unwrap(), None);
+    }
+
+    /// DC-EPOCH-22 (#2b-ii): the binding is DURABLE — persisted before the cross, it survives a restart
+    /// (crash between bind and cross → the binding is recovered, the cross re-derives + crosses).
+    #[test]
+    fn boundary_mark_binding_survives_reopen() {
+        let tmp = TempDir::new().unwrap();
+        {
+            let s = store(&tmp);
+            s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+            s.bind_boundary_mark(SlotNo(500), &Hash32([0x77; 32]))
+                .unwrap();
+        }
+        let s2 = EpochAccumulatorStore::open(&tmp.path().join("acc.redb")).unwrap();
+        assert_eq!(
+            s2.boundary_mark_binding().unwrap(),
+            Some((SlotNo(500), Hash32([0x77; 32])))
+        );
     }
 }
