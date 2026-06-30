@@ -210,8 +210,10 @@ fn build_state(k: &Knobs) -> Vec<u8> {
         // ConwayGovState = array(7)[Proposals, committee, constitution, curPParams, prev, future, drepPulser]
         concat(&[
             arr(7),
-            arr(0),       // Proposals (placeholder)
-            arr(0),       // committee
+            // Proposals = array(2)[GovRelation, OMap of GovActionState]; an empty set since S1's
+            // decoder now reads this field (was a skip_item placeholder when arr(0) sufficed).
+            concat(&[arr(2), arr(0), arr(0)]),
+            arr(0),       // committee (SNothing = array(0))
             arr(0),       // constitution
             pparams,      // curPParams
             arr(0),       // prevPParams
