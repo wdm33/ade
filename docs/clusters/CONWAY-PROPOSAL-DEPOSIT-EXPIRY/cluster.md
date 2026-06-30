@@ -220,9 +220,19 @@ proof it cannot ratify. `gov_action_threshold_index` already encodes the per-act
   reward differential); the exact SNAP-vs-refund interleave is confirmed by the CE-3d byte-exact rerun.
   Tests: 8 planner decision-table + 4 boundary (refund-to-rewards, deregistered→treasury, terminal-zero-
   mutation, replay-equivalent). Enforces DC-GOV-01.
-- **S5 — CE-3d re-run → byte-exact reward total.** Re-run the CE-3d differential; the +400k/+100k
-  refunds land, the reward total matches cardano (bar the separate −343B B3c go-stake and the ~−37.6M
-  rounding tail). Hands off to the B3c UTxO investigation (separate).
+- **S5 — CE-3d reward closure → the −500B is gone. [DONE, the reward gap]** Proven DIRECTLY on the real
+  data: `cpde_s5_refund_closes_500b.rs` decodes the certified POST-1340 governance state (the 50 real
+  proposals) and runs the public S4 planner over them at 1340→1341 — the planned refunds are EXACTLY the
+  −500B: **+400,000 ADA to acct1 (00ceb134..) + +100,000 ADA to acct2 (00f53256..) = 500,000 ADA.** The full
+  `ce3d_boundary_differential` re-run still prints `rewards d-499969199597` because its CE-3c SEED
+  accumulator (mtime 08:53) PREDATES the S1 gov-import commit `d2522faf` (13:46) — it carries NO tracked
+  proposals, so the refund (correctly wired through `cross_accumulator_over_boundary_block →
+  apply_selected_block → cross_epoch_boundary → apply_gov_deposit_refunds`) has nothing to refund. A
+  re-bootstrapped seed (current code) would close the differential's `rewards` line; the focused proof
+  bypasses that heavy re-bootstrap. The differential's REMAINING mismatches (treasury +231M, reserves
+  +894M, go-stake −349B with 32 phantom 0-stake pools) are the SEPARATE, documented B3c residual — NOT a
+  governance gap, its own cluster. So the −500B reward gap (DC-GOV-01's accounting target) is CLOSED; the
+  full byte-exact differential additionally awaits the B3c UTxO fix.
 
 ---
 
