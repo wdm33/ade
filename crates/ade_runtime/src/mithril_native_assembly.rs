@@ -358,20 +358,23 @@ pub fn assemble_native_mithril_seed(
         track_utxo: false,
         cert_state: s1a.cert_state.clone(),
         max_lovelace_supply: genesis.max_lovelace_supply,
-        // CONWAY-PROPOSAL-DEPOSIT-EXPIRY S1: seed the accumulator's gov_state from the CERTIFIED
-        // snapshot's imported Proposals + Committee (NOT inferred). Identity-bound proposals (incl their
-        // canonical vote maps), the active committee, and its quorum are the inputs the boundary
-        // deposit-expiry negative proof reads. The remaining ConwayGovState fields are NOT imported in
-        // S1 — they are sourced from pparams / cert-state in later slices (S3 sources gov_action_lifetime
-        // + thresholds for NEWLY-submitted proposals; the imported proposals already carry their own
-        // expires_after). The S4 evaluator FAILS CLOSED if a proposal's disposition needs any field not
-        // populated here; the observed five refunds need only the committee gate (committee + quorum).
+        // CONWAY-PROPOSAL-DEPOSIT-EXPIRY S1/S3: seed the accumulator's gov_state from the CERTIFIED
+        // snapshot (NOT inferred, NOT defaulted). Identity-bound proposals (incl their canonical vote
+        // maps), the active committee, and its quorum are the inputs the boundary deposit-expiry negative
+        // proof reads; `gov_action_lifetime` is the era-correct `govActionLifetime` read from the
+        // certified `curPParams` (S3) — the persisted timing authority for a LIVE proposal's
+        // `expires_after`, bound into the bootstrap commitment as fresh-bootstrap tamper-evidence (a
+        // pre-S3 store recovers 0 and fail-closes at the runtime capture guard, never here). The remaining
+        // ConwayGovState fields (thresholds, drep_expiry) are NOT yet imported; the imported proposals
+        // already carry their own decoded `expires_after`, and the S4 evaluator FAILS CLOSED if a
+        // disposition needs any field not populated here (the observed five refunds need only the
+        // committee gate).
         gov_state: Some(ade_ledger::state::ConwayGovState {
             proposals: s1a.imported_gov.proposals.clone(),
             committee: s1a.imported_gov.committee.clone(),
             committee_quorum: s1a.imported_gov.committee_quorum.unwrap_or((1, 1)),
             drep_expiry: std::collections::BTreeMap::new(),
-            gov_action_lifetime: 0,
+            gov_action_lifetime: s1a.imported_gov.gov_action_lifetime,
             vote_delegations: std::collections::BTreeMap::new(),
             pool_voting_thresholds: Vec::new(),
             drep_voting_thresholds: Vec::new(),
@@ -651,6 +654,7 @@ mod tests {
             }],
             committee,
             committee_quorum: Some(SAMPLE_QUORUM),
+            gov_action_lifetime: 6,
         }
     }
 
@@ -878,6 +882,13 @@ mod tests {
                 .expect("gov_state seeded from the imported proposals + committee");
             assert_eq!(gov.proposals.len(), 1, "imported proposal count preserved");
             assert_eq!(gov.committee_quorum, SAMPLE_QUORUM, "imported committee quorum preserved");
+            // CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3: gov_action_lifetime is SEEDED from the imported
+            // curPParams value (6), NOT the old hardcoded 0 placeholder — the persisted timing authority
+            // for a live proposal's expiry must come from the certified snapshot.
+            assert_eq!(
+                gov.gov_action_lifetime, 6,
+                "imported govActionLifetime seeded (not the 0 placeholder)",
+            );
             assert_eq!(
                 gov.committee.get(&StakeCredential::KeyHash(Hash28(SAMPLE_COMMITTEE_MEMBER))),
                 Some(&1340u64),

@@ -364,6 +364,26 @@ pub enum LedgerTransitionError {
     BootstrapRupdCommitmentMismatch,
     /// Applying the bootstrap RUPD's reserves draw underflowed (delta_reserves > reserves). Fail closed.
     BootstrapRupdReservesUnderflow,
+    /// CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3 / DC-GOV-01: a canonical selected-chain vote (tx-body field 19,
+    /// `voting_procedures`) targets a currently-tracked governance proposal. Ade does NOT process votes;
+    /// a post-seed vote makes that proposal's tracked vote map non-canonical, so the S4 negative-
+    /// ratifiability proof would be unsound. Fail closed — never tally, ratify, or refund past a vote that
+    /// is not accounted for. `tx_index` is the voting tx within the block.
+    VoteOnTrackedProposal { tx_index: u64 },
+    /// CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3: a tx-body governance field (19 `voting_procedures` / 20
+    /// `proposal_procedures`) failed to decode, or a field-20 procedure carried an unknown gov-action
+    /// variant, on the within-epoch authority path. Terminal for the governance authority — never a silent
+    /// skip or empty default (an unknown variant is `MalformedGovernanceField`, not a dropped proposal).
+    /// `tx_index` locates the offending tx.
+    MalformedGovernanceField { tx_index: u64 },
+    /// CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3 / DC-GOV-01: a tx submitted a governance proposal (field 20) but
+    /// the accumulator's imported `gov_action_lifetime` is 0 — the placeholder / un-imported value,
+    /// impossible on any real network (govActionLifetime ≥ 1). A proposal's `expires_after = proposed_in +
+    /// gov_action_lifetime` is PERSISTED future refund authority; it must never be derived from an unproven
+    /// parameter. Fail closed rather than track a proposal with a fabricated (`proposed_in`) expiry. A
+    /// properly v7-bootstrapped accumulator imports the era-correct lifetime from the certified curPParams.
+    /// `tx_index` locates the submitting tx.
+    GovActionLifetimeUnproven { tx_index: u64 },
 }
 
 /// Apply one durable selected-chain block to the accumulator. Total, deterministic, replay-equivalent.
@@ -597,7 +617,24 @@ fn apply_within_epoch(
         process_block_certificates(block, era, &view).map_err(LedgerTransitionError::CertApply)?
     };
     acc.cert_state = cert_state;
-    acc.gov_state = gov_state;
+
+    // Governance proposals (tx-body field 20) + the vote tripwire (field 19) — CONWAY-PROPOSAL-DEPOSIT-
+    // EXPIRY S3 / DC-GOV-01. When governance is tracked (`gov_state` present) this captures each newly
+    // submitted proposal's identity (GovActionId = tx-id ‖ procedure index), deposit, return address, and
+    // exact expiry, and fail-closes if any selected-chain vote targets a tracked proposal. When governance
+    // is not tracked (`None`) the within-epoch governance half is skipped — the same gating
+    // `process_block_certificates` applies. Reuses `invalid` (the phase-2-invalid set the fee scan already
+    // decoded) as the authority-effect gate, paralleling the cert/withdrawal guard.
+    acc.gov_state = match gov_state {
+        Some(gov) => Some(apply_block_governance(
+            gov,
+            &block.tx_bodies,
+            block.tx_count,
+            &invalid,
+            ctx.block_epoch,
+        )?),
+        None => None,
+    };
 
     // Issuer block-production (nesBcur) — the producer is the header issuer (ctx), no leader lookup.
     let entry = acc
@@ -922,6 +959,281 @@ pub(crate) fn reward_account_credential(account: &[u8]) -> Option<StakeCredentia
     } else {
         Some(StakeCredential::KeyHash(Hash28(cred)))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Within-epoch governance capture (CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3 / DC-GOV-01)
+// ---------------------------------------------------------------------------
+
+/// Capture this block's governance proposals (tx-body field 20) into `gov.proposals` and trip on any
+/// vote (field 19) that targets a currently-tracked proposal — the INPUT half of DC-GOV-01.
+///
+/// A dedicated tx-body walk (mirroring `rules::process_block_certificates`, the cert authority's own
+/// walk) rather than an extension of the fee scan: forming a live proposal's `GovActionId` needs the tx
+/// body hash, the current epoch, and the `gov_state` to merge into — none of which the fee scan's
+/// `TxScan` carries. The fee scan and the SHARED `rules.rs` authority are left untouched.
+///
+/// For every VALID tx (phase-2-valid), in tx order:
+///   1. field 20 (`proposal_procedures`, via the typed closed decoder): each procedure becomes a tracked
+///      `GovActionState` whose `action_id = (transaction_id(tx_body) ‖ procedure_index)`, with the
+///      submitter's deposit / return address / gov-action verbatim, `proposed_in = current_epoch`,
+///      `expires_after = proposed_in + gov_action_lifetime`, and EMPTY vote maps (Ade never tallies — S4
+///      reads the imported maps).
+///   2. field 19 (`voting_procedures`): the targeted `GovActionId`s (the inner-map keys, not the votes)
+///      are checked against the tracked set. A vote on any tracked proposal — INCLUDING one this same tx
+///      just submitted, since (1) runs first — fail-closes (`VoteOnTrackedProposal`).
+///
+/// A phase-2-invalid tx that carries field 19/20 fail-closes (`InvalidTxCarriesAuthorityEffect`), parity
+/// with the fee scan's cert/withdrawal guard (cardano discards an invalid tx's body effects; rather than
+/// selectively skip a discarded proposal, halt). A malformed field 19/20, or an unknown gov-action
+/// variant, is terminal (`MalformedGovernanceField`) — never a silent skip. Pure + total; replaying the
+/// same block yields the same `gov`.
+fn apply_block_governance(
+    mut gov: ConwayGovState,
+    tx_bodies: &[u8],
+    tx_count: u64,
+    invalid: &std::collections::BTreeSet<u64>,
+    current_epoch: EpochNo,
+) -> Result<ConwayGovState, LedgerTransitionError> {
+    use ade_codec::cbor;
+    if tx_count == 0 {
+        return Ok(gov);
+    }
+    let data = tx_bodies;
+    let mut offset = 0usize;
+    let mut tx_index: u64 = 0;
+    match cbor::read_array_header(data, &mut offset)
+        .map_err(|_| LedgerTransitionError::MalformedBlock)?
+    {
+        cbor::ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                apply_one_tx_governance(
+                    &mut gov,
+                    data,
+                    &mut offset,
+                    tx_index,
+                    invalid,
+                    current_epoch,
+                )?;
+                tx_index += 1;
+            }
+        }
+        cbor::ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)? {
+                apply_one_tx_governance(
+                    &mut gov,
+                    data,
+                    &mut offset,
+                    tx_index,
+                    invalid,
+                    current_epoch,
+                )?;
+                tx_index += 1;
+            }
+        }
+    }
+    // Mechanical coupling: the tx index space walked here must equal `tx_count` (the count the invalid set
+    // was range-checked against), so the per-tx validity gate aligns. Equal by construction — the same
+    // durable bytes the fee scan + cert pass already walked — but asserted so a future miswire fails closed.
+    if tx_index != tx_count {
+        return Err(LedgerTransitionError::MalformedBlock);
+    }
+    Ok(gov)
+}
+
+/// Apply ONE tx's governance effects (field 20 capture, field 19 tripwire) gated by phase-2 validity.
+fn apply_one_tx_governance(
+    gov: &mut ConwayGovState,
+    data: &[u8],
+    offset: &mut usize,
+    tx_index: u64,
+    invalid: &std::collections::BTreeSet<u64>,
+    current_epoch: EpochNo,
+) -> Result<(), LedgerTransitionError> {
+    use ade_codec::cbor;
+    use ade_types::conway::governance::{GovActionId, GovActionState};
+
+    let body_start = *offset;
+    // Locate field 19 (votes) + field 20 (proposals) value spans in one tx-body walk.
+    let mut field19: Option<(usize, usize)> = None;
+    let mut field20: Option<(usize, usize)> = None;
+    match cbor::read_map_header(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)? {
+        cbor::ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                read_one_gov_field(data, offset, &mut field19, &mut field20)?;
+            }
+        }
+        cbor::ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, *offset).map_err(|_| LedgerTransitionError::MalformedBlock)? {
+                read_one_gov_field(data, offset, &mut field19, &mut field20)?;
+            }
+            *offset += 1; // consume break
+        }
+    }
+    let body_end = *offset;
+
+    // Phase-2-invalid txs discard ALL body effects; rather than selectively skip a discarded proposal/vote
+    // (gated to the byte-exact boundary work), fail closed — parity with the fee scan's cert/withdrawal guard.
+    if invalid.contains(&tx_index) {
+        if field19.is_some() || field20.is_some() {
+            return Err(LedgerTransitionError::InvalidTxCarriesAuthorityEffect { tx_index });
+        }
+        return Ok(());
+    }
+
+    // (1) Capture submitted proposals (field 20). The GovActionId binds to THIS tx's canonical id.
+    if let Some((s, e)) = field20 {
+        let procs = ade_codec::conway::governance::decode_proposal_procedures(&data[s..e])
+            .map_err(|_| LedgerTransitionError::MalformedGovernanceField { tx_index })?;
+        // `expires_after = proposed_in + gov_action_lifetime` is persisted future refund authority; a 0
+        // lifetime is the placeholder / un-imported value (impossible on any real network). Refuse to
+        // track a proposal with a fabricated expiry — the era-correct lifetime must have been imported
+        // from the certified curPParams (the v7 bootstrap). `decode_proposal_procedures` rejects an empty
+        // set, so reaching here means at least one proposal WILL be tracked.
+        if gov.gov_action_lifetime == 0 {
+            return Err(LedgerTransitionError::GovActionLifetimeUnproven { tx_index });
+        }
+        let tx_hash = ade_crypto::transaction_id(&data[body_start..body_end]);
+        for (i, p) in procs.into_iter().enumerate() {
+            let index = u32::try_from(i)
+                .map_err(|_| LedgerTransitionError::MalformedGovernanceField { tx_index })?;
+            let expires_after = current_epoch
+                .0
+                .checked_add(gov.gov_action_lifetime)
+                .ok_or(LedgerTransitionError::ArithmeticOverflow)?;
+            gov.proposals.push(GovActionState {
+                action_id: GovActionId {
+                    tx_hash: tx_hash.clone(),
+                    index,
+                },
+                committee_votes: Vec::new(),
+                drep_votes: Vec::new(),
+                spo_votes: Vec::new(),
+                deposit: p.deposit,
+                return_addr: p.return_addr,
+                gov_action: p.gov_action,
+                proposed_in: current_epoch,
+                expires_after: EpochNo(expires_after),
+            });
+        }
+    }
+
+    // (2) Vote tripwire (field 19): any vote on a tracked proposal — including one just submitted in this
+    // tx, since (1) ran first — is terminal (the imported/empty vote map is no longer canonical).
+    if let Some((s, e)) = field19 {
+        let voted = extract_voted_action_ids(&data[s..e])
+            .map_err(|_| LedgerTransitionError::MalformedGovernanceField { tx_index })?;
+        for vid in &voted {
+            if gov.proposals.iter().any(|p| &p.action_id == vid) {
+                return Err(LedgerTransitionError::VoteOnTrackedProposal { tx_index });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Read one tx-body field, recording the VALUE byte-span for key 19 (`voting_procedures`) and key 20
+/// (`proposal_procedures`); every other field's value is skipped. Advances `offset` past the value.
+fn read_one_gov_field(
+    data: &[u8],
+    offset: &mut usize,
+    field19: &mut Option<(usize, usize)>,
+    field20: &mut Option<(usize, usize)>,
+) -> Result<(), LedgerTransitionError> {
+    use ade_codec::cbor;
+    let (key, _) =
+        cbor::read_uint(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)?;
+    let (vstart, vend) =
+        cbor::skip_item(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)?;
+    match key {
+        19 => *field19 = Some((vstart, vend)),
+        20 => *field20 = Some((vstart, vend)),
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Extract the `GovActionId`s a `voting_procedures` (tx-body field 19) targets — the inner-map KEYS, not
+/// the votes. CDDL: `voting_procedures = { + voter => { + gov_action_id => voting_procedure } }`; the
+/// voter keys and the `voting_procedure` values are skipped (parity with the proven voter walk in
+/// `tx_validity::required_signers::collect_voter_keys`). Fail-closed (`Err(())`) on any malformed shape —
+/// the tripwire must never silently miss a vote on a tracked proposal. `data` is the exact field-19 value;
+/// trailing bytes are rejected.
+fn extract_voted_action_ids(
+    data: &[u8],
+) -> Result<Vec<ade_types::conway::governance::GovActionId>, ()> {
+    use ade_codec::cbor;
+    let mut offset = 0usize;
+    // Defensive parity with the proven voter walk: tolerate an optional set/tag wrapper (a plain map
+    // starts at major 5, so this fires only if a wrapper tag is actually present).
+    if offset < data.len() && cbor::peek_major(data, offset).map_err(|_| ())? == 6 {
+        let _ = cbor::read_tag(data, &mut offset).map_err(|_| ())?;
+    }
+    let mut out = Vec::new();
+    let mut one_voter = |data: &[u8], offset: &mut usize| -> Result<(), ()> {
+        // voter key = [tag, hash] — a self-contained item; its identity is irrelevant to the tripwire.
+        let _ = cbor::skip_item(data, offset).map_err(|_| ())?;
+        // value map: { + gov_action_id => voting_procedure }
+        match cbor::read_map_header(data, offset).map_err(|_| ())? {
+            cbor::ContainerEncoding::Definite(m, _) => {
+                for _ in 0..m {
+                    out.push(read_gov_action_id(data, offset)?);
+                    let _ = cbor::skip_item(data, offset).map_err(|_| ())?; // voting_procedure value
+                }
+            }
+            cbor::ContainerEncoding::Indefinite => {
+                while !cbor::is_break(data, *offset).map_err(|_| ())? {
+                    out.push(read_gov_action_id(data, offset)?);
+                    let _ = cbor::skip_item(data, offset).map_err(|_| ())?;
+                }
+                *offset += 1;
+            }
+        }
+        Ok(())
+    };
+    match cbor::read_map_header(data, &mut offset).map_err(|_| ())? {
+        cbor::ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                one_voter(data, &mut offset)?;
+            }
+        }
+        cbor::ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, offset).map_err(|_| ())? {
+                one_voter(data, &mut offset)?;
+            }
+            offset += 1;
+        }
+    }
+    // Closed surface: the field-19 value is exactly one (optionally tag-wrapped) map — no trailing bytes.
+    if offset != data.len() {
+        return Err(());
+    }
+    Ok(out)
+}
+
+/// Decode `gov_action_id = array(2)[tx_hash(bytes32), index(uint)]` at `offset` (mirrors the proven S1
+/// ledger-state reader `ledgerdb_state::nn_read_gov_action_id`). Fail-closed on any malformed shape.
+fn read_gov_action_id(
+    data: &[u8],
+    offset: &mut usize,
+) -> Result<ade_types::conway::governance::GovActionId, ()> {
+    use ade_codec::cbor;
+    match cbor::read_array_header(data, offset).map_err(|_| ())? {
+        cbor::ContainerEncoding::Definite(2, _) => {}
+        _ => return Err(()),
+    }
+    let (txid, _) = cbor::read_bytes(data, offset).map_err(|_| ())?;
+    if txid.len() != 32 {
+        return Err(());
+    }
+    let mut h = [0u8; 32];
+    h.copy_from_slice(&txid);
+    let (idx, _) = cbor::read_uint(data, offset).map_err(|_| ())?;
+    let index = u32::try_from(idx).map_err(|_| ())?;
+    Ok(ade_types::conway::governance::GovActionId {
+        tx_hash: ade_types::Hash32(h),
+        index,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -2328,5 +2640,320 @@ mod tests {
             matches!(r, Err(LedgerTransitionError::MalformedBlock)),
             "expected MalformedBlock for an out-of-range index, got {r:?}"
         );
+    }
+
+    // ----- CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3: within-epoch governance capture + vote tripwire -----
+
+    use ade_types::conway::governance::{
+        Anchor, GovAction, GovActionId, GovActionState, ProposalProcedure,
+    };
+
+    /// A round-trippable opaque anchor (`[ "x", h'aa..' ]`), mirroring the codec test fixture.
+    fn s3_anchor() -> Anchor {
+        let mut buf = Vec::new();
+        write_array_header(&mut buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+        ade_codec::cbor::write_text_canonical(&mut buf, "x");
+        write_bytes_canonical(&mut buf, &[0xaa; 32]);
+        Anchor { raw: buf }
+    }
+
+    /// An `InfoAction` proposal procedure with an observable deposit + return address.
+    fn s3_proposal(deposit: u64, return_addr_byte: u8) -> ProposalProcedure {
+        ProposalProcedure {
+            deposit: Coin(deposit),
+            return_addr: vec![return_addr_byte; 29],
+            gov_action: GovAction::InfoAction,
+            anchor: s3_anchor(),
+        }
+    }
+
+    /// tx-body field-20 (`proposal_procedures`) value bytes for `procs`.
+    fn s3_field20(procs: &[ProposalProcedure]) -> Vec<u8> {
+        ade_codec::conway::governance::encode_proposal_procedures(procs)
+    }
+
+    /// tx-body field-19 (`voting_procedures`) value bytes: one DRep voter (tag 2) casting a Yes on each
+    /// `targets` action id. `voting_procedures = { voter => { gov_action_id => voting_procedure } }`.
+    fn s3_field19(targets: &[GovActionId]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        write_map_header(&mut buf, ContainerEncoding::Definite(1, IntWidth::Inline)); // 1 voter
+        // voter = [2, addr_keyhash(28)] (DRep keyhash)
+        write_array_header(&mut buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+        write_uint_canonical(&mut buf, 2);
+        write_bytes_canonical(&mut buf, &[0x11; 28]);
+        // { gov_action_id => voting_procedure }
+        let n = targets.len() as u64;
+        write_map_header(&mut buf, ContainerEncoding::Definite(n, canonical_width(n)));
+        for gid in targets {
+            // gov_action_id = [tx_hash(32), index]
+            write_array_header(&mut buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+            write_bytes_canonical(&mut buf, &gid.tx_hash.0);
+            write_uint_canonical(&mut buf, gid.index as u64);
+            // voting_procedure = [vote, anchor/null] — skipped by the tripwire extractor.
+            write_array_header(&mut buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+            write_uint_canonical(&mut buf, 1); // Yes
+            write_null(&mut buf);
+        }
+        buf
+    }
+
+    /// A tx body map carrying `fields` (which MUST be in ascending key order).
+    fn s3_body(fields: &[(u64, Vec<u8>)]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let n = fields.len() as u64;
+        write_map_header(&mut buf, ContainerEncoding::Definite(n, canonical_width(n)));
+        for (k, v) in fields {
+            write_uint_canonical(&mut buf, *k);
+            buf.extend_from_slice(v);
+        }
+        buf
+    }
+
+    /// Wrap tx bodies into the `tx_bodies` array.
+    fn s3_tx_bodies(bodies: &[Vec<u8>]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let n = bodies.len() as u64;
+        write_array_header(&mut buf, ContainerEncoding::Definite(n, canonical_width(n)));
+        for b in bodies {
+            buf.extend_from_slice(b);
+        }
+        buf
+    }
+
+    fn s3_empty_gov(lifetime: u64) -> ConwayGovState {
+        ConwayGovState {
+            proposals: Vec::new(),
+            committee: std::collections::BTreeMap::new(),
+            committee_quorum: (2, 3),
+            drep_expiry: std::collections::BTreeMap::new(),
+            gov_action_lifetime: lifetime,
+            vote_delegations: std::collections::BTreeMap::new(),
+            pool_voting_thresholds: Vec::new(),
+            drep_voting_thresholds: Vec::new(),
+            committee_hot_keys: std::collections::BTreeMap::new(),
+        }
+    }
+
+    fn s3_tracked(gov: &mut ConwayGovState, id: GovActionId, expires_after: EpochNo) {
+        gov.proposals.push(GovActionState {
+            action_id: id,
+            committee_votes: Vec::new(),
+            drep_votes: Vec::new(),
+            spo_votes: Vec::new(),
+            deposit: Coin(100_000_000_000),
+            return_addr: vec![0xe0; 29],
+            gov_action: GovAction::InfoAction,
+            proposed_in: EpochNo(1309),
+            expires_after,
+        });
+    }
+
+    #[test]
+    fn s3_live_proposal_captured_with_identity_epoch_and_expiry() {
+        let p = s3_proposal(100_000_000_000, 0xe0);
+        let body = s3_body(&[(20, s3_field20(std::slice::from_ref(&p)))]);
+        let expected_tx_hash = ade_crypto::transaction_id(&body);
+        let bodies = s3_tx_bodies(std::slice::from_ref(&body));
+
+        let gov =
+            apply_block_governance(s3_empty_gov(6), &bodies, 1, &invalid_set(&[]), EpochNo(1309))
+                .expect("capture");
+        assert_eq!(gov.proposals.len(), 1);
+        let gas = &gov.proposals[0];
+        // Identity binds to THIS tx's canonical id (= blake2b-256 of the body bytes), index 0.
+        assert_eq!(gas.action_id.tx_hash, expected_tx_hash);
+        assert_eq!(gas.action_id.index, 0);
+        assert_eq!(gas.deposit, Coin(100_000_000_000));
+        assert_eq!(gas.return_addr, vec![0xe0; 29]);
+        assert_eq!(gas.gov_action, GovAction::InfoAction);
+        assert_eq!(gas.proposed_in, EpochNo(1309));
+        // expires_after = proposed_in + gov_action_lifetime.
+        assert_eq!(gas.expires_after, EpochNo(1309 + 6));
+        assert!(
+            gas.committee_votes.is_empty()
+                && gas.drep_votes.is_empty()
+                && gas.spo_votes.is_empty(),
+            "a freshly captured proposal carries NO votes (Ade never tallies)"
+        );
+    }
+
+    #[test]
+    fn s3_two_proposals_one_tx_get_sequential_indices_same_txid() {
+        let procs = [s3_proposal(1_000, 0xe0), s3_proposal(2_000, 0xe1)];
+        let body = s3_body(&[(20, s3_field20(&procs))]);
+        let txid = ade_crypto::transaction_id(&body);
+        let bodies = s3_tx_bodies(std::slice::from_ref(&body));
+        let gov = apply_block_governance(s3_empty_gov(6), &bodies, 1, &invalid_set(&[]), EpochNo(500))
+            .expect("capture");
+        assert_eq!(gov.proposals.len(), 2);
+        assert_eq!(
+            gov.proposals[0].action_id,
+            GovActionId { tx_hash: txid.clone(), index: 0 }
+        );
+        assert_eq!(
+            gov.proposals[1].action_id,
+            GovActionId { tx_hash: txid, index: 1 }
+        );
+        assert_eq!(gov.proposals[0].deposit, Coin(1_000));
+        assert_eq!(gov.proposals[1].deposit, Coin(2_000));
+    }
+
+    #[test]
+    fn s3_vote_on_tracked_proposal_is_terminal() {
+        let pid = GovActionId { tx_hash: Hash32([0xAB; 32]), index: 0 };
+        let mut gov = s3_empty_gov(6);
+        s3_tracked(&mut gov, pid.clone(), EpochNo(1339));
+        let body = s3_body(&[(19, s3_field19(std::slice::from_ref(&pid)))]);
+        let bodies = s3_tx_bodies(std::slice::from_ref(&body));
+        let err = apply_block_governance(gov, &bodies, 1, &invalid_set(&[]), EpochNo(1338))
+            .unwrap_err();
+        assert!(
+            matches!(err, LedgerTransitionError::VoteOnTrackedProposal { tx_index: 0 }),
+            "a vote on a tracked proposal must fail closed, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn s3_vote_on_untracked_proposal_is_carried_forward() {
+        let pid = GovActionId { tx_hash: Hash32([0xAB; 32]), index: 0 };
+        let qid = GovActionId { tx_hash: Hash32([0xCD; 32]), index: 7 };
+        let mut gov = s3_empty_gov(6);
+        s3_tracked(&mut gov, pid, EpochNo(1339));
+        let before = gov.clone();
+        let body = s3_body(&[(19, s3_field19(std::slice::from_ref(&qid)))]);
+        let bodies = s3_tx_bodies(std::slice::from_ref(&body));
+        let after = apply_block_governance(gov, &bodies, 1, &invalid_set(&[]), EpochNo(1338))
+            .expect("a vote on an UNtracked proposal is a no-op, never a refund or terminal");
+        assert_eq!(after, before, "nothing tracked changed");
+    }
+
+    #[test]
+    fn s3_cross_tx_same_block_vote_on_just_submitted_proposal_is_terminal() {
+        // tx0 submits P; tx1 (same block) votes on P. P is tracked before tx1 is checked ⇒ terminal.
+        let p = s3_proposal(100_000_000_000, 0xe0);
+        let tx0 = s3_body(&[(20, s3_field20(std::slice::from_ref(&p)))]);
+        let pid = GovActionId { tx_hash: ade_crypto::transaction_id(&tx0), index: 0 };
+        let tx1 = s3_body(&[(19, s3_field19(std::slice::from_ref(&pid)))]);
+        let bodies = s3_tx_bodies(&[tx0, tx1]);
+        let err = apply_block_governance(s3_empty_gov(6), &bodies, 2, &invalid_set(&[]), EpochNo(500))
+            .unwrap_err();
+        assert!(
+            matches!(err, LedgerTransitionError::VoteOnTrackedProposal { tx_index: 1 }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn s3_invalid_tx_carrying_proposal_is_fail_closed() {
+        let p = s3_proposal(1, 0xe0);
+        let body = s3_body(&[(20, s3_field20(std::slice::from_ref(&p)))]);
+        let bodies = s3_tx_bodies(std::slice::from_ref(&body));
+        let err = apply_block_governance(s3_empty_gov(6), &bodies, 1, &invalid_set(&[0]), EpochNo(500))
+            .unwrap_err();
+        assert!(
+            matches!(err, LedgerTransitionError::InvalidTxCarriesAuthorityEffect { tx_index: 0 }),
+            "a phase-2-invalid tx's proposal must fail closed, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn s3_invalid_tx_carrying_vote_is_fail_closed() {
+        let qid = GovActionId { tx_hash: Hash32([0xCD; 32]), index: 0 };
+        let body = s3_body(&[(19, s3_field19(std::slice::from_ref(&qid)))]);
+        let bodies = s3_tx_bodies(std::slice::from_ref(&body));
+        let err = apply_block_governance(s3_empty_gov(6), &bodies, 1, &invalid_set(&[0]), EpochNo(500))
+            .unwrap_err();
+        assert!(
+            matches!(err, LedgerTransitionError::InvalidTxCarriesAuthorityEffect { tx_index: 0 }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn s3_malformed_field20_is_fail_closed() {
+        // field 20 present but an empty set — violates the CIP-1694 non-empty invariant.
+        let body = s3_body(&[(20, vec![0x80])]); // array(0)
+        let bodies = s3_tx_bodies(std::slice::from_ref(&body));
+        let err = apply_block_governance(s3_empty_gov(6), &bodies, 1, &invalid_set(&[]), EpochNo(500))
+            .unwrap_err();
+        assert!(
+            matches!(err, LedgerTransitionError::MalformedGovernanceField { tx_index: 0 }),
+            "a malformed field 20 is terminal, never a silent skip, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn s3_malformed_field19_is_fail_closed() {
+        // field 19 present but a bare uint, not a voter map.
+        let body = s3_body(&[(19, vec![0x00])]);
+        let bodies = s3_tx_bodies(std::slice::from_ref(&body));
+        let err = apply_block_governance(s3_empty_gov(6), &bodies, 1, &invalid_set(&[]), EpochNo(500))
+            .unwrap_err();
+        assert!(
+            matches!(err, LedgerTransitionError::MalformedGovernanceField { tx_index: 0 }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn s3_block_without_governance_fields_is_noop() {
+        let body = tx_body_fee(50); // only field 2
+        let bodies = s3_tx_bodies(std::slice::from_ref(&body));
+        let gov = s3_empty_gov(6);
+        let before = gov.clone();
+        let after = apply_block_governance(gov, &bodies, 1, &invalid_set(&[]), EpochNo(500))
+            .expect("no governance fields ⇒ no change");
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn s3_capture_skips_non_gov_fields_and_is_replay_equivalent() {
+        // A body carrying a fee (field 2) THEN a proposal (field 20): the pass skips field 2, captures 20.
+        let p = s3_proposal(100_000_000_000, 0xe0);
+        let body = s3_body(&[(2, cbor_uint(50)), (20, s3_field20(std::slice::from_ref(&p)))]);
+        let bodies = s3_tx_bodies(std::slice::from_ref(&body));
+        let a = apply_block_governance(s3_empty_gov(6), &bodies, 1, &invalid_set(&[]), EpochNo(1309))
+            .expect("a");
+        let b = apply_block_governance(s3_empty_gov(6), &bodies, 1, &invalid_set(&[]), EpochNo(1309))
+            .expect("b");
+        assert_eq!(a, b, "same gov + block + epoch ⇒ identical proposals (replay-equivalent)");
+        assert_eq!(a.proposals.len(), 1);
+        assert_eq!(a.proposals[0].deposit, Coin(100_000_000_000));
+    }
+
+    #[test]
+    fn s3_unproven_zero_lifetime_refuses_to_fabricate_expiry() {
+        // A 0 gov_action_lifetime is the placeholder / un-imported value (impossible on a real network).
+        // Capturing a proposal would fabricate `expires_after = proposed_in`. Refuse — the timing
+        // authority must be imported from the certified curPParams (the v7 bootstrap).
+        let p = s3_proposal(100_000_000_000, 0xe0);
+        let body = s3_body(&[(20, s3_field20(std::slice::from_ref(&p)))]);
+        let bodies = s3_tx_bodies(std::slice::from_ref(&body));
+        let err = apply_block_governance(s3_empty_gov(0), &bodies, 1, &invalid_set(&[]), EpochNo(1309))
+            .unwrap_err();
+        assert!(
+            matches!(err, LedgerTransitionError::GovActionLifetimeUnproven { tx_index: 0 }),
+            "a 0 (unimported) lifetime must fail closed, never fabricate an expiry, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn s3_gov_state_none_is_untracked_and_skipped() {
+        // The within-epoch wiring: a `None` gov_state means governance is not tracked, so a block carrying
+        // a proposal applies cleanly and leaves gov_state None — the same gating process_block_certificates
+        // uses (no silent governance authority on an untracked replay).
+        let mut acc = fresh_conway_acc();
+        assert!(acc.gov_state.is_none());
+        acc.gov_state = None;
+        let ctx = SelectedBlockCtx {
+            era: CardanoEra::Conway,
+            block_epoch: EpochNo(500),
+            block_slot: SlotNo(43_000_000),
+            issuer_pool: pool(0x77),
+            boundary_mark: None,
+            active_slots_per_epoch: 21_600,
+        };
+        let out = apply_selected_block(&acc, RAW_CONWAY_BLOCK, &ctx).expect("apply");
+        assert!(out.gov_state.is_none(), "untracked governance stays None");
     }
 }

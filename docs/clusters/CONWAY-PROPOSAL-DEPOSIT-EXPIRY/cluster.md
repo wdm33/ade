@@ -149,12 +149,37 @@ proof it cannot ratify. `gov_action_threshold_index` already encodes the per-act
   with a clear startup error. **Release note: a v5/pre-import bootstrap store requires re-bootstrap from
   the certified snapshot to import the gov proposals + committee.** Tests:
   `epoch_accumulator_store::tests::governance_import_gate_rejects_absent_but_allows_empty`.
-- **S3 — Capture live proposal procedures + a vote tripwire.** Wire `read_one_tx_field` to capture tx
-  field 20 (`decode_proposal_procedures`, already typed) into `gov_state.proposals` with
-  `proposed_in = current_epoch`, `expires_after = proposed_in + gov_action_lifetime`. Add a **field-19
-  tripwire**: if any voting_procedure references a TRACKED proposal during the follow, the imported vote
-  maps are no longer canonical ⇒ terminal structured failure (no tally/apply). Full field-19 vote
-  capture is a documented escalation if CE-3d fails closed here.
+- **S3 — Capture live proposal procedures + a vote tripwire + the expiry-lifetime authority. [DONE]**
+  A DEDICATED within-epoch governance pass `apply_block_governance` in `epoch_accumulator::apply_within_
+  epoch` (NOT an extension of the fee scan / `read_one_tx_field`, the planning shorthand: forming a live
+  proposal's `GovActionId` needs the tx-body hash, the block epoch, and the `gov_state` to merge into —
+  none of which `TxScan` carries; the pass mirrors `process_block_certificates` as its own tx-body walk,
+  leaves the fee scan + the SHARED `rules.rs` untouched, and reuses the already-decoded phase-2-`invalid`
+  set as the authority-effect gate). Per VALID tx, in tx order: (1) field 20 (`decode_proposal_
+  procedures`) → each becomes a tracked `GovActionState` with `action_id = (transaction_id(body),
+  proc_index)` (`block.tx_bodies` are raw wire bytes ⇒ the txid matches cardano byte-for-byte),
+  deposit/return-addr/gov-action verbatim, `proposed_in = ctx.block_epoch`, `expires_after = proposed_in
+  + gov_action_lifetime`, EMPTY vote maps; (2) field 19 → `extract_voted_action_ids` (the inner-map
+  GovActionId keys, mirroring `required_signers::collect_voter_keys`) — any targeting a tracked proposal,
+  incl. one just submitted this tx, ⇒ terminal `VoteOnTrackedProposal` (no tally/apply). Fail-closed
+  terminals: invalid-tx carrying field 19/20 → `InvalidTxCarriesAuthorityEffect`; malformed field 19/20 /
+  unknown gov-action → `MalformedGovernanceField`; `gov_state = None` ⇒ governance untracked, pass skipped.
+  **Expiry-lifetime authority (closes S3's own timing authority):** `expires_after` is persisted future
+  refund authority, so `gov_action_lifetime` must NOT be a default. It is now IMPORTED from the certified
+  `curPParams` (index 26, previously skipped) into `ImportedGovState.gov_action_lifetime`, SEEDED into the
+  accumulator's `gov_state` (was a hardcoded `0`), and the capture path refuses a `0` (un-imported)
+  lifetime → terminal `GovActionLifetimeUnproven` rather than fabricate `expires_after = proposed_in`. The
+  bootstrap commitment binds it (`v6`→`v7`) as FRESH-BOOTSTRAP tamper-evidence — a tampered lifetime in the
+  certified snapshot flips the digest; it is NOT a warm-start load gate (a pre-S3 durable store recovers
+  `0` via the unchanged accumulator codec and fail-closes at the runtime capture guard, which fires exactly
+  where the lifetime is consumed — it is consumed nowhere else). DESIGN NOTE (per-slice review): S3 adds a
+  NEW deterministic-halt surface to the proven follow path — a real selected-chain block that votes on a
+  seed-imported proposal now halts the advance with a structured `Err` (not a panic); operators/runbooks
+  should expect the deterministic halt, not read it as a regression. Tests: 13 capture/tripwire/guard cases
+  in `epoch_accumulator` + the import-link (hermetic `imported_gov.gov_action_lifetime == 6`), the seed-link
+  (assembly), the v7 commitment-binding, and the lifetime-0 terminal. Gate: `ci/ci_check_gov_proposal_
+  capture.sh`. Per-slice IDD/security review: no BLOCK. Full field-19 vote capture remains a documented
+  escalation if CE-3d fails closed at S5.
 - **S4 — Boundary deposit-expiry-refund evaluator (the transition).** In
   `apply_epoch_boundary_with_registrations`, BEFORE the reward update: for every proposal, evaluate
   ratifiability via `check_ratification` with complete canonical inputs. Any ratifiable ⇒ terminal.

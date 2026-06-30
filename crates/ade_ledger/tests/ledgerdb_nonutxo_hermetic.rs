@@ -350,6 +350,13 @@ fn happy_minimal_state_decodes_all_fields() {
     // on the protocol params.
     assert_eq!(s.network_id, 0);
     assert_eq!(s.protocol_params.network_id, 0);
+    // CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3: govActionLifetime (curPParams index 26) is IMPORTED — read from
+    // the certified snapshot, not skipped/defaulted — the era-correct timing authority for a live
+    // proposal's expiry. The fixture's curPParams sets it to 6.
+    assert_eq!(
+        s.imported_gov.gov_action_lifetime, 6,
+        "govActionLifetime imported from curPParams idx 26"
+    );
     // pots.
     assert_eq!(s.treasury, Coin(1_890_267_427_632_547));
     assert_eq!(s.reserves, Coin(13_051_749_596_873_397));

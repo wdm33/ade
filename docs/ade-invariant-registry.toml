@@ -9408,3 +9408,33 @@ ci_scripts = ["ci/ci_check_boundary_aligned_mark_capture.sh"]
 status = "declared"
 introduced_in = "LIVE-LEDGER-EPOCH-TRANSITION-S3"
 strengthened_in = []
+
+[[rules]]
+id = "DC-GOV-01"
+tier = "derived"
+statement = """
+GOVERNANCE-DEPOSIT-EXPIRY-REFUND (negative proof). Ade refunds a removed governance proposal's deposit to
+its recorded return address ONLY when it can PROVE, from canonical governance state and the Conway rules,
+that the proposal could NOT have ratified or enacted; otherwise it fails closed (terminal structured
+failure). The refund (deposit-pot debit + return-address credit) is a total, deterministic, replay-
+equivalent boundary transition; the proof is canonical, persisted-or-reproducibly-derivable, and testable.
+Ade never decides a proposal RATIFIES, only proves when one CANNOT. The tracked proposal set is canonical at
+every boundary: imported from the certified snapshot (bootstrap), kept current by capturing live
+proposal_procedures (tx-body field 20) during follow, and PROTECTED by a vote tripwire -- any canonical
+selected-chain vote (field 19) targeting a tracked proposal makes its tracked vote map non-canonical and is
+terminal (Ade does not tally/ratify/enact). Every persisted field that decides a future refund is canonical,
+never defaulted: expires_after = proposed_in + govActionLifetime, and govActionLifetime is IMPORTED from the
+certified curPParams (never a placeholder) -- a 0/un-imported lifetime at capture is terminal, never a
+fabricated expiry. No silent skip / empty default: an unknown GovActionState / GovAction variant, an
+unsupported committee representation, or a malformed field 19/20 is terminal; an ABSENT proposal/committee
+set is never reinterpreted as an EMPTY one (a pre-import store fails closed -> re-bootstrap required).
+"""
+source = "docs/clusters/CONWAY-PROPOSAL-DEPOSIT-EXPIRY/cluster.md (sections 2-4, declared by this cluster); CIP-1694 (proposal lifecycle: deposit -> expiry -> refund to return_addr from the deposit pot, distinct from a treasury withdrawal). Ground-truthed 2026-06-30 against a POST-1340 cardano db-analyser extraction: the CE-3d -500B reward differential is dropped expired-proposal deposit refunds (5 TreasuryWithdrawals proposals, deposit 100k ADA each, proposed_in 1309 / expires_after 1339, refunded at the 1340->1341 boundary)."
+cross_ref = ["DC-LEDGER-11", "DC-EPOCH-19", "DC-EPOCH-20", "DC-EPOCH-21", "DC-EPOCH-22"]
+code_locus = "S1 (bootstrap import, d2522faf): ade_ledger/ledgerdb_state.rs (decode_native_nonutxo_state -> nn_read_proposals / nn_read_committee / nn_read_gov_action_id; no silent skip -> Unsupported/MalformedGovernanceState; ImportedGovState carries proposals + committee + committee_quorum; the v5->v6 commitment binds them). S2 (absent != empty load gate, 9855ad56): ade_runtime/chaindb/epoch_accumulator_store.rs (verify_governance_imported -> GovernanceImportRequired) + ade_node node_lifecycle warm-start (AccumulatorPredatesGovernanceImport). S3 (capture + tripwire + expiry-lifetime authority): ade_ledger/epoch_accumulator.rs (apply_block_governance / apply_one_tx_governance -- the dedicated within-epoch governance walk wired into apply_within_epoch, gated by the phase-2-invalid set; field-20 -> GovActionState{action_id=(transaction_id(body),index), proposed_in=block_epoch, expires_after=proposed_in+gov_action_lifetime, empty votes}; extract_voted_action_ids -- the field-19 vote tripwire; terminals VoteOnTrackedProposal / MalformedGovernanceField / GovActionLifetimeUnproven, and InvalidTxCarriesAuthorityEffect now reachable for field 19/20) + ade_ledger/ledgerdb_state.rs (read_conway_pparams captures govActionLifetime at curPParams index CONWAY_PP_GOV_ACTION_LIFETIME_INDEX into ImportedGovState.gov_action_lifetime; the v6->v7 commitment binds it as fresh-bootstrap tamper-evidence) + ade_runtime/mithril_native_assembly.rs (seeds gov_state.gov_action_lifetime from the import, never a hardcoded 0)."
+tests = ["ade_ledger::epoch_accumulator::tests (s3_live_proposal_captured_with_identity_epoch_and_expiry, s3_two_proposals_one_tx_get_sequential_indices_same_txid, s3_vote_on_tracked_proposal_is_terminal, s3_vote_on_untracked_proposal_is_carried_forward, s3_cross_tx_same_block_vote_on_just_submitted_proposal_is_terminal, s3_invalid_tx_carrying_proposal_is_fail_closed, s3_invalid_tx_carrying_vote_is_fail_closed, s3_malformed_field20_is_fail_closed, s3_malformed_field19_is_fail_closed, s3_block_without_governance_fields_is_noop, s3_capture_skips_non_gov_fields_and_is_replay_equivalent, s3_unproven_zero_lifetime_refuses_to_fabricate_expiry, s3_gov_state_none_is_untracked_and_skipped)", "ade_ledger::ledgerdb_state::tip_tests::v6_commitment_is_deterministic_and_binds_gov (v7 binds the imported gov_action_lifetime)", "ade_ledger tests/ledgerdb_nonutxo_hermetic.rs::happy_minimal_state_decodes_all_fields (imported_gov.gov_action_lifetime == 6 read from curPParams idx 26)", "ade_runtime::mithril_native_assembly::tests::native_assembly_maps_each_field_from_its_source (gov_state.gov_action_lifetime seeded from the import, not 0)", "ade_runtime::chaindb::epoch_accumulator_store::tests::governance_import_gate_rejects_absent_but_allows_empty (S2 absent != empty)"]
+ci_scripts = ["ci/ci_check_gov_proposal_capture.sh"]
+status = "declared"
+introduced_in = "CONWAY-PROPOSAL-DEPOSIT-EXPIRY-S1"
+strengthened_in = ["CONWAY-PROPOSAL-DEPOSIT-EXPIRY-S2", "CONWAY-PROPOSAL-DEPOSIT-EXPIRY-S3"]
+open_obligation = "S4: the boundary deposit-expiry-refund EVALUATOR -- ONLY a ProvablyUnratifiable structured verdict (committee quorum and/or DRep threshold structurally unreachable given the real boundary-era membership, via the existing governance::check_ratification with COMPLETE canonical inputs) enters the refund path; PotentiallyRatifiable / UnsupportedGovernanceState / MalformedGovernanceState / already-ratified-or-enacted-or-postponed are terminal. S5: the CE-3d byte-exact reward rerun (the +400k/+100k refunds land; the reward total matches cardano bar the documented -343B B3c go-stake + rounding tail). The full DC-GOV-01 is mechanically enforced only when S4 + S5 land; S3 closes the INPUT half -- a canonical, tamper-evident tracked proposal set with proven timing. Full field-19 vote CAPTURE (vs the current detect-and-halt tripwire) is the documented escalation if S5 fails closed."

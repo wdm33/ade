@@ -519,8 +519,12 @@ mod tip_tests {
             imported_gov: gov,
             reward_nibble_observation: RewardNibbleObservation::None,
         };
-        let empty =
-            ImportedGovState { proposals: Vec::new(), committee: BTreeMap::new(), committee_quorum: None };
+        let empty = ImportedGovState {
+            proposals: Vec::new(),
+            committee: BTreeMap::new(),
+            committee_quorum: None,
+            gov_action_lifetime: 6,
+        };
         let one = ImportedGovState {
             proposals: vec![GovActionState {
                 action_id: GovActionId { tx_hash: Hash32([0xAB; 32]), index: 0 },
@@ -538,6 +542,7 @@ mod tip_tests {
             }],
             committee: BTreeMap::new(),
             committee_quorum: Some((2, 3)),
+            gov_action_lifetime: 6,
         };
         // deterministic
         assert_eq!(
@@ -554,9 +559,18 @@ mod tip_tests {
         let mut mutated = one.clone();
         mutated.proposals[0].deposit = Coin(999);
         assert_ne!(
-            commit_native_nonutxo_state(&mk(one)),
+            commit_native_nonutxo_state(&mk(one.clone())),
             commit_native_nonutxo_state(&mk(mutated)),
             "v6 binds the proposal deposit",
+        );
+        // the imported govActionLifetime (live-proposal expiry authority) is bound: a tampered lifetime
+        // flips the commitment, so it cannot be silently substituted (CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3).
+        let mut diff_lifetime = one.clone();
+        diff_lifetime.gov_action_lifetime = 7;
+        assert_ne!(
+            commit_native_nonutxo_state(&mk(one)),
+            commit_native_nonutxo_state(&mk(diff_lifetime)),
+            "v7 binds the imported gov_action_lifetime",
         );
     }
 }
@@ -829,6 +843,9 @@ fn read_pool_distr(d: &[u8], o: &mut usize) -> R<BTreeMap<PoolId, (u64, Hash32)>
 /// The Conway on-wire current-PParams array arity (cardano-ledger-conway 1.22.1.0).
 /// `d`/`extraEntropy` removed vs Shelley; governance fields appended.
 const CONWAY_PPARAMS_FIELDS: u64 = 31;
+/// curPParams index of `govActionLifetime` (epochs a proposal lives before expiry) — imported for the
+/// CONWAY-PROPOSAL-DEPOSIT-EXPIRY live-proposal expiry authority (S3).
+const CONWAY_PP_GOV_ACTION_LIFETIME_INDEX: u64 = 26;
 /// `ConwayGovState` (cardano-ledger 1.22) is a 7-field array; `curPParams` is field 3.
 const CONWAY_GOV_STATE_FIELDS: u64 = 7;
 const CONWAY_GOV_STATE_CURPPARAMS_INDEX: usize = 3;
@@ -1394,7 +1411,7 @@ fn read_conway_pparams_from_utxo_state(
     let proposals = nn_read_proposals(d, o)?; // [0]
     let (committee, committee_quorum) = nn_read_committee(d, o)?; // [1]
     skip_item(d, o)?; // [2] constitution
-    let pp = read_conway_pparams(d, o, network_id)?;
+    let (pp, gov_action_lifetime) = read_conway_pparams(d, o, network_id)?;
     // skip the remaining govState fields (prevPParams, futurePParams, drepPulser).
     for _ in (CONWAY_GOV_STATE_CURPPARAMS_INDEX + 1)..(gn as usize) {
         skip_item(d, o)?;
@@ -1410,6 +1427,7 @@ fn read_conway_pparams_from_utxo_state(
             proposals,
             committee,
             committee_quorum,
+            gov_action_lifetime,
         },
     ))
 }
@@ -1427,6 +1445,12 @@ pub struct ImportedGovState {
     pub committee: std::collections::BTreeMap<StakeCredential, u64>,
     /// Committee approval quorum (UnitInterval numerator, denominator); `None` when no committee.
     pub committee_quorum: Option<(u64, u64)>,
+    /// `govActionLifetime` (curPParams index 26) — the number of epochs a newly submitted proposal lives
+    /// before it expires. The current, era-correct protocol value read from the certified, manifest-bound
+    /// snapshot's `curPParams` (NOT a default): it is the persisted timing authority for a LIVE-submitted
+    /// proposal's `expires_after` (CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3). Bound into the commitment so a
+    /// tampered lifetime is caught; `0` is impossible on any real network and is rejected at capture.
+    pub gov_action_lifetime: u64,
 }
 
 /// Decode the Conway on-wire `curPParams` = `array(31)`. Field order (cardano-ledger
@@ -1451,7 +1475,7 @@ pub struct ImportedGovState {
 /// array and carries its Conway constant (`d = 0`, fully decentralized). `network_id` is
 /// NOT a Conway protocol parameter either; it is supplied by the caller, derived from the
 /// manifest network magic (the authority), and bound onto the shared `ProtocolParameters`.
-fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<ProtocolParameters> {
+fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<(ProtocolParameters, u64)> {
     if peek_major(d, *o).map_err(NativeNonUtxoError::from)? != 4 {
         return Err(NativeNonUtxoError::ProtocolParamsMissing(
             "curPParams: not an array".into(),
@@ -1490,12 +1514,18 @@ fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<ProtocolPa
     let collateral_percent = nn_read_u64(d, o, "pp.collateralPercentage")?.min(u16::MAX as u64) as u16; // [20]
     // [21..=30]: maxCollateralInputs, poolVotingThresholds, drepVotingThresholds,
     // committeeMinSize, committeeMaxTermLength, govActionLifetime, govActionDeposit,
-    // dRepDeposit, dRepActivity, minFeeRefScriptCostPerByte — governance / Conway-only
-    // params that have no home on the shared `ProtocolParameters`; consumed but not mapped.
-    for _ in 21..CONWAY_PPARAMS_FIELDS {
-        skip_item(d, o)?;
+    // dRepDeposit, dRepActivity, minFeeRefScriptCostPerByte. govActionLifetime (index 26) IS captured
+    // (the live-proposal expiry authority, CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3); the rest have no home on
+    // the shared `ProtocolParameters` and are consumed but not mapped.
+    let mut gov_action_lifetime: u64 = 0;
+    for idx in 21..CONWAY_PPARAMS_FIELDS {
+        if idx == CONWAY_PP_GOV_ACTION_LIFETIME_INDEX {
+            gov_action_lifetime = nn_read_u64(d, o, "pp.govActionLifetime")?;
+        } else {
+            skip_item(d, o)?;
+        }
     }
-    Ok(ProtocolParameters {
+    Ok((ProtocolParameters {
         min_fee_a,
         min_fee_b,
         max_block_body_size,
@@ -1521,7 +1551,7 @@ fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<ProtocolPa
         // bound from the manifest network magic (the authority), not decoded from the array.
         network_id,
         cost_models_cbor,
-    })
+    }, gov_action_lifetime))
 }
 
 /// Read a Conway PParams rational field (`tag(30) array(2)[num, den]`).
@@ -1587,7 +1617,7 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
     // v5: binds the certified epoch fee pot (`epoch_fees`) alongside the v4 seed-boundary RUPD pots
     // (`rupd_delta_treasury`/`rupd_delta_reserves`), the v3 `current_block_production` (nesBcur) and the
     // v1 `block_production` (nesBprev).
-    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v6");
+    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v7");
     v.push(s.era.as_u8());
     // The manifest-derived network id (a network identity perturbation flips the commitment).
     v.push(s.network_id);
@@ -1669,6 +1699,13 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
         }
     };
     let g = &s.imported_gov;
+    // v7: the imported `govActionLifetime` (curPParams) — the timing authority for a LIVE proposal's
+    // expiry (CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3). Binding it here is FRESH-BOOTSTRAP tamper-evidence: a
+    // tampered/substituted lifetime in the certified snapshot flips this commitment, caught at bootstrap.
+    // (It is NOT a warm-start load gate — a pre-S3 durable store recovers `gov_action_lifetime = 0` via
+    // the unchanged accumulator codec and fail-closes at the runtime CAPTURE guard `GovActionLifetime
+    // Unproven`, which fires exactly where the value is consumed; the lifetime is used nowhere else.)
+    v.extend_from_slice(&g.gov_action_lifetime.to_be_bytes());
     v.extend_from_slice(&(g.proposals.len() as u64).to_be_bytes());
     for p in &g.proposals {
         v.extend_from_slice(&p.action_id.tx_hash.0);
