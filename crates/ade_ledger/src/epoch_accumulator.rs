@@ -384,6 +384,12 @@ pub enum LedgerTransitionError {
     /// properly v7-bootstrapped accumulator imports the era-correct lifetime from the certified curPParams.
     /// `tx_index` locates the submitting tx.
     GovActionLifetimeUnproven { tx_index: u64 },
+    /// CONWAY-PROPOSAL-DEPOSIT-EXPIRY S4 / DC-GOV-01: the epoch-boundary deposit-expiry-refund planner
+    /// could not prove that EVERY tracked proposal is safe to resolve under Ade's authority — at least one
+    /// proposal is potentially ratifiable, malformed, or unsupported. The boundary fails closed with ZERO
+    /// mutation (no refund credited, no proposal removed) rather than refund past an unproven disposition.
+    /// Carries the structured verdict that tripped it.
+    GovDepositRefundTerminal(crate::governance::RefundVerdict),
 }
 
 /// Apply one durable selected-chain block to the accumulator. Total, deterministic, replay-equivalent.
@@ -429,6 +435,86 @@ pub fn apply_selected_block(
     acc = apply_within_epoch(acc, &block, era, ctx)?;
     acc.epoch_state.slot = ctx.block_slot;
     Ok(acc)
+}
+
+/// Apply the CONWAY-PROPOSAL-DEPOSIT-EXPIRY S4 deposit-expiry refunds at an epoch boundary into `target`
+/// (DC-GOV-01). Builds the canonical ratification inputs from the accumulator's governance state + the
+/// current (pre-rotation) snapshots, plans the whole-set refund (`governance::plan_deposit_refunds`), and —
+/// ONLY on a fully-safe plan — credits each refunded deposit to its return-address reward account and
+/// removes the proposal, in `GovActionId` order. A non-`ProvablyUnratifiable` proposal anywhere returns the
+/// structured terminal `GovDepositRefundTerminal` with ZERO mutation. Governance-untracked (`None`) is a
+/// no-op. The deposit pot is IMPLICIT: removal IS the debit, so Σcredits == Σremoved deposits by construction.
+fn apply_gov_deposit_refunds(
+    acc: &mut EpochAccumulator,
+    target: EpochNo,
+) -> Result<(), LedgerTransitionError> {
+    // Plan first (immutable borrows of gov_state + snapshots); mutate `acc` only on a clean plan.
+    let plan = {
+        let gov = match acc.gov_state.as_ref() {
+            Some(g) => g,
+            None => return Ok(()), // governance not tracked
+        };
+        // Active DRep stake from the imported vote delegations × the current mark snapshot (mirrors the
+        // boundary fn's step 4b). For the accumulator `vote_delegations` is empty ⇒ empty, so the committee
+        // gate is the proof (per the S4.0 census).
+        let mark = &acc.epoch_state.snapshots.mark;
+        let mut drep_stake: crate::governance::DRepStakeDistribution = BTreeMap::new();
+        for (cred, drep) in &gov.vote_delegations {
+            let stake = mark.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
+            if stake > 0 {
+                *drep_stake.entry(drep.clone()).or_insert(0) += stake;
+            }
+        }
+        let committee_quorum = crate::rational::Rational::new(
+            gov.committee_quorum.0 as i128,
+            gov.committee_quorum.1.max(1) as i128,
+        )
+        .unwrap_or_else(crate::rational::Rational::one);
+        crate::governance::plan_deposit_refunds(
+            &gov.proposals,
+            &drep_stake,
+            &acc.epoch_state.snapshots.go.0.pool_stakes,
+            &gov.committee,
+            &committee_quorum,
+            &gov.pool_voting_thresholds,
+            &gov.drep_voting_thresholds,
+            target.0,
+            &gov.committee_hot_keys,
+            &gov.drep_expiry,
+        )
+        .map_err(LedgerTransitionError::GovDepositRefundTerminal)?
+    };
+
+    // Apply atomically — nothing above mutated `acc` (a terminal returned with zero mutation). The refund
+    // routes EXACTLY as POOLREAP (rules.rs) and reward distribution do: a REGISTERED return-address
+    // credential is credited to its reward account; a DEREGISTERED one goes to the TREASURY (cardano's
+    // unredeemed path) — never an orphan `rewards` entry (the codebase-wide invariant "every rewards key is
+    // registered"). Treasury is credited before the boundary view, so the boundary fn's `treasury + deltas`
+    // carries it. GovActionId order (the planner already sorted `removed`).
+    for entry in &plan.removed {
+        if let Some((cred, deposit)) = &entry.credit {
+            if acc.cert_state.delegation.registrations.contains_key(cred) {
+                let bal = acc
+                    .cert_state
+                    .delegation
+                    .rewards
+                    .entry(cred.clone())
+                    .or_insert(Coin(0));
+                bal.0 = bal.0.saturating_add(deposit.0);
+            } else {
+                acc.epoch_state.treasury.0 =
+                    acc.epoch_state.treasury.0.saturating_add(deposit.0);
+            }
+        }
+    }
+    if !plan.removed.is_empty() {
+        if let Some(gov) = acc.gov_state.as_mut() {
+            let removed: std::collections::BTreeSet<_> =
+                plan.removed.iter().map(|e| e.action_id.clone()).collect();
+            gov.proposals.retain(|p| !removed.contains(&p.action_id));
+        }
+    }
+    Ok(())
 }
 
 /// Cross ONE epoch boundary into `target`. Reuses the validated `apply_epoch_boundary_with_registrations`
@@ -488,6 +574,14 @@ pub fn cross_epoch_boundary(
     // Capture the just-finished epoch's nesBcur (it becomes nesBprev after this boundary).
     let finished_blocks = std::mem::take(&mut acc.epoch_state.block_production);
     let finished_fees = acc.epoch_state.epoch_fees;
+
+    // CONWAY-PROPOSAL-DEPOSIT-EXPIRY S4 (DC-GOV-01): the deposit-expiry-refund transition, BEFORE the
+    // boundary view. The whole-set planner refunds each EXPIRED + provably-unratifiable proposal's deposit
+    // to its return address and removes it; any potentially-ratifiable / malformed / unsupported proposal
+    // fails the boundary closed with ZERO mutation. Removing the expired proposals here means the boundary
+    // fn's own governance pass (which would otherwise silently DROP the expired set) sees a reduced set and
+    // is a no-op for them, and the refund credits flow into the new epoch's snapshot.
+    apply_gov_deposit_refunds(&mut acc, target)?;
 
     // Reward inputs: at the seed boundary, EMPTY (the bootstrap RUPD carries the reward, so the native
     // reward computes exactly zero); otherwise the held nesBprev + prev fees.
@@ -2955,5 +3049,139 @@ mod tests {
         };
         let out = apply_selected_block(&acc, RAW_CONWAY_BLOCK, &ctx).expect("apply");
         assert!(out.gov_state.is_none(), "untracked governance stays None");
+    }
+
+    // ----- CONWAY-PROPOSAL-DEPOSIT-EXPIRY S4: the boundary deposit-expiry-refund transition -----
+
+    use ade_types::conway::governance::Vote;
+
+    fn s4_tw() -> GovAction {
+        GovAction::TreasuryWithdrawals { withdrawals: Vec::new(), policy_hash: None }
+    }
+    fn s4_gas(
+        id: u8, action: GovAction, votes: Vec<(StakeCredential, Vote)>,
+        expires: u64, deposit: u64, ra: u8,
+    ) -> GovActionState {
+        GovActionState {
+            action_id: GovActionId { tx_hash: Hash32([id; 32]), index: 0 },
+            committee_votes: votes,
+            drep_votes: Vec::new(),
+            spo_votes: Vec::new(),
+            deposit: Coin(deposit),
+            return_addr: vec![ra; 29],
+            gov_action: action,
+            proposed_in: EpochNo(1309),
+            expires_after: EpochNo(expires),
+        }
+    }
+    fn s4_acc_with_gov(proposals: Vec<GovActionState>) -> EpochAccumulator {
+        let mut acc = EpochAccumulator::new(CardanoEra::Conway);
+        acc.epoch_state.epoch = EpochNo(1340);
+        // Register the return-address credentials the S4 tests use (0xe0/0xe1) so their refunds route to the
+        // reward account (the CE-3d case — its accounts are registered); a deregistered account → treasury.
+        for ra in [0xe0u8, 0xe1] {
+            acc.cert_state
+                .delegation
+                .registrations
+                .insert(StakeCredential::KeyHash(Hash28([ra; 28])), Coin(2_000_000));
+        }
+        let mut gov = s3_empty_gov(6); // committee_quorum (2,3)
+        gov.committee = [
+            (StakeCredential::KeyHash(Hash28([0xC1; 28])), 1400u64),
+            (StakeCredential::KeyHash(Hash28([0xC2; 28])), 1400),
+            (StakeCredential::KeyHash(Hash28([0xC3; 28])), 1400),
+        ]
+        .into_iter()
+        .collect();
+        gov.proposals = proposals;
+        acc.gov_state = Some(gov);
+        acc
+    }
+
+    #[test]
+    fn s4_boundary_refunds_expiring_unratifiable_and_carries_the_rest() {
+        // 0x01: expiring (1339 < ending 1340) + 0 committee Yes -> refund to 0xe0; 0x02: non-expiring -> carried.
+        let mut acc = s4_acc_with_gov(vec![
+            s4_gas(0x01, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
+            s4_gas(0x02, s4_tw(), Vec::new(), 1366, 100_000_000_000, 0xe1),
+        ]);
+        apply_gov_deposit_refunds(&mut acc, EpochNo(1341)).expect("clean refund");
+        assert_eq!(
+            acc.cert_state.delegation.rewards.get(&StakeCredential::KeyHash(Hash28([0xe0; 28]))),
+            Some(&Coin(100_000_000_000)),
+            "the expired proposal's deposit refunds to its return-address reward account",
+        );
+        let gov = acc.gov_state.as_ref().unwrap();
+        assert_eq!(gov.proposals.len(), 1, "expired removed, non-expiring carried");
+        assert_eq!(gov.proposals[0].action_id.tx_hash, Hash32([0x02; 32]));
+    }
+
+    #[test]
+    fn s4_boundary_terminal_on_ratifiable_is_zero_mutation() {
+        // A ratifiable proposal (2/3 committee Yes) alongside an expiring one -> the whole boundary terminals
+        // with ZERO mutation (no refund credited, no proposal removed).
+        let mut acc = s4_acc_with_gov(vec![
+            s4_gas(0x01, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
+            s4_gas(
+                0x02, s4_tw(),
+                vec![
+                    (StakeCredential::KeyHash(Hash28([0xC1; 28])), Vote::Yes),
+                    (StakeCredential::KeyHash(Hash28([0xC2; 28])), Vote::Yes),
+                ],
+                1339, 100_000_000_000, 0xe1,
+            ),
+        ]);
+        let before = acc.clone();
+        let err = apply_gov_deposit_refunds(&mut acc, EpochNo(1341)).unwrap_err();
+        assert!(
+            matches!(err, LedgerTransitionError::GovDepositRefundTerminal(_)),
+            "a potentially-ratifiable proposal fails the boundary closed, got {err:?}"
+        );
+        assert_eq!(acc, before, "a terminal boundary makes ZERO mutation");
+    }
+
+    #[test]
+    fn s4_boundary_refund_is_replay_equivalent() {
+        let acc0 = s4_acc_with_gov(vec![
+            s4_gas(0x03, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
+            s4_gas(0x01, s4_tw(), Vec::new(), 1339, 50_000_000_000, 0xe0),
+        ]);
+        let (mut a, mut b) = (acc0.clone(), acc0);
+        apply_gov_deposit_refunds(&mut a, EpochNo(1341)).expect("a");
+        apply_gov_deposit_refunds(&mut b, EpochNo(1341)).expect("b");
+        assert_eq!(a, b, "same prior + same boundary ⇒ identical accumulator");
+        // both 0xe0 deposits (50k + 100k) accrued to the one return account.
+        assert_eq!(
+            a.cert_state.delegation.rewards.get(&StakeCredential::KeyHash(Hash28([0xe0; 28]))),
+            Some(&Coin(150_000_000_000)),
+        );
+        assert!(a.gov_state.as_ref().unwrap().proposals.is_empty(), "both expired removed");
+    }
+
+    #[test]
+    fn s4_boundary_deregistered_return_account_routes_deposit_to_treasury() {
+        // The return account 0xee is NOT registered ⇒ the refund goes to TREASURY (cardano's unredeemed
+        // path), never an orphan reward entry — matching POOLREAP + reward distribution.
+        let mut acc =
+            s4_acc_with_gov(vec![s4_gas(0x01, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xee)]);
+        let treasury_before = acc.epoch_state.treasury.0;
+        apply_gov_deposit_refunds(&mut acc, EpochNo(1341)).expect("clean refund");
+        assert_eq!(
+            acc.epoch_state.treasury.0,
+            treasury_before + 100_000_000_000,
+            "an unregistered return account's deposit goes to treasury",
+        );
+        assert!(
+            acc.cert_state
+                .delegation
+                .rewards
+                .get(&StakeCredential::KeyHash(Hash28([0xee; 28])))
+                .is_none(),
+            "no orphan reward entry for the unregistered account",
+        );
+        assert!(
+            acc.gov_state.as_ref().unwrap().proposals.is_empty(),
+            "the expired proposal is removed regardless of refund destination",
+        );
     }
 }

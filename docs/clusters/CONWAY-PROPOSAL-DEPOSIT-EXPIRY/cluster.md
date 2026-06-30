@@ -197,20 +197,29 @@ proof it cannot ratify. `gov_action_threshold_index` already encodes the per-act
   thresholds are never consulted ⇒ **NO threshold/DRep-stake import gap is needed for CE-3d**; the 5
   expiring `TreasuryWithdrawals` are exactly the refund set. Per-slice BLUE review: no BLOCK. ⇒ the narrow
   S4 committee-gate evaluator is ADMISSIBLE.
-- **S4 — Boundary deposit-expiry-refund evaluator (the transition).** In
-  `apply_epoch_boundary_with_registrations` (or `cross_epoch_boundary`, which has the `Result` channel),
-  BEFORE the reward update: a whole-set PURE planner returning `Result<RefundPlan, RefundVerdict>` —
-  evaluate every proposal's ratifiability via `check_ratification` with complete canonical inputs (the
-  S4.0 census proved the committee-only authority suffices). **SEAM (per the S4.0 review):** compose
-  expiry AND provable-unratifiability *through* `check_ratification` — refund only an EXPIRED
-  (`expires_after < ending_epoch`) **AND** provably-unratifiable proposal; do NOT consume the observer's
-  expiry-free `potentially_ratifiable` as standalone refund authority. Any potentially-ratifiable /
-  malformed / unsupported / unresolved proposal ⇒ a structured terminal with ZERO boundary mutation (no
-  credits/removals until every tracked proposal has a safe verdict). Else refund each expiring proposal:
-  credit the return-address credential in `cert_state.delegation.rewards`, remove the proposal (the
-  implicit-pot debit; conservation by construction), in deterministic GovActionId order. InfoAction never
-  enacts ⇒ never receives a refund unless protocol state says it carried one. Total + deterministic +
-  replay-equivalent. Enforces DC-GOV-01.
+- **S4 — Boundary deposit-expiry-refund evaluator (the transition). [DONE]** A whole-set PURE planner
+  `governance::plan_deposit_refunds` returning `Result<RefundPlan, RefundVerdict>` — for EVERY proposal it
+  composes expiry (`expires_after < new_epoch-1`) with the REAL `check_ratification` (the SEAM: refund only
+  an EXPIRED **and** provably-unratifiable proposal; never the observer's expiry-free flag). Any
+  potentially-ratifiable / malformed / unsupported proposal ⇒ the terminal `RefundVerdict`; the planner
+  mutates nothing. `epoch_accumulator::apply_gov_deposit_refunds` (wired into `cross_epoch_boundary` BEFORE
+  the boundary view — it has the `Result` channel) builds the canonical inputs from `gov_state` + the
+  pre-rotation snapshots, runs the planner, and — ONLY on a fully-safe plan — applies it ATOMICALLY: a
+  REGISTERED return-address credential is credited in `cert_state.delegation.rewards`, a DEREGISTERED one
+  routes to TREASURY (cardano's unredeemed path, matching POOLREAP + reward distribution — never an orphan
+  `rewards` entry), and the proposal is removed, in GovActionId order. Implicit pot (removal IS the debit;
+  Σcredits == Σremoved). A non-safe verdict ⇒ `LedgerTransitionError::GovDepositRefundTerminal` with ZERO
+  mutation. Removing the expired set here makes the boundary fn's own step-4b expired-drop a no-op (no
+  double-refund / double-drop). InfoAction never enacts ⇒ refunded on expiry only if it carried a deposit.
+  Total, deterministic, replay-equivalent. **Per-slice BLUE review:** one BLOCK (unregistered return
+  account credited unconditionally → treasury divergence) FIXED via the POOLREAP treasury-routing above;
+  else clean. **Operational envelope (documented, not a bug):** Ade does not model enactment, so the FIRST
+  genuinely potentially-ratifiable governance proposal halts the boundary deterministically (zero mutation)
+  — the fail-closed posture, surfaced for runbooks. **Deferred to S5:** the refund credit enters the stake
+  *distribution* only at the next boundary's mark (the reward-account balance is immediate, correct for the
+  reward differential); the exact SNAP-vs-refund interleave is confirmed by the CE-3d byte-exact rerun.
+  Tests: 8 planner decision-table + 4 boundary (refund-to-rewards, deregistered→treasury, terminal-zero-
+  mutation, replay-equivalent). Enforces DC-GOV-01.
 - **S5 — CE-3d re-run → byte-exact reward total.** Re-run the CE-3d differential; the +400k/+100k
   refunds land, the reward total matches cardano (bar the separate −343B B3c go-stake and the ~−37.6M
   rounding tail). Hands off to the B3c UTxO investigation (separate).

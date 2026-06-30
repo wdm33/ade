@@ -18,7 +18,7 @@
 //! Reference: CIP-1694, Haskell cardano-ledger Conway.Epoch rules.
 
 use ade_types::conway::cert::DRep;
-use ade_types::conway::governance::{GovAction, GovActionState, Vote};
+use ade_types::conway::governance::{GovAction, GovActionId, GovActionState, Vote};
 use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::Coin;
 use ade_types::Hash28;
@@ -429,6 +429,131 @@ pub fn proposal_ratification_observation(
     }
 }
 
+// ─── Deposit-expiry-refund planner (CONWAY-PROPOSAL-DEPOSIT-EXPIRY S4) ───
+
+/// Why a proposal is provably unratifiable (the sound negative-proof reason).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnratifiableReason {
+    /// A constitutional-committee-requiring action whose committee Yes-ratio is below quorum, evaluated
+    /// against a PRESENT + active committee (the gate definitively failed).
+    MissingRequiredCommitteeApproval,
+    /// `InfoAction` has no enactment effect — it can never ratify-into-enactment.
+    InfoActionNeverEnacts,
+}
+
+/// The structured verdict for a proposal's refund disposition (DC-GOV-01). ONLY `ProvablyUnratifiable`
+/// may enter the refund path; every other verdict makes the WHOLE boundary a terminal failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefundVerdict {
+    /// Proven, from canonical governance state + the Conway rules, that the proposal could NOT ratify or
+    /// enact.
+    ProvablyUnratifiable { reason: UnratifiableReason },
+    /// Every required gate passed OR was skipped for absent inputs — it MIGHT ratify/enact. Ade does not
+    /// model enactment, so this is terminal.
+    PotentiallyRatifiable { action_id: GovActionId },
+    /// A governance representation Ade does not support. Reserved for the closed verdict surface — no
+    /// currently-decoded `GovAction` variant yields it (all seven are evaluable).
+    UnsupportedGovernanceState { action_id: GovActionId, detail: &'static str },
+    /// A malformed governance representation (e.g. a refundable proposal's return address is not a
+    /// 29-byte reward account).
+    MalformedGovernanceState { action_id: GovActionId, detail: &'static str },
+}
+
+/// One deposit refund to apply at the boundary: remove `action_id` and (when it carried a deposit) credit
+/// `credit`. Applied in `action_id` order — the canonical, deterministic boundary order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefundEntry {
+    pub action_id: GovActionId,
+    /// `Some((return-address credential, deposit))` when `deposit > 0`; `None` for a 0-deposit proposal
+    /// (removed, no credit — the protocol never escrowed a deposit to return).
+    pub credit: Option<(StakeCredential, Coin)>,
+}
+
+/// The whole-set refund plan: the expired + provably-unratifiable proposals to remove (with their
+/// return-address credits), in `GovActionId` order. Built ONLY when EVERY tracked proposal has a safe
+/// verdict; otherwise [`plan_deposit_refunds`] returns the terminal [`RefundVerdict`] and the boundary
+/// makes zero mutation.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RefundPlan {
+    pub removed: Vec<RefundEntry>,
+}
+
+/// Plan the deposit-expiry refunds for an epoch boundary into `new_epoch` (DC-GOV-01, S4) — a PURE,
+/// whole-set planner examined BEFORE any mutation.
+///
+/// For EVERY tracked proposal, in `GovActionId` order, it composes EXPIRY (`expires_after < new_epoch-1`)
+/// with a per-proposal ratifiability verdict from the REAL [`check_ratification`] (or `InfoAction` never
+/// enacts) — the seam: refund ONLY an EXPIRED **and** provably-unratifiable proposal. A proposal that is
+/// potentially ratifiable (any) makes the WHOLE boundary terminal (`PotentiallyRatifiable`); a refundable
+/// proposal whose return address is malformed is terminal (`MalformedGovernanceState`). A non-expiring
+/// provably-unratifiable proposal is carried forward (no entry). `InfoAction` is refunded on expiry only
+/// if it actually carried a deposit. Total, deterministic; never mutates — the caller applies `Ok(plan)`
+/// atomically or halts on `Err`.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_deposit_refunds(
+    proposals: &[GovActionState],
+    drep_stake: &DRepStakeDistribution,
+    pool_stake: &BTreeMap<ade_types::tx::PoolId, Coin>,
+    committee_members: &BTreeMap<StakeCredential, u64>,
+    committee_quorum: &Rational,
+    pool_thresholds: &[(u64, u64)],
+    drep_thresholds: &[(u64, u64)],
+    new_epoch: u64,
+    committee_hot_keys: &BTreeMap<StakeCredential, StakeCredential>,
+    drep_expiry: &BTreeMap<StakeCredential, u64>,
+) -> Result<RefundPlan, RefundVerdict> {
+    let ending_epoch = new_epoch.saturating_sub(1);
+    let (active_drep_stake, total_drep_active_stake) =
+        active_drep_stake_filtered(drep_stake, drep_expiry, ending_epoch);
+    let total_pool_stake: u64 = pool_stake.values().map(|c| c.0).sum();
+
+    // Canonical, deterministic order over the WHOLE set.
+    let mut sorted: Vec<&GovActionState> = proposals.iter().collect();
+    sorted.sort_by(|a, b| a.action_id.cmp(&b.action_id));
+
+    let mut removed: Vec<RefundEntry> = Vec::new();
+    for p in sorted {
+        // Ratifiability verdict from the REAL gates (InfoAction never enacts — mirrors evaluate_ratification).
+        if !matches!(p.gov_action, GovAction::InfoAction) {
+            let action_idx = gov_action_threshold_index(&p.gov_action);
+            let passed_or_skipped = check_ratification(
+                p,
+                action_idx,
+                &total_drep_active_stake,
+                &active_drep_stake,
+                total_pool_stake,
+                pool_stake,
+                committee_members,
+                committee_quorum,
+                pool_thresholds,
+                drep_thresholds,
+                ending_epoch,
+                committee_hot_keys,
+            );
+            if passed_or_skipped {
+                // It might ratify/enact — Ade does not model enactment ⇒ the whole boundary is terminal.
+                return Err(RefundVerdict::PotentiallyRatifiable { action_id: p.action_id.clone() });
+            }
+        }
+        // Here every proposal is PROVABLY UNRATIFIABLE. Refund ONLY if expired; else carry forward.
+        if p.expires_after.0 < ending_epoch {
+            let credit = if p.deposit.0 > 0 {
+                let cred = crate::epoch_accumulator::reward_account_credential(&p.return_addr).ok_or(
+                    RefundVerdict::MalformedGovernanceState {
+                        action_id: p.action_id.clone(),
+                        detail: "proposal return address is not a 29-byte reward account",
+                    },
+                )?;
+                Some((cred, p.deposit))
+            } else {
+                None
+            };
+            removed.push(RefundEntry { action_id: p.action_id.clone(), credit });
+        }
+    }
+    Ok(RefundPlan { removed })
+}
+
 // ─── Enactment ───────────────────────────────────────────────────────
 
 /// Priority class for enactment ordering.
@@ -825,6 +950,126 @@ mod committee_fidelity_tests {
             &[], &[], 0, &empty_hot, &empty_drep_expiry,
         );
         assert!(!obs.potentially_ratifiable && obs.is_info_action, "InfoAction never enacts (observer)");
+    }
+
+    // CPDE-S4: the whole-set deposit-expiry-refund PLANNER (pure; no mutation). new_epoch 1341 -> ending 1340.
+
+    fn s4_committee() -> BTreeMap<StakeCredential, u64> {
+        // 3 active members (term expiry 1400 >= ending_epoch 1340).
+        [(key(0xC1), 1400u64), (key(0xC2), 1400), (key(0xC3), 1400)].into_iter().collect()
+    }
+    fn s4_plan(proposals: &[GovActionState]) -> Result<RefundPlan, RefundVerdict> {
+        let quorum = Rational::new(2, 3).unwrap();
+        plan_deposit_refunds(
+            proposals, &BTreeMap::new(), &BTreeMap::new(), &s4_committee(), &quorum,
+            &[], &[], 1341, &BTreeMap::new(), &BTreeMap::new(),
+        )
+    }
+    fn s4_prop(
+        id: u8, action: GovAction, votes: Vec<(StakeCredential, Vote)>,
+        expires_after: u64, deposit: u64, return_addr: Vec<u8>,
+    ) -> GovActionState {
+        GovActionState {
+            action_id: GovActionId { tx_hash: Hash32([id; 32]), index: 0 },
+            committee_votes: votes,
+            drep_votes: Vec::new(),
+            spo_votes: Vec::new(),
+            deposit: Coin(deposit),
+            return_addr,
+            gov_action: action,
+            proposed_in: EpochNo(1309),
+            expires_after: EpochNo(expires_after),
+        }
+    }
+    fn tw_action() -> GovAction {
+        GovAction::TreasuryWithdrawals { withdrawals: Vec::new(), policy_hash: None }
+    }
+
+    #[test]
+    fn s4_unvoted_expiring_tw_refunds_to_return_address() {
+        let p = s4_prop(0x01, tw_action(), Vec::new(), 1339, 100_000_000_000, vec![0xe0; 29]);
+        let plan = s4_plan(std::slice::from_ref(&p)).expect("clean plan");
+        assert_eq!(plan.removed.len(), 1);
+        assert_eq!(plan.removed[0].action_id, p.action_id);
+        assert_eq!(
+            plan.removed[0].credit,
+            Some((StakeCredential::KeyHash(Hash28([0xe0; 28])), Coin(100_000_000_000))),
+            "expired + committee-fail -> refund to the return-address key-hash credential",
+        );
+    }
+
+    #[test]
+    fn s4_committee_pass_is_terminal() {
+        // 2 of 3 committee Yes (= 2/3 >= quorum) -> potentially ratifiable -> the whole boundary terminals.
+        let p = s4_prop(0x01, tw_action(), vec![(key(0xC1), Vote::Yes), (key(0xC2), Vote::Yes)], 1339, 1, vec![0xe0; 29]);
+        assert!(matches!(s4_plan(std::slice::from_ref(&p)).unwrap_err(), RefundVerdict::PotentiallyRatifiable { .. }));
+    }
+
+    #[test]
+    fn s4_noconfidence_skips_committee_then_empty_thresholds_is_terminal() {
+        // NoConfidence skips the committee gate; empty drep/pool thresholds -> all gates skipped -> passes
+        // -> potentially ratifiable -> terminal (committee-only authority cannot disprove it). The census
+        // proved no such proposal exists in the CE-3d set; this pins the fail-closed behavior if one did.
+        let p = s4_prop(0x01, GovAction::NoConfidence { prev_action: None }, Vec::new(), 1339, 1, vec![0xe0; 29]);
+        assert!(matches!(s4_plan(std::slice::from_ref(&p)).unwrap_err(), RefundVerdict::PotentiallyRatifiable { .. }));
+    }
+
+    #[test]
+    fn s4_malformed_return_addr_on_refund_is_terminal() {
+        // Expiring + unratifiable, but the return address is not a 29-byte reward account -> terminal.
+        let p = s4_prop(0x01, tw_action(), Vec::new(), 1339, 100_000_000_000, vec![0xe0; 20]);
+        assert!(matches!(s4_plan(std::slice::from_ref(&p)).unwrap_err(), RefundVerdict::MalformedGovernanceState { .. }));
+    }
+
+    #[test]
+    fn s4_non_expiring_unratifiable_carries_forward() {
+        // Provably unratifiable but NOT expiring (1366 >= ending 1340) -> no refund, no terminal.
+        let p = s4_prop(0x01, tw_action(), Vec::new(), 1366, 100_000_000_000, vec![0xe0; 29]);
+        assert!(s4_plan(std::slice::from_ref(&p)).expect("clean plan").removed.is_empty());
+    }
+
+    #[test]
+    fn s4_info_action_expiring_refunds_deposit_else_removed_without_credit() {
+        // InfoAction never enacts -> provably unratifiable; expiring + deposit > 0 -> refund.
+        let p = s4_prop(0x01, GovAction::InfoAction, Vec::new(), 1339, 100_000_000_000, vec![0xe0; 29]);
+        let plan = s4_plan(std::slice::from_ref(&p)).expect("clean plan");
+        assert_eq!(plan.removed.len(), 1);
+        assert!(plan.removed[0].credit.is_some(), "an InfoAction that carried a deposit is refunded");
+        // 0-deposit -> removed, no credit (the protocol never escrowed a deposit to return).
+        let z = s4_prop(0x02, GovAction::InfoAction, Vec::new(), 1339, 0, vec![0xe0; 29]);
+        let plan = s4_plan(std::slice::from_ref(&z)).expect("clean plan");
+        assert_eq!(plan.removed.len(), 1);
+        assert!(plan.removed[0].credit.is_none());
+    }
+
+    #[test]
+    fn s4_script_hash_return_addr_credits_script_credential() {
+        let mut addr = vec![0xf0u8]; // 0xf0 & 0x10 != 0 -> ScriptHash
+        addr.extend_from_slice(&[0xab; 28]);
+        let p = s4_prop(0x01, tw_action(), Vec::new(), 1339, 100_000_000_000, addr);
+        let plan = s4_plan(std::slice::from_ref(&p)).expect("clean plan");
+        assert_eq!(
+            plan.removed[0].credit,
+            Some((StakeCredential::ScriptHash(Hash28([0xab; 28])), Coin(100_000_000_000))),
+            "a 0xF_ reward account credits the SCRIPT-hash credential, not a key-hash projection",
+        );
+    }
+
+    #[test]
+    fn s4_whole_set_one_ratifiable_makes_the_whole_plan_terminal_else_gov_action_id_ordered() {
+        let r_late = s4_prop(0x03, tw_action(), Vec::new(), 1339, 1, vec![0xe0; 29]);
+        let r_early = s4_prop(0x01, tw_action(), Vec::new(), 1339, 1, vec![0xe0; 29]);
+        let ratifiable = s4_prop(0x02, tw_action(), vec![(key(0xC1), Vote::Yes), (key(0xC2), Vote::Yes)], 1339, 1, vec![0xe0; 29]);
+        // ANY ratifiable proposal -> the WHOLE plan is terminal (zero mutation), even though two others would refund.
+        assert!(matches!(
+            s4_plan(&[r_late.clone(), r_early.clone(), ratifiable]).unwrap_err(),
+            RefundVerdict::PotentiallyRatifiable { .. }
+        ));
+        // Without it, the two refunds come back in GovActionId order (0x01 before 0x03).
+        let plan = s4_plan(&[r_late, r_early]).expect("clean plan");
+        assert_eq!(plan.removed.len(), 2);
+        assert_eq!(plan.removed[0].action_id.tx_hash, Hash32([0x01; 32]), "GovActionId order");
+        assert_eq!(plan.removed[1].action_id.tx_hash, Hash32([0x03; 32]));
     }
 
     /// ENACTMENT-COMMITTEE-FIDELITY CE-2: the `EnactmentEffects.committee_changes`
