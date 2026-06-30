@@ -35,7 +35,7 @@ use std::path::Path;
 use ade_ledger::epoch_accumulator::{
     decode_epoch_accumulator, encode_epoch_accumulator, EpochAccumulator,
 };
-use ade_types::{Hash32, SlotNo};
+use ade_types::{CardanoEra, Hash32, SlotNo};
 use redb::{Database, ReadableTable, TableDefinition};
 
 const META_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("epoch_acc_meta");
@@ -92,6 +92,12 @@ pub enum AccumulatorReadinessError {
     /// The accumulator advanced PAST the required slot (an unhandled rollback / overshoot) — its state no
     /// longer reflects the required slot exactly.
     Ahead { advanced: u64, required: u64 },
+    /// CONWAY-PROPOSAL-DEPOSIT-EXPIRY S2 (absent ≠ empty): the sealed bootstrap baseline is a Conway+
+    /// store that carries NO imported governance state (`gov_state = None`) — it PREDATES the
+    /// governance-proposal import (a pre-v6 bootstrap). It must NEVER load as "zero proposals" (an absent
+    /// set is not an empty set); fail closed — re-bootstrap to upgrade. A v6 bootstrap always carries
+    /// `gov_state = Some(..)`, even when the pending-proposal set is empty.
+    GovernanceImportRequired { era_tag: u64 },
 }
 
 fn rerr(e: impl std::fmt::Debug) -> EpochAccumulatorStoreError {
@@ -394,6 +400,28 @@ impl EpochAccumulatorStore {
         Ok(())
     }
 
+    /// CONWAY-PROPOSAL-DEPOSIT-EXPIRY S2 (absent ≠ empty): require that the sealed bootstrap baseline
+    /// carries the imported governance state. A Conway+ bootstrap baseline with `gov_state = None`
+    /// PREDATES the governance-proposal import (a pre-v6 store); it must NEVER be loaded as "zero
+    /// proposals" — a missing imported set is not an empty set. Fail closed; re-bootstrap to upgrade.
+    /// The warm-start path consults this BEFORE operating on a recovered store.
+    pub fn verify_governance_imported(&self) -> Result<(), AccumulatorReadinessError> {
+        let read = |e: EpochAccumulatorStoreError| AccumulatorReadinessError::Read(format!("{e:?}"));
+        let txn = self.db.begin_read().map_err(|e| read(rerr(e)))?;
+        let meta = txn.open_table(META_TABLE).map_err(|e| read(rerr(e)))?;
+        let blob = meta
+            .get(BOOTSTRAP_BLOB_KEY)
+            .map_err(|e| read(rerr(e)))?
+            .map(|v| v.value().to_vec())
+            .ok_or(AccumulatorReadinessError::Unsealed)?;
+        let acc = decode_epoch_accumulator(&blob)
+            .map_err(|e| AccumulatorReadinessError::Read(format!("{e:?}")))?;
+        if (acc.era as u8) >= (CardanoEra::Conway as u8) && acc.gov_state.is_none() {
+            return Err(AccumulatorReadinessError::GovernanceImportRequired { era_tag: acc.era as u64 });
+        }
+        Ok(())
+    }
+
     /// Shared readiness prelude: the sealed seed (lineage-checked) + the last advanced slot, fail-closed.
     fn readiness_inputs(
         &self,
@@ -455,6 +483,51 @@ mod tests {
         assert_eq!(
             s.verify_advanced_through(SlotNo(10), SlotNo(0)),
             Err(AccumulatorReadinessError::Unsealed)
+        );
+    }
+
+    /// CONWAY-PROPOSAL-DEPOSIT-EXPIRY S2 (absent ≠ empty): a Conway bootstrap baseline that PREDATES the
+    /// governance import (`gov_state = None`) is rejected — re-bootstrap required — while a v6 baseline
+    /// with an EMPTY-but-present gov_state passes. The missing import must never masquerade as "zero
+    /// proposals".
+    #[test]
+    fn governance_import_gate_rejects_absent_but_allows_empty() {
+        use ade_ledger::state::ConwayGovState;
+
+        // Absent: a pre-v6 Conway bootstrap (gov_state = None) -> re-bootstrap required.
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        let boot_none = acc_bootstrap();
+        assert!(boot_none.gov_state.is_none());
+        s.seal_bootstrap(&boot_none, SlotNo(100)).unwrap();
+        assert_eq!(
+            s.verify_governance_imported(),
+            Err(AccumulatorReadinessError::GovernanceImportRequired {
+                era_tag: CardanoEra::Conway as u64
+            }),
+            "an absent imported gov state predates the import — re-bootstrap required",
+        );
+
+        // Empty-but-present: a v6 bootstrap whose imported proposal set is empty -> OK (absent != empty).
+        let tmp2 = TempDir::new().unwrap();
+        let s2 = store(&tmp2);
+        let mut boot_empty = acc_bootstrap();
+        boot_empty.gov_state = Some(ConwayGovState {
+            proposals: Vec::new(),
+            committee: std::collections::BTreeMap::new(),
+            committee_quorum: (1, 1),
+            drep_expiry: std::collections::BTreeMap::new(),
+            gov_action_lifetime: 0,
+            vote_delegations: std::collections::BTreeMap::new(),
+            pool_voting_thresholds: Vec::new(),
+            drep_voting_thresholds: Vec::new(),
+            committee_hot_keys: std::collections::BTreeMap::new(),
+        });
+        s2.seal_bootstrap(&boot_empty, SlotNo(100)).unwrap();
+        assert_eq!(
+            s2.verify_governance_imported(),
+            Ok(()),
+            "an empty-but-PRESENT imported gov state is valid (absent != empty)",
         );
     }
 

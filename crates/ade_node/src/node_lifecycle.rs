@@ -291,6 +291,14 @@ pub enum NodeLifecycleError {
         found_version: u32,
         required_version: u32,
     },
+    /// CONWAY-PROPOSAL-DEPOSIT-EXPIRY S2 (absent ≠ empty): the persisted EpochAccumulator's sealed
+    /// bootstrap baseline PREDATES the governance-proposal import (Conway+ store with `gov_state = None`,
+    /// a pre-v6 bootstrap). A missing imported governance set must NEVER masquerade as "zero proposals";
+    /// fail closed — re-bootstrap to upgrade. A TYPED re-bootstrap requirement (like the old-sidecar
+    /// schema gate), DISTINCT from a corrupt store (which stays non-fatal/observe-only).
+    AccumulatorPredatesGovernanceImport {
+        era_tag: u64,
+    },
     /// The relay run loop's sync step (`run_node_sync` → `pump_block`)
     /// fail-closed on a block (undecodable, unvalidatable, a cross-epoch
     /// header beyond the recovered single-epoch view, or a durability
@@ -404,7 +412,8 @@ fn exit_code_for(e: &NodeLifecycleError) -> i32 {
         | NodeLifecycleError::WarmStartForwardReplayUnsupported { .. }
         | NodeLifecycleError::RestartGenesisGeometryMismatch { .. }
         | NodeLifecycleError::WarmStartBootstrap(_)
-        | NodeLifecycleError::ConsensusInputsSchemaUnsupported { .. } => {
+        | NodeLifecycleError::ConsensusInputsSchemaUnsupported { .. }
+        | NodeLifecycleError::AccumulatorPredatesGovernanceImport { .. } => {
             EXIT_NODE_WARM_START_RECOVERY_FAILED
         }
         NodeLifecycleError::RelaySync(_)
@@ -508,7 +517,19 @@ async fn run_node_lifecycle_inner(
     let accumulator_path = snapshot_dir.join("epoch-accumulator.redb");
     let epoch_accumulator = if accumulator_path.exists() {
         match ade_runtime::chaindb::EpochAccumulatorStore::open(&accumulator_path) {
-            Ok(s) => Some(s),
+            Ok(s) => {
+                // CONWAY-PROPOSAL-DEPOSIT-EXPIRY S2 (absent != empty): a sealed bootstrap baseline that
+                // PREDATES the governance-proposal import (Conway+ store with gov_state = None, pre-v6) is
+                // a TYPED re-bootstrap requirement -- fail closed. A missing imported governance set must
+                // NEVER load as "zero proposals". DISTINCT from a corrupt store (the non-fatal arm below).
+                if let Err(
+                    ade_runtime::chaindb::AccumulatorReadinessError::GovernanceImportRequired { era_tag },
+                ) = s.verify_governance_imported()
+                {
+                    return Err(NodeLifecycleError::AccumulatorPredatesGovernanceImport { era_tag });
+                }
+                Some(s)
+            }
             Err(e) => {
                 eprintln!(
                     "ade_node --mode node: epoch-accumulator open skipped (non-fatal): {e:?}"
@@ -3821,6 +3842,16 @@ fn report(e: &NodeLifecycleError) {
                  carries genesis_hash + protocol_params_hash). This is a SCHEMA-UPGRADE / REIMPORT \
                  requirement, NOT corruption -- re-import the seed consensus inputs to rewrite the \
                  sidecar at v{required_version}."
+            );
+        }
+        NodeLifecycleError::AccumulatorPredatesGovernanceImport { era_tag } => {
+            eprintln!(
+                "ade_node --mode node: warm-start FAIL-CLOSED -- the durable EpochAccumulator's sealed \
+                 bootstrap baseline (era tag {era_tag}) PREDATES the governance-proposal import: it \
+                 carries NO imported governance state (gov_state = None, a pre-v6 bootstrap). A missing \
+                 imported governance set must NEVER be treated as zero proposals (absent != empty). This \
+                 is a RE-BOOTSTRAP requirement, NOT corruption -- re-bootstrap from the certified \
+                 snapshot to import the gov proposals + committee and rewrite the store at v6."
             );
         }
         NodeLifecycleError::ExtractionRead(d) => {

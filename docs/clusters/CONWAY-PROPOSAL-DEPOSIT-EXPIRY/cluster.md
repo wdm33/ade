@@ -137,12 +137,18 @@ proof it cannot ratify. `gov_action_threshold_index` already encodes the per-act
   decoding the real POST-1340 state byte-exactly: exactly 5 expiring `TreasuryWithdrawals` proposals
   (deposit 100k ADA, return addresses acct1×4 / acct2×1, `proposed_in=1309`, `expires_after=1339`, the
   one `[0,2,0]` vote). Declares **DC-GOV-01**.
-- **S2 — Version the seed codec; fail-closed re-bootstrap error.** Bump the commitment domain
-  `…-v5` → `…-v6`, binding the imported proposals + committee into the manifest commitment. Bump the
-  accumulator schema (v1→v2) only if `encode_gov_state` changes. **A v5/v1 store lacking proposal +
-  committee material rejects with an explicit "re-bootstrap required" terminal error — it is NEVER
-  reinterpreted as "no proposals" (absent ≠ empty; the two are semantically distinct).** Release note:
-  v1/v5 bootstrap stores require re-bootstrap.
+- **S2 — Version the seed codec; fail-closed re-bootstrap error. [DONE]** The S1 commitment is already
+  v6 (binds the imported proposals + committee). S2 adds the LOAD-PATH gate (absent ≠ empty): a sealed
+  Conway+ bootstrap baseline whose `gov_state` is `None` PREDATES the import (a pre-v6 store) and is
+  rejected — it is NEVER loaded as "zero proposals." `gov_state = None` is uniquely the no-import case
+  (a v6 bootstrap always seals `Some(..)`, even with an empty pending-proposal set). Mechanism:
+  `EpochAccumulatorStore::verify_governance_imported` → `AccumulatorReadinessError::
+  GovernanceImportRequired`; the warm-start store-open in `node_lifecycle` maps it to the TYPED terminal
+  `NodeLifecycleError::AccumulatorPredatesGovernanceImport` (exit `EXIT_NODE_WARM_START_RECOVERY_FAILED`,
+  same class as the ECA-2-pre old-sidecar gate; DISTINCT from a corrupt store, which stays non-fatal),
+  with a clear startup error. **Release note: a v5/pre-import bootstrap store requires re-bootstrap from
+  the certified snapshot to import the gov proposals + committee.** Tests:
+  `epoch_accumulator_store::tests::governance_import_gate_rejects_absent_but_allows_empty`.
 - **S3 — Capture live proposal procedures + a vote tripwire.** Wire `read_one_tx_field` to capture tx
   field 20 (`decode_proposal_procedures`, already typed) into `gov_state.proposals` with
   `proposed_in = current_epoch`, `expires_after = proposed_in + gov_action_lifetime`. Add a **field-19
