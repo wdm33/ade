@@ -524,6 +524,8 @@ mod tip_tests {
             committee: BTreeMap::new(),
             committee_quorum: None,
             gov_action_lifetime: 6,
+            pool_voting_thresholds: Vec::new(),
+            drep_voting_thresholds: Vec::new(),
         };
         let one = ImportedGovState {
             proposals: vec![GovActionState {
@@ -543,6 +545,8 @@ mod tip_tests {
             committee: BTreeMap::new(),
             committee_quorum: Some((2, 3)),
             gov_action_lifetime: 6,
+            pool_voting_thresholds: vec![(51, 100)],
+            drep_voting_thresholds: vec![(51, 100)],
         };
         // deterministic
         assert_eq!(
@@ -568,9 +572,18 @@ mod tip_tests {
         let mut diff_lifetime = one.clone();
         diff_lifetime.gov_action_lifetime = 7;
         assert_ne!(
-            commit_native_nonutxo_state(&mk(one)),
+            commit_native_nonutxo_state(&mk(one.clone())),
             commit_native_nonutxo_state(&mk(diff_lifetime)),
-            "v7 binds the imported gov_action_lifetime",
+            "v8 binds the imported gov_action_lifetime",
+        );
+        // the imported voting thresholds (curPParams 22/23) are bound: a tampered SPO/DRep threshold flips
+        // the commitment (CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S1).
+        let mut diff_thresholds = one.clone();
+        diff_thresholds.drep_voting_thresholds = vec![(67, 100)];
+        assert_ne!(
+            commit_native_nonutxo_state(&mk(one)),
+            commit_native_nonutxo_state(&mk(diff_thresholds)),
+            "v8 binds the imported drep_voting_thresholds",
         );
     }
 }
@@ -846,6 +859,11 @@ const CONWAY_PPARAMS_FIELDS: u64 = 31;
 /// curPParams index of `govActionLifetime` (epochs a proposal lives before expiry) — imported for the
 /// CONWAY-PROPOSAL-DEPOSIT-EXPIRY live-proposal expiry authority (S3).
 const CONWAY_PP_GOV_ACTION_LIFETIME_INDEX: u64 = 26;
+/// curPParams index of `poolVotingThresholds` (per-action SPO thresholds) — CONWAY-RATIFICATION-AND-
+/// ENACTMENT-AUTHORITY S1.
+const CONWAY_PP_POOL_VOTING_THRESHOLDS_INDEX: u64 = 22;
+/// curPParams index of `drepVotingThresholds` (per-action DRep thresholds) — CRE S1.
+const CONWAY_PP_DREP_VOTING_THRESHOLDS_INDEX: u64 = 23;
 /// `ConwayGovState` (cardano-ledger 1.22) is a 7-field array; `curPParams` is field 3.
 const CONWAY_GOV_STATE_FIELDS: u64 = 7;
 const CONWAY_GOV_STATE_CURPPARAMS_INDEX: usize = 3;
@@ -1411,7 +1429,8 @@ fn read_conway_pparams_from_utxo_state(
     let proposals = nn_read_proposals(d, o)?; // [0]
     let (committee, committee_quorum) = nn_read_committee(d, o)?; // [1]
     skip_item(d, o)?; // [2] constitution
-    let (pp, gov_action_lifetime) = read_conway_pparams(d, o, network_id)?;
+    let (pp, gov_action_lifetime, pool_voting_thresholds, drep_voting_thresholds) =
+        read_conway_pparams(d, o, network_id)?;
     // skip the remaining govState fields (prevPParams, futurePParams, drepPulser).
     for _ in (CONWAY_GOV_STATE_CURPPARAMS_INDEX + 1)..(gn as usize) {
         skip_item(d, o)?;
@@ -1428,6 +1447,8 @@ fn read_conway_pparams_from_utxo_state(
             committee,
             committee_quorum,
             gov_action_lifetime,
+            pool_voting_thresholds,
+            drep_voting_thresholds,
         },
     ))
 }
@@ -1451,6 +1472,22 @@ pub struct ImportedGovState {
     /// proposal's `expires_after` (CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3). Bound into the commitment so a
     /// tampered lifetime is caught; `0` is impossible on any real network and is rejected at capture.
     pub gov_action_lifetime: u64,
+    /// `poolVotingThresholds` (curPParams index 22) — the per-action SPO ratification thresholds
+    /// (CIP-1694 order: motionNoConfidence, committeeNormal, committeeNoConfidence, hardForkInitiation,
+    /// ppSecurityGroup), each a UnitInterval (numerator, denominator). Imported from the certified
+    /// curPParams (CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S1) and commitment-bound here as
+    /// tamper-evidence, but DELIBERATELY NOT threaded into the live `ConwayGovState` gate at import: the SPO
+    /// gate has no active-stake guard, so feeding it the thresholds would ACTIVATE SPO ratification on the
+    /// authoritative boundary. The activation is the CRE ratify slice (S4), with oracle verification.
+    pub pool_voting_thresholds: Vec<(u64, u64)>,
+    /// `drepVotingThresholds` (curPParams index 23) — the per-action DRep ratification thresholds (CIP-1694
+    /// order: motionNoConfidence, committeeNormal, committeeNoConfidence, updateConstitution,
+    /// hardForkInitiation, ppNetworkGroup, ppEconomicGroup, ppTechnicalGroup, ppGovernanceGroup,
+    /// treasuryWithdrawal), each a UnitInterval. Imported + commitment-bound at S1; like the SPO thresholds,
+    /// NOT threaded into the live gate until the CRE ratify activation (S4) — the DRep gate IS active-stake-
+    /// guarded (`total_drep_active_stake > 0`), but both thresholds activate together for a single
+    /// oracle-verified semantic boundary, never piecemeal at import.
+    pub drep_voting_thresholds: Vec<(u64, u64)>,
 }
 
 /// Decode the Conway on-wire `curPParams` = `array(31)`. Field order (cardano-ledger
@@ -1475,7 +1512,9 @@ pub struct ImportedGovState {
 /// array and carries its Conway constant (`d = 0`, fully decentralized). `network_id` is
 /// NOT a Conway protocol parameter either; it is supplied by the caller, derived from the
 /// manifest network magic (the authority), and bound onto the shared `ProtocolParameters`.
-fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<(ProtocolParameters, u64)> {
+type ConwayPParamsGov = (ProtocolParameters, u64, Vec<(u64, u64)>, Vec<(u64, u64)>);
+
+fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<ConwayPParamsGov> {
     if peek_major(d, *o).map_err(NativeNonUtxoError::from)? != 4 {
         return Err(NativeNonUtxoError::ProtocolParamsMissing(
             "curPParams: not an array".into(),
@@ -1518,8 +1557,14 @@ fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<(ProtocolP
     // (the live-proposal expiry authority, CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3); the rest have no home on
     // the shared `ProtocolParameters` and are consumed but not mapped.
     let mut gov_action_lifetime: u64 = 0;
+    let mut pool_voting_thresholds: Vec<(u64, u64)> = Vec::new();
+    let mut drep_voting_thresholds: Vec<(u64, u64)> = Vec::new();
     for idx in 21..CONWAY_PPARAMS_FIELDS {
-        if idx == CONWAY_PP_GOV_ACTION_LIFETIME_INDEX {
+        if idx == CONWAY_PP_POOL_VOTING_THRESHOLDS_INDEX {
+            pool_voting_thresholds = nn_read_voting_thresholds(d, o, "pp.poolVotingThresholds")?;
+        } else if idx == CONWAY_PP_DREP_VOTING_THRESHOLDS_INDEX {
+            drep_voting_thresholds = nn_read_voting_thresholds(d, o, "pp.drepVotingThresholds")?;
+        } else if idx == CONWAY_PP_GOV_ACTION_LIFETIME_INDEX {
             gov_action_lifetime = nn_read_u64(d, o, "pp.govActionLifetime")?;
         } else {
             skip_item(d, o)?;
@@ -1551,7 +1596,36 @@ fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<(ProtocolP
         // bound from the manifest network magic (the authority), not decoded from the array.
         network_id,
         cost_models_cbor,
-    }, gov_action_lifetime))
+    }, gov_action_lifetime, pool_voting_thresholds, drep_voting_thresholds))
+}
+
+/// Read a `[* UnitInterval]` voting-threshold vector (a per-action ratification-threshold list). Each
+/// UnitInterval is a curPParams rational `tag(30) array(2)[num, den]`, mirroring `read_pp_rational` but
+/// collecting `(num, den)` pairs in CIP-1694 action order.
+fn nn_read_voting_thresholds(d: &[u8], o: &mut usize, what: &str) -> Rn<Vec<(u64, u64)>> {
+    let n = nn_array_len(d, o, what)?;
+    let mut out = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        let (t, _) = read_tag(d, o).map_err(NativeNonUtxoError::from)?;
+        if t != TAG_RATIONAL_PP {
+            return Err(NativeNonUtxoError::ProtocolParamsMissing(format!(
+                "{what}: UnitInterval tag {t} != 30"
+            )));
+        }
+        nn_expect_array(d, o, 2, what)?;
+        let num = nn_read_u64(d, o, what)?;
+        let den = nn_read_u64(d, o, what)?;
+        // Fail-closed at capture (IDD §8), mirroring read_pp_rational: a voting-threshold UnitInterval must
+        // be a proper fraction in [0,1]. A zero denominator or num > den is structurally invalid governance
+        // state and must not enter the commitment as a silently-degenerate rational.
+        if den == 0 || num > den {
+            return Err(NativeNonUtxoError::ProtocolParamsMissing(format!(
+                "{what}: invalid UnitInterval {num}/{den} (require 0 < den, num <= den)"
+            )));
+        }
+        out.push((num, den));
+    }
+    Ok(out)
 }
 
 /// Read a Conway PParams rational field (`tag(30) array(2)[num, den]`).
@@ -1617,7 +1691,7 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
     // v5: binds the certified epoch fee pot (`epoch_fees`) alongside the v4 seed-boundary RUPD pots
     // (`rupd_delta_treasury`/`rupd_delta_reserves`), the v3 `current_block_production` (nesBcur) and the
     // v1 `block_production` (nesBprev).
-    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v7");
+    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v8");
     v.push(s.era.as_u8());
     // The manifest-derived network id (a network identity perturbation flips the commitment).
     v.push(s.network_id);
@@ -1742,6 +1816,20 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
             v.extend_from_slice(&d.to_be_bytes());
         }
         None => v.push(0),
+    }
+    // v8: the imported per-action SPO/DRep voting thresholds (curPParams 22/23) — the ratification-gate
+    // authority (CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S1). Bound as fresh-bootstrap tamper-evidence,
+    // same posture as the lifetime above. The thresholds are captured here for tamper-evidence but are NOT
+    // threaded into the live ConwayGovState gate at import (the SPO gate has no active-stake guard, so that
+    // would activate SPO ratification on the authoritative boundary); the ratify semantic activates
+    // deliberately in the CRE ratify slice (S4). A pre-S1 store recovers EMPTY vectors via the unchanged
+    // accumulator codec, identical to the not-yet-activated live gate.
+    for thresholds in [&g.pool_voting_thresholds, &g.drep_voting_thresholds] {
+        v.extend_from_slice(&(thresholds.len() as u64).to_be_bytes());
+        for (num, den) in thresholds {
+            v.extend_from_slice(&num.to_be_bytes());
+            v.extend_from_slice(&den.to_be_bytes());
+        }
     }
     // reward-account nibble observation (DIAGNOSTIC evidence — committed for determinism, NOT a
     // verdict): None=0, Uniform(n)=[1,n], Mixed=2.

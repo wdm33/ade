@@ -43,8 +43,19 @@ PROVE, not build-from-scratch.
   be extracted (offline, via the AWS reference node per CLAUDE.md) before the ratify/enact slices can be
   ground-truthed. THIS IS THE GATING NEXT STEP.
 - **S1 — Import the full ratification authority** (DRep/SPO thresholds + DRep stake distribution + hot keys
-  + drep_expiry — coupled, commitment-bound; the same shape as the S3 lifetime import, landed together so
-  no gate under-counts).
+  + drep_expiry — commitment-bound). **Part 1 DONE (threshold IMPORT, not activation):** `read_conway_pparams`
+  captures curPParams 22/23 into `ImportedGovState`, fail-closed on degenerate UnitIntervals, bound in
+  commitment **v8**, ground-truthed against the real POST-1340 (pool = 5×0.51, drep = 10 CIP-1694 fractions
+  via `cre_oracle_govstate_lifecycle.rs`). **The thresholds are DELIBERATELY NOT threaded into the live
+  `ConwayGovState` gate.** The per-slice IDD review caught that threading them would *activate* the SPO
+  ratification gate on the authoritative boundary — `check_ratification`'s SPO arm has NO active-stake guard
+  (only `voted_stake > 0`, `governance.rs:299`) and its inputs (the `go` pool stake + `spo_votes`) are
+  already present at bootstrap, so a go-stake undercount could flip a near-boundary ratio into a false
+  rejection (the CE-3d window was safe only because it carries zero SPO votes — an accident of the corpus,
+  not an invariant). So S1 imports the AUTHORITY; the ratify SEMANTIC activates deliberately in **S4** with
+  oracle verification. **Part 2 (VState import) NEXT:** `vote_delegations` (DState UMap field 3, skipped at
+  `ledgerdb_state.rs:795`) + `committee_hot_keys` + `drep_expiry` (the VState, skipped at `:731`) — the
+  inputs S4 needs to activate the DRep gate; same commitment binding.
 - **S2 — Live vote capture** (replace the S3 tripwire): decode field-19 voting_procedures into the
   proposals' committee/DRep/SPO vote maps, persisted, discriminant-correct voter resolution.
 - **S3 — DRep/SPO voting-stake derivation** (the InstantStake-equivalent distribution authority).

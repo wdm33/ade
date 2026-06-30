@@ -58,8 +58,9 @@ fn report_epoch(label: &str, g: &ImportedGovState) {
         }
     }
     eprintln!(
-        "epoch {label}: {} proposals ({} voted) | committee {} quorum {:?} | by kind: {:?}",
-        g.proposals.len(), voted, g.committee.len(), g.committee_quorum, by_kind
+        "epoch {label}: {} proposals ({} voted) | committee {} quorum {:?} | thresholds pool={:?} drep={:?} | by kind: {:?}",
+        g.proposals.len(), voted, g.committee.len(), g.committee_quorum,
+        g.pool_voting_thresholds, g.drep_voting_thresholds, by_kind
     );
 }
 
@@ -110,4 +111,13 @@ fn cre_oracle_govstate_lifecycle_1340_1342() {
 
     // Sanity: the decoder yields a non-trivial governance state at each epoch (the harness can read the oracle).
     assert!(!g1340.proposals.is_empty() && !g1341.proposals.is_empty(), "oracle gov state decodes non-empty");
+
+    // S1 ground truth: the per-action voting thresholds (curPParams 22/23) are captured from the REAL
+    // certified state with the CIP-1694 cardinalities (pool=5, drep=10) and are non-degenerate rationals.
+    // This is the oracle gate on S1's threshold import — the imported authority matches what cardano holds.
+    assert_eq!(g1340.pool_voting_thresholds.len(), 5, "poolVotingThresholds: 5 SPO actions (CIP-1694)");
+    assert_eq!(g1340.drep_voting_thresholds.len(), 10, "drepVotingThresholds: 10 DRep actions (CIP-1694)");
+    for (n, d) in g1340.pool_voting_thresholds.iter().chain(g1340.drep_voting_thresholds.iter()) {
+        assert!(*d != 0 && *n <= *d, "each threshold is a proper fraction in [0,1]: {n}/{d}");
+    }
 }

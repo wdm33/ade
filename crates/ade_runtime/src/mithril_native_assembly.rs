@@ -364,11 +364,16 @@ pub fn assemble_native_mithril_seed(
         // proof reads; `gov_action_lifetime` is the era-correct `govActionLifetime` read from the
         // certified `curPParams` (S3) — the persisted timing authority for a LIVE proposal's
         // `expires_after`, bound into the bootstrap commitment as fresh-bootstrap tamper-evidence (a
-        // pre-S3 store recovers 0 and fail-closes at the runtime capture guard, never here). The remaining
-        // ConwayGovState fields (thresholds, drep_expiry) are NOT yet imported; the imported proposals
-        // already carry their own decoded `expires_after`, and the S4 evaluator FAILS CLOSED if a
-        // disposition needs any field not populated here (the observed five refunds need only the
-        // committee gate).
+        // pre-S3 store recovers 0 and fail-closes at the runtime capture guard, never here). The per-action
+        // SPO/DRep voting thresholds (curPParams 22/23) ARE imported + commitment-bound in the
+        // `ImportedGovState` (CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S1), but are DELIBERATELY NOT
+        // threaded into the live `ConwayGovState` here. The SPO ratification gate has NO active-stake guard
+        // (governance.rs:281 — only `voted_stake > 0`), and its inputs (the `go` pool stake + the proposals'
+        // `spo_votes`) are ALREADY present at bootstrap — so feeding it the thresholds would ACTIVATE the SPO
+        // gate on the authoritative epoch boundary (a semantic activation, where a go-stake undercount could
+        // flip a near-boundary ratio into a false rejection). The ratify SEMANTIC activates deliberately in
+        // the CRE ratify slice (S4) with oracle verification, never as a side-effect of the import; so the
+        // live gate stays empty (skipped) here.
         gov_state: Some(ade_ledger::state::ConwayGovState {
             proposals: s1a.imported_gov.proposals.clone(),
             committee: s1a.imported_gov.committee.clone(),
@@ -655,6 +660,8 @@ mod tests {
             committee,
             committee_quorum: Some(SAMPLE_QUORUM),
             gov_action_lifetime: 6,
+            pool_voting_thresholds: vec![(51, 100), (51, 100), (51, 100), (51, 100), (51, 100)],
+            drep_voting_thresholds: vec![(51, 100); 10],
         }
     }
 
@@ -894,6 +901,13 @@ mod tests {
                 Some(&1340u64),
                 "imported committee member preserved",
             );
+            // CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S1: the imported per-action voting thresholds
+            // (curPParams 22/23) are commitment-bound in the ImportedGovState but DELIBERATELY NOT threaded
+            // into the live gate — the SPO ratification gate has no active-stake guard, so threading would
+            // activate it on the authoritative boundary. The live gate stays empty until the CRE ratify
+            // slice (S4) activates the semantic with oracle verification.
+            assert!(gov.pool_voting_thresholds.is_empty(), "SPO threshold NOT activated into the live gate at import");
+            assert!(gov.drep_voting_thresholds.is_empty(), "DRep threshold NOT activated into the live gate at import");
             let p = &gov.proposals[0];
             assert_eq!(p.action_id.tx_hash, Hash32(SAMPLE_GAS_TXID), "GovActionId tx_hash bound");
             assert_eq!(p.action_id.index, 0, "GovActionId index bound");

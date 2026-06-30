@@ -51,7 +51,11 @@ fn cpde_s5_planner_refunds_close_the_500b_on_real_proposals() {
     let empty_hot = BTreeMap::new();
     let empty_drep_expiry = BTreeMap::new();
 
-    // Plan the refunds at the 1340 -> 1341 boundary (new_epoch = 1341, ending_epoch = 1340).
+    // Plan the refunds at the 1340 -> 1341 boundary (new_epoch = 1341, ending_epoch = 1340). The thresholds
+    // are EMPTY here, matching the live boundary: CRE S1 imports + commitment-binds the voting thresholds
+    // but does NOT thread them into the live gate (the SPO gate has no active-stake guard, so threading
+    // would activate SPO ratification — that is the CRE ratify slice, S4). So the committee gate is the
+    // binding authority for the CPDE -500B closure, exactly as on the live boundary.
     let plan = plan_deposit_refunds(
         &g.proposals,
         &empty_drep,
