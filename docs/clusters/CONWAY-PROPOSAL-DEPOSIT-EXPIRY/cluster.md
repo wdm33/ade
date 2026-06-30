@@ -180,12 +180,37 @@ proof it cannot ratify. `gov_action_threshold_index` already encodes the per-act
   (assembly), the v7 commitment-binding, and the lifetime-0 terminal. Gate: `ci/ci_check_gov_proposal_
   capture.sh`. Per-slice IDD/security review: no BLOCK. Full field-19 vote capture remains a documented
   escalation if CE-3d fails closed at S5.
+- **S4.0 — Ratification census (read-only evidence; admissibility gate for the narrow S4). [DONE]**
+  Before any S4 mutation exists, prove over the WHOLE tracked set at the exact 1340→1341 boundary whether
+  Ade's CURRENT (committee-only) ratification authority is sufficient — i.e. every tracked proposal is in
+  a SAFE terminal category (`PresentGateFailed` = provably unratifiable via a present, failed gate, or
+  `InfoActionNeverEnacts`) and NONE is `PotentiallyRatifiable` (would need un-imported DRep/SPO threshold +
+  stake) or `Malformed`. A new observe-only `governance::proposal_ratification_observation` exercises the
+  REAL `check_ratification` (shares the extracted `active_drep_stake_filtered` preamble with
+  `evaluate_ratification` — meaning-preserving, regression-pinned; the observer's verdict comes solely from
+  `check_ratification`, never a second implementation) — GREEN/test authority, no mutation, no runtime
+  dependency. The census (`ade_testkit/tests/cpde_s4_0_ratification_census.rs`, `#[ignore]`) emits a
+  canonical, GovActionId-sorted, state-bound report retained as committed evidence
+  (`cpde-s4-0-ratification-census.txt`, reproduced byte-for-byte). **RESULT — CENSUS CLEAN:** all 50
+  proposals resolve (46 PresentGateFailed + 4 InfoActionNeverEnacts; 0 PotentiallyRatifiable; 0 Malformed);
+  the committee is active 3/8 at 1340 (gate fires); no proposal reaches the DRep/SPO gates ⇒ the empty
+  thresholds are never consulted ⇒ **NO threshold/DRep-stake import gap is needed for CE-3d**; the 5
+  expiring `TreasuryWithdrawals` are exactly the refund set. Per-slice BLUE review: no BLOCK. ⇒ the narrow
+  S4 committee-gate evaluator is ADMISSIBLE.
 - **S4 — Boundary deposit-expiry-refund evaluator (the transition).** In
-  `apply_epoch_boundary_with_registrations`, BEFORE the reward update: for every proposal, evaluate
-  ratifiability via `check_ratification` with complete canonical inputs. Any ratifiable ⇒ terminal.
-  Else refund each expiring proposal (`expires_after < ending_epoch`): credit the return-address
-  credential in `cert_state.delegation.rewards`, debit the deposit pot, remove the proposal. Total +
-  deterministic + replay-equivalent. Enforces DC-GOV-01.
+  `apply_epoch_boundary_with_registrations` (or `cross_epoch_boundary`, which has the `Result` channel),
+  BEFORE the reward update: a whole-set PURE planner returning `Result<RefundPlan, RefundVerdict>` —
+  evaluate every proposal's ratifiability via `check_ratification` with complete canonical inputs (the
+  S4.0 census proved the committee-only authority suffices). **SEAM (per the S4.0 review):** compose
+  expiry AND provable-unratifiability *through* `check_ratification` — refund only an EXPIRED
+  (`expires_after < ending_epoch`) **AND** provably-unratifiable proposal; do NOT consume the observer's
+  expiry-free `potentially_ratifiable` as standalone refund authority. Any potentially-ratifiable /
+  malformed / unsupported / unresolved proposal ⇒ a structured terminal with ZERO boundary mutation (no
+  credits/removals until every tracked proposal has a safe verdict). Else refund each expiring proposal:
+  credit the return-address credential in `cert_state.delegation.rewards`, remove the proposal (the
+  implicit-pot debit; conservation by construction), in deterministic GovActionId order. InfoAction never
+  enacts ⇒ never receives a refund unless protocol state says it carried one. Total + deterministic +
+  replay-equivalent. Enforces DC-GOV-01.
 - **S5 — CE-3d re-run → byte-exact reward total.** Re-run the CE-3d differential; the +400k/+100k
   refunds land, the reward total matches cardano (bar the separate −343B B3c go-stake and the ~−37.6M
   rounding tail). Hands off to the B3c UTxO investigation (separate).

@@ -40,6 +40,37 @@ pub struct RatificationResult {
     pub remaining: Vec<GovActionState>,
 }
 
+/// Active DRep stake (denominator for the DRep ratification gate): excludes `AlwaysAbstain` and DReps
+/// whose term has expired (`drep_expiry < current_epoch`; absent ⇒ assumed active). Returns the filtered
+/// distribution and its total. Shared by [`evaluate_ratification`] and the S4.0 ratification census
+/// observer so both read the SAME denominator — there is one filter, not two.
+pub(crate) fn active_drep_stake_filtered(
+    drep_stake: &DRepStakeDistribution,
+    drep_expiry: &BTreeMap<StakeCredential, u64>,
+    current_epoch: u64,
+) -> (DRepStakeDistribution, u64) {
+    let active: DRepStakeDistribution = drep_stake
+        .iter()
+        .filter(|(drep, _)| match drep {
+            DRep::AlwaysAbstain => false,
+            // A DRep's key/script discriminant maps to the matching credential variant — the
+            // drep_expiry map is keyed by the discriminated credential.
+            DRep::KeyHash(h) => drep_expiry
+                .get(&StakeCredential::KeyHash(h.clone()))
+                .map(|e| *e >= current_epoch)
+                .unwrap_or(true),
+            DRep::ScriptHash(h) => drep_expiry
+                .get(&StakeCredential::ScriptHash(h.clone()))
+                .map(|e| *e >= current_epoch)
+                .unwrap_or(true),
+            _ => true,
+        })
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
+    let total = active.values().sum::<u64>();
+    (active, total)
+}
+
 /// Evaluate ratification for all proposals.
 ///
 /// For each proposal, checks whether DRep votes, committee votes, and SPO votes
@@ -61,27 +92,9 @@ pub fn evaluate_ratification(
     committee_hot_keys: &BTreeMap<StakeCredential, StakeCredential>, // hot → cold mapping
     drep_expiry: &BTreeMap<StakeCredential, u64>, // DRep credential → expiry epoch
 ) -> RatificationResult {
-    // Filter DRep stake: exclude AlwaysAbstain AND inactive DReps
-    let active_drep_stake: DRepStakeDistribution = drep_stake.iter()
-        .filter(|(drep, _)| {
-            match drep {
-                DRep::AlwaysAbstain => false,
-                // A DRep's key/script discriminant maps to the matching credential
-                // variant — the drep_expiry map is keyed by the discriminated credential.
-                DRep::KeyHash(h) => drep_expiry
-                    .get(&StakeCredential::KeyHash(h.clone()))
-                    .map(|e| *e >= current_epoch)
-                    .unwrap_or(true),
-                DRep::ScriptHash(h) => drep_expiry
-                    .get(&StakeCredential::ScriptHash(h.clone()))
-                    .map(|e| *e >= current_epoch)
-                    .unwrap_or(true),
-                _ => true,
-            }
-        })
-        .map(|(k, v)| (k.clone(), *v))
-        .collect();
-    let total_drep_active_stake = active_drep_stake.values().sum::<u64>();
+    // Active DRep stake (exclude AlwaysAbstain + expired DReps) — shared with the S4.0 census observer.
+    let (active_drep_stake, total_drep_active_stake) =
+        active_drep_stake_filtered(drep_stake, drep_expiry, current_epoch);
     let total_pool_stake: u64 = pool_stake.values().map(|c| c.0).sum();
 
     let mut ratified = Vec::new();
@@ -298,6 +311,122 @@ fn check_ratification(
     }
 
     true
+}
+
+// ─── Ratification census (observe-only, CONWAY-PROPOSAL-DEPOSIT-EXPIRY S4.0) ───
+
+/// A per-proposal observation of the REAL ratification path at `current_epoch` — observe-only, on NO
+/// mutation or runtime authority path. The S4.0 negative-proof census reads it to decide whether Ade's
+/// CURRENT (committee-only) authority can resolve the WHOLE tracked proposal set, or whether a threshold /
+/// DRep-stake import gap must close before the S4 boundary refund evaluator exists.
+///
+/// `potentially_ratifiable` is the EXACT outcome of [`check_ratification`] (the same gates
+/// [`evaluate_ratification`] runs), evaluated WITHOUT the expiry short-circuit (Conway: ratification
+/// precedes expiry). The trace fields are INPUT-presence inspection that EXPLAINS the outcome — they do
+/// not re-derive the ratification decision.
+#[derive(Debug, Clone)]
+pub struct RatificationObservation {
+    /// `false` ⟺ a PRESENT gate definitively failed ⟹ provably unratifiable (the sound negative proof);
+    /// `true` ⟺ every required gate passed OR was skipped for absent inputs ⟹ potentially ratifiable
+    /// (boundary-terminal). `InfoAction` never enacts ⟹ `false`.
+    pub potentially_ratifiable: bool,
+    /// `InfoAction` — no enactment effect (handled exactly as `evaluate_ratification` special-cases it).
+    pub is_info_action: bool,
+    /// The action requires constitutional-committee approval (everything except NoConfidence /
+    /// UpdateCommittee).
+    pub requires_committee: bool,
+    /// Imported constitutional-committee size.
+    pub committee_size: usize,
+    /// Committee members ACTIVE at `current_epoch` (`expiry >= current_epoch`). If 0 while
+    /// `requires_committee`, the committee gate SKIPS and the proof would rest on other (possibly absent)
+    /// gates — the decisive activity check for the census.
+    pub committee_active_members: usize,
+    /// RAW count of `Vote::Yes` committee votes recorded on this proposal — NOT the gate's effective
+    /// tally (the committee gate resolves hot→cold before counting). Annotation only; never consumed by
+    /// `potentially_ratifiable`.
+    pub committee_yes: usize,
+    /// DRep voting-threshold index for the action (`None` = no DRep gate).
+    pub drep_threshold_index: Option<usize>,
+    /// The DRep gate's inputs are present (threshold imported AND active DRep stake > 0).
+    pub drep_inputs_present: bool,
+    /// SPO voting-threshold index for the action (`None` = no SPO gate).
+    pub pool_threshold_index: Option<usize>,
+    /// The SPO gate's inputs are present (threshold imported with a non-zero denominator).
+    pub spo_inputs_present: bool,
+}
+
+/// Observe (do NOT mutate) one proposal's ratification disposition at `current_epoch` — see
+/// [`RatificationObservation`]. Exercises the real [`check_ratification`]; the S4.0 census's only entry
+/// point into the ratification authority.
+#[allow(clippy::too_many_arguments)]
+pub fn proposal_ratification_observation(
+    proposal: &GovActionState,
+    drep_stake: &DRepStakeDistribution,
+    pool_stake: &BTreeMap<ade_types::tx::PoolId, Coin>,
+    committee_members: &BTreeMap<StakeCredential, u64>,
+    committee_quorum: &Rational,
+    pool_thresholds: &[(u64, u64)],
+    drep_thresholds: &[(u64, u64)],
+    current_epoch: u64,
+    committee_hot_keys: &BTreeMap<StakeCredential, StakeCredential>,
+    drep_expiry: &BTreeMap<StakeCredential, u64>,
+) -> RatificationObservation {
+    let is_info_action = matches!(proposal.gov_action, GovAction::InfoAction);
+    let requires_committee = !matches!(
+        proposal.gov_action,
+        GovAction::NoConfidence { .. } | GovAction::UpdateCommittee { .. }
+    );
+    let (active_drep_stake, total_drep_active_stake) =
+        active_drep_stake_filtered(drep_stake, drep_expiry, current_epoch);
+    let total_pool_stake: u64 = pool_stake.values().map(|c| c.0).sum();
+    let (pool_idx, drep_idx) = gov_action_threshold_index(&proposal.gov_action);
+
+    let committee_active_members = committee_members
+        .iter()
+        .filter(|(_, expiry)| **expiry >= current_epoch)
+        .count();
+    let committee_yes = proposal
+        .committee_votes
+        .iter()
+        .filter(|(_, vote)| matches!(vote, Vote::Yes))
+        .count();
+    let drep_inputs_present =
+        drep_idx.map_or(false, |i| i < drep_thresholds.len()) && total_drep_active_stake > 0;
+    let spo_inputs_present =
+        pool_idx.map_or(false, |i| i < pool_thresholds.len() && pool_thresholds[i].1 > 0);
+
+    // InfoAction never enacts (mirrors evaluate_ratification's special-case); else the REAL gate outcome.
+    let potentially_ratifiable = if is_info_action {
+        false
+    } else {
+        check_ratification(
+            proposal,
+            (pool_idx, drep_idx),
+            &total_drep_active_stake,
+            &active_drep_stake,
+            total_pool_stake,
+            pool_stake,
+            committee_members,
+            committee_quorum,
+            pool_thresholds,
+            drep_thresholds,
+            current_epoch,
+            committee_hot_keys,
+        )
+    };
+
+    RatificationObservation {
+        potentially_ratifiable,
+        is_info_action,
+        requires_committee,
+        committee_size: committee_members.len(),
+        committee_active_members,
+        committee_yes,
+        drep_threshold_index: drep_idx,
+        drep_inputs_present,
+        pool_threshold_index: pool_idx,
+        spo_inputs_present,
+    }
 }
 
 // ─── Enactment ───────────────────────────────────────────────────────
@@ -622,6 +751,80 @@ mod committee_fidelity_tests {
         let matching: DRepStakeDistribution =
             [(DRep::KeyHash(Hash28([0x11; 28])), 1000u64)].into_iter().collect();
         assert!(ratifies_drep(&matching), "matching-variant DRep stake ratifies (discriminant is the only difference)");
+    }
+
+    /// CPDE-S4.0: the shared-preamble extraction is MEANING-PRESERVING and the census observer is
+    /// OBSERVATIONAL-ONLY. For representative committee-fail / committee-pass / empty-gate / InfoAction
+    /// cases, the REAL `evaluate_ratification` (now routing through `active_drep_stake_filtered`) yields the
+    /// expected classification, and `proposal_ratification_observation` AGREES with it — proving the
+    /// observer reads the same outcome the authority path produces, never a second implementation.
+    #[test]
+    fn s4_0_extraction_preserves_outcomes_and_observer_agrees() {
+        let quorum = Rational::new(2, 3).unwrap();
+        let empty_drep: DRepStakeDistribution = BTreeMap::new();
+        let empty_pool: BTreeMap<ade_types::tx::PoolId, Coin> = BTreeMap::new();
+        let empty_hot: BTreeMap<StakeCredential, StakeCredential> = BTreeMap::new();
+        let empty_drep_expiry: BTreeMap<StakeCredential, u64> = BTreeMap::new();
+        // 3 active committee members (term expiry 100 >= the epoch-0 evaluation).
+        let committee: BTreeMap<StakeCredential, u64> =
+            [(key(0xC1), 100u64), (key(0xC2), 100), (key(0xC3), 100)].into_iter().collect();
+
+        let tw = |id: u8, votes: Vec<(StakeCredential, Vote)>| GovActionState {
+            action_id: GovActionId { tx_hash: Hash32([id; 32]), index: 0 },
+            committee_votes: votes,
+            drep_votes: Vec::new(),
+            spo_votes: Vec::new(),
+            deposit: Coin(100_000_000_000),
+            return_addr: vec![0xe0; 29],
+            gov_action: GovAction::TreasuryWithdrawals { withdrawals: Vec::new(), policy_hash: None },
+            proposed_in: EpochNo(0),
+            expires_after: EpochNo(100), // non-expiring at epoch 0 (so no expiry short-circuit)
+        };
+
+        // Run the REAL evaluate_ratification on [p] + the observer; return (evaluate→ratified?, observed).
+        let run = |p: &GovActionState, cm: &BTreeMap<StakeCredential, u64>| -> (bool, bool) {
+            let res = evaluate_ratification(
+                std::slice::from_ref(p), &empty_drep, &empty_pool, cm, &quorum,
+                &[], &[], 0, &empty_hot, &empty_drep_expiry,
+            );
+            let ratified = res.ratified.iter().any(|q| q.action_id == p.action_id);
+            let obs = proposal_ratification_observation(
+                p, &empty_drep, &empty_pool, cm, &quorum,
+                &[], &[], 0, &empty_hot, &empty_drep_expiry,
+            );
+            (ratified, obs.potentially_ratifiable)
+        };
+
+        // (1) committee-fail: 0 committee Yes, active committee, quorum 2/3 -> a PRESENT gate fails.
+        let (r, o) = run(&tw(0x01, Vec::new()), &committee);
+        assert!(!r && !o, "committee-fail: not ratified; observer agrees (provably unratifiable)");
+
+        // (2) committee-pass: 2 of 3 Yes (= 2/3 >= quorum; no hot map -> Yes counted) -> passes.
+        let (r, o) = run(&tw(0x02, vec![(key(0xC1), Vote::Yes), (key(0xC2), Vote::Yes)]), &committee);
+        assert!(r && o, "committee-pass: 2/3 Yes ratifies; observer agrees (potentially ratifiable)");
+
+        // (3) empty-gate: TW with EMPTY committee + empty thresholds -> every required gate skipped.
+        let no_committee: BTreeMap<StakeCredential, u64> = BTreeMap::new();
+        let (r, o) = run(&tw(0x03, Vec::new()), &no_committee);
+        assert!(r && o, "empty-gate: required gates skipped -> passed-or-skipped; observer agrees (the danger category)");
+
+        // (4) InfoAction: never enacts -> evaluate_ratification -> remaining (never ratified); observer not
+        //     ratifiable + flagged is_info.
+        let mut info = tw(0x04, Vec::new());
+        info.gov_action = GovAction::InfoAction;
+        let res = evaluate_ratification(
+            std::slice::from_ref(&info), &empty_drep, &empty_pool, &committee, &quorum,
+            &[], &[], 0, &empty_hot, &empty_drep_expiry,
+        );
+        assert!(
+            res.ratified.is_empty() && res.remaining.iter().any(|q| q.action_id == info.action_id),
+            "InfoAction -> remaining, never ratified",
+        );
+        let obs = proposal_ratification_observation(
+            &info, &empty_drep, &empty_pool, &committee, &quorum,
+            &[], &[], 0, &empty_hot, &empty_drep_expiry,
+        );
+        assert!(!obs.potentially_ratifiable && obs.is_info_action, "InfoAction never enacts (observer)");
     }
 
     /// ENACTMENT-COMMITTEE-FIDELITY CE-2: the `EnactmentEffects.committee_changes`

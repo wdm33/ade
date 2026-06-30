@@ -1,0 +1,57 @@
+# CPDE-S4.0 RATIFICATION CENSUS (observe-only; the real check_ratification path)
+# state: certified POST-1340 preview ledger state, point slot 115776011
+# boundary: 1340 -> 1341 (ratification evaluated as of ending_epoch 1340)
+# authority: committee 8 members / quorum 2/3 (IMPORTED); drep_thresholds=[] pool_thresholds=[] drep_stake=[] (NOT imported)
+# fields: gov_action_id | kind | proposed_in | expires_after | expiring | committee_active/size | committee_yes | drep_inputs | spo_inputs | observation
+10d9e2c406e23a6c740fa881a804431585434ff0262bdbbc52eb977da6ec2053#0 | TreasuryWithdrawals | 1322 | 1352 | N | 3/8 | 0 | N | N | PresentGateFailed
+178a410703c9a88d38acc8e7e00217722f98e697c826ebd105e0c5beaf32e00f#0 | InfoAction | 1339 | 1369 | N | 3/8 | 0 | N | N | InfoActionNeverEnacts
+26c33f9415f442ea37a1a9d34066e94b59a25f39c17d7fe193c46a764aea6c6c#0 | TreasuryWithdrawals | 1331 | 1361 | N | 3/8 | 0 | N | N | PresentGateFailed
+2724a03dad5602cfe8d08dcb2d2a3faf2d6f15033190dda56a81526dabf135b8#0 | InfoAction | 1330 | 1360 | N | 3/8 | 0 | N | N | InfoActionNeverEnacts
+4e158bb4a6b434778115e02421b8b32be7363e74a793e9078949a49dd3fbd12f#0 | TreasuryWithdrawals | 1317 | 1347 | N | 3/8 | 0 | N | N | PresentGateFailed
+57bb313c50a311756f9632d657bdc2ccc01e718929e6f7df9725ab3ac27045c0#0 | TreasuryWithdrawals | 1312 | 1342 | N | 3/8 | 0 | N | N | PresentGateFailed
+64e677f65e4cabd00383b7171dd4d9674d998db5aa67b16d4c770304c60bdec3#0 | InfoAction | 1330 | 1360 | N | 3/8 | 0 | N | N | InfoActionNeverEnacts
+b0069ac97b2e5522a6ca3bb3723356e25915fec7ca202b79788c3439608ba3e7#0 | TreasuryWithdrawals | 1309 | 1339 | Y | 3/8 | 0 | N | N | PresentGateFailed
+b1d1e5bef717d366173882c0fc48517def38c7f88fdf26bb7fdf3865dbab5bcc#0 | ParameterChange | 1334 | 1364 | N | 3/8 | 0 | N | N | PresentGateFailed
+b31cb31e90e78def29e99d1933f9ee6c08a0b23a91580b6b5bf55e4127be9bed#0 | InfoAction | 1338 | 1368 | N | 3/8 | 0 | N | N | InfoActionNeverEnacts
+bd9e02b82cabada66ab168815a13be29f86d3914ea88f7f9d7747170d04d6998#0 | TreasuryWithdrawals | 1338 | 1368 | N | 3/8 | 0 | N | N | PresentGateFailed
+bfa9eb84428ecf6e59668f15e7e9af90594724c5993d48a6e3502bdd81afd4fc#0 | TreasuryWithdrawals | 1331 | 1361 | N | 3/8 | 0 | N | N | PresentGateFailed
+c7c573f0503f7d8179b4c4c448a5039758be89e3663086b03ea8884f7189b685#0 | TreasuryWithdrawals | 1309 | 1339 | Y | 3/8 | 0 | N | N | PresentGateFailed
+c7f699822e3f581eb7c3e10af4000da0f7a3798321aef86c8a1529eca089029a#0 | TreasuryWithdrawals | 1339 | 1369 | N | 3/8 | 0 | N | N | PresentGateFailed
+d236d9acd2962412b6c185f1b9843c5e4abe9d09b232aae620199e0c74c26b2f#0 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+d236d9acd2962412b6c185f1b9843c5e4abe9d09b232aae620199e0c74c26b2f#1 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+d236d9acd2962412b6c185f1b9843c5e4abe9d09b232aae620199e0c74c26b2f#2 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+d236d9acd2962412b6c185f1b9843c5e4abe9d09b232aae620199e0c74c26b2f#3 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+d236d9acd2962412b6c185f1b9843c5e4abe9d09b232aae620199e0c74c26b2f#4 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+d236d9acd2962412b6c185f1b9843c5e4abe9d09b232aae620199e0c74c26b2f#5 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+d236d9acd2962412b6c185f1b9843c5e4abe9d09b232aae620199e0c74c26b2f#6 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+d236d9acd2962412b6c185f1b9843c5e4abe9d09b232aae620199e0c74c26b2f#7 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+d236d9acd2962412b6c185f1b9843c5e4abe9d09b232aae620199e0c74c26b2f#8 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+d236d9acd2962412b6c185f1b9843c5e4abe9d09b232aae620199e0c74c26b2f#9 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+d236d9acd2962412b6c185f1b9843c5e4abe9d09b232aae620199e0c74c26b2f#10 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+d44f1075724924ddbd8732cd2059a87e05d19c4c68d0f99565cd9cfc1a84032d#0 | TreasuryWithdrawals | 1309 | 1339 | Y | 3/8 | 0 | N | N | PresentGateFailed
+e470fa811bbb3d5a8509a58da9b234f6814720416952d2e71d3e2f6e3f3d4053#0 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+e470fa811bbb3d5a8509a58da9b234f6814720416952d2e71d3e2f6e3f3d4053#1 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+e470fa811bbb3d5a8509a58da9b234f6814720416952d2e71d3e2f6e3f3d4053#2 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+e470fa811bbb3d5a8509a58da9b234f6814720416952d2e71d3e2f6e3f3d4053#3 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+e470fa811bbb3d5a8509a58da9b234f6814720416952d2e71d3e2f6e3f3d4053#4 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+e470fa811bbb3d5a8509a58da9b234f6814720416952d2e71d3e2f6e3f3d4053#5 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+e470fa811bbb3d5a8509a58da9b234f6814720416952d2e71d3e2f6e3f3d4053#6 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+e470fa811bbb3d5a8509a58da9b234f6814720416952d2e71d3e2f6e3f3d4053#7 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+e470fa811bbb3d5a8509a58da9b234f6814720416952d2e71d3e2f6e3f3d4053#8 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+e470fa811bbb3d5a8509a58da9b234f6814720416952d2e71d3e2f6e3f3d4053#9 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+e470fa811bbb3d5a8509a58da9b234f6814720416952d2e71d3e2f6e3f3d4053#10 | TreasuryWithdrawals | 1336 | 1366 | N | 3/8 | 0 | N | N | PresentGateFailed
+e7a21fe9d6102f99db78b31b6c58fae65f558b3b15bb4dc802bdbf7f2bd86aee#0 | TreasuryWithdrawals | 1337 | 1367 | N | 3/8 | 0 | N | N | PresentGateFailed
+e878cc2333372d2cb37d186e602473dd71dba69408bcfcc5527a8cb8831aa912#0 | TreasuryWithdrawals | 1309 | 1339 | Y | 3/8 | 0 | N | N | PresentGateFailed
+eab4f455b8e4b8cc3258eabc57f99d2bcfe6b5a28fa3220324396b800660c45c#0 | TreasuryWithdrawals | 1309 | 1339 | Y | 3/8 | 0 | N | N | PresentGateFailed
+ee3f1e7ae46614adab0531a35304a191fedbdfef96c7a8df25f734b8aa7ae7e3#0 | TreasuryWithdrawals | 1337 | 1367 | N | 3/8 | 0 | N | N | PresentGateFailed
+ee3f1e7ae46614adab0531a35304a191fedbdfef96c7a8df25f734b8aa7ae7e3#1 | TreasuryWithdrawals | 1337 | 1367 | N | 3/8 | 0 | N | N | PresentGateFailed
+ee3f1e7ae46614adab0531a35304a191fedbdfef96c7a8df25f734b8aa7ae7e3#2 | TreasuryWithdrawals | 1337 | 1367 | N | 3/8 | 0 | N | N | PresentGateFailed
+ee3f1e7ae46614adab0531a35304a191fedbdfef96c7a8df25f734b8aa7ae7e3#3 | TreasuryWithdrawals | 1337 | 1367 | N | 3/8 | 0 | N | N | PresentGateFailed
+ee3f1e7ae46614adab0531a35304a191fedbdfef96c7a8df25f734b8aa7ae7e3#4 | TreasuryWithdrawals | 1337 | 1367 | N | 3/8 | 0 | N | N | PresentGateFailed
+ee3f1e7ae46614adab0531a35304a191fedbdfef96c7a8df25f734b8aa7ae7e3#5 | TreasuryWithdrawals | 1337 | 1367 | N | 3/8 | 0 | N | N | PresentGateFailed
+ee3f1e7ae46614adab0531a35304a191fedbdfef96c7a8df25f734b8aa7ae7e3#6 | TreasuryWithdrawals | 1337 | 1367 | N | 3/8 | 0 | N | N | PresentGateFailed
+ee3f1e7ae46614adab0531a35304a191fedbdfef96c7a8df25f734b8aa7ae7e3#7 | TreasuryWithdrawals | 1337 | 1367 | N | 3/8 | 0 | N | N | PresentGateFailed
+ee3f1e7ae46614adab0531a35304a191fedbdfef96c7a8df25f734b8aa7ae7e3#8 | TreasuryWithdrawals | 1337 | 1367 | N | 3/8 | 0 | N | N | PresentGateFailed
+ee3f1e7ae46614adab0531a35304a191fedbdfef96c7a8df25f734b8aa7ae7e3#9 | TreasuryWithdrawals | 1337 | 1367 | N | 3/8 | 0 | N | N | PresentGateFailed
+# summary: PresentGateFailed=46 InfoActionNeverEnacts=4 PotentiallyRatifiable=0 Malformed=0 | expiring_refunds=5
+# verdict: CENSUS CLEAN — the committee-only authority resolves every tracked proposal; narrow S4 admissible
