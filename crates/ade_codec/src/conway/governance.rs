@@ -116,7 +116,11 @@ pub fn encode_proposal_procedures(procs: &[ProposalProcedure]) -> Vec<u8> {
 
 // ---- per-procedure ----
 
-fn decode_proposal_procedure(
+/// Decode one `ProposalProcedure` = `array(4)[deposit, return_addr, gov_action, anchor]` at `offset`.
+/// Public so the ledger-state decoder (`ade_ledger::ledgerdb_state`) reuses the SAME closed
+/// `gov_action` grammar when importing the bootstrap `Proposals` OMap — an unknown gov-action variant
+/// fails closed identically on both the tx-body and ledger-state paths (no silent skip).
+pub fn decode_proposal_procedure(
     data: &[u8],
     offset: &mut usize,
 ) -> Result<ProposalProcedure, CodecError> {

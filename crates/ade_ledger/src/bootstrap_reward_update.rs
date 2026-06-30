@@ -44,13 +44,14 @@ use ade_types::tx::Coin;
 use ade_types::{EpochNo, Hash28, Hash32, SlotNo};
 
 /// Pinned wire schema version. Decode rejects any other (fail-closed). v1 = the initial Option-B
-/// bootstrap reward-update sidecar.
-pub const BOOTSTRAP_RUPD_SCHEMA_VERSION: u32 = 1;
+/// bootstrap reward-update sidecar (rs only); v2 = adds `delta_treasury` + `delta_reserves` so the
+/// seed-boundary apply sets the pots byte-exact (the pre-seed fees it cannot re-derive natively).
+pub const BOOTSTRAP_RUPD_SCHEMA_VERSION: u32 = 2;
 
 /// Domain separator for the canonical commitment (binds the bytes to THIS artifact + version).
-const RUPD_COMMITMENT_DOMAIN: &[u8] = b"ade.b3c.bootstrap-reward-update.v1";
+const RUPD_COMMITMENT_DOMAIN: &[u8] = b"ade.b3c.bootstrap-reward-update.v2";
 
-const FIELDS_OUTER: u64 = 7;
+const FIELDS_OUTER: u64 = 9;
 const CREDENTIAL_FIELDS: u64 = 2;
 
 /// The credential discriminants, matching the ledger snapshot encoding
@@ -75,6 +76,13 @@ pub struct BootstrapRewardUpdate {
     /// window replays this epoch's blocks, then applies this delta exactly once before the snapshot.
     /// The window driver applies the delta ONLY for the window ending at this boundary.
     pub target_epoch: EpochNo,
+    /// The snapshot `nesRu`'s `deltaT` — the treasury INCREASE this reward update applies (the
+    /// pot's tau share plus any unregistered-reward sweep). Added to the treasury at the seed
+    /// boundary so the accumulator's pots are byte-exact without re-deriving from pre-seed fees.
+    pub delta_treasury: Coin,
+    /// The snapshot `nesRu`'s `deltaR` MAGNITUDE — the reserves DECREASE this reward update applies
+    /// (the net draw after the undistributed return). Subtracted from reserves at the seed boundary.
+    pub delta_reserves: Coin,
     /// The per-credential reward delta (the snapshot's Complete `nesRu` `rs` map, aggregated per
     /// credential). Keys join the dstate reward map by the SAME `StakeCredential` representation.
     /// `BTreeMap` ordering is the sole acceptable map ordering on an authority path.
@@ -107,11 +115,14 @@ pub enum BootstrapRupdError {
 }
 
 /// Compute the canonical commitment over the body (every field EXCEPT the commitment itself).
+#[allow(clippy::too_many_arguments)]
 pub fn bootstrap_rupd_commitment(
     manifest_commitment: &Hash32,
     source_point_slot: SlotNo,
     source_point_hash: &Hash32,
     target_epoch: EpochNo,
+    delta_treasury: Coin,
+    delta_reserves: Coin,
     reward_delta: &BTreeMap<StakeCredential, Coin>,
 ) -> Hash32 {
     let body = encode_rupd_body(
@@ -119,6 +130,8 @@ pub fn bootstrap_rupd_commitment(
         source_point_slot,
         source_point_hash,
         target_epoch,
+        delta_treasury,
+        delta_reserves,
         reward_delta,
     );
     let mut domained = Vec::with_capacity(RUPD_COMMITMENT_DOMAIN.len() + body.len());
@@ -128,11 +141,14 @@ pub fn bootstrap_rupd_commitment(
 }
 
 /// Encode every field EXCEPT the version header + the commitment (the bytes the commitment binds).
+#[allow(clippy::too_many_arguments)]
 fn encode_rupd_body(
     manifest_commitment: &Hash32,
     source_point_slot: SlotNo,
     source_point_hash: &Hash32,
     target_epoch: EpochNo,
+    delta_treasury: Coin,
+    delta_reserves: Coin,
     reward_delta: &BTreeMap<StakeCredential, Coin>,
 ) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -140,6 +156,8 @@ fn encode_rupd_body(
     write_uint_canonical(&mut buf, source_point_slot.0);
     write_bytes_canonical(&mut buf, &source_point_hash.0);
     write_uint_canonical(&mut buf, target_epoch.0);
+    write_uint_canonical(&mut buf, delta_treasury.0);
+    write_uint_canonical(&mut buf, delta_reserves.0);
     let count = reward_delta.len() as u64;
     write_map_header(&mut buf, ContainerEncoding::Definite(count, canonical_width(count)));
     // `BTreeMap` iteration is in canonical `StakeCredential` order — the credential CBOR encoding
@@ -161,6 +179,8 @@ fn encode_rupd_body(
 ///   uint   source_point_slot,
 ///   bytes(32) source_point_hash,
 ///   uint   target_epoch,
+///   uint   delta_treasury,
+///   uint   delta_reserves,
 ///   map(N) { array(2)[uint cred_tag, bytes(28) cred_hash] => uint coin, ... },  // BTreeMap order
 ///   bytes(32) canonical_commitment,
 /// ]
@@ -177,6 +197,8 @@ pub fn encode_bootstrap_reward_update(rupd: &BootstrapRewardUpdate) -> Vec<u8> {
         rupd.source_point_slot,
         &rupd.source_point_hash,
         rupd.target_epoch,
+        rupd.delta_treasury,
+        rupd.delta_reserves,
         &rupd.reward_delta,
     );
     buf.extend_from_slice(&body);
@@ -205,6 +227,8 @@ pub fn decode_bootstrap_reward_update(
     let source_point_slot = SlotNo(read_u64_field(bytes, &mut o)?);
     let source_point_hash = read_hash32(bytes, &mut o)?;
     let target_epoch = EpochNo(read_u64_field(bytes, &mut o)?);
+    let delta_treasury = Coin(read_u64_field(bytes, &mut o)?);
+    let delta_reserves = Coin(read_u64_field(bytes, &mut o)?);
     let reward_delta = decode_reward_delta(bytes, &mut o)?;
     let canonical_commitment = read_hash32(bytes, &mut o)?;
 
@@ -220,6 +244,8 @@ pub fn decode_bootstrap_reward_update(
         source_point_slot,
         &source_point_hash,
         target_epoch,
+        delta_treasury,
+        delta_reserves,
         &reward_delta,
     );
     if recomputed != canonical_commitment {
@@ -231,6 +257,8 @@ pub fn decode_bootstrap_reward_update(
         source_point_slot,
         source_point_hash,
         target_epoch,
+        delta_treasury,
+        delta_reserves,
         reward_delta,
         canonical_commitment,
     };
@@ -392,11 +420,15 @@ mod tests {
         let source_point_slot = SlotNo(115_676_685);
         let source_point_hash = Hash32([0x66; 32]);
         let target_epoch = EpochNo(1338);
+        let delta_treasury = Coin(2_744_247_724_989);
+        let delta_reserves = Coin(3_108_895_499_648);
         let canonical_commitment = bootstrap_rupd_commitment(
             &manifest_commitment,
             source_point_slot,
             &source_point_hash,
             target_epoch,
+            delta_treasury,
+            delta_reserves,
             &reward_delta,
         );
         BootstrapRewardUpdate {
@@ -404,6 +436,8 @@ mod tests {
             source_point_slot,
             source_point_hash,
             target_epoch,
+            delta_treasury,
+            delta_reserves,
             reward_delta,
             canonical_commitment,
         }
@@ -441,7 +475,7 @@ mod tests {
     #[test]
     fn decode_rejects_unknown_version() {
         let fresh = encode_bootstrap_reward_update(&sample());
-        for bad in [0u64, 2, 99] {
+        for bad in [0u64, 1, 99] {
             let mut buf = Vec::new();
             write_array_header(
                 &mut buf,
@@ -450,7 +484,7 @@ mod tests {
             write_uint_canonical(&mut buf, bad);
             buf.extend_from_slice(&fresh[2..]);
             match decode_bootstrap_reward_update(&buf) {
-                Err(BootstrapRupdError::UnknownVersion { expected: 1, found })
+                Err(BootstrapRupdError::UnknownVersion { expected: 2, found })
                     if found == bad as u32 => {}
                 other => panic!("expected UnknownVersion for v{bad}, got {other:?}"),
             }
@@ -489,12 +523,16 @@ mod tests {
         let source_point_slot = SlotNo(1);
         let source_point_hash = Hash32([0x22; 32]);
         let target_epoch = EpochNo(7);
+        let delta_treasury = Coin(0);
+        let delta_reserves = Coin(0);
         let reward_delta = BTreeMap::new();
         let canonical_commitment = bootstrap_rupd_commitment(
             &manifest_commitment,
             source_point_slot,
             &source_point_hash,
             target_epoch,
+            delta_treasury,
+            delta_reserves,
             &reward_delta,
         );
         let s = BootstrapRewardUpdate {
@@ -502,6 +540,8 @@ mod tests {
             source_point_slot,
             source_point_hash,
             target_epoch,
+            delta_treasury,
+            delta_reserves,
             reward_delta,
             canonical_commitment,
         };
@@ -521,6 +561,8 @@ mod tests {
             s.source_point_slot,
             &s.source_point_hash,
             s.target_epoch,
+            s.delta_treasury,
+            s.delta_reserves,
             &s.reward_delta,
         );
         s

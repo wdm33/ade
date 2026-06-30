@@ -275,7 +275,8 @@ const NATIVE_SOURCE_MARKER: &str = "native-mithril-snapshot";
 ///   epoch_fees = 0};
 /// - `ledger.protocol_params` <- S1a (incl. the `MinUtxoRule::PerByte`);
 /// - `ledger.era` = Conway; `ledger.max_lovelace_supply` <- genesis;
-///   `gov_state = None`; `conway_deposit_params = None`; `track_utxo = false`;
+///   `gov_state` <- the certified snapshot's imported Proposals + Committee (CONWAY-PROPOSAL-DEPOSIT-
+///   EXPIRY S1); `conway_deposit_params = None`; `track_utxo = false`;
 /// - `chain_dep` five nonces <- S1a; op-cert counters empty; `last_* = None`;
 /// - `consensus_inputs` (native) <- manifest magic/genesis/point + S1a
 ///   epoch/eta0/pool_distr/params + genesis ASC + derived epoch window.
@@ -343,8 +344,11 @@ pub fn assemble_native_mithril_seed(
         reserves: s1a.reserves,
         treasury: s1a.treasury,
         block_production: pool_keyed_block_production(&s1a.block_production),
-        // epoch_fees = 0 (cold start; no in-epoch fees accumulated yet).
-        epoch_fees: ade_types::tx::Coin(0),
+        // epoch_fees <- the certified snapshot fee pot (epoch (seed)'s fees accrued up to the snapshot
+        // point). This is the nesBcur-analog for fees: the live follow adds the seed-to-end tail onto it,
+        // so the FULL epoch (seed) fees rotate to nesBprev at the seed boundary and the FIRST native
+        // boundary (seed+1 -> seed+2) draws the complete fee pot (NOT cold-start 0, which under-draws).
+        epoch_fees: s1a.epoch_fees,
     };
     let ledger = LedgerState {
         utxo_state: utxo,
@@ -354,7 +358,25 @@ pub fn assemble_native_mithril_seed(
         track_utxo: false,
         cert_state: s1a.cert_state.clone(),
         max_lovelace_supply: genesis.max_lovelace_supply,
-        gov_state: None,
+        // CONWAY-PROPOSAL-DEPOSIT-EXPIRY S1: seed the accumulator's gov_state from the CERTIFIED
+        // snapshot's imported Proposals + Committee (NOT inferred). Identity-bound proposals (incl their
+        // canonical vote maps), the active committee, and its quorum are the inputs the boundary
+        // deposit-expiry negative proof reads. The remaining ConwayGovState fields are NOT imported in
+        // S1 — they are sourced from pparams / cert-state in later slices (S3 sources gov_action_lifetime
+        // + thresholds for NEWLY-submitted proposals; the imported proposals already carry their own
+        // expires_after). The S4 evaluator FAILS CLOSED if a proposal's disposition needs any field not
+        // populated here; the observed five refunds need only the committee gate (committee + quorum).
+        gov_state: Some(ade_ledger::state::ConwayGovState {
+            proposals: s1a.imported_gov.proposals.clone(),
+            committee: s1a.imported_gov.committee.clone(),
+            committee_quorum: s1a.imported_gov.committee_quorum.unwrap_or((1, 1)),
+            drep_expiry: std::collections::BTreeMap::new(),
+            gov_action_lifetime: 0,
+            vote_delegations: std::collections::BTreeMap::new(),
+            pool_voting_thresholds: Vec::new(),
+            drep_voting_thresholds: Vec::new(),
+            committee_hot_keys: std::collections::BTreeMap::new(),
+        }),
         conway_deposit_params: None,
     };
 
@@ -593,6 +615,45 @@ mod tests {
     }
 
     /// A hermetic S1a `NativeSnapshotNonUtxoState` bound to the manifest point.
+    // CONWAY-PROPOSAL-DEPOSIT-EXPIRY S1: one identity-bound proposal + a committee for the threading
+    // test, so a `Some(empty)` regression (proposal data silently dropped) FAILS rather than passes.
+    const SAMPLE_GAS_TXID: [u8; 32] = [0xAB; 32];
+    const SAMPLE_DEPOSIT: u64 = 100_000_000_000;
+    const SAMPLE_RETURN_ADDR: [u8; 29] = [0xE0; 29];
+    const SAMPLE_PROPOSED_IN: u64 = 1309;
+    const SAMPLE_EXPIRES_AFTER: u64 = 1339;
+    const SAMPLE_COMMITTEE_MEMBER: [u8; 28] = [0xC0; 28];
+    const SAMPLE_QUORUM: (u64, u64) = (2, 3);
+
+    fn sample_imported_gov() -> ade_ledger::ledgerdb_state::ImportedGovState {
+        use ade_types::conway::governance::{GovAction, GovActionId, GovActionState};
+        use ade_types::shelley::cert::StakeCredential;
+        use ade_types::tx::Coin;
+        let mut committee = std::collections::BTreeMap::new();
+        committee.insert(StakeCredential::KeyHash(Hash28(SAMPLE_COMMITTEE_MEMBER)), 1340u64);
+        ade_ledger::ledgerdb_state::ImportedGovState {
+            proposals: vec![GovActionState {
+                action_id: GovActionId {
+                    tx_hash: Hash32(SAMPLE_GAS_TXID),
+                    index: 0,
+                },
+                committee_votes: Vec::new(), // 0 committee Yes ⇒ committee gate fails ⇒ provably unratifiable
+                drep_votes: Vec::new(),
+                spo_votes: Vec::new(),
+                deposit: Coin(SAMPLE_DEPOSIT),
+                return_addr: SAMPLE_RETURN_ADDR.to_vec(),
+                gov_action: GovAction::TreasuryWithdrawals {
+                    withdrawals: vec![(SAMPLE_RETURN_ADDR.to_vec(), Coin(400_000_000_000))],
+                    policy_hash: None,
+                },
+                proposed_in: EpochNo(SAMPLE_PROPOSED_IN),
+                expires_after: EpochNo(SAMPLE_EXPIRES_AFTER),
+            }],
+            committee,
+            committee_quorum: Some(SAMPLE_QUORUM),
+        }
+    }
+
     fn s1a_state() -> NativeSnapshotNonUtxoState {
         let mut pp = ProtocolParameters::default();
         // Conway per-byte rule (S1a decodes coinsPerUTxOByte into PerByte).
@@ -660,6 +721,10 @@ mod tests {
             block_production,
             current_block_production,
             reward_deltas: std::collections::BTreeMap::new(),
+            rupd_delta_treasury: Coin(0),
+            rupd_delta_reserves: Coin(0),
+            epoch_fees: Coin(0),
+            imported_gov: sample_imported_gov(),
             reward_nibble_observation: RewardNibbleObservation::Mixed,
         }
     }
@@ -801,7 +866,38 @@ mod tests {
         // LedgerState field sources.
         assert_eq!(seed.ledger.era, CardanoEra::Conway);
         assert!(!seed.ledger.track_utxo, "track_utxo = false");
-        assert!(seed.ledger.gov_state.is_none(), "gov_state = None");
+        // CONWAY-PROPOSAL-DEPOSIT-EXPIRY S1: gov_state is SEEDED from the imported proposals +
+        // committee — never None, and never Some(empty) (a regression dropping proposal data must fail
+        // HERE, not silently pass). Assert the meaningful imported state + a full identity-bound record.
+        {
+            use ade_types::shelley::cert::StakeCredential;
+            let gov = seed
+                .ledger
+                .gov_state
+                .as_ref()
+                .expect("gov_state seeded from the imported proposals + committee");
+            assert_eq!(gov.proposals.len(), 1, "imported proposal count preserved");
+            assert_eq!(gov.committee_quorum, SAMPLE_QUORUM, "imported committee quorum preserved");
+            assert_eq!(
+                gov.committee.get(&StakeCredential::KeyHash(Hash28(SAMPLE_COMMITTEE_MEMBER))),
+                Some(&1340u64),
+                "imported committee member preserved",
+            );
+            let p = &gov.proposals[0];
+            assert_eq!(p.action_id.tx_hash, Hash32(SAMPLE_GAS_TXID), "GovActionId tx_hash bound");
+            assert_eq!(p.action_id.index, 0, "GovActionId index bound");
+            assert_eq!(p.deposit.0, SAMPLE_DEPOSIT, "deposit bound");
+            assert_eq!(p.return_addr, SAMPLE_RETURN_ADDR.to_vec(), "return_addr bound");
+            assert_eq!(p.proposed_in.0, SAMPLE_PROPOSED_IN, "proposed_in bound");
+            assert_eq!(p.expires_after.0, SAMPLE_EXPIRES_AFTER, "expires_after bound");
+            assert!(
+                matches!(
+                    p.gov_action,
+                    ade_types::conway::governance::GovAction::TreasuryWithdrawals { .. }
+                ),
+                "action kind bound",
+            );
+        }
         assert!(
             seed.ledger.conway_deposit_params.is_none(),
             "conway_deposit_params = None"

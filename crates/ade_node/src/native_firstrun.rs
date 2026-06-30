@@ -591,11 +591,15 @@ where
         let source_point_hash = binding.certified_point.block_hash.clone();
         let target_epoch = s1a.epoch;
         let reward_delta = s1a.reward_deltas.clone();
+        let delta_treasury = s1a.rupd_delta_treasury;
+        let delta_reserves = s1a.rupd_delta_reserves;
         let canonical_commitment = bru::bootstrap_rupd_commitment(
             &manifest_commitment,
             source_point_slot,
             &source_point_hash,
             target_epoch,
+            delta_treasury,
+            delta_reserves,
             &reward_delta,
         );
         let rupd = bru::BootstrapRewardUpdate {
@@ -603,6 +607,8 @@ where
             source_point_slot,
             source_point_hash,
             target_epoch,
+            delta_treasury,
+            delta_reserves,
             reward_delta,
             canonical_commitment,
         };

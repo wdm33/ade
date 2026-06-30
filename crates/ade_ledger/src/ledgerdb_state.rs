@@ -31,6 +31,7 @@ use ade_codec::cbor::{
     ContainerEncoding,
 };
 use ade_crypto::blake2b::blake2b_256;
+use ade_types::conway::governance::{GovAction, GovActionId, GovActionState, Vote};
 use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::{Coin, PoolId};
 use ade_types::{CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
@@ -422,6 +423,142 @@ mod tip_tests {
         let mut o = 0usize;
         assert!(read_stake_snapshot_full(&s, &mut o, "test").is_err());
     }
+
+    // ===== CONWAY-PROPOSAL-DEPOSIT-EXPIRY S1 — gov-state decoder fail-closed proofs =====
+
+    /// An unknown `Vote` value is TERMINAL (never silently defaulted).
+    #[test]
+    fn nn_read_vote_rejects_unknown_value() {
+        let s = vec![0x07u8]; // uint 7 — not 0/1/2
+        let mut o = 0usize;
+        assert!(matches!(
+            nn_read_vote(&s, &mut o),
+            Err(NativeNonUtxoError::UnsupportedGovernanceState(_))
+        ));
+    }
+
+    /// `SJust` committee decodes member→expiry + the UnitInterval quorum; `null` ⇒ no committee.
+    #[test]
+    fn nn_read_committee_decodes_sjust_and_snothing() {
+        // SJust: array(1)[ array(2)[ map(1){ KeyHash(0xC0) => 1007 }, tag30[2,3] ] ]
+        let mut s = vec![0x81, 0x82, 0xa1, 0x82, 0x00, 0x58, 0x1c];
+        s.extend_from_slice(&[0xC0; 28]);
+        s.extend_from_slice(&[0x19, 0x03, 0xef]); // 1007
+        s.extend_from_slice(&[0xd8, 0x1e, 0x82, 0x02, 0x03]); // tag(30) [2,3]
+        let mut o = 0usize;
+        let (members, quorum) = nn_read_committee(&s, &mut o).expect("committee SJust");
+        assert_eq!(o, s.len(), "consumes the whole committee");
+        assert_eq!(members.get(&StakeCredential::KeyHash(Hash28([0xC0; 28]))), Some(&1007u64));
+        assert_eq!(quorum, Some((2, 3)));
+
+        let n = vec![0xf6u8]; // null -> SNothing
+        let mut o2 = 0usize;
+        let (m2, q2) = nn_read_committee(&n, &mut o2).expect("committee SNothing");
+        assert!(m2.is_empty() && q2.is_none(), "absent committee is empty + no quorum");
+    }
+
+    /// An unknown `GovAction` variant inside a proposal is TERMINAL — never silently skipped.
+    #[test]
+    fn nn_read_gov_action_state_rejects_unknown_action() {
+        // array(7)[ gasId, a0, a0, a0, procedure[deposit 0, return[], gov_action(tag 99), anchor null] ]
+        let mut s = vec![0x87, 0x82, 0x58, 0x20];
+        s.extend_from_slice(&[0xAB; 32]); // gasId tx_hash
+        s.push(0x00); // gasId index
+        s.extend_from_slice(&[0xa0, 0xa0, 0xa0]); // empty cc/drep/spo votes
+        // procedure = array(4)[deposit 0, return_addr bytes(0), gov_action array(1)[uint 99], anchor null]
+        s.extend_from_slice(&[0x84, 0x00, 0x40, 0x81, 0x18, 0x63, 0xf6]);
+        let mut o = 0usize;
+        assert!(
+            nn_read_gov_action_state(&s, &mut o).is_err(),
+            "unknown gov-action variant must halt, not be coerced to a default",
+        );
+    }
+
+    /// A truncated `Proposals` OMap element is TERMINAL (never a partial / empty proposal set).
+    #[test]
+    fn nn_read_proposals_rejects_truncated() {
+        // array(2)[ GovRelation=array(0), OMap=indef-array[ array(7) header then EOF ] ]
+        let s = vec![0x82, 0x80, 0x9f, 0x87];
+        let mut o = 0usize;
+        assert!(nn_read_proposals(&s, &mut o).is_err(), "truncated proposal must halt");
+    }
+
+    /// The v6 commitment is deterministic AND binds the imported gov state: an empty proposal set
+    /// commits differently from a populated one (absent ≠ empty), and mutating any bound field flips it.
+    #[test]
+    fn v6_commitment_is_deterministic_and_binds_gov() {
+        use crate::consensus_input_extract::{Nonce, PraosNonces};
+        use crate::delegation::CertState;
+        use crate::epoch::SnapshotState;
+        use ade_types::conway::governance::{GovAction, GovActionId, GovActionState};
+        let mk = |gov: ImportedGovState| NativeSnapshotNonUtxoState {
+            era: CardanoEra::Conway,
+            network_id: 0,
+            epoch: EpochNo(1340),
+            point: SeedPoint { slot: SlotNo(1), block_hash: Hash32([0; 32]) },
+            cert_state: CertState::new(),
+            praos_nonces: PraosNonces {
+                evolving: Nonce([0; 32]),
+                candidate: Nonce([0; 32]),
+                epoch: Nonce([0; 32]),
+                lab: Nonce([0; 32]),
+                last_epoch_block: Nonce([0; 32]),
+            },
+            pool_distr: BTreeMap::new(),
+            mark_pool_distr: BTreeMap::new(),
+            snapshots: SnapshotState::default(),
+            protocol_params: ProtocolParameters::default(),
+            reserves: Coin(0),
+            treasury: Coin(0),
+            block_production: BTreeMap::new(),
+            current_block_production: BTreeMap::new(),
+            reward_deltas: BTreeMap::new(),
+            rupd_delta_treasury: Coin(0),
+            rupd_delta_reserves: Coin(0),
+            epoch_fees: Coin(0),
+            imported_gov: gov,
+            reward_nibble_observation: RewardNibbleObservation::None,
+        };
+        let empty =
+            ImportedGovState { proposals: Vec::new(), committee: BTreeMap::new(), committee_quorum: None };
+        let one = ImportedGovState {
+            proposals: vec![GovActionState {
+                action_id: GovActionId { tx_hash: Hash32([0xAB; 32]), index: 0 },
+                committee_votes: Vec::new(),
+                drep_votes: Vec::new(),
+                spo_votes: Vec::new(),
+                deposit: Coin(100_000_000_000),
+                return_addr: vec![0xE0; 29],
+                gov_action: GovAction::TreasuryWithdrawals {
+                    withdrawals: vec![(vec![0xE0; 29], Coin(1))],
+                    policy_hash: None,
+                },
+                proposed_in: EpochNo(1309),
+                expires_after: EpochNo(1339),
+            }],
+            committee: BTreeMap::new(),
+            committee_quorum: Some((2, 3)),
+        };
+        // deterministic
+        assert_eq!(
+            commit_native_nonutxo_state(&mk(empty.clone())),
+            commit_native_nonutxo_state(&mk(empty.clone())),
+        );
+        // absent (empty) ≠ populated: the proposal set is bound
+        assert_ne!(
+            commit_native_nonutxo_state(&mk(empty)),
+            commit_native_nonutxo_state(&mk(one.clone())),
+            "v6 binds the proposal set (empty ≠ populated)",
+        );
+        // a single bound field flip changes the commitment
+        let mut mutated = one.clone();
+        mutated.proposals[0].deposit = Coin(999);
+        assert_ne!(
+            commit_native_nonutxo_state(&mk(one)),
+            commit_native_nonutxo_state(&mk(mutated)),
+            "v6 binds the proposal deposit",
+        );
+    }
 }
 
 /// Extract the five PraosState nonces from the headerState bytes: the TRAILING five contiguous
@@ -739,6 +876,12 @@ pub enum NativeNonUtxoError {
     ProtocolParamsMissing(String),
     /// The decoded CertState does not survive a canonical encode/decode round-trip.
     RoundTripMismatch,
+    /// A governance proposal / committee carries a representation Ade does not model (e.g. an unknown
+    /// `GovAction` variant or committee shape). TERMINAL for the deposit-expiry authority path — NEVER
+    /// coerced to an empty/default set (an absent set is not an empty set). (CONWAY-PROPOSAL-DEPOSIT-EXPIRY.)
+    UnsupportedGovernanceState(String),
+    /// A governance proposal / committee is structurally malformed where the gov-state must carry it.
+    MalformedGovernanceState(String),
 }
 
 /// DIAGNOSTIC ONLY — never a bootstrap verdict. The distribution of pool reward-account
@@ -831,6 +974,23 @@ pub struct NativeSnapshotNonUtxoState {
     /// chain applies at the NEXT epoch boundary (the seed-window-end RUPD that authority(N+2) needs).
     /// Empty when SNothing or mid-pulse.
     pub reward_deltas: BTreeMap<StakeCredential, Coin>,
+    /// `nesRu` Complete reward update's `deltaT` — the treasury INCREASE the seed-boundary RUPD applies.
+    /// Pairs with `reward_deltas` (the rs) to form the COMPLETE cardano reward at the seed boundary; the
+    /// `EpochAccumulator` adds this to treasury so the pots are byte-exact (it cannot re-derive the
+    /// pre-seed fees natively). Zero when the nesRu is SNothing.
+    pub rupd_delta_treasury: Coin,
+    /// `nesRu` Complete reward update's `deltaR` MAGNITUDE — the reserves DECREASE the seed-boundary
+    /// RUPD applies (subtracted from reserves). Zero when the nesRu is SNothing.
+    pub rupd_delta_reserves: Coin,
+    /// The certified epoch fee pot (UTxOState index 2) at the snapshot point — epoch (seed)'s fees
+    /// accumulated so far. Seeds `epoch_state.epoch_fees` so the first bootstrap-adjacent native boundary
+    /// (seed+1 -> seed+2, paying epoch (seed)'s reward) consumes the FULL epoch fees (this pre-seed
+    /// snapshot pot + the followed tail), not just the followed tail. Manifest-bound certified state.
+    pub epoch_fees: Coin,
+    /// The bootstrap-imported Conway governance state (CONWAY-PROPOSAL-DEPOSIT-EXPIRY S1) — the live
+    /// `Proposals` set + the constitutional committee — bound into the v6 commitment. An ABSENT gov
+    /// state is never an empty one: a pre-v6 store fails closed on load (re-bootstrap required).
+    pub imported_gov: ImportedGovState,
     /// DIAGNOSTIC evidence only (never a verdict): the pool reward-account network-nibble
     /// distribution. `network_id` above (manifest-derived) is the sole network authority.
     pub reward_nibble_observation: RewardNibbleObservation,
@@ -939,12 +1099,17 @@ fn read_reward_set_amount_sum(d: &[u8], o: &mut usize) -> R<u64> {
 /// snapshot rewards unchanged). `rs = map(Credential -> Set Reward)`; credentials route through the
 /// SAME `read_credential` as the dstate so the keys JOIN the existing reward map. The full item is
 /// consumed regardless (so the caller's decode stays aligned).
-fn read_reward_update_deltas(d: &[u8], o: &mut usize) -> R<BTreeMap<StakeCredential, Coin>> {
+/// Decode the snapshot's Complete `nesRu` into (rs per-credential map, deltaT, delta_reserves).
+/// `deltaT` is the treasury increase; `delta_reserves` is the reserves-decrease MAGNITUDE. Both are
+/// the cardano-computed pots for the seed→seed+1 boundary (they fold in epoch (seed-1)'s fees, which
+/// the native accumulator cannot reconstruct from post-bootstrap blocks). The seed-boundary apply
+/// adds deltaT to treasury and subtracts delta_reserves from reserves so the pots are byte-exact.
+fn read_reward_update_deltas(d: &[u8], o: &mut usize) -> R<(BTreeMap<StakeCredential, Coin>, Coin, Coin)> {
     let mut deltas: BTreeMap<StakeCredential, Coin> = BTreeMap::new();
     // StrictMaybe: array(0) = SNothing, array(1) = SJust PulsingRewUpdate.
     let sm = array_len(d, o, "nesRu.strictMaybe")?;
     if sm == 0 {
-        return Ok(deltas);
+        return Ok((deltas, Coin(0), Coin(0)));
     }
     // SJust PulsingRewUpdate = array[tag, ...]: tag 0 = Pulsing(+RewardSnapShot+Pulser), 1 = Complete(+RewardUpdate).
     let _pru = array_len(d, o, "nesRu.pulsing")?;
@@ -960,8 +1125,13 @@ fn read_reward_update_deltas(d: &[u8], o: &mut usize) -> R<BTreeMap<StakeCredent
     }
     // Complete: the remaining field is RewardUpdate = array(5)[deltaT, -deltaR, rs, -deltaF, nonMyopic].
     expect_array(d, o, 5, "RewardUpdate")?;
-    skip_item(d, o).map_err(|e| malformed(format!("RewardUpdate.deltaT: {e:?}")))?;
-    skip_item(d, o).map_err(|e| malformed(format!("RewardUpdate.deltaR: {e:?}")))?;
+    // deltaT (treasury increase) and the deltaR MAGNITUDE (reserves decrease). DeltaCoin values; we
+    // take the read magnitude — for a normal reward update deltaT is a treasury gain and deltaR is a
+    // reserves draw, both applied as positive pots at the seed boundary.
+    let (delta_treasury, _, _) =
+        read_any_int(d, o).map_err(|e| malformed(format!("RewardUpdate.deltaT: {e:?}")))?;
+    let (delta_reserves, _, _) =
+        read_any_int(d, o).map_err(|e| malformed(format!("RewardUpdate.deltaR: {e:?}")))?;
     map_each(d, o, "RewardUpdate.rs", |o| {
         let cred = read_credential(d, o)?;
         let sum = read_reward_set_amount_sum(d, o)?;
@@ -973,7 +1143,7 @@ fn read_reward_update_deltas(d: &[u8], o: &mut usize) -> R<BTreeMap<StakeCredent
     })?;
     skip_item(d, o).map_err(|e| malformed(format!("RewardUpdate.deltaF: {e:?}")))?;
     skip_item(d, o).map_err(|e| malformed(format!("RewardUpdate.nonMyopic: {e:?}")))?;
-    Ok(deltas)
+    Ok((deltas, Coin(delta_treasury), Coin(delta_reserves)))
 }
 
 pub fn decode_native_nonutxo_state(
@@ -1024,7 +1194,8 @@ pub fn decode_native_nonutxo_state(
     nn_expect_array(d, o, 2, "LedgerState")?;
     let (pool, delegation) = nn_read_cert_state(d, o)?;
     // UTxOState = array(6)[utxo, deposited, fees, govState, incrStake, donation]
-    let protocol_params = read_conway_pparams_from_utxo_state(d, o, network_id)?;
+    let (protocol_params, epoch_fees, imported_gov) =
+        read_conway_pparams_from_utxo_state(d, o, network_id)?;
     // EpochState.snapshots = SnapShots = array(4)[ssStakeMark, ssStakeSet, ssStakeGo, ssFee] (this ledger
     // version caches NO mark PoolDistr). CE-3d: decode the FULL mark/set/go stake snapshots (the reward +
     // leadership stake authority the EpochAccumulator seeds) — NOT just the ECA-5 mark PoolDistr, and
@@ -1045,7 +1216,7 @@ pub fn decode_native_nonutxo_state(
     skip_item(d, o)?; // EpochState.nonMyopic
     // nes.rewardUpdate (nesRu): decode the Complete RUPD's per-credential reward deltas — the
     // seed-window-end reward distribution that authority(N+2)'s stake needs. R-error -> Rn.
-    let reward_deltas = read_reward_update_deltas(d, o)
+    let (reward_deltas, rupd_delta_treasury, rupd_delta_reserves) = read_reward_update_deltas(d, o)
         .map_err(|e| nn_malformed(format!("nesRu rewardUpdate: {e:?}")))?;
     // nes[5] = [PoolDistr, totalActiveStake]
     let pd_n = nn_array_len(d, o, "nes.poolDistrWrapper")?;
@@ -1122,6 +1293,10 @@ pub fn decode_native_nonutxo_state(
         block_production,
         current_block_production,
         reward_deltas,
+        rupd_delta_treasury,
+        rupd_delta_reserves,
+        epoch_fees,
+        imported_gov,
         reward_nibble_observation,
     };
     let commitment = commit_native_nonutxo_state(&state);
@@ -1180,16 +1355,19 @@ fn read_account_state(d: &[u8], o: &mut usize) -> Rn<(Coin, Coin)> {
 }
 
 /// Navigate `LedgerState[1]` = `UTxOState` and decode the Conway current protocol
-/// parameters from `utxosGovState[curPParams]`. Consumes the whole UTxOState item (the
-/// caller's offset lands just past it). The UTxO map / deposited / fees / incrStake /
-/// donation are NOT this slice's authority (the UTxO lives in `tables`); only the
-/// embedded current PParams is decoded.
+/// parameters from `utxosGovState[curPParams]` AND the certified epoch fee pot (index 2).
+/// Consumes the whole UTxOState item (the caller's offset lands just past it). The UTxO
+/// map (index 0) lives in `tables` and `deposited` (index 1) is not this slice's authority;
+/// `fees` (index 2) IS — it is the certified historical fee pot the first bootstrap-adjacent
+/// native boundary consumes (epoch (seed)'s pre-seed fees), so the 1339->1340-style reward
+/// does not under-draw. Also imports the gov-state Proposals (index 0) + Committee (index 1) for
+/// CONWAY-PROPOSAL-DEPOSIT-EXPIRY. Returns `(curPParams, fees, importedGovState)`.
 fn read_conway_pparams_from_utxo_state(
     d: &[u8],
     o: &mut usize,
     network_id: u8,
-) -> Rn<ProtocolParameters> {
-    // UTxOState = array(6); descend to [3] = govState.
+) -> Rn<(ProtocolParameters, Coin, ImportedGovState)> {
+    // UTxOState = array(6)[utxo, deposited, fees, govState, incrStake, donation]; descend to [3] = govState.
     if peek_major(d, *o).map_err(NativeNonUtxoError::from)? != 4 {
         return Err(NativeNonUtxoError::ProtocolParamsMissing(
             "UTxOState: not an array".into(),
@@ -1201,9 +1379,11 @@ fn read_conway_pparams_from_utxo_state(
             "UTxOState arity {un} has no govState"
         )));
     }
-    for _ in 0..UTXO_STATE_GOVSTATE_INDEX {
-        skip_item(d, o)?; // utxo, deposited, fees
-    }
+    // [0]=utxo (in `tables`), [1]=deposited — not this slice's authority; [2]=fees IS the certified
+    // epoch fee pot. Read it, landing at [3]=govState (UTXO_STATE_GOVSTATE_INDEX).
+    skip_item(d, o)?; // [0] utxo
+    skip_item(d, o)?; // [1] deposited
+    let fees = Coin(nn_read_u64(d, o, "UTxOState.fees")?); // [2] fees
     // utxosGovState = array(7); curPParams is field 3.
     let gn = nn_array_len(d, o, "utxosGovState")?;
     if gn != CONWAY_GOV_STATE_FIELDS {
@@ -1211,9 +1391,9 @@ fn read_conway_pparams_from_utxo_state(
             "ConwayGovState arity {gn} != {CONWAY_GOV_STATE_FIELDS}"
         )));
     }
-    for _ in 0..CONWAY_GOV_STATE_CURPPARAMS_INDEX {
-        skip_item(d, o)?; // Proposals, committee, constitution
-    }
+    let proposals = nn_read_proposals(d, o)?; // [0]
+    let (committee, committee_quorum) = nn_read_committee(d, o)?; // [1]
+    skip_item(d, o)?; // [2] constitution
     let pp = read_conway_pparams(d, o, network_id)?;
     // skip the remaining govState fields (prevPParams, futurePParams, drepPulser).
     for _ in (CONWAY_GOV_STATE_CURPPARAMS_INDEX + 1)..(gn as usize) {
@@ -1223,7 +1403,30 @@ fn read_conway_pparams_from_utxo_state(
     for _ in (UTXO_STATE_GOVSTATE_INDEX + 1)..(un as usize) {
         skip_item(d, o)?;
     }
-    Ok(pp)
+    Ok((
+        pp,
+        fees,
+        ImportedGovState {
+            proposals,
+            committee,
+            committee_quorum,
+        },
+    ))
+}
+
+/// The bootstrap-imported Conway governance state (CONWAY-PROPOSAL-DEPOSIT-EXPIRY S1): the live
+/// `Proposals` set (identity-bound `GovActionState`s incl their canonical vote maps) and the
+/// constitutional `Committee` (active member → term-expiry epoch) + its quorum. Carried in
+/// [`NativeSnapshotNonUtxoState`] and bound into the v6 commitment so the deposit-expiry authority path
+/// has canonical, manifest-bound governance inputs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedGovState {
+    /// The live `cgsProposals` OMap values — the authoritative tracked proposal set.
+    pub proposals: Vec<GovActionState>,
+    /// Active constitutional-committee cold credential → term-expiry epoch.
+    pub committee: std::collections::BTreeMap<StakeCredential, u64>,
+    /// Committee approval quorum (UnitInterval numerator, denominator); `None` when no committee.
+    pub committee_quorum: Option<(u64, u64)>,
 }
 
 /// Decode the Conway on-wire `curPParams` = `array(31)`. Field order (cardano-ledger
@@ -1366,10 +1569,25 @@ fn read_raw_item(d: &[u8], o: &mut usize, _what: &str) -> Rn<Vec<u8>> {
 /// (pool ++ stake ++ vrf), the protocol params (via the canonical `encode_pparams`), the
 /// pots, and the block production (pool ++ blocks). BTreeMap iteration is ascending +
 /// deterministic; fixed big-endian widths => an identical state serializes identically.
+/// The closed `GovAction` sum's 1-byte discriminant (CIP-1694 tag order), for the v6 commitment.
+fn gov_action_kind_tag(a: &GovAction) -> u8 {
+    match a {
+        GovAction::ParameterChange { .. } => 0,
+        GovAction::HardForkInitiation { .. } => 1,
+        GovAction::TreasuryWithdrawals { .. } => 2,
+        GovAction::NoConfidence { .. } => 3,
+        GovAction::UpdateCommittee { .. } => 4,
+        GovAction::NewConstitution { .. } => 5,
+        GovAction::InfoAction => 6,
+    }
+}
+
 fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
     let mut v: Vec<u8> = Vec::new();
-    // v3: binds `current_block_production` (nesBcur) alongside the existing `block_production` (nesBprev).
-    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v3");
+    // v5: binds the certified epoch fee pot (`epoch_fees`) alongside the v4 seed-boundary RUPD pots
+    // (`rupd_delta_treasury`/`rupd_delta_reserves`), the v3 `current_block_production` (nesBcur) and the
+    // v1 `block_production` (nesBprev).
+    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v6");
     v.push(s.era.as_u8());
     // The manifest-derived network id (a network identity perturbation flips the commitment).
     v.push(s.network_id);
@@ -1424,6 +1642,69 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
     for (pid, blocks) in &s.current_block_production {
         v.extend_from_slice(&pid.0 .0);
         v.extend_from_slice(&blocks.to_be_bytes());
+    }
+    // v4: the seed-boundary RUPD pots — the treasury increase + reserves-decrease magnitude.
+    v.extend_from_slice(&s.rupd_delta_treasury.0.to_be_bytes());
+    v.extend_from_slice(&s.rupd_delta_reserves.0.to_be_bytes());
+    // v5: the certified epoch fee pot (seed epoch's pre-seed fees) — authority for the first
+    // bootstrap-adjacent native boundary's reward; a fee-pot perturbation flips the commitment.
+    v.extend_from_slice(&s.epoch_fees.0.to_be_bytes());
+    // v6: the imported Conway gov state (CONWAY-PROPOSAL-DEPOSIT-EXPIRY) — the live proposal set
+    // (identity-bound by GovActionId, with deposit/return-addr/expiry/vote maps) + the constitutional
+    // committee. A tampered proposal/deposit/return-addr/expiry/vote flips the commitment. The DECODE
+    // order is canonical (cardano OMap / BTreeMap), so this serialization is deterministic.
+    let commit_cred = |v: &mut Vec<u8>, c: &StakeCredential| {
+        let (tag, h) = match c {
+            StakeCredential::KeyHash(h) => (0u8, h),
+            StakeCredential::ScriptHash(h) => (1u8, h),
+        };
+        v.push(tag);
+        v.extend_from_slice(&h.0);
+    };
+    let vote_byte = |vt: &Vote| -> u8 {
+        match vt {
+            Vote::No => 0,
+            Vote::Yes => 1,
+            Vote::Abstain => 2,
+        }
+    };
+    let g = &s.imported_gov;
+    v.extend_from_slice(&(g.proposals.len() as u64).to_be_bytes());
+    for p in &g.proposals {
+        v.extend_from_slice(&p.action_id.tx_hash.0);
+        v.extend_from_slice(&p.action_id.index.to_be_bytes());
+        // action-kind discriminant (the closed GovAction sum, by declaration order).
+        v.push(gov_action_kind_tag(&p.gov_action));
+        v.extend_from_slice(&p.deposit.0.to_be_bytes());
+        v.extend_from_slice(&(p.return_addr.len() as u64).to_be_bytes());
+        v.extend_from_slice(&p.return_addr);
+        v.extend_from_slice(&p.proposed_in.0.to_be_bytes());
+        v.extend_from_slice(&p.expires_after.0.to_be_bytes());
+        for votes in [&p.committee_votes, &p.drep_votes] {
+            v.extend_from_slice(&(votes.len() as u64).to_be_bytes());
+            for (cred, vt) in votes {
+                commit_cred(&mut v, cred);
+                v.push(vote_byte(vt));
+            }
+        }
+        v.extend_from_slice(&(p.spo_votes.len() as u64).to_be_bytes());
+        for (h, vt) in &p.spo_votes {
+            v.extend_from_slice(&h.0);
+            v.push(vote_byte(vt));
+        }
+    }
+    v.extend_from_slice(&(g.committee.len() as u64).to_be_bytes());
+    for (cred, exp) in &g.committee {
+        commit_cred(&mut v, cred);
+        v.extend_from_slice(&exp.to_be_bytes());
+    }
+    match g.committee_quorum {
+        Some((n, d)) => {
+            v.push(1);
+            v.extend_from_slice(&n.to_be_bytes());
+            v.extend_from_slice(&d.to_be_bytes());
+        }
+        None => v.push(0),
     }
     // reward-account nibble observation (DIAGNOSTIC evidence — committed for determinism, NOT a
     // verdict): None=0, Uniform(n)=[1,n], Mixed=2.
@@ -1520,6 +1801,225 @@ fn nn_read_cert_state(d: &[u8], o: &mut usize) -> Rn<(PoolState, DelegationState
         LedgerDbStateError::MalformedCbor(s) => NativeNonUtxoError::MalformedCbor(s),
         other => nn_malformed(format!("cert_state: {other:?}")),
     })
+}
+
+// ===========================================================================
+// CONWAY-PROPOSAL-DEPOSIT-EXPIRY S1 — bootstrap import of the gov-state Proposals + Committee.
+// All decoders are FAIL-CLOSED: an unknown GovAction variant / vote value / committee shape is
+// TERMINAL (Unsupported/Malformed), never coerced to an empty/default. Identity is the GovActionId.
+// ===========================================================================
+
+/// Lift the `R<>` credential decoder into the native enum as a governance-malformed terminal.
+fn nn_read_credential(d: &[u8], o: &mut usize) -> Rn<StakeCredential> {
+    read_credential(d, o).map_err(|e| match e {
+        LedgerDbStateError::MalformedCbor(s) => NativeNonUtxoError::MalformedGovernanceState(s),
+        other => NativeNonUtxoError::MalformedGovernanceState(format!("credential: {other:?}")),
+    })
+}
+
+/// `GovActionId` = `array(2)[tx_hash(bytes32), index(uint)]`.
+fn nn_read_gov_action_id(d: &[u8], o: &mut usize) -> Rn<GovActionId> {
+    nn_expect_array(d, o, 2, "GovActionId")?;
+    let (txid, _) = read_bytes(d, o)?;
+    if txid.len() != 32 {
+        return Err(NativeNonUtxoError::MalformedGovernanceState(format!(
+            "GovActionId.tx_hash len {} != 32",
+            txid.len()
+        )));
+    }
+    let mut h = [0u8; 32];
+    h.copy_from_slice(&txid);
+    let (idx, _) = ade_codec::cbor::read_uint(d, o)?;
+    Ok(GovActionId {
+        tx_hash: Hash32(h),
+        index: u32::try_from(idx)
+            .map_err(|_| NativeNonUtxoError::MalformedGovernanceState("GovActionId.index > u32".into()))?,
+    })
+}
+
+/// A Conway `Vote` (0=No, 1=Yes, 2=Abstain). Unknown ⇒ terminal (no silent default).
+fn nn_read_vote(d: &[u8], o: &mut usize) -> Rn<Vote> {
+    let (v, _) = ade_codec::cbor::read_uint(d, o)?;
+    match v {
+        0 => Ok(Vote::No),
+        1 => Ok(Vote::Yes),
+        2 => Ok(Vote::Abstain),
+        other => Err(NativeNonUtxoError::UnsupportedGovernanceState(format!(
+            "vote value {other}"
+        ))),
+    }
+}
+
+/// A vote map keyed by a discriminated `StakeCredential` (committee-hot or DRep credentials).
+fn nn_read_cred_vote_map(d: &[u8], o: &mut usize) -> Rn<Vec<(StakeCredential, Vote)>> {
+    let enc = read_map_header(d, o)?;
+    let mut out = Vec::new();
+    match enc {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                let cred = nn_read_credential(d, o)?;
+                out.push((cred, nn_read_vote(d, o)?));
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !ade_codec::cbor::is_break(d, *o)? {
+                let cred = nn_read_credential(d, o)?;
+                out.push((cred, nn_read_vote(d, o)?));
+            }
+            *o += 1; // consume break
+        }
+    }
+    Ok(out)
+}
+
+/// The SPO vote map keyed by a pool `KeyHash` (bytes28).
+fn nn_read_spo_vote_map(d: &[u8], o: &mut usize) -> Rn<Vec<(Hash28, Vote)>> {
+    let enc = read_map_header(d, o)?;
+    let mut out = Vec::new();
+    let one = |d: &[u8], o: &mut usize| -> Rn<(Hash28, Vote)> {
+        let (k, _) = read_bytes(d, o)?;
+        if k.len() != 28 {
+            return Err(NativeNonUtxoError::MalformedGovernanceState(format!(
+                "spo vote key len {} != 28",
+                k.len()
+            )));
+        }
+        Ok((nn_hash28(k), nn_read_vote(d, o)?))
+    };
+    match enc {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                out.push(one(d, o)?);
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !ade_codec::cbor::is_break(d, *o)? {
+                out.push(one(d, o)?);
+            }
+            *o += 1; // consume break
+        }
+    }
+    Ok(out)
+}
+
+/// One `GovActionState` = `array(7)[gasId, ccVotes, drepVotes, spoVotes, procedure, proposed_in,
+/// expires_after]`. The `procedure` (= `array(4)[deposit, return_addr, gov_action, anchor]`) reuses the
+/// SAME closed `gov_action` grammar as the tx-body path (`ade_codec::conway::governance`) — an unknown
+/// gov-action variant fails closed identically (no silent skip).
+fn nn_read_gov_action_state(d: &[u8], o: &mut usize) -> Rn<GovActionState> {
+    nn_expect_array(d, o, 7, "GovActionState")?;
+    let action_id = nn_read_gov_action_id(d, o)?;
+    let committee_votes = nn_read_cred_vote_map(d, o)?;
+    let drep_votes = nn_read_cred_vote_map(d, o)?;
+    let spo_votes = nn_read_spo_vote_map(d, o)?;
+    let proc = ade_codec::conway::governance::decode_proposal_procedure(d, o)?;
+    let proposed_in = EpochNo(nn_read_u64(d, o, "GovActionState.proposed_in")?);
+    let expires_after = EpochNo(nn_read_u64(d, o, "GovActionState.expires_after")?);
+    Ok(GovActionState {
+        action_id,
+        committee_votes,
+        drep_votes,
+        spo_votes,
+        deposit: proc.deposit,
+        return_addr: proc.return_addr,
+        gov_action: proc.gov_action,
+        proposed_in,
+        expires_after,
+    })
+}
+
+/// The Conway live `Proposals` (gov-state index 0) = `array(2)[GovRelation, OMap]` where the OMap is a
+/// (usually indefinite) array of `GovActionState`. The `GovRelation` (roots/graph) is reconstructable
+/// from the OMap and is skipped; the OMap values are the authoritative proposal set.
+fn nn_read_proposals(d: &[u8], o: &mut usize) -> Rn<Vec<GovActionState>> {
+    nn_expect_array(d, o, 2, "Proposals")?;
+    skip_item(d, o)?; // GovRelation (roots/graph) — reconstructable, not authoritative here
+    let enc = read_array_header(d, o)?;
+    let mut out = Vec::new();
+    match enc {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                out.push(nn_read_gov_action_state(d, o)?);
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !ade_codec::cbor::is_break(d, *o)? {
+                out.push(nn_read_gov_action_state(d, o)?);
+            }
+            *o += 1; // consume break
+        }
+    }
+    Ok(out)
+}
+
+/// A CBOR `UnitInterval` = `tag(30) array(2)[num, den]` → `(num, den)`.
+fn nn_read_unit_interval(d: &[u8], o: &mut usize, what: &str) -> Rn<(u64, u64)> {
+    let (t, _) = read_tag(d, o)?;
+    if t != 30 {
+        return Err(NativeNonUtxoError::MalformedGovernanceState(format!(
+            "{what}: UnitInterval tag {t} != 30"
+        )));
+    }
+    nn_expect_array(d, o, 2, what)?;
+    let num = nn_read_u64(d, o, "UnitInterval.num")?;
+    let den = nn_read_u64(d, o, "UnitInterval.den")?;
+    Ok((num, den))
+}
+
+/// The constitutional `Committee` (gov-state index 1) = `StrictMaybe Committee`. `SJust` =
+/// `array(1)[array(2)[map{cold_cred ⇒ term_expiry_epoch}, quorum:UnitInterval]]`; `SNothing` =
+/// `array(0)` or `null`. Returns the active-member→expiry map + the quorum (None when no committee).
+fn nn_read_committee(
+    d: &[u8],
+    o: &mut usize,
+) -> Rn<(std::collections::BTreeMap<StakeCredential, u64>, Option<(u64, u64)>)> {
+    use std::collections::BTreeMap;
+    // SNothing as a CBOR simple/null (major 7).
+    if peek_major(d, *o)? == 7 {
+        skip_item(d, o)?;
+        return Ok((BTreeMap::new(), None));
+    }
+    let enc = read_array_header(d, o)?;
+    let n = match enc {
+        ContainerEncoding::Definite(n, _) => n,
+        ContainerEncoding::Indefinite => {
+            return Err(NativeNonUtxoError::MalformedGovernanceState(
+                "committee StrictMaybe indefinite array".into(),
+            ))
+        }
+    };
+    if n == 0 {
+        return Ok((BTreeMap::new(), None)); // SNothing as array(0)
+    }
+    if n != 1 {
+        return Err(NativeNonUtxoError::UnsupportedGovernanceState(format!(
+            "committee StrictMaybe arity {n} (expected 0 or 1)"
+        )));
+    }
+    nn_expect_array(d, o, 2, "Committee")?;
+    let mut members = BTreeMap::new();
+    let menc = read_map_header(d, o)?;
+    let one = |d: &[u8], o: &mut usize, members: &mut BTreeMap<StakeCredential, u64>| -> Rn<()> {
+        let cred = nn_read_credential(d, o)?;
+        let epoch = nn_read_u64(d, o, "committee.member.expiry")?;
+        members.insert(cred, epoch);
+        Ok(())
+    };
+    match menc {
+        ContainerEncoding::Definite(mn, _) => {
+            for _ in 0..mn {
+                one(d, o, &mut members)?;
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !ade_codec::cbor::is_break(d, *o)? {
+                one(d, o, &mut members)?;
+            }
+            *o += 1; // consume break
+        }
+    }
+    let quorum = nn_read_unit_interval(d, o, "committee.quorum")?;
+    Ok((members, Some(quorum)))
 }
 
 /// PoolDistr decode, lifting Stage-1 errors into the native enum.

@@ -350,12 +350,16 @@ mod tests {
         let manifest_commitment = Hash32([0x44; 32]);
         let source_point_slot = SlotNo(1);
         let source_point_hash = Hash32([0x66; 32]);
+        let delta_treasury = ade_types::Coin(0);
+        let delta_reserves = ade_types::Coin(0);
         let reward_delta = BTreeMap::new();
         let canonical_commitment = ade_ledger::bootstrap_reward_update::bootstrap_rupd_commitment(
             &manifest_commitment,
             source_point_slot,
             &source_point_hash,
             target_epoch,
+            delta_treasury,
+            delta_reserves,
             &reward_delta,
         );
         BootstrapRewardUpdateT {
@@ -363,6 +367,8 @@ mod tests {
             source_point_slot,
             source_point_hash,
             target_epoch,
+            delta_treasury,
+            delta_reserves,
             reward_delta,
             canonical_commitment,
         }

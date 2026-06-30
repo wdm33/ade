@@ -105,10 +105,10 @@ use ade_types::tx::{Coin, PoolId};
 use ade_types::{CardanoEra, EpochNo, Hash28, SlotNo};
 
 use crate::bootstrap_reward_update::{
-    decode_bootstrap_reward_update, encode_bootstrap_reward_update, BootstrapRewardUpdate,
-    BootstrapRupdError,
+    bootstrap_rupd_commitment, decode_bootstrap_reward_update, encode_bootstrap_reward_update,
+    BootstrapRewardUpdate, BootstrapRupdError,
 };
-use crate::delegation::CertState;
+use crate::delegation::{apply_bootstrap_reward_deltas, CertState};
 use crate::error::LedgerError;
 use crate::pparams::{ConwayOnlyDepositParams, ProtocolParameters};
 use crate::rules::{apply_epoch_boundary_with_registrations, process_block_certificates};
@@ -237,13 +237,20 @@ impl EpochAccumulator {
             });
         }
 
-        // The bootstrapped epoch-state's block_production is nesBprev and its epoch_fees is the (cold-start)
-        // fee pot — both boundary-consumed reward inputs → the prev_* buffers. nesBcur (the current epoch's
-        // blocks-so-far at the snapshot point) seeds `epoch_state.block_production`, so the seed→seed+1
-        // boundary counts the whole seed epoch, not just the anchor+1 replayed tail.
+        // The bootstrapped epoch-state's block_production is nesBprev (epoch (seed-1)'s blocks) → the prev_*
+        // buffer; nesBcur (the current epoch's blocks-so-far at the snapshot point) seeds
+        // `epoch_state.block_production`, so the seed→seed+1 boundary counts the whole seed epoch, not just
+        // the anchor+1 replayed tail.
+        //
+        // FEES are asymmetric to blocks: the certified snapshot carries ONE fee pot (epoch (seed)'s fees
+        // accrued so far) — the nesBcur-analog, NOT a nesBprev. It STAYS in `epoch_state.epoch_fees` (the
+        // live follow adds the seed-to-end tail) so the FULL epoch (seed) fees rotate to nesBprev at the
+        // seed boundary and the first native boundary draws them. `prev_epoch_fees` is 0: epoch (seed-1)'s
+        // fees are NOT in the snapshot — they ride in the one-shot bootstrap RUPD (which owns the seed
+        // boundary's reward), so there is no native nesBprev fee to seed.
         let mut epoch_state = ledger.epoch_state.clone();
         let prev_block_production = std::mem::take(&mut epoch_state.block_production);
-        let prev_epoch_fees = std::mem::replace(&mut epoch_state.epoch_fees, Coin(0));
+        let prev_epoch_fees = Coin(0);
         epoch_state.block_production = current_block_production;
 
         Ok(EpochAccumulator {
@@ -348,6 +355,15 @@ pub enum LedgerTransitionError {
     /// effect, the live within-epoch transition fail-closes; the invalid-tx body-effect skip is S3's
     /// byte-exact-gate item.
     InvalidTxCarriesAuthorityEffect { tx_index: u64 },
+    /// A pending one-shot bootstrap RUPD reached a boundary that is NOT its target (target_epoch+1). The
+    /// bootstrap exception applies at EXACTLY the seed→seed+1 boundary; at any other boundary it must be
+    /// already-consumed-None. Fail closed rather than carry a stale bootstrap reward into a later epoch.
+    BootstrapRupdWrongBoundary { rupd_target: u64, boundary: u64 },
+    /// The durable bootstrap RUPD's recomputed commitment did not match its bound `canonical_commitment`
+    /// (tampered or corrupt durable bytes). Fail closed before applying the pots.
+    BootstrapRupdCommitmentMismatch,
+    /// Applying the bootstrap RUPD's reserves draw underflowed (delta_reserves > reserves). Fail closed.
+    BootstrapRupdReservesUnderflow,
 }
 
 /// Apply one durable selected-chain block to the accumulator. Total, deterministic, replay-equivalent.
@@ -421,18 +437,26 @@ pub fn cross_epoch_boundary(
         return Err(LedgerTransitionError::MissingBoundaryStake { epoch: target.0 });
     }
 
-    // Bootstrap-transient reward seed (DC-EPOCH-18, CE-3d revision): CONSUMED (cleared) at its target
-    // boundary, but NO LONGER APPLIED in the accumulator. Once the bootstrap seeds the go/set/mark
-    // snapshots and nesBprev/nesBcur (the CE-3d snapshot seeding + the nesBcur seed), the NATIVE boundary
-    // reward below (`apply_epoch_boundary_with_registrations`) reproduces cardano's reward update — the
-    // reserves drawdown, the treasury split, AND the rs distribution — for THIS boundary too (verified:
-    // it draws the snapshot `nesRu`'s `deltaR` within 0.03%). Applying the seed here as well would
-    // DOUBLE-COUNT reserves/treasury/rewards. So the accumulator computes its reward natively at EVERY
-    // boundary (one uniform path); the seed remains the EVIEW window-replay authority via its own sidecar
-    // (`reduced_window_driver`), recovered + applied there, never here.
+    // ONE-SHOT BOOTSTRAP RUPD (DC-EPOCH-18 / CE-3d). The law: native is the SOLE reward authority once
+    // bootstrap-derived inputs are exhausted; only the FIRST bootstrap-adjacent transition (the seed→
+    // seed+1 boundary) may consume manifest-bound historical state from the certified snapshot. That
+    // boundary pays epoch (seed-1)'s rewards, which need epoch (seed-1)'s FEES — PRE-SEED, and
+    // unreconstructable from post-bootstrap blocks (proven: with fees=0 the native pot under-draws by
+    // exactly the snapshot `deltaF`). So here the native reward is forced to ZERO (empty block-production
+    // + zero fees → no reserves draw, R=0, the pool loop is skipped; rotation/POOLREAP/enactment still
+    // run) and the bound bootstrap RUPD supplies cardano's EXACT reward (pots + rs) EXACTLY ONCE, then is
+    // consumed. A pending RUPD at any NON-target boundary fails closed (it may never carry into a later
+    // epoch). After consumption every later boundary is native-only.
+    let is_seed_boundary = matches!(
+        &acc.pending_reward_update,
+        Some(rupd) if rupd.target_epoch.0.checked_add(1) == Some(target.0)
+    );
     if let Some(rupd) = &acc.pending_reward_update {
-        if rupd.target_epoch.0.checked_add(1) == Some(target.0) {
-            acc.pending_reward_update = None;
+        if !is_seed_boundary {
+            return Err(LedgerTransitionError::BootstrapRupdWrongBoundary {
+                rupd_target: rupd.target_epoch.0,
+                boundary: target.0,
+            });
         }
     }
 
@@ -445,11 +469,16 @@ pub fn cross_epoch_boundary(
     let finished_blocks = std::mem::take(&mut acc.epoch_state.block_production);
     let finished_fees = acc.epoch_state.epoch_fees;
 
-    // Build the boundary view with the REWARD INPUTS = the held nesBprev + prev fees (what the
-    // existing boundary fn reads as `epoch_state.block_production` / `epoch_state.epoch_fees`).
+    // Reward inputs: at the seed boundary, EMPTY (the bootstrap RUPD carries the reward, so the native
+    // reward computes exactly zero); otherwise the held nesBprev + prev fees.
     let mut view = acc.as_ledger_view();
-    view.epoch_state.block_production = acc.prev_block_production.clone();
-    view.epoch_state.epoch_fees = acc.prev_epoch_fees;
+    if is_seed_boundary {
+        view.epoch_state.block_production = BTreeMap::new();
+        view.epoch_state.epoch_fees = Coin(0);
+    } else {
+        view.epoch_state.block_production = acc.prev_block_production.clone();
+        view.epoch_state.epoch_fees = acc.prev_epoch_fees;
+    }
 
     let (new_view, _accounting) = apply_epoch_boundary_with_registrations(
         &view,
@@ -469,6 +498,42 @@ pub fn cross_epoch_boundary(
     // Rotate the block-production buffers: nesBprev := the just-finished nesBcur.
     acc.prev_block_production = finished_blocks;
     acc.prev_epoch_fees = finished_fees;
+
+    // Apply the one-shot bootstrap RUPD exactly once at the seed boundary, AFTER the native mechanics +
+    // zero reward, then consume (None = the durable "consumed" record; the accumulator is persisted).
+    // Verify the durable commitment first — fail closed on a tampered/corrupt record.
+    if is_seed_boundary {
+        let rupd = acc
+            .pending_reward_update
+            .take()
+            .expect("is_seed_boundary implies pending_reward_update is Some");
+        let recomputed = bootstrap_rupd_commitment(
+            &rupd.manifest_commitment,
+            rupd.source_point_slot,
+            &rupd.source_point_hash,
+            rupd.target_epoch,
+            rupd.delta_treasury,
+            rupd.delta_reserves,
+            &rupd.reward_delta,
+        );
+        if recomputed != rupd.canonical_commitment {
+            return Err(LedgerTransitionError::BootstrapRupdCommitmentMismatch);
+        }
+        acc.epoch_state.reserves.0 = acc
+            .epoch_state
+            .reserves
+            .0
+            .checked_sub(rupd.delta_reserves.0)
+            .ok_or(LedgerTransitionError::BootstrapRupdReservesUnderflow)?;
+        acc.epoch_state.treasury.0 = acc
+            .epoch_state
+            .treasury
+            .0
+            .checked_add(rupd.delta_treasury.0)
+            .ok_or(LedgerTransitionError::ArithmeticOverflow)?;
+        apply_bootstrap_reward_deltas(&mut acc.cert_state.delegation, &rupd.reward_delta)
+            .map_err(|_| LedgerTransitionError::ArithmeticOverflow)?;
+    }
     Ok(acc)
 }
 
@@ -1259,6 +1324,8 @@ mod tests {
             SlotNo(163_000_000),
             &Hash32([0x66; 32]),
             EpochNo(1339),
+            Coin(2_744_247_724_989),
+            Coin(3_108_895_499_648),
             &delta,
         );
         acc.pending_reward_update = Some(BootstrapRewardUpdate {
@@ -1266,6 +1333,8 @@ mod tests {
             source_point_slot: SlotNo(163_000_000),
             source_point_hash: Hash32([0x66; 32]),
             target_epoch: EpochNo(1339),
+            delta_treasury: Coin(2_744_247_724_989),
+            delta_reserves: Coin(3_108_895_499_648),
             reward_delta: delta,
             canonical_commitment: commitment,
         });
@@ -1276,8 +1345,10 @@ mod tests {
 
     #[test]
     fn seed_splits_bootstrapped_epoch_state_into_prev_buffers() {
-        // The bootstrapped EpochState carries nesBprev in `block_production` and the (cold-start) fee pot
-        // in `epoch_fees`; the seed moves BOTH into the prev_* reward buffers and starts nesBcur fresh.
+        // The bootstrapped EpochState carries nesBprev in `block_production` (→ the prev_* BLOCK buffer)
+        // and the certified epoch fee pot in `epoch_fees`. Blocks split into prev_*; the fee pot is the
+        // nesBcur-analog and STAYS in `epoch_fees` (the follow adds the seed-to-end tail). The fee
+        // prev-buffer is 0 — epoch (seed-1)'s fees ride in the bootstrap RUPD, not a native nesBprev.
         let boot = populated();
         let rupd = boot.pending_reward_update.clone();
         let ledger = boot.as_ledger_view();
@@ -1298,13 +1369,16 @@ mod tests {
         )
         .expect("seed");
 
-        // nesBprev + the prior fee pot seed the boundary-consumed reward buffers.
+        // nesBprev seeds the boundary-consumed BLOCK buffer; the fee prev-buffer is 0 (epoch (seed-1)'s
+        // fees ride in the bootstrap RUPD, not a native nesBprev fee).
         assert_eq!(seed.prev_block_production, nes_bprev);
-        assert_eq!(seed.prev_epoch_fees, fee_pot);
-        // nesBcur seeds the CURRENT block-production buffer (so the seed→seed+1 boundary counts the
-        // whole seed epoch, not just the anchor+1 replayed tail). The fee pot still starts fresh.
+        assert_eq!(seed.prev_epoch_fees, Coin(0));
+        // nesBcur seeds the CURRENT block-production buffer (so the seed→seed+1 boundary counts the whole
+        // seed epoch). The certified fee pot is the nesBcur-analog: it STAYS in `epoch_fees` so the follow
+        // adds the seed-to-end tail and the FULL epoch (seed) fees rotate to prev at the seed boundary.
+        assert!(fee_pot.0 > 0, "the test ledger must carry a non-zero certified fee pot");
         assert_eq!(seed.epoch_state.block_production, nes_bcur);
-        assert_eq!(seed.epoch_state.epoch_fees, Coin(0));
+        assert_eq!(seed.epoch_state.epoch_fees, fee_pot);
         // The within-epoch-consumed authority is carried faithfully.
         assert_eq!(seed.epoch_state.epoch, EpochNo(1340));
         assert_eq!(seed.epoch_state.slot, ledger.epoch_state.slot);
@@ -1669,12 +1743,14 @@ mod tests {
         );
     }
 
-    // ----- Bootstrap-transient reward seed: CONSUMED (cleared) at its target boundary, NOT applied -----
+    // ----- One-shot bootstrap RUPD: APPLIED EXACTLY ONCE at the seed boundary (pots + rs), then consumed -----
 
     #[test]
-    fn pending_reward_update_consumed_not_applied() {
+    fn pending_reward_update_applied_once_at_seed_boundary() {
         let mut acc = reward_fixture();
         acc.epoch_state.epoch = EpochNo(1339);
+        let delta_treasury = Coin(1_000);
+        let delta_reserves = Coin(2_000);
         let mut delta = BTreeMap::new();
         delta.insert(key_cred(0xCC), Coin(4_242));
         let commitment = bootstrap_rupd_commitment(
@@ -1682,6 +1758,8 @@ mod tests {
             SlotNo(1),
             &Hash32([0x02; 32]),
             EpochNo(1339),
+            delta_treasury,
+            delta_reserves,
             &delta,
         );
         acc.pending_reward_update = Some(BootstrapRewardUpdate {
@@ -1689,14 +1767,13 @@ mod tests {
             source_point_slot: SlotNo(1),
             source_point_hash: Hash32([0x02; 32]),
             target_epoch: EpochNo(1339),
+            delta_treasury,
+            delta_reserves,
             reward_delta: delta,
             canonical_commitment: commitment,
         });
-        // CE-3d revision: the bootstrap seed is CONSUMED (cleared) at its target boundary but NOT
-        // applied — the native reward (step 2) is the sole authority. Suppress the native reward
-        // (clear nesBprev → eta = 0 → no draw) so the cross's ONLY potential effect would be the (now
-        // removed) seed application; assert it leaves rewards + pots untouched and just clears the seed.
-        acc.prev_block_production.clear();
+        // The seed boundary (target_epoch+1 == 1340) forces the native reward to zero (empty inputs) and
+        // applies the bound RUPD EXACTLY once: pots + rs. Assert the byte-exact pot moves + the rs credit.
         let reserves_before = acc.epoch_state.reserves.0;
         let treasury_before = acc.epoch_state.treasury.0;
         let ctx = SelectedBlockCtx {
@@ -1710,21 +1787,136 @@ mod tests {
         let after = cross_epoch_boundary(acc, EpochNo(1340), &ctx).expect("boundary");
         assert_eq!(
             after.cert_state.delegation.rewards.get(&key_cred(0xCC)),
-            None,
-            "the bootstrap seed delta is NOT applied in the accumulator (the native reward owns it)"
+            Some(&Coin(4_242)),
+            "the bootstrap RUPD's rs is credited at the seed boundary"
         );
         assert_eq!(
-            after.epoch_state.treasury.0, treasury_before,
-            "the bootstrap seed moves no pots (treasury unchanged)"
+            after.epoch_state.treasury.0,
+            treasury_before + delta_treasury.0,
+            "the bootstrap RUPD adds deltaT to treasury"
         );
         assert_eq!(
-            after.epoch_state.reserves.0, reserves_before,
-            "the bootstrap seed moves no pots (reserves unchanged)"
+            after.epoch_state.reserves.0,
+            reserves_before - delta_reserves.0,
+            "the bootstrap RUPD subtracts delta_reserves from reserves"
         );
         assert!(
             after.pending_reward_update.is_none(),
-            "the bootstrap seed is CONSUMED (cleared) at its target boundary"
+            "the one-shot bootstrap RUPD is CONSUMED at its target boundary"
         );
+    }
+
+    /// ZERO-DOUBLE-COUNT INVARIANT (CONWAY-PROPOSAL-DEPOSIT-EXPIRY / DC-EPOCH-18). The imported fee pot
+    /// (the certified snapshot's epoch-(seed) fees) and the bootstrap RUPD (cardano's exact reward for
+    /// epoch (seed-1), carrying epoch (seed-1)'s `deltaF`) represent DISTINCT historical epochs' fee
+    /// contributions; the seed-adjacent boundary may NEVER count the same fee twice. Proven directly:
+    ///   (a) at the seed boundary the native reward draws ZERO fees (`epoch_fees` forced to 0), so the
+    ///       imported pot is NOT pulled into the seed-boundary reward;
+    ///   (b) the pots move by EXACTLY the RUPD's deltas — no extra fee-driven native draw;
+    ///   (c) the imported pot rotates to `prev_epoch_fees` INTACT, to be consumed EXACTLY ONCE at the
+    ///       NEXT boundary (seed+1 -> seed+2), never here.
+    #[test]
+    fn imported_fee_pot_not_double_counted_with_bootstrap_rupd_at_seed_boundary() {
+        const IMPORTED_FEES: u64 = 7_777_777;
+        let mut acc = reward_fixture();
+        acc.epoch_state.epoch = EpochNo(1339);
+        // The certified snapshot's epoch-(seed) fee pot (the v5/v6 import seeds this).
+        acc.epoch_state.epoch_fees = Coin(IMPORTED_FEES);
+        let delta_treasury = Coin(1_000);
+        let delta_reserves = Coin(2_000);
+        let mut delta = BTreeMap::new();
+        delta.insert(key_cred(0xCC), Coin(4_242));
+        let commitment = bootstrap_rupd_commitment(
+            &Hash32([0x01; 32]),
+            SlotNo(1),
+            &Hash32([0x02; 32]),
+            EpochNo(1339),
+            delta_treasury,
+            delta_reserves,
+            &delta,
+        );
+        acc.pending_reward_update = Some(BootstrapRewardUpdate {
+            manifest_commitment: Hash32([0x01; 32]),
+            source_point_slot: SlotNo(1),
+            source_point_hash: Hash32([0x02; 32]),
+            target_epoch: EpochNo(1339),
+            delta_treasury,
+            delta_reserves,
+            reward_delta: delta,
+            canonical_commitment: commitment,
+        });
+        let reserves_before = acc.epoch_state.reserves.0;
+        let treasury_before = acc.epoch_state.treasury.0;
+        let ctx = SelectedBlockCtx {
+            era: CardanoEra::Conway,
+            block_epoch: EpochNo(1340),
+            block_slot: SlotNo(0),
+            issuer_pool: pool(0xAA),
+            boundary_mark: Some(sample_mark(0xAA, 1_000_000_000_000)),
+            active_slots_per_epoch: 21_600,
+        };
+        let after = cross_epoch_boundary(acc, EpochNo(1340), &ctx).expect("boundary");
+        // (c) the imported epoch-(seed) fee pot is held INTACT in prev_epoch_fees — consumed exactly
+        // once, at the NEXT boundary, NOT here.
+        assert_eq!(
+            after.prev_epoch_fees.0, IMPORTED_FEES,
+            "imported fee pot rotates to prev_epoch_fees INTACT (consumed once, at the next boundary)"
+        );
+        // (a)+(b) the seed-boundary pots move by EXACTLY the bootstrap RUPD's deltas — the imported fee
+        // pot drove NO additional fee-driven native draw (it is not double-counted into this reward).
+        assert_eq!(
+            after.epoch_state.reserves.0,
+            reserves_before - delta_reserves.0,
+            "ONLY the RUPD draws reserves at the seed boundary (no fee-driven native draw)"
+        );
+        assert_eq!(
+            after.epoch_state.treasury.0,
+            treasury_before + delta_treasury.0,
+            "ONLY the RUPD moves treasury at the seed boundary"
+        );
+        // the new epoch's fresh nesBcur fee accumulator starts at zero (the imported pot lives in prev).
+        assert_eq!(after.epoch_state.epoch_fees.0, 0, "new-epoch fee accumulator is fresh");
+    }
+
+    #[test]
+    fn pending_reward_update_rejected_at_non_target_boundary() {
+        let mut acc = reward_fixture();
+        acc.epoch_state.epoch = EpochNo(1339);
+        let delta = BTreeMap::new();
+        let commitment = bootstrap_rupd_commitment(
+            &Hash32([0x01; 32]),
+            SlotNo(1),
+            &Hash32([0x02; 32]),
+            EpochNo(1337), // target+1 = 1338, NOT this boundary (1340)
+            Coin(0),
+            Coin(0),
+            &delta,
+        );
+        acc.pending_reward_update = Some(BootstrapRewardUpdate {
+            manifest_commitment: Hash32([0x01; 32]),
+            source_point_slot: SlotNo(1),
+            source_point_hash: Hash32([0x02; 32]),
+            target_epoch: EpochNo(1337),
+            delta_treasury: Coin(0),
+            delta_reserves: Coin(0),
+            reward_delta: delta,
+            canonical_commitment: commitment,
+        });
+        let ctx = SelectedBlockCtx {
+            era: CardanoEra::Conway,
+            block_epoch: EpochNo(1340),
+            block_slot: SlotNo(0),
+            issuer_pool: pool(0xAA),
+            boundary_mark: Some(sample_mark(0xAA, 1_000_000_000_000)),
+            active_slots_per_epoch: 21_600,
+        };
+        match cross_epoch_boundary(acc, EpochNo(1340), &ctx) {
+            Err(LedgerTransitionError::BootstrapRupdWrongBoundary {
+                rupd_target: 1337,
+                boundary: 1340,
+            }) => {}
+            other => panic!("expected BootstrapRupdWrongBoundary, got {other:?}"),
+        }
     }
 
     // ----- Fail-closed boundaries -----
