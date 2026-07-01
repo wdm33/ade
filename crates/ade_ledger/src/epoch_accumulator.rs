@@ -364,12 +364,6 @@ pub enum LedgerTransitionError {
     BootstrapRupdCommitmentMismatch,
     /// Applying the bootstrap RUPD's reserves draw underflowed (delta_reserves > reserves). Fail closed.
     BootstrapRupdReservesUnderflow,
-    /// CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3 / DC-GOV-01: a canonical selected-chain vote (tx-body field 19,
-    /// `voting_procedures`) targets a currently-tracked governance proposal. Ade does NOT process votes;
-    /// a post-seed vote makes that proposal's tracked vote map non-canonical, so the S4 negative-
-    /// ratifiability proof would be unsound. Fail closed — never tally, ratify, or refund past a vote that
-    /// is not accounted for. `tx_index` is the voting tx within the block.
-    VoteOnTrackedProposal { tx_index: u64 },
     /// CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3: a tx-body governance field (19 `voting_procedures` / 20
     /// `proposal_procedures`) failed to decode, or a field-20 procedure carried an unknown gov-action
     /// variant, on the within-epoch authority path. Terminal for the governance authority — never a silent
@@ -1059,8 +1053,8 @@ pub(crate) fn reward_account_credential(account: &[u8]) -> Option<StakeCredentia
 // Within-epoch governance capture (CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3 / DC-GOV-01)
 // ---------------------------------------------------------------------------
 
-/// Capture this block's governance proposals (tx-body field 20) into `gov.proposals` and trip on any
-/// vote (field 19) that targets a currently-tracked proposal — the INPUT half of DC-GOV-01.
+/// Capture this block's governance proposals (tx-body field 20) into `gov.proposals` and CAPTURE this
+/// block's votes (field 19) into the tracked proposals' vote maps (CRE S2) — the INPUT half of DC-GOV-01.
 ///
 /// A dedicated tx-body walk (mirroring `rules::process_block_certificates`, the cert authority's own
 /// walk) rather than an extension of the fee scan: forming a live proposal's `GovActionId` needs the tx
@@ -1071,17 +1065,19 @@ pub(crate) fn reward_account_credential(account: &[u8]) -> Option<StakeCredentia
 ///   1. field 20 (`proposal_procedures`, via the typed closed decoder): each procedure becomes a tracked
 ///      `GovActionState` whose `action_id = (transaction_id(tx_body) ‖ procedure_index)`, with the
 ///      submitter's deposit / return address / gov-action verbatim, `proposed_in = current_epoch`,
-///      `expires_after = proposed_in + gov_action_lifetime`, and EMPTY vote maps (Ade never tallies — S4
-///      reads the imported maps).
-///   2. field 19 (`voting_procedures`): the targeted `GovActionId`s (the inner-map keys, not the votes)
-///      are checked against the tracked set. A vote on any tracked proposal — INCLUDING one this same tx
-///      just submitted, since (1) runs first — fail-closes (`VoteOnTrackedProposal`).
+///      `expires_after = proposed_in + gov_action_lifetime`, and EMPTY vote maps (populated by the
+///      field-19 capture below).
+///   2. field 19 (`voting_procedures`): each `(voter, gov_action_id, vote)` is applied to the tracked
+///      proposal's committee/DRep/SPO vote map (`apply_field19_votes`, CRE S2 — replaces the CPDE S3
+///      detect-and-halt tripwire). A vote on an untracked proposal is ignored; a re-vote by the same voter
+///      replaces its prior entry; a vote on a proposal this same tx just submitted is applied too (1 runs
+///      first). This is CAPTURE, not ratification — the DRep/SPO ratify gates stay inert until CRE S4.
 ///
 /// A phase-2-invalid tx that carries field 19/20 fail-closes (`InvalidTxCarriesAuthorityEffect`), parity
 /// with the fee scan's cert/withdrawal guard (cardano discards an invalid tx's body effects; rather than
-/// selectively skip a discarded proposal, halt). A malformed field 19/20, or an unknown gov-action
-/// variant, is terminal (`MalformedGovernanceField`) — never a silent skip. Pure + total; replaying the
-/// same block yields the same `gov`.
+/// selectively skip a discarded proposal, halt). A malformed field 19/20, an unknown gov-action variant,
+/// or an unknown voter/vote discriminant on a tracked proposal is terminal (`MalformedGovernanceField`) —
+/// never a silent skip. Pure + total; replaying the same block yields the same `gov`.
 fn apply_block_governance(
     mut gov: ConwayGovState,
     tx_bodies: &[u8],
@@ -1212,16 +1208,23 @@ fn apply_one_tx_governance(
         }
     }
 
-    // (2) Vote tripwire (field 19): any vote on a tracked proposal — including one just submitted in this
-    // tx, since (1) ran first — is terminal (the imported/empty vote map is no longer canonical).
+    // (2) Vote CAPTURE (field 19): apply each vote to its tracked proposal's vote map — a live vote no
+    // longer HALTS the node (CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S2 replaces the CPDE S3
+    // detect-and-halt tripwire). Votes on untracked proposals are ignored; a re-vote replaces the voter's
+    // prior entry. This is CAPTURE, not ratification: the DRep/SPO ratify gates stay inert (S1 kept their
+    // thresholds/stake out of the live gate), so captured DRep/SPO votes do nothing yet. The committee gate
+    // is already live via CPDE, so a captured committee vote that reaches quorum makes a proposal
+    // potentially-ratifiable → the CPDE S4 potentially-ratifiable terminal (fail-safe) until the CRE S4
+    // activation replaces it with real ratify-then-enact.
+    // ⚠ S4 SEQUENCING (per the S2 review): the committee + DRep gates count ONLY Yes, so captured No/Abstain
+    // votes are fail-safe (monotone toward the terminal). The SPO gate is NON-MONOTONE — it folds No stake
+    // into its denominator — so a captured SPO No could flip a proposal to PROVABLY-unratifiable. That is
+    // safe ONLY while S1's SPO threshold stays inert. S4 MUST replace the CPDE deposit-refund with real
+    // ratify-then-enact BEFORE (or atomically with) activating the live SPO threshold; otherwise a captured
+    // SPO No could drive a wrongful expiry-refund.
     if let Some((s, e)) = field19 {
-        let voted = extract_voted_action_ids(&data[s..e])
+        apply_field19_votes(gov, &data[s..e])
             .map_err(|_| LedgerTransitionError::MalformedGovernanceField { tx_index })?;
-        for vid in &voted {
-            if gov.proposals.iter().any(|p| &p.action_id == vid) {
-                return Err(LedgerTransitionError::VoteOnTrackedProposal { tx_index });
-            }
-        }
     }
     Ok(())
 }
@@ -1247,62 +1250,168 @@ fn read_one_gov_field(
     Ok(())
 }
 
-/// Extract the `GovActionId`s a `voting_procedures` (tx-body field 19) targets — the inner-map KEYS, not
-/// the votes. CDDL: `voting_procedures = { + voter => { + gov_action_id => voting_procedure } }`; the
-/// voter keys and the `voting_procedure` values are skipped (parity with the proven voter walk in
-/// `tx_validity::required_signers::collect_voter_keys`). Fail-closed (`Err(())`) on any malformed shape —
-/// the tripwire must never silently miss a vote on a tracked proposal. `data` is the exact field-19 value;
-/// trailing bytes are rejected.
-fn extract_voted_action_ids(
-    data: &[u8],
-) -> Result<Vec<ade_types::conway::governance::GovActionId>, ()> {
+/// Apply the votes in a `voting_procedures` (tx-body field 19) to the tracked proposals' vote maps
+/// (CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S2 — replaces the CPDE S3 detect-and-halt tripwire).
+/// CDDL: `{ + voter => { + gov_action_id => voting_procedure } }`; voter = `[voter_type, hash28]`
+/// (0/1 = committee-hot keyhash/scripthash, 2/3 = DRep keyhash/scripthash, 4 = stake-pool keyhash);
+/// voting_procedure = `[vote, anchor/null]` (0=No, 1=Yes, 2=Abstain). A vote on an UNTRACKED proposal is
+/// ignored; a re-vote by the same voter REPLACES its prior entry (the ledger keeps the latest vote).
+/// Fail-closed (`Err(())`) on any malformed shape / unknown voter-or-vote discriminant; the field-19 value
+/// is exactly one (optionally tag-wrapped) map, trailing bytes rejected.
+fn apply_field19_votes(gov: &mut ConwayGovState, data: &[u8]) -> Result<(), ()> {
     use ade_codec::cbor;
     let mut offset = 0usize;
-    // Defensive parity with the proven voter walk: tolerate an optional set/tag wrapper (a plain map
-    // starts at major 5, so this fires only if a wrapper tag is actually present).
+    // Tolerate an optional set/tag wrapper (a plain map starts at major 5).
     if offset < data.len() && cbor::peek_major(data, offset).map_err(|_| ())? == 6 {
         let _ = cbor::read_tag(data, &mut offset).map_err(|_| ())?;
     }
-    let mut out = Vec::new();
-    let mut one_voter = |data: &[u8], offset: &mut usize| -> Result<(), ()> {
-        // voter key = [tag, hash] — a self-contained item; its identity is irrelevant to the tripwire.
-        let _ = cbor::skip_item(data, offset).map_err(|_| ())?;
-        // value map: { + gov_action_id => voting_procedure }
-        match cbor::read_map_header(data, offset).map_err(|_| ())? {
-            cbor::ContainerEncoding::Definite(m, _) => {
-                for _ in 0..m {
-                    out.push(read_gov_action_id(data, offset)?);
-                    let _ = cbor::skip_item(data, offset).map_err(|_| ())?; // voting_procedure value
-                }
-            }
-            cbor::ContainerEncoding::Indefinite => {
-                while !cbor::is_break(data, *offset).map_err(|_| ())? {
-                    out.push(read_gov_action_id(data, offset)?);
-                    let _ = cbor::skip_item(data, offset).map_err(|_| ())?;
-                }
-                *offset += 1;
-            }
-        }
-        Ok(())
-    };
     match cbor::read_map_header(data, &mut offset).map_err(|_| ())? {
         cbor::ContainerEncoding::Definite(n, _) => {
             for _ in 0..n {
-                one_voter(data, &mut offset)?;
+                apply_one_voter(gov, data, &mut offset)?;
             }
         }
         cbor::ContainerEncoding::Indefinite => {
             while !cbor::is_break(data, offset).map_err(|_| ())? {
-                one_voter(data, &mut offset)?;
+                apply_one_voter(gov, data, &mut offset)?;
             }
             offset += 1;
         }
     }
-    // Closed surface: the field-19 value is exactly one (optionally tag-wrapped) map — no trailing bytes.
     if offset != data.len() {
         return Err(());
     }
-    Ok(out)
+    Ok(())
+}
+
+/// One `voter => { + gov_action_id => voting_procedure }` map entry.
+fn apply_one_voter(gov: &mut ConwayGovState, data: &[u8], offset: &mut usize) -> Result<(), ()> {
+    use ade_codec::cbor;
+    let (voter_type, voter_hash) = read_voter(data, offset)?;
+    match cbor::read_map_header(data, offset).map_err(|_| ())? {
+        cbor::ContainerEncoding::Definite(m, _) => {
+            for _ in 0..m {
+                let gid = read_gov_action_id(data, offset)?;
+                let vote = read_voting_procedure(data, offset)?;
+                apply_one_vote(gov, voter_type, &voter_hash, &gid, vote)?;
+            }
+        }
+        cbor::ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, *offset).map_err(|_| ())? {
+                let gid = read_gov_action_id(data, offset)?;
+                let vote = read_voting_procedure(data, offset)?;
+                apply_one_vote(gov, voter_type, &voter_hash, &gid, vote)?;
+            }
+            *offset += 1;
+        }
+    }
+    Ok(())
+}
+
+/// voter = `array(2)[voter_type(uint), hash28(bytes)]`.
+fn read_voter(data: &[u8], offset: &mut usize) -> Result<(u64, ade_types::Hash28), ()> {
+    use ade_codec::cbor;
+    match cbor::read_array_header(data, offset).map_err(|_| ())? {
+        cbor::ContainerEncoding::Definite(2, _) => {}
+        _ => return Err(()),
+    }
+    let (voter_type, _) = cbor::read_uint(data, offset).map_err(|_| ())?;
+    // A voter is one of the 5 Conway roles (0/1 committee-hot, 2/3 DRep, 4 SPO). Any other discriminant is a
+    // CDDL-invalid field-19 → fail-closed at DECODE, regardless of whether its target is tracked (consistent
+    // with read_voting_procedure rejecting an out-of-range vote value; a malformed field-19 is a malformed
+    // block, not a per-proposal concern).
+    if voter_type > 4 {
+        return Err(());
+    }
+    let (hb, _) = cbor::read_bytes(data, offset).map_err(|_| ())?;
+    if hb.len() != 28 {
+        return Err(());
+    }
+    let mut h = [0u8; 28];
+    h.copy_from_slice(&hb);
+    Ok((voter_type, ade_types::Hash28(h)))
+}
+
+/// voting_procedure = `array(n>=1)[vote(uint 0..=2), anchor/null?]` → the decoded `Vote`.
+fn read_voting_procedure(
+    data: &[u8],
+    offset: &mut usize,
+) -> Result<ade_types::conway::governance::Vote, ()> {
+    use ade_codec::cbor;
+    use ade_types::conway::governance::Vote;
+    let n = match cbor::read_array_header(data, offset).map_err(|_| ())? {
+        cbor::ContainerEncoding::Definite(n, _) => n,
+        cbor::ContainerEncoding::Indefinite => return Err(()),
+    };
+    if n == 0 {
+        return Err(());
+    }
+    let (v, _) = cbor::read_uint(data, offset).map_err(|_| ())?;
+    let vote = match v {
+        0 => Vote::No,
+        1 => Vote::Yes,
+        2 => Vote::Abstain,
+        _ => return Err(()),
+    };
+    for _ in 1..n {
+        let _ = cbor::skip_item(data, offset).map_err(|_| ())?;
+    }
+    Ok(vote)
+}
+
+/// Apply one decoded vote to its tracked proposal (ignored if untracked); a re-vote REPLACES the voter's
+/// prior entry. Fail-closed on an unknown voter discriminant that targets a TRACKED proposal.
+fn apply_one_vote(
+    gov: &mut ConwayGovState,
+    voter_type: u64,
+    voter_hash: &ade_types::Hash28,
+    gid: &ade_types::conway::governance::GovActionId,
+    vote: ade_types::conway::governance::Vote,
+) -> Result<(), ()> {
+    use ade_types::shelley::cert::StakeCredential;
+    let Some(p) = gov.proposals.iter_mut().find(|p| &p.action_id == gid) else {
+        return Ok(()); // a vote on an untracked proposal — not ours to record
+    };
+    match voter_type {
+        0 | 1 => {
+            let cred = if voter_type == 0 {
+                StakeCredential::KeyHash(voter_hash.clone())
+            } else {
+                StakeCredential::ScriptHash(voter_hash.clone())
+            };
+            upsert_cred_vote(&mut p.committee_votes, cred, vote);
+        }
+        2 | 3 => {
+            let cred = if voter_type == 2 {
+                StakeCredential::KeyHash(voter_hash.clone())
+            } else {
+                StakeCredential::ScriptHash(voter_hash.clone())
+            };
+            upsert_cred_vote(&mut p.drep_votes, cred, vote);
+        }
+        4 => {
+            if let Some(e) = p.spo_votes.iter_mut().find(|(h, _)| h == voter_hash) {
+                e.1 = vote;
+            } else {
+                p.spo_votes.push((voter_hash.clone(), vote));
+            }
+        }
+        _ => return Err(()), // unknown voter discriminant on a tracked proposal — fail-closed
+    }
+    Ok(())
+}
+
+/// Upsert a `(credential, vote)`: replace the voter's prior vote or append.
+fn upsert_cred_vote(
+    votes: &mut Vec<(ade_types::shelley::cert::StakeCredential, ade_types::conway::governance::Vote)>,
+    cred: ade_types::shelley::cert::StakeCredential,
+    vote: ade_types::conway::governance::Vote,
+) {
+    if let Some(e) = votes.iter_mut().find(|(c, _)| *c == cred) {
+        e.1 = vote;
+    } else {
+        votes.push((cred, vote));
+    }
 }
 
 /// Decode `gov_action_id = array(2)[tx_hash(bytes32), index(uint)]` at `offset` (mirrors the proven S1
@@ -2893,18 +3002,26 @@ mod tests {
     }
 
     #[test]
-    fn s3_vote_on_tracked_proposal_is_terminal() {
+    fn cre_s2_vote_on_tracked_proposal_is_captured() {
+        use ade_types::conway::governance::Vote;
+        use ade_types::shelley::cert::StakeCredential;
+        use ade_types::Hash28;
         let pid = GovActionId { tx_hash: Hash32([0xAB; 32]), index: 0 };
         let mut gov = s3_empty_gov(6);
         s3_tracked(&mut gov, pid.clone(), EpochNo(1339));
         let body = s3_body(&[(19, s3_field19(std::slice::from_ref(&pid)))]);
         let bodies = s3_tx_bodies(std::slice::from_ref(&body));
-        let err = apply_block_governance(gov, &bodies, 1, &invalid_set(&[]), EpochNo(1338))
-            .unwrap_err();
-        assert!(
-            matches!(err, LedgerTransitionError::VoteOnTrackedProposal { tx_index: 0 }),
-            "a vote on a tracked proposal must fail closed, got {err:?}"
+        // CRE S2: a live vote is CAPTURED, no longer a terminal (replaces the CPDE S3 tripwire).
+        let gov = apply_block_governance(gov, &bodies, 1, &invalid_set(&[]), EpochNo(1338))
+            .expect("a live vote is captured, not a halt");
+        let p = gov.proposals.iter().find(|p| p.action_id == pid).expect("proposal tracked");
+        // s3_field19 encodes voter_type 2 (DRep keyhash 0x11..) voting Yes → the tracked proposal's drep_votes.
+        assert_eq!(
+            p.drep_votes,
+            vec![(StakeCredential::KeyHash(Hash28([0x11; 28])), Vote::Yes)],
+            "the DRep vote landed in drep_votes"
         );
+        assert!(p.committee_votes.is_empty() && p.spo_votes.is_empty(), "only the drep map got the vote");
     }
 
     #[test]
@@ -2922,18 +3039,104 @@ mod tests {
     }
 
     #[test]
-    fn s3_cross_tx_same_block_vote_on_just_submitted_proposal_is_terminal() {
-        // tx0 submits P; tx1 (same block) votes on P. P is tracked before tx1 is checked ⇒ terminal.
+    fn cre_s2_cross_tx_same_block_vote_on_just_submitted_proposal_is_captured() {
+        use ade_types::conway::governance::Vote;
+        use ade_types::shelley::cert::StakeCredential;
+        use ade_types::Hash28;
+        // tx0 submits P; tx1 (same block) votes on P. P is tracked when tx1 runs ⇒ the vote is CAPTURED.
         let p = s3_proposal(100_000_000_000, 0xe0);
         let tx0 = s3_body(&[(20, s3_field20(std::slice::from_ref(&p)))]);
         let pid = GovActionId { tx_hash: ade_crypto::transaction_id(&tx0), index: 0 };
         let tx1 = s3_body(&[(19, s3_field19(std::slice::from_ref(&pid)))]);
         let bodies = s3_tx_bodies(&[tx0, tx1]);
-        let err = apply_block_governance(s3_empty_gov(6), &bodies, 2, &invalid_set(&[]), EpochNo(500))
-            .unwrap_err();
+        let gov = apply_block_governance(s3_empty_gov(6), &bodies, 2, &invalid_set(&[]), EpochNo(500))
+            .expect("the vote on the just-submitted proposal is captured");
+        let tracked = gov.proposals.iter().find(|q| q.action_id == pid).expect("tracked");
+        assert_eq!(
+            tracked.drep_votes,
+            vec![(StakeCredential::KeyHash(Hash28([0x11; 28])), Vote::Yes)],
+            "the cross-tx vote landed on the just-submitted proposal"
+        );
+    }
+
+    /// field-19 with one voter of `voter_type` (hash = `hash`×28) casting `vote` (0=No,1=Yes,2=Abstain) on
+    /// each target.
+    fn cre_s2_field19(voter_type: u64, hash: u8, votes: &[(GovActionId, u64)]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        write_map_header(&mut buf, ContainerEncoding::Definite(1, IntWidth::Inline));
+        write_array_header(&mut buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+        write_uint_canonical(&mut buf, voter_type);
+        write_bytes_canonical(&mut buf, &[hash; 28]);
+        let n = votes.len() as u64;
+        write_map_header(&mut buf, ContainerEncoding::Definite(n, canonical_width(n)));
+        for (gid, vote) in votes {
+            write_array_header(&mut buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+            write_bytes_canonical(&mut buf, &gid.tx_hash.0);
+            write_uint_canonical(&mut buf, gid.index as u64);
+            write_array_header(&mut buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+            write_uint_canonical(&mut buf, *vote);
+            write_null(&mut buf);
+        }
+        buf
+    }
+
+    #[test]
+    fn cre_s2_captures_committee_and_spo_votes_by_voter_type() {
+        use ade_types::conway::governance::Vote;
+        use ade_types::shelley::cert::StakeCredential;
+        use ade_types::Hash28;
+        let pid = GovActionId { tx_hash: Hash32([0xAB; 32]), index: 0 };
+        // committee (voter_type 1 = scripthash) voting No -> committee_votes as ScriptHash.
+        let mut gov = s3_empty_gov(6);
+        s3_tracked(&mut gov, pid.clone(), EpochNo(1339));
+        let body = s3_body(&[(19, cre_s2_field19(1, 0x22, &[(pid.clone(), 0)]))]);
+        let bodies = s3_tx_bodies(std::slice::from_ref(&body));
+        let gov = apply_block_governance(gov, &bodies, 1, &invalid_set(&[]), EpochNo(1338)).expect("cap");
+        let p = gov.proposals.iter().find(|p| p.action_id == pid).unwrap();
+        assert_eq!(p.committee_votes, vec![(StakeCredential::ScriptHash(Hash28([0x22; 28])), Vote::No)]);
+        assert!(p.drep_votes.is_empty() && p.spo_votes.is_empty());
+        // spo (voter_type 4) voting Abstain -> spo_votes as Hash28.
+        let mut gov = s3_empty_gov(6);
+        s3_tracked(&mut gov, pid.clone(), EpochNo(1339));
+        let body = s3_body(&[(19, cre_s2_field19(4, 0x33, &[(pid.clone(), 2)]))]);
+        let bodies = s3_tx_bodies(std::slice::from_ref(&body));
+        let gov = apply_block_governance(gov, &bodies, 1, &invalid_set(&[]), EpochNo(1338)).expect("cap");
+        let p = gov.proposals.iter().find(|p| p.action_id == pid).unwrap();
+        assert_eq!(p.spo_votes, vec![(Hash28([0x33; 28]), Vote::Abstain)]);
+    }
+
+    #[test]
+    fn cre_s2_revote_replaces_prior_vote() {
+        use ade_types::conway::governance::Vote;
+        use ade_types::shelley::cert::StakeCredential;
+        use ade_types::Hash28;
+        let pid = GovActionId { tx_hash: Hash32([0xAB; 32]), index: 0 };
+        let mut gov = s3_empty_gov(6);
+        s3_tracked(&mut gov, pid.clone(), EpochNo(1339));
+        // tx0: DRep 0x11 votes No; tx1: same DRep votes Yes -> the latest (Yes) REPLACES (not appended).
+        let tx0 = s3_body(&[(19, cre_s2_field19(2, 0x11, &[(pid.clone(), 0)]))]);
+        let tx1 = s3_body(&[(19, cre_s2_field19(2, 0x11, &[(pid.clone(), 1)]))]);
+        let bodies = s3_tx_bodies(&[tx0, tx1]);
+        let gov = apply_block_governance(gov, &bodies, 2, &invalid_set(&[]), EpochNo(1338)).expect("cap");
+        let p = gov.proposals.iter().find(|p| p.action_id == pid).unwrap();
+        assert_eq!(
+            p.drep_votes,
+            vec![(StakeCredential::KeyHash(Hash28([0x11; 28])), Vote::Yes)],
+            "re-vote replaced the prior entry"
+        );
+    }
+
+    #[test]
+    fn cre_s2_unknown_voter_type_on_tracked_proposal_is_terminal() {
+        let pid = GovActionId { tx_hash: Hash32([0xAB; 32]), index: 0 };
+        let mut gov = s3_empty_gov(6);
+        s3_tracked(&mut gov, pid.clone(), EpochNo(1339));
+        let body = s3_body(&[(19, cre_s2_field19(5, 0x11, &[(pid.clone(), 1)]))]); // voter_type 5 = unknown
+        let bodies = s3_tx_bodies(std::slice::from_ref(&body));
+        let err = apply_block_governance(gov, &bodies, 1, &invalid_set(&[]), EpochNo(1338)).unwrap_err();
         assert!(
-            matches!(err, LedgerTransitionError::VoteOnTrackedProposal { tx_index: 1 }),
-            "got {err:?}"
+            matches!(err, LedgerTransitionError::MalformedGovernanceField { tx_index: 0 }),
+            "an unknown voter discriminant on a tracked proposal is terminal, got {err:?}"
         );
     }
 

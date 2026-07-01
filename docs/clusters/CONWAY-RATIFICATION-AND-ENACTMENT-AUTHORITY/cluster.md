@@ -61,8 +61,17 @@ PROVE, not build-from-scratch.
   inverted hot→cold, 8 real members), commitment **v10**. **S1 IS COMPLETE** — all four inputs imported +
   commitment-bound + ground-truthed, and ALL kept OUT of the live gate (import-not-activate); the ratify
   SEMANTIC activates deliberately in **S4** with oracle verification.
-- **S2 — Live vote capture** (replace the S3 tripwire): decode field-19 voting_procedures into the
-  proposals' committee/DRep/SPO vote maps, persisted, discriminant-correct voter resolution.
+- **S2 — Live vote capture [DONE].** `apply_field19_votes` (epoch_accumulator.rs) replaces the CPDE S3
+  detect-and-halt tripwire: it decodes the full field-19 `{ voter => { gov_action_id => voting_procedure } }`
+  and applies each vote to the tracked proposal's committee/DRep/SPO vote map (voter_type 0/1→committee,
+  2/3→DRep, 4→SPO; 0/1/2 = No/Yes/Abstain). Untracked-proposal votes ignored; re-votes replace; byte-aligned
+  (every entry fully decoded regardless of tracked-ness); fail-closed on malformed / unknown voter-or-vote
+  discriminant on a tracked proposal. The `VoteOnTrackedProposal` terminal is removed — **a live vote no
+  longer halts the node** (the first CPDE continuity blocker retired). CAPTURE, not ratification: DRep/SPO
+  votes inert (S1 gates inert); a captured committee vote feeds the CPDE-live committee gate → the CPDE
+  potentially-ratifiable terminal (fail-safe, never a wrongful refund) until S4. Safe on the proven CE-3d
+  window (no votes on tracked proposals there → no-op; the −500B closure unchanged). Live-delta ground truth
+  (real vote windows) is available via a local `dba.sh` preview dump, same as S4.
 - **S3 — DRep/SPO voting-stake derivation** (the InstantStake-equivalent distribution authority).
 - **S4 — Deterministic RATIFY** (remove the S4-CPDE terminal): full ordering, delays, previous-action /
   reference-hash protections.
