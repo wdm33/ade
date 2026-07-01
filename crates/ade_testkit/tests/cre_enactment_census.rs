@@ -66,3 +66,45 @@ fn cre_census_probe_epoch_1088() {
         "the decoder reads epoch-1088 curPParams (a real maxTxExUnits.mem)"
     );
 }
+
+/// Partial census over whatever window states are extracted so far (auto-discovers the *_db-analyser
+/// snapshots in the 1087-1103 slot range). Reports the lifecycle-so-far: action presence + maxTxExUnits.mem.
+#[test]
+#[ignore = "reads local db-analyser window states as they extract; run for a live census status"]
+fn cre_census_partial_available() {
+    let dir = "/home/ts/.cardano-ce3d-extract/db/ledger";
+    let mut slots: Vec<u64> = std::fs::read_dir(dir)
+        .expect("ledger dir")
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            e.file_name()
+                .to_str()?
+                .strip_suffix("_db-analyser")
+                .and_then(|s| s.parse::<u64>().ok())
+        })
+        .filter(|s| (93_900_000..=95_400_000).contains(s))
+        .collect();
+    slots.sort_unstable();
+    eprintln!("=== CRE ENACTMENT-CENSUS (partial, {} epochs extracted) ===", slots.len());
+    for slot in slots {
+        // The stored slot is a few slots INTO its epoch; round the (115862400-slot) gap UP to whole epochs.
+        let epoch = 1341 - (115_862_400 - slot + 86_399) / 86_400;
+        let state = std::fs::read(format!("{dir}/{slot}_db-analyser/state")).expect("state");
+        let point = SeedPoint { slot: SlotNo(slot), block_hash: Hash32([0u8; 32]) };
+        let (s1a, _) = match decode_native_nonutxo_state(&state, point, epoch, 2) {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("epoch {epoch} @{slot}: DECODE FAILED -> {e:?}");
+                continue;
+            }
+        };
+        let g = &s1a.imported_gov;
+        let present = g.proposals.iter().any(|p| p.action_id == target());
+        eprintln!(
+            "epoch {epoch} @{slot}: {:>3} proposals | target 69c948cd..#0 present={:<5} | maxTxExUnits.mem={}",
+            g.proposals.len(),
+            present,
+            s1a.protocol_params.max_tx_ex_units_mem,
+        );
+    }
+}

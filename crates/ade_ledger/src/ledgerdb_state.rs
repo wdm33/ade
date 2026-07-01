@@ -1516,9 +1516,17 @@ pub fn decode_native_nonutxo_state(
             }
         }
     }
-    // Coherence: every block producer in the previous AND current epoch must be a known CertState pool.
-    for pid in block_production.keys().chain(current_block_production.keys()) {
-        if !cert_state.pool.pools.contains_key(pid) {
+    // Coherence: a block producer is normally a known CertState pool. A producer NOT in the active set is a
+    // pool that RETIRED after producing — removed from the active pool params at the epoch boundary, but its
+    // block count remains valid for the epoch it produced in (cardano still credits a retired pool's blocks).
+    // This is a legitimate ledger state (surfaced by the epoch-1090 Preview census; the CE-3d 1340 corpus
+    // never exercised a retired producer). TOLERATE an unknown producer rather than fail closed. Defense in
+    // depth: bound its block count by an impossible-per-epoch ceiling so a GROSS decode misalignment (a
+    // fabricated garbage count) is still TERMINAL; a subtle misalignment corrupts the cursor and is caught
+    // by the downstream epoch-state / snapshot / gov-state decode that follows.
+    const IMPOSSIBLE_EPOCH_BLOCKS: u64 = 1_000_000;
+    for (pid, blocks) in block_production.iter().chain(current_block_production.iter()) {
+        if !cert_state.pool.pools.contains_key(pid) && *blocks > IMPOSSIBLE_EPOCH_BLOCKS {
             return Err(NativeNonUtxoError::BlockProductionUnknownPool(pid.clone()));
         }
     }

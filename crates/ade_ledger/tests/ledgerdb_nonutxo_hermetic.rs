@@ -583,10 +583,18 @@ fn malformed_account_state_is_terminal() {
 }
 
 #[test]
-fn block_production_unknown_pool_is_terminal() {
+fn block_production_retired_producer_tolerated_but_gross_count_terminal() {
+    // A producer NOT in the active CertState pool set = a pool that RETIRED after producing. Its reasonable
+    // block count stays valid for the epoch's rewards, so the decode TOLERATES it (surfaced by the Preview
+    // epoch-1090 census; the CE-3d 1340 corpus never had a retired producer).
     let mut k = Knobs::default();
-    // a producer not in the CertState pool set
     k.block_production = vec![(OTHER_POOL_ID, 5)];
+    assert!(
+        decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC).is_ok(),
+        "a retired producer with a reasonable block count is tolerated, not terminal"
+    );
+    // But a GROSS block count (> the impossible-per-epoch ceiling) is a decode-misalignment tell -> TERMINAL.
+    k.block_production = vec![(OTHER_POOL_ID, 2_000_000)];
     assert!(matches!(
         decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC),
         Err(NativeNonUtxoError::BlockProductionUnknownPool(_))
