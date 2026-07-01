@@ -741,6 +741,8 @@ mod tests {
             epoch_fees: Coin(0),
             imported_gov: sample_imported_gov(),
             reward_nibble_observation: RewardNibbleObservation::Mixed,
+            max_block_ex_units_mem: 0,
+            gov_deposit_pot: Coin(0),
         }
     }
 

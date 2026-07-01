@@ -519,6 +519,8 @@ mod tip_tests {
             epoch_fees: Coin(0),
             imported_gov: gov,
             reward_nibble_observation: RewardNibbleObservation::None,
+            max_block_ex_units_mem: 0,
+            gov_deposit_pot: Coin(0),
         };
         let empty = ImportedGovState {
             proposals: Vec::new(),
@@ -1256,6 +1258,13 @@ pub struct NativeSnapshotNonUtxoState {
     /// DIAGNOSTIC evidence only (never a verdict): the pool reward-account network-nibble
     /// distribution. `network_id` above (manifest-derived) is the sole network authority.
     pub reward_nibble_observation: RewardNibbleObservation,
+    /// `curPParams.maxBlockExUnits.mem` (index 18) — decoded for the CRE enactment-census differential (the
+    /// param-update ground truth changes BOTH maxTx and maxBlock exec-mem). Not otherwise carried on the
+    /// shared `ProtocolParameters` (which holds only the tx exec-units).
+    pub max_block_ex_units_mem: u64,
+    /// `UTxOState.deposited` (index 1) — the total deposit pot (key/pool/DRep/gov deposits). Decoded for the
+    /// CRE enactment census (an enacted or expired gov action refunds its deposit, moving this pot).
+    pub gov_deposit_pot: Coin,
 }
 
 /// Decode a cardano `SnapShot = array(2)[ssStake: map(StakeCredential -> [Coin, PoolId]),
@@ -1456,7 +1465,7 @@ pub fn decode_native_nonutxo_state(
     nn_expect_array(d, o, 2, "LedgerState")?;
     let (pool, delegation, gov_import) = nn_read_cert_state(d, o)?;
     // UTxOState = array(6)[utxo, deposited, fees, govState, incrStake, donation]
-    let (protocol_params, epoch_fees, mut imported_gov) =
+    let (protocol_params, epoch_fees, mut imported_gov, gov_deposit_pot, max_block_ex_units_mem) =
         read_conway_pparams_from_utxo_state(d, o, network_id)?;
     // Thread the CertState bootstrap governance import (CRE S1 part 2): the DState-UMap DRep vote
     // delegations (2a) + the VState DRep-expiry and committee-hot-key maps (2b). They live ONLY in
@@ -1576,6 +1585,8 @@ pub fn decode_native_nonutxo_state(
         epoch_fees,
         imported_gov,
         reward_nibble_observation,
+        max_block_ex_units_mem,
+        gov_deposit_pot,
     };
     let commitment = commit_native_nonutxo_state(&state);
     Ok((state, commitment))
@@ -1644,7 +1655,7 @@ fn read_conway_pparams_from_utxo_state(
     d: &[u8],
     o: &mut usize,
     network_id: u8,
-) -> Rn<(ProtocolParameters, Coin, ImportedGovState)> {
+) -> Rn<(ProtocolParameters, Coin, ImportedGovState, Coin, u64)> {
     // UTxOState = array(6)[utxo, deposited, fees, govState, incrStake, donation]; descend to [3] = govState.
     if peek_major(d, *o).map_err(NativeNonUtxoError::from)? != 4 {
         return Err(NativeNonUtxoError::ProtocolParamsMissing(
@@ -1660,7 +1671,7 @@ fn read_conway_pparams_from_utxo_state(
     // [0]=utxo (in `tables`), [1]=deposited — not this slice's authority; [2]=fees IS the certified
     // epoch fee pot. Read it, landing at [3]=govState (UTXO_STATE_GOVSTATE_INDEX).
     skip_item(d, o)?; // [0] utxo
-    skip_item(d, o)?; // [1] deposited
+    let deposited = Coin(nn_read_u64(d, o, "UTxOState.deposited")?); // [1] deposit pot (for the CRE census)
     let fees = Coin(nn_read_u64(d, o, "UTxOState.fees")?); // [2] fees
     // utxosGovState = array(7); curPParams is field 3.
     let gn = nn_array_len(d, o, "utxosGovState")?;
@@ -1672,7 +1683,7 @@ fn read_conway_pparams_from_utxo_state(
     let proposals = nn_read_proposals(d, o)?; // [0]
     let (committee, committee_quorum) = nn_read_committee(d, o)?; // [1]
     skip_item(d, o)?; // [2] constitution
-    let (pp, gov_action_lifetime, pool_voting_thresholds, drep_voting_thresholds) =
+    let (pp, gov_action_lifetime, pool_voting_thresholds, drep_voting_thresholds, max_block_ex_units_mem) =
         read_conway_pparams(d, o, network_id)?;
     // skip the remaining govState fields (prevPParams, futurePParams, drepPulser).
     for _ in (CONWAY_GOV_STATE_CURPPARAMS_INDEX + 1)..(gn as usize) {
@@ -1700,6 +1711,8 @@ fn read_conway_pparams_from_utxo_state(
             committee_hot_keys: BTreeMap::new(),
             num_dormant_epochs: 0,
         },
+        deposited,
+        max_block_ex_units_mem,
     ))
 }
 
@@ -1784,7 +1797,7 @@ pub struct ImportedGovState {
 /// array and carries its Conway constant (`d = 0`, fully decentralized). `network_id` is
 /// NOT a Conway protocol parameter either; it is supplied by the caller, derived from the
 /// manifest network magic (the authority), and bound onto the shared `ProtocolParameters`.
-type ConwayPParamsGov = (ProtocolParameters, u64, Vec<(u64, u64)>, Vec<(u64, u64)>);
+type ConwayPParamsGov = (ProtocolParameters, u64, Vec<(u64, u64)>, Vec<(u64, u64)>, u64);
 
 fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<ConwayPParamsGov> {
     if peek_major(d, *o).map_err(NativeNonUtxoError::from)? != 4 {
@@ -1820,7 +1833,7 @@ fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<ConwayPPar
     let cost_models_cbor = Some(read_raw_item(d, o, "pp.costModels")?);
     skip_item(d, o)?; // [16] prices (not on the shared params)
     let (max_tx_ex_units_mem, max_tx_ex_units_cpu) = read_ex_units(d, o)?; // [17] maxTxExUnits
-    skip_item(d, o)?; // [18] maxBlockExUnits
+    let (max_block_ex_units_mem, _) = read_ex_units(d, o)?; // [18] maxBlockExUnits (mem for the CRE census)
     skip_item(d, o)?; // [19] maxValSize
     let collateral_percent = nn_read_u64(d, o, "pp.collateralPercentage")?.min(u16::MAX as u64) as u16; // [20]
     // [21..=30]: maxCollateralInputs, poolVotingThresholds, drepVotingThresholds,
@@ -1868,7 +1881,7 @@ fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<ConwayPPar
         // bound from the manifest network magic (the authority), not decoded from the array.
         network_id,
         cost_models_cbor,
-    }, gov_action_lifetime, pool_voting_thresholds, drep_voting_thresholds))
+    }, gov_action_lifetime, pool_voting_thresholds, drep_voting_thresholds, max_block_ex_units_mem))
 }
 
 /// Read a `[* UnitInterval]` voting-threshold vector (a per-action ratification-threshold list). Each

@@ -101,10 +101,12 @@ fn cre_census_partial_available() {
         let g = &s1a.imported_gov;
         let present = g.proposals.iter().any(|p| p.action_id == target());
         eprintln!(
-            "epoch {epoch} @{slot}: {:>3} proposals | target 69c948cd..#0 present={:<5} | maxTxExUnits.mem={}",
+            "epoch {epoch} @{slot}: {:>3} proposals | target present={:<5} | maxTxMem={} maxBlockMem={} | deposit_pot={}",
             g.proposals.len(),
             present,
             s1a.protocol_params.max_tx_ex_units_mem,
+            s1a.max_block_ex_units_mem,
+            s1a.gov_deposit_pot.0,
         );
     }
 }
