@@ -31,6 +31,7 @@ use ade_codec::cbor::{
     ContainerEncoding,
 };
 use ade_crypto::blake2b::blake2b_256;
+use ade_types::conway::cert::DRep;
 use ade_types::conway::governance::{GovAction, GovActionId, GovActionState, Vote};
 use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::{Coin, PoolId};
@@ -526,6 +527,7 @@ mod tip_tests {
             gov_action_lifetime: 6,
             pool_voting_thresholds: Vec::new(),
             drep_voting_thresholds: Vec::new(),
+            vote_delegations: BTreeMap::new(),
         };
         let one = ImportedGovState {
             proposals: vec![GovActionState {
@@ -547,6 +549,10 @@ mod tip_tests {
             gov_action_lifetime: 6,
             pool_voting_thresholds: vec![(51, 100)],
             drep_voting_thresholds: vec![(51, 100)],
+            vote_delegations: BTreeMap::from([(
+                StakeCredential::KeyHash(Hash28([0x11; 28])),
+                DRep::KeyHash(Hash28([0x22; 28])),
+            )]),
         };
         // deterministic
         assert_eq!(
@@ -574,16 +580,27 @@ mod tip_tests {
         assert_ne!(
             commit_native_nonutxo_state(&mk(one.clone())),
             commit_native_nonutxo_state(&mk(diff_lifetime)),
-            "v8 binds the imported gov_action_lifetime",
+            "v9 binds the imported gov_action_lifetime",
         );
         // the imported voting thresholds (curPParams 22/23) are bound: a tampered SPO/DRep threshold flips
         // the commitment (CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S1).
         let mut diff_thresholds = one.clone();
         diff_thresholds.drep_voting_thresholds = vec![(67, 100)];
         assert_ne!(
-            commit_native_nonutxo_state(&mk(one)),
+            commit_native_nonutxo_state(&mk(one.clone())),
             commit_native_nonutxo_state(&mk(diff_thresholds)),
-            "v8 binds the imported drep_voting_thresholds",
+            "v9 binds the imported drep_voting_thresholds",
+        );
+        // the imported bootstrap vote delegations (DState UMap drep field) are bound: a tampered delegation
+        // flips the commitment (CRE S1 part 2a).
+        let mut diff_vd = one.clone();
+        diff_vd
+            .vote_delegations
+            .insert(StakeCredential::KeyHash(Hash28([0x33; 28])), DRep::AlwaysNoConfidence);
+        assert_ne!(
+            commit_native_nonutxo_state(&mk(one)),
+            commit_native_nonutxo_state(&mk(diff_vd)),
+            "v9 binds the imported vote_delegations",
         );
     }
 }
@@ -672,7 +689,7 @@ pub fn probe_ledgerdb_state(state_cbor: &[u8], manifest_epoch: u64) -> R<LedgerD
     skip_item(d, o)?; // accountState
     // LedgerState = array(2)[CertState, UTxOState]
     expect_array(d, o, 2, "LedgerState")?;
-    let (pool, delegation) = read_cert_state(d, o)?;
+    let (pool, delegation, _vote_delegations) = read_cert_state(d, o)?;
     skip_item(d, o)?; // UTxOState (the empty UTxO + the incremental stake distr; Stage 2 reads `tables`)
     skip_item(d, o)?; // EpochState.snapshots
     skip_item(d, o)?; // EpochState.nonMyopic
@@ -725,8 +742,13 @@ pub fn probe_ledgerdb_state(state_cbor: &[u8], manifest_epoch: u64) -> R<LedgerD
     Ok(probe)
 }
 
-/// Decode the CertState (LedgerState[0]) = array(3)[VState, PState, DState] -> (PoolState, DelegationState).
-fn read_cert_state(d: &[u8], o: &mut usize) -> R<(PoolState, DelegationState)> {
+/// Decode the CertState (LedgerState[0]) = array(3)[VState, PState, DState] -> (PoolState,
+/// DelegationState, vote_delegations). The VState (committee hot keys, DRep expiry) is still SKIPPED here —
+/// its capture is CRE S1 part 2b; part 2a captures only the DState UMap's per-credential drep field.
+fn read_cert_state(
+    d: &[u8],
+    o: &mut usize,
+) -> R<(PoolState, DelegationState, BTreeMap<StakeCredential, DRep>)> {
     expect_array(d, o, 3, "CertState")?;
     skip_item(d, o)?; // VState
     // PState = array(4)[?, psStakePoolParams(28B->PoolParams), psFutureStakePoolParams, psRetiring]
@@ -740,8 +762,8 @@ fn read_cert_state(d: &[u8], o: &mut usize) -> R<(PoolState, DelegationState)> {
         future_pools,
         retiring,
     };
-    let delegation = read_dstate(d, o)?;
-    Ok((pool, delegation))
+    let (delegation, vote_delegations) = read_dstate(d, o)?;
+    Ok((pool, delegation, vote_delegations))
 }
 
 /// Decode a `Map PoolId PoolParams` (28-byte pool-id key -> PoolParams array).
@@ -771,9 +793,10 @@ fn read_retiring(d: &[u8], o: &mut usize) -> R<BTreeMap<PoolId, EpochNo>> {
 /// Decode the DState (CertState[2]) = array(4)[UMap, futureGenDelegs, genDelegs, iRewards].
 /// The UMap = `Map StakeCredential [reward, deposit, pool?, drep?]`. Every entry is a registration;
 /// entries with a pool are delegations; rewards = cred -> reward.
-fn read_dstate(d: &[u8], o: &mut usize) -> R<DelegationState> {
+fn read_dstate(d: &[u8], o: &mut usize) -> R<(DelegationState, BTreeMap<StakeCredential, DRep>)> {
     expect_array(d, o, 4, "DState")?;
     let mut ds = DelegationState::new();
+    let mut vote_delegations: BTreeMap<StakeCredential, DRep> = BTreeMap::new();
     map_each(d, o, "umap", |o| {
         let cred = read_credential(d, o)?;
         // value: array(4)[reward, deposit, pool?(28B|null), drep?]
@@ -792,8 +815,18 @@ fn read_dstate(d: &[u8], o: &mut usize) -> R<DelegationState> {
         } else {
             skip_item(d, o)?; // null / absent delegation
         }
-        for _ in 3..vn {
-            skip_item(d, o)?; // drep, etc.
+        // drep?: null (0xF6 = no vote delegation) or a DRep. Captured as the CRE S1 bootstrap-baseline
+        // vote_delegations import (read-only here; kept OUT of the live gate until the S4 activation). Any
+        // fields past the drep are skipped, so the UMap cursor stays aligned exactly as the old skip did.
+        if vn >= 4 {
+            if ade_codec::cbor::peek_major(d, *o)? == 7 {
+                skip_item(d, o)?; // null / simple -> no vote delegation
+            } else {
+                vote_delegations.insert(cred.clone(), read_native_drep(d, o)?);
+            }
+            for _ in 4..vn {
+                skip_item(d, o)?;
+            }
         }
         ds.registrations.insert(cred.clone(), deposit);
         ds.rewards.insert(cred, reward);
@@ -803,7 +836,41 @@ fn read_dstate(d: &[u8], o: &mut usize) -> R<DelegationState> {
     skip_item(d, o)?;
     skip_item(d, o)?;
     skip_item(d, o)?;
-    Ok(ds)
+    Ok((ds, vote_delegations))
+}
+
+/// Decode a cardano-ledger `DRep` from the DState UMap drep field. Robust to the arity variance:
+/// `[0, keyhash28]` / `[1, scripthash28]` carry a hash; `[2]` / `[3]` are the predefined DReps
+/// (AlwaysAbstain / AlwaysNoConfidence) and may be encoded arity-1 or arity-2-with-null — any trailing
+/// element is consumed so the UMap cursor stays byte-aligned regardless of which encoding the snapshot uses.
+fn read_native_drep(d: &[u8], o: &mut usize) -> R<DRep> {
+    let n = array_len(d, o, "umap.drep")?;
+    if n == 0 {
+        return Err(malformed("umap.drep: empty array".to_string()));
+    }
+    let variant = read_u64(d, o, "umap.drep.variant")?;
+    // A hash DRep (variant 0/1) MUST carry its 28-byte hash as the array's 2nd element. Reject an arity-1
+    // hash variant BY CONSTRUCTION (fail-closed, symmetric to the n == 0 guard) so the unconditional hash
+    // read below can never over-consume the following item's bytes on a malformed `[0]`/`[1]` (unreachable
+    // on real cardano — DRepKeyHash/DRepScriptHash are fixed at encodeListLen 2 — but terminal by design).
+    if variant <= 1 && n < 2 {
+        return Err(malformed(format!(
+            "umap.drep: hash variant {variant} with arity {n} < 2"
+        )));
+    }
+    let drep = match variant {
+        0 => DRep::KeyHash(hash28(read_fixed_bytes(d, o, 28, "umap.drep.keyhash")?)),
+        1 => DRep::ScriptHash(hash28(read_fixed_bytes(d, o, 28, "umap.drep.scripthash")?)),
+        2 => DRep::AlwaysAbstain,
+        3 => DRep::AlwaysNoConfidence,
+        v => return Err(malformed(format!("umap.drep: variant {v} out of range"))),
+    };
+    // Consume any trailing payload element (a normalized-encoding null for the predefined DReps).
+    let consumed: u64 = if variant <= 1 { 2 } else { 1 };
+    for _ in consumed..n {
+        skip_item(d, o)?;
+    }
+    Ok(drep)
 }
 
 /// Decode the PoolDistr = `Map PoolId [stakeFraction, stake, vrf]`. Returns pool -> (stake, vrf).
@@ -1227,10 +1294,14 @@ pub fn decode_native_nonutxo_state(
     let (treasury, reserves) = read_account_state(d, o)?;
     // LedgerState = array(2)[CertState, UTxOState]
     nn_expect_array(d, o, 2, "LedgerState")?;
-    let (pool, delegation) = nn_read_cert_state(d, o)?;
+    let (pool, delegation, bootstrap_vote_delegations) = nn_read_cert_state(d, o)?;
     // UTxOState = array(6)[utxo, deposited, fees, govState, incrStake, donation]
-    let (protocol_params, epoch_fees, imported_gov) =
+    let (protocol_params, epoch_fees, mut imported_gov) =
         read_conway_pparams_from_utxo_state(d, o, network_id)?;
+    // Thread the DState-UMap bootstrap-baseline DRep vote delegations into the gov import (CRE S1 part 2a).
+    // They live only in ImportedGovState (commitment-bound); NOT in the live cert `delegation` or the live
+    // ConwayGovState gate — the S4 activation threads them.
+    imported_gov.vote_delegations = bootstrap_vote_delegations;
     // EpochState.snapshots = SnapShots = array(4)[ssStakeMark, ssStakeSet, ssStakeGo, ssFee] (this ledger
     // version caches NO mark PoolDistr). CE-3d: decode the FULL mark/set/go stake snapshots (the reward +
     // leadership stake authority the EpochAccumulator seeds) — NOT just the ECA-5 mark PoolDistr, and
@@ -1449,6 +1520,9 @@ fn read_conway_pparams_from_utxo_state(
             gov_action_lifetime,
             pool_voting_thresholds,
             drep_voting_thresholds,
+            // Placeholder — the DState UMap drep field is decoded upstream (in the CertState) and threaded
+            // in by decode_native_nonutxo_state; the gov-state pass has no access to it here.
+            vote_delegations: BTreeMap::new(),
         },
     ))
 }
@@ -1488,6 +1562,13 @@ pub struct ImportedGovState {
     /// guarded (`total_drep_active_stake > 0`), but both thresholds activate together for a single
     /// oracle-verified semantic boundary, never piecemeal at import.
     pub drep_voting_thresholds: Vec<(u64, u64)>,
+    /// The bootstrap-baseline DRep vote delegations (`credential -> DRep`), captured from the DState UMap's
+    /// per-credential drep field (CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S1 part 2). This is the
+    /// starting delegation graph the within-epoch vote-delegation certs (gov_cert.rs) then evolve. Imported
+    /// + commitment-bound here, but — like the thresholds — NOT threaded into the live `ConwayGovState`
+    /// until the CRE ratify activation (S4): a bootstrap baseline without the live cert deltas is a partial
+    /// DRep-stake distribution, and activating the DRep gate on a partial distribution could under-count.
+    pub vote_delegations: std::collections::BTreeMap<StakeCredential, ade_types::conway::cert::DRep>,
 }
 
 /// Decode the Conway on-wire `curPParams` = `array(31)`. Field order (cardano-ledger
@@ -1691,7 +1772,7 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
     // v5: binds the certified epoch fee pot (`epoch_fees`) alongside the v4 seed-boundary RUPD pots
     // (`rupd_delta_treasury`/`rupd_delta_reserves`), the v3 `current_block_production` (nesBcur) and the
     // v1 `block_production` (nesBprev).
-    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v8");
+    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v9");
     v.push(s.era.as_u8());
     // The manifest-derived network id (a network identity perturbation flips the commitment).
     v.push(s.network_id);
@@ -1831,6 +1912,26 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
             v.extend_from_slice(&den.to_be_bytes());
         }
     }
+    // v9: the bootstrap-baseline DRep vote delegations (DState UMap drep field, CRE S1 part 2a). Bound as
+    // fresh-bootstrap tamper-evidence; NOT threaded into the live gate until the S4 activation (same posture
+    // as the thresholds). The BTreeMap gives a deterministic key order; the DRep is bound by discriminant +
+    // its 28-byte hash (predefined DReps carry no hash).
+    v.extend_from_slice(&(g.vote_delegations.len() as u64).to_be_bytes());
+    for (cred, drep) in &g.vote_delegations {
+        commit_cred(&mut v, cred);
+        match drep {
+            DRep::KeyHash(h) => {
+                v.push(0);
+                v.extend_from_slice(&h.0);
+            }
+            DRep::ScriptHash(h) => {
+                v.push(1);
+                v.extend_from_slice(&h.0);
+            }
+            DRep::AlwaysAbstain => v.push(2),
+            DRep::AlwaysNoConfidence => v.push(3),
+        }
+    }
     // reward-account nibble observation (DIAGNOSTIC evidence — committed for determinism, NOT a
     // verdict): None=0, Uniform(n)=[1,n], Mixed=2.
     match &s.reward_nibble_observation {
@@ -1920,7 +2021,10 @@ fn nn_hash28(b: Vec<u8>) -> Hash28 {
 
 /// CertState decode, re-using the Stage-1 navigation but lifting its errors into the
 /// native enum (zero VRF / round-trip surface as the native variants).
-fn nn_read_cert_state(d: &[u8], o: &mut usize) -> Rn<(PoolState, DelegationState)> {
+fn nn_read_cert_state(
+    d: &[u8],
+    o: &mut usize,
+) -> Rn<(PoolState, DelegationState, BTreeMap<StakeCredential, DRep>)> {
     read_cert_state(d, o).map_err(|e| match e {
         LedgerDbStateError::ZeroVrf(p) => NativeNonUtxoError::ZeroVrf(p),
         LedgerDbStateError::MalformedCbor(s) => NativeNonUtxoError::MalformedCbor(s),

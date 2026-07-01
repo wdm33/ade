@@ -57,10 +57,20 @@ fn report_epoch(label: &str, g: &ImportedGovState) {
             voted += 1;
         }
     }
+    let (mut kh, mut sh, mut abstain, mut noconf) = (0usize, 0usize, 0usize, 0usize);
+    for drep in g.vote_delegations.values() {
+        match drep {
+            ade_types::conway::cert::DRep::KeyHash(_) => kh += 1,
+            ade_types::conway::cert::DRep::ScriptHash(_) => sh += 1,
+            ade_types::conway::cert::DRep::AlwaysAbstain => abstain += 1,
+            ade_types::conway::cert::DRep::AlwaysNoConfidence => noconf += 1,
+        }
+    }
     eprintln!(
-        "epoch {label}: {} proposals ({} voted) | committee {} quorum {:?} | thresholds pool={:?} drep={:?} | by kind: {:?}",
+        "epoch {label}: {} proposals ({} voted) | committee {} quorum {:?} | thresholds pool={:?} drep={:?} | vote_delegations {} (keyhash={} scripthash={} abstain={} noconf={}) | by kind: {:?}",
         g.proposals.len(), voted, g.committee.len(), g.committee_quorum,
-        g.pool_voting_thresholds, g.drep_voting_thresholds, by_kind
+        g.pool_voting_thresholds, g.drep_voting_thresholds,
+        g.vote_delegations.len(), kh, sh, abstain, noconf, by_kind
     );
 }
 
@@ -120,4 +130,17 @@ fn cre_oracle_govstate_lifecycle_1340_1342() {
     for (n, d) in g1340.pool_voting_thresholds.iter().chain(g1340.drep_voting_thresholds.iter()) {
         assert!(*d != 0 && *n <= *d, "each threshold is a proper fraction in [0,1]: {n}/{d}");
     }
+
+    // S1 part 2a ground truth: the DState UMap drep field decodes into the real bootstrap vote-delegation
+    // baseline (58k+ credentials on preview @1340), spanning hash-DReps AND the predefined DReps — proving
+    // the robust decoder handles BOTH cardano DRep arities across the whole UMap without misaligning the
+    // 58k-entry cursor (a wrong arity guess would have panicked the whole-state decode above).
+    use ade_types::conway::cert::DRep;
+    assert!(g1340.vote_delegations.len() > 10_000, "real bootstrap vote delegations captured (58k+ on preview)");
+    let has_hash = g1340.vote_delegations.values().any(|d| matches!(d, DRep::KeyHash(_) | DRep::ScriptHash(_)));
+    let has_predef = g1340
+        .vote_delegations
+        .values()
+        .any(|d| matches!(d, DRep::AlwaysAbstain | DRep::AlwaysNoConfidence));
+    assert!(has_hash && has_predef, "the drep decode spans hash-DReps and predefined DReps (both arities)");
 }

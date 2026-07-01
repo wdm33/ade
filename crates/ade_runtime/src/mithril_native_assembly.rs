@@ -662,6 +662,7 @@ mod tests {
             gov_action_lifetime: 6,
             pool_voting_thresholds: vec![(51, 100), (51, 100), (51, 100), (51, 100), (51, 100)],
             drep_voting_thresholds: vec![(51, 100); 10],
+            vote_delegations: std::collections::BTreeMap::new(),
         }
     }
 
