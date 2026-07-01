@@ -343,6 +343,54 @@ fn enacted_str(r: &CensusRow) -> String {
     }
 }
 
+/// CRE S4 ORACLE ANCHOR (built BEFORE any live activation): run Ade's REAL ratify gate
+/// (`evaluate_ratification`) over the census states with the real thresholds + derived DRep stake + the
+/// proposals' accumulated votes, and check whether it reproduces the oracle — 69c948cd..#0 enacted at 1096,
+/// so it must be decided RATIFIED at the 1095→1096 boundary (ending_epoch=1095) and NOT before it enacts.
+/// If Ade's gate does not reproduce this, the S4.2/S4.3 activation does NOT flip until the gate is correct.
+#[test]
+#[ignore = "reads local census states; runs the REAL ratify gate as the S4 activation oracle anchor"]
+fn cre_s4_oracle_anchor_ratify_decision() {
+    use ade_ledger::governance::{derive_drep_voting_stake, evaluate_ratification};
+    use ade_ledger::rational::Rational;
+
+    // Run the real ratify gate on the census state at (slot, epoch) with ending_epoch = epoch (the boundary
+    // that epoch's accumulated votes feed). Returns (target_ratified, total_ratified, proposal_count).
+    fn ratify(slot: u64, epoch: u64) -> (bool, usize, usize) {
+        let dir = "/home/ts/.cardano-ce3d-extract/db/ledger";
+        let state = std::fs::read(format!("{dir}/{slot}_db-analyser/state")).expect("state");
+        let point = SeedPoint { slot: SlotNo(slot), block_hash: Hash32([0u8; 32]) };
+        let (s1a, _) = decode_native_nonutxo_state(&state, point, epoch, 2).expect("decode");
+        let g = &s1a.imported_gov;
+        let drep_stake = derive_drep_voting_stake(&g.vote_delegations, &s1a.snapshots.mark.0);
+        let quorum = g
+            .committee_quorum
+            .map(|(n, d)| Rational::new(n as i128, d.max(1) as i128).unwrap())
+            .unwrap_or_else(|| Rational::new(1, 1).unwrap());
+        let r = evaluate_ratification(
+            &g.proposals,
+            &drep_stake,
+            &s1a.snapshots.go.0.pool_stakes,
+            &g.committee,
+            &quorum,
+            &g.pool_voting_thresholds,
+            &g.drep_voting_thresholds,
+            epoch,
+            &g.committee_hot_keys,
+            &g.drep_expiry,
+        );
+        (r.ratified.iter().any(|p| p.action_id == target()), r.ratified.len(), g.proposals.len())
+    }
+
+    let (t94, n94, p94) = ratify(94_521_600, 1094);
+    let (t95, n95, p95) = ratify(94_608_021, 1095);
+    eprintln!("=== CRE S4 ORACLE ANCHOR (real ratify gate on the census) ===");
+    eprintln!("ending_epoch 1094 (n={p94}): target ratified={t94} | {n94} total ratified");
+    eprintln!("ending_epoch 1095 (n={p95}): target ratified={t95} | {n95} total ratified");
+    // The oracle: 69c948cd..#0 enacted at 1096 => it ratifies at the 1095->1096 boundary.
+    assert!(t95, "the REAL ratify gate reproduces the oracle: 69c948cd..#0 ratifies at ending_epoch 1095");
+}
+
 // ============================================================================================
 // The PERMANENT differential fixture: every ground-truth row bound to its exact SELECTED-CHAIN POINT
 // (block_header_hash + parent + genesis/config hash + network_magic), NOT merely a decoded-state fingerprint.
