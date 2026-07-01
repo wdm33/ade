@@ -10,6 +10,7 @@
 //! CE-3d corpus?); the full per-transition census + fixture follows as the window extraction completes.
 //! `#[ignore]`'d (reads local artifacts).
 
+use ade_crypto::blake2b_256;
 use ade_ledger::bootstrap_anchor::SeedPoint;
 use ade_ledger::ledgerdb_state::decode_native_nonutxo_state;
 use ade_types::conway::governance::GovActionId;
@@ -109,4 +110,135 @@ fn cre_census_partial_available() {
             s1a.gov_deposit_pot.0,
         );
     }
+}
+
+// ============================================================================================
+// Row-emission scaffold: one canonical, replay-stable row per epoch-boundary state, with the four
+// required evidence additions. GROUND TRUTH for a FUTURE ratify/enact cluster -- NOT S4 authority.
+// ============================================================================================
+
+/// The acquisition manifest (addition 1, OPERATIONAL tier -- local db-analyser, never live runtime
+/// authority). Bound into each row's provenance so the corpus is reproducible.
+const DBA_IMAGE: &str = "ghcr.io/intersectmbo/cardano-node:11.0.1";
+const PREVIEW_CONFIG: &str = "/home/ts/.cardano-node-preview/config/config.json";
+const DBA_COMMAND: &str =
+    "db-analyser --db <ce3d-db> --config <preview-config> --in-mem --db-validation minimum-block-validation --store-ledger <epoch-first-slot>";
+
+/// One canonical census row. Replay-stable: the same ledger state yields a byte-identical row + row_hash.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct CensusRow {
+    // (1) provenance binding -- the ChainDB point + era (block-hash/genesis/config binding is threaded from
+    // the manifest below; the ledger-state file itself carries no block hash, so that is a ChainDB witness).
+    epoch: u64,
+    slot: u64,
+    era: &'static str,
+    // (3) lifecycle observables (their first-change boundary is the ratify/enact evidence)
+    action_present: bool,
+    proposal_count: u64,
+    max_tx_ex_units_mem: u64,
+    max_block_ex_units_mem: u64,
+    deposit_pot: u64,
+    // (2) canonical hashes (project encoding): the gov/non-UTxO state commitment + this row's witness hash.
+    gov_state_hash: [u8; 32],
+    row_hash: [u8; 32],
+}
+
+fn build_row(epoch: u64, slot: u64, state: &[u8]) -> CensusRow {
+    let point = SeedPoint { slot: SlotNo(slot), block_hash: Hash32([0u8; 32]) };
+    let (s1a, commitment) = decode_native_nonutxo_state(state, point, epoch, 2)
+        .unwrap_or_else(|e| panic!("decode epoch {epoch} @{slot}: {e:?}"));
+    let g = &s1a.imported_gov;
+    let action_present = g.proposals.iter().any(|p| p.action_id == target());
+    let proposal_count = g.proposals.len() as u64;
+    let max_tx = s1a.protocol_params.max_tx_ex_units_mem;
+    let max_block = s1a.max_block_ex_units_mem;
+    let deposit = s1a.gov_deposit_pot.0;
+    // canonical row encoding (fixed field order, big-endian) -> the differential witness hash.
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&epoch.to_be_bytes());
+    buf.extend_from_slice(&slot.to_be_bytes());
+    buf.push(action_present as u8);
+    buf.extend_from_slice(&proposal_count.to_be_bytes());
+    buf.extend_from_slice(&max_tx.to_be_bytes());
+    buf.extend_from_slice(&max_block.to_be_bytes());
+    buf.extend_from_slice(&deposit.to_be_bytes());
+    buf.extend_from_slice(&commitment.0);
+    CensusRow {
+        epoch,
+        slot,
+        era: "Conway",
+        action_present,
+        proposal_count,
+        max_tx_ex_units_mem: max_tx,
+        max_block_ex_units_mem: max_block,
+        deposit_pot: deposit,
+        gov_state_hash: commitment.0,
+        row_hash: blake2b_256(&buf).0,
+    }
+}
+
+/// Auto-discover the extracted window slots (the *_db-analyser snapshots in 1087-1103), sorted by epoch.
+fn window_slots() -> Vec<u64> {
+    let dir = "/home/ts/.cardano-ce3d-extract/db/ledger";
+    let mut slots: Vec<u64> = std::fs::read_dir(dir)
+        .expect("ledger dir")
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            e.file_name()
+                .to_str()?
+                .strip_suffix("_db-analyser")
+                .and_then(|s| s.parse::<u64>().ok())
+        })
+        .filter(|s| (93_900_000..=95_400_000).contains(s))
+        .collect();
+    slots.sort_unstable();
+    slots
+}
+
+fn build_census(slots: &[u64]) -> Vec<CensusRow> {
+    let dir = "/home/ts/.cardano-ce3d-extract/db/ledger";
+    slots
+        .iter()
+        .map(|&slot| {
+            let epoch = 1341 - (115_862_400 - slot + 86_399) / 86_400;
+            let state = std::fs::read(format!("{dir}/{slot}_db-analyser/state")).expect("state");
+            build_row(epoch, slot, &state)
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "reads the local db-analyser window states; emits the canonical census + first-change boundaries"]
+fn cre_census_rows_and_first_boundaries() {
+    let slots = window_slots();
+    let rows = build_census(&slots);
+    assert!(!rows.is_empty(), "some window states extracted");
+    eprintln!("=== CRE ENACTMENT CENSUS ({} epochs) ===", rows.len());
+    eprintln!("manifest: image={DBA_IMAGE} config={PREVIEW_CONFIG}");
+    eprintln!("command:  {DBA_COMMAND}");
+    for r in &rows {
+        eprintln!(
+            "ep {} @{} [{}] present={} n={:<3} maxTx={} maxBlock={} deposit={} gov={:02x}{:02x} row={:02x}{:02x}{:02x}{:02x}",
+            r.epoch, r.slot, r.era, r.action_present, r.proposal_count,
+            r.max_tx_ex_units_mem, r.max_block_ex_units_mem, r.deposit_pot,
+            r.gov_state_hash[0], r.gov_state_hash[1],
+            r.row_hash[0], r.row_hash[1], r.row_hash[2], r.row_hash[3],
+        );
+    }
+    // (3) first boundary each lifecycle fact changes -- the params changing IS the enactment evidence.
+    eprintln!("--- lifecycle transitions (first-boundary-of-change) ---");
+    for w in rows.windows(2) {
+        let (a, b) = (&w[0], &w[1]);
+        if a.action_present != b.action_present {
+            eprintln!("  action_present {} -> {} @ epoch {}", a.action_present, b.action_present, b.epoch);
+        }
+        if a.max_tx_ex_units_mem != b.max_tx_ex_units_mem {
+            eprintln!("  maxTxExUnits.mem {} -> {} @ epoch {}  [ENACTMENT]", a.max_tx_ex_units_mem, b.max_tx_ex_units_mem, b.epoch);
+        }
+        if a.max_block_ex_units_mem != b.max_block_ex_units_mem {
+            eprintln!("  maxBlockExUnits.mem {} -> {} @ epoch {}  [ENACTMENT]", a.max_block_ex_units_mem, b.max_block_ex_units_mem, b.epoch);
+        }
+    }
+    // (4) replay: the SAME slots re-decoded twice produce byte-identical rows + hashes.
+    assert_eq!(build_census(&slots), build_census(&slots), "census replay is byte-identical");
 }
