@@ -101,13 +101,25 @@ fn cre_census_partial_available() {
         };
         let g = &s1a.imported_gov;
         let present = g.proposals.iter().any(|p| p.action_id == target());
+        let is_target = s1a
+            .enacted_pparam_update
+            .as_ref()
+            .map(|id| *id == target())
+            .unwrap_or(false);
         eprintln!(
-            "epoch {epoch} @{slot}: {:>3} proposals | target present={:<5} | maxTxMem={} maxBlockMem={} | deposit_pot={}",
+            "epoch {epoch} @{slot}: {:>3} proposals | target present={:<5} | cur {}/{} prev {}/{} | deposit_pot={} | enacted_pp={} target={}",
             g.proposals.len(),
             present,
             s1a.protocol_params.max_tx_ex_units_mem,
             s1a.max_block_ex_units_mem,
+            s1a.prev_max_tx_ex_units_mem,
+            s1a.prev_max_block_ex_units_mem,
             s1a.gov_deposit_pot.0,
+            s1a.enacted_pparam_update
+                .as_ref()
+                .map(|id| format!("{:02x}{:02x}..#{}", id.tx_hash.0[0], id.tx_hash.0[1], id.index))
+                .unwrap_or_else(|| "none".to_string()),
+            is_target,
         );
     }
 }
@@ -138,6 +150,15 @@ struct CensusRow {
     max_tx_ex_units_mem: u64,
     max_block_ex_units_mem: u64,
     deposit_pot: u64,
+    // prevPParams observables (the previous-epoch exec-mem) — at the enactment boundary `prev` still holds the
+    // OLD value while the maxTx/maxBlock above hold the NEW, proving the flip lands exactly at that boundary.
+    prev_max_tx_ex_units_mem: u64,
+    prev_max_block_ex_units_mem: u64,
+    // The ledger's enacted-authority pointer (`prevGovActionIds.pgaPParamUpdate`) — becomes the enacting
+    // action's id at the enactment boundary. `enacted_is_target` records when it names THE target action: the
+    // proof that the enacted params were CAUSED by the target, not merely coincident with its observables.
+    enacted_pparam_update: Option<GovActionId>,
+    enacted_is_target: bool,
     // (2) canonical hashes (project encoding): the gov/non-UTxO state commitment + this row's witness hash.
     gov_state_hash: [u8; 32],
     row_hash: [u8; 32],
@@ -153,6 +174,10 @@ fn build_row(epoch: u64, slot: u64, state: &[u8]) -> CensusRow {
     let max_tx = s1a.protocol_params.max_tx_ex_units_mem;
     let max_block = s1a.max_block_ex_units_mem;
     let deposit = s1a.gov_deposit_pot.0;
+    let prev_max_tx = s1a.prev_max_tx_ex_units_mem;
+    let prev_max_block = s1a.prev_max_block_ex_units_mem;
+    let enacted = s1a.enacted_pparam_update.clone();
+    let enacted_is_target = enacted.as_ref().map(|id| *id == target()).unwrap_or(false);
     // canonical row encoding (fixed field order, big-endian) -> the differential witness hash.
     let mut buf = Vec::new();
     buf.extend_from_slice(&epoch.to_be_bytes());
@@ -162,6 +187,17 @@ fn build_row(epoch: u64, slot: u64, state: &[u8]) -> CensusRow {
     buf.extend_from_slice(&max_tx.to_be_bytes());
     buf.extend_from_slice(&max_block.to_be_bytes());
     buf.extend_from_slice(&deposit.to_be_bytes());
+    buf.extend_from_slice(&prev_max_tx.to_be_bytes());
+    buf.extend_from_slice(&prev_max_block.to_be_bytes());
+    // enacted-authority pointer: 0x00 for SNothing, else 0x01 || tx_hash(32) || index(BE u32).
+    match &enacted {
+        None => buf.push(0x00),
+        Some(id) => {
+            buf.push(0x01);
+            buf.extend_from_slice(&id.tx_hash.0);
+            buf.extend_from_slice(&id.index.to_be_bytes());
+        }
+    }
     buf.extend_from_slice(&commitment.0);
     CensusRow {
         epoch,
@@ -172,6 +208,10 @@ fn build_row(epoch: u64, slot: u64, state: &[u8]) -> CensusRow {
         max_tx_ex_units_mem: max_tx,
         max_block_ex_units_mem: max_block,
         deposit_pot: deposit,
+        prev_max_tx_ex_units_mem: prev_max_tx,
+        prev_max_block_ex_units_mem: prev_max_block,
+        enacted_pparam_update: enacted,
+        enacted_is_target,
         gov_state_hash: commitment.0,
         row_hash: blake2b_256(&buf).0,
     }
@@ -218,10 +258,11 @@ fn cre_census_rows_and_first_boundaries() {
     eprintln!("command:  {DBA_COMMAND}");
     for r in &rows {
         eprintln!(
-            "ep {} @{} [{}] present={} n={:<3} maxTx={} maxBlock={} deposit={} gov={:02x}{:02x} row={:02x}{:02x}{:02x}{:02x}",
+            "ep {} @{} [{}] present={} n={:<3} cur={}/{} prev={}/{} deposit={} enacted={} row={:02x}{:02x}{:02x}{:02x}",
             r.epoch, r.slot, r.era, r.action_present, r.proposal_count,
-            r.max_tx_ex_units_mem, r.max_block_ex_units_mem, r.deposit_pot,
-            r.gov_state_hash[0], r.gov_state_hash[1],
+            r.max_tx_ex_units_mem, r.max_block_ex_units_mem,
+            r.prev_max_tx_ex_units_mem, r.prev_max_block_ex_units_mem, r.deposit_pot,
+            enacted_str(r),
             r.row_hash[0], r.row_hash[1], r.row_hash[2], r.row_hash[3],
         );
     }
@@ -238,7 +279,39 @@ fn cre_census_rows_and_first_boundaries() {
         if a.max_block_ex_units_mem != b.max_block_ex_units_mem {
             eprintln!("  maxBlockExUnits.mem {} -> {} @ epoch {}  [ENACTMENT]", a.max_block_ex_units_mem, b.max_block_ex_units_mem, b.epoch);
         }
+        if a.enacted_pparam_update != b.enacted_pparam_update {
+            eprintln!(
+                "  enacted PParamUpdate root {} -> {} @ epoch {}{}",
+                enacted_str(a), enacted_str(b), b.epoch,
+                if b.enacted_is_target { "  [= TARGET: the ledger names the target action the enacted authority]" } else { "" },
+            );
+        }
+    }
+    // The causal chain: IF the census window spans the enactment (maxTx flips), THEN at that SAME boundary the
+    // enacted-authority pointer must name the target AND the action must leave the proposal map AND prevPParams
+    // must still hold the old value. This is what upgrades the census from "params coincide with the
+    // observables" to "the ledger's own authority record attributes the flip to the target action".
+    for w in rows.windows(2) {
+        let (a, b) = (&w[0], &w[1]);
+        if a.max_tx_ex_units_mem != b.max_tx_ex_units_mem {
+            assert!(b.enacted_is_target, "at the enactment boundary the enacted PParamUpdate root names the target");
+            assert!(a.action_present && !b.action_present, "the target leaves the proposal map on enactment");
+            assert_eq!(b.prev_max_tx_ex_units_mem, a.max_tx_ex_units_mem, "prevPParams still holds the pre-enactment maxTx");
+            assert_eq!(b.prev_max_block_ex_units_mem, a.max_block_ex_units_mem, "prevPParams still holds the pre-enactment maxBlock");
+        }
     }
     // (4) replay: the SAME slots re-decoded twice produce byte-identical rows + hashes.
     assert_eq!(build_census(&slots), build_census(&slots), "census replay is byte-identical");
+}
+
+/// Render a row's enacted-authority PParamUpdate pointer (`prevGovActionIds.pgaPParamUpdate`) compactly.
+fn enacted_str(r: &CensusRow) -> String {
+    match &r.enacted_pparam_update {
+        None => "none".to_string(),
+        Some(id) => format!(
+            "{:02x}{:02x}..#{}{}",
+            id.tx_hash.0[0], id.tx_hash.0[1], id.index,
+            if r.enacted_is_target { "(TARGET)" } else { "" },
+        ),
+    }
 }

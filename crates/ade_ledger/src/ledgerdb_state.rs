@@ -478,10 +478,46 @@ mod tip_tests {
     /// A truncated `Proposals` OMap element is TERMINAL (never a partial / empty proposal set).
     #[test]
     fn nn_read_proposals_rejects_truncated() {
-        // array(2)[ GovRelation=array(0), OMap=indef-array[ array(7) header then EOF ] ]
-        let s = vec![0x82, 0x80, 0x9f, 0x87];
+        // array(2)[ GovRelation=array(4)[SNothing;4], OMap=indef-array[ array(7) header then EOF ] ]
+        let s = vec![0x82, 0x84, 0x80, 0x80, 0x80, 0x80, 0x9f, 0x87];
         let mut o = 0usize;
         assert!(nn_read_proposals(&s, &mut o).is_err(), "truncated proposal must halt");
+    }
+
+    /// The enacted PParamUpdate root (`GovRelation` element 0 = `prevGovActionIds.pgaPParamUpdate`) is decoded
+    /// from the head of `Proposals`: `SJust id` → `Some(id)`, exactly the id in element 0 (not 1..3).
+    #[test]
+    fn nn_read_proposals_decodes_enacted_pparam_update_root() {
+        let mut s = vec![0x82]; // Proposals = array(2)
+        s.push(0x84); // GovRelation = array(4)
+        // [0] PParamUpdate = SJust(GovActionId(tx 0x11..; index 0)) = array(1)[ array(2)[bytes32, 0] ]
+        s.extend_from_slice(&[0x81, 0x82, 0x58, 0x20]);
+        s.extend_from_slice(&[0x11; 32]);
+        s.push(0x00);
+        // [1] HardFork = SJust(other id) — must NOT be mistaken for the pparam-update root
+        s.extend_from_slice(&[0x81, 0x82, 0x58, 0x20]);
+        s.extend_from_slice(&[0x22; 32]);
+        s.push(0x00);
+        s.extend_from_slice(&[0x80, 0x80]); // [2] Committee = SNothing, [3] Constitution = SNothing
+        s.extend_from_slice(&[0x80]); // OMap = array(0) — no live proposals
+        let mut o = 0usize;
+        let (props, enacted) = nn_read_proposals(&s, &mut o).expect("decode");
+        assert!(props.is_empty());
+        let id = enacted.expect("SJust PParamUpdate root");
+        assert_eq!(id.tx_hash, Hash32([0x11; 32]), "the PParamUpdate root, not the HardFork root");
+        assert_eq!(id.index, 0);
+        assert_eq!(o, s.len(), "the whole Proposals is consumed");
+    }
+
+    /// `SNothing` PParamUpdate root (genesis: no param-update ever enacted) → `None`; a StrictMaybe arity ≠
+    /// {0,1} is TERMINAL, never coerced.
+    #[test]
+    fn nn_read_strict_maybe_gov_action_id_none_and_terminal() {
+        let mut o = 0usize;
+        assert_eq!(nn_read_strict_maybe_gov_action_id(&[0x80], &mut o, "t").unwrap(), None);
+        let mut o = 0usize;
+        // array(2) is neither SNothing nor SJust → terminal.
+        assert!(nn_read_strict_maybe_gov_action_id(&[0x82, 0x00, 0x00], &mut o, "t").is_err());
     }
 
     /// The v6 commitment is deterministic AND binds the imported gov state: an empty proposal set
@@ -521,6 +557,9 @@ mod tip_tests {
             reward_nibble_observation: RewardNibbleObservation::None,
             max_block_ex_units_mem: 0,
             gov_deposit_pot: Coin(0),
+            prev_max_tx_ex_units_mem: 0,
+            prev_max_block_ex_units_mem: 0,
+            enacted_pparam_update: None,
         };
         let empty = ImportedGovState {
             proposals: Vec::new(),
@@ -1265,6 +1304,18 @@ pub struct NativeSnapshotNonUtxoState {
     /// `UTxOState.deposited` (index 1) — the total deposit pot (key/pool/DRep/gov deposits). Decoded for the
     /// CRE enactment census (an enacted or expired gov action refunds its deposit, moving this pot).
     pub gov_deposit_pot: Coin,
+    /// `prevPParams.maxTxExUnits.mem` (ConwayGovState field 4, index 20) — the protocol params as of the
+    /// PREVIOUS epoch. Decoded for the CRE enactment census: at the enactment boundary `prev` still holds the
+    /// old value while `cur` holds the new, proving the param flip lands exactly at THIS boundary.
+    pub prev_max_tx_ex_units_mem: u64,
+    /// `prevPParams.maxBlockExUnits.mem` (ConwayGovState field 4, index 18) — see `prev_max_tx_ex_units_mem`.
+    pub prev_max_block_ex_units_mem: u64,
+    /// The ledger's own enacted-authority pointer for the PParamUpdate purpose — the root of the `GovRelation`
+    /// at the head of `Proposals` (gov-state field 0), i.e. `prevGovActionIds.pgaPParamUpdate`. `None` at
+    /// genesis (no PParamUpdate ever enacted). Decoded for the CRE census: when an action is enacted this
+    /// pointer becomes that action's id, so the fixture PROVES the enacted params were caused by the target
+    /// action (not merely coincident with its observables). Never a live-gate input.
+    pub enacted_pparam_update: Option<GovActionId>,
 }
 
 /// Decode a cardano `SnapShot = array(2)[ssStake: map(StakeCredential -> [Coin, PoolId]),
@@ -1465,8 +1516,16 @@ pub fn decode_native_nonutxo_state(
     nn_expect_array(d, o, 2, "LedgerState")?;
     let (pool, delegation, gov_import) = nn_read_cert_state(d, o)?;
     // UTxOState = array(6)[utxo, deposited, fees, govState, incrStake, donation]
-    let (protocol_params, epoch_fees, mut imported_gov, gov_deposit_pot, max_block_ex_units_mem) =
-        read_conway_pparams_from_utxo_state(d, o, network_id)?;
+    let (
+        protocol_params,
+        epoch_fees,
+        mut imported_gov,
+        gov_deposit_pot,
+        max_block_ex_units_mem,
+        prev_max_tx_ex_units_mem,
+        prev_max_block_ex_units_mem,
+        enacted_pparam_update,
+    ) = read_conway_pparams_from_utxo_state(d, o, network_id)?;
     // Thread the CertState bootstrap governance import (CRE S1 part 2): the DState-UMap DRep vote
     // delegations (2a) + the VState DRep-expiry and committee-hot-key maps (2b). They live ONLY in
     // ImportedGovState (commitment-bound); NOT in the live cert `delegation` or the live ConwayGovState gate
@@ -1587,6 +1646,9 @@ pub fn decode_native_nonutxo_state(
         reward_nibble_observation,
         max_block_ex_units_mem,
         gov_deposit_pot,
+        prev_max_tx_ex_units_mem,
+        prev_max_block_ex_units_mem,
+        enacted_pparam_update,
     };
     let commitment = commit_native_nonutxo_state(&state);
     Ok((state, commitment))
@@ -1655,7 +1717,7 @@ fn read_conway_pparams_from_utxo_state(
     d: &[u8],
     o: &mut usize,
     network_id: u8,
-) -> Rn<(ProtocolParameters, Coin, ImportedGovState, Coin, u64)> {
+) -> Rn<(ProtocolParameters, Coin, ImportedGovState, Coin, u64, u64, u64, Option<GovActionId>)> {
     // UTxOState = array(6)[utxo, deposited, fees, govState, incrStake, donation]; descend to [3] = govState.
     if peek_major(d, *o).map_err(NativeNonUtxoError::from)? != 4 {
         return Err(NativeNonUtxoError::ProtocolParamsMissing(
@@ -1680,13 +1742,17 @@ fn read_conway_pparams_from_utxo_state(
             "ConwayGovState arity {gn} != {CONWAY_GOV_STATE_FIELDS}"
         )));
     }
-    let proposals = nn_read_proposals(d, o)?; // [0]
+    let (proposals, enacted_pparam_update) = nn_read_proposals(d, o)?; // [0] (+ the enacted PParamUpdate root)
     let (committee, committee_quorum) = nn_read_committee(d, o)?; // [1]
     skip_item(d, o)?; // [2] constitution
     let (pp, gov_action_lifetime, pool_voting_thresholds, drep_voting_thresholds, max_block_ex_units_mem) =
-        read_conway_pparams(d, o, network_id)?;
-    // skip the remaining govState fields (prevPParams, futurePParams, drepPulser).
-    for _ in (CONWAY_GOV_STATE_CURPPARAMS_INDEX + 1)..(gn as usize) {
+        read_conway_pparams(d, o, network_id)?; // [3] curPParams
+    // [4] prevPParams — the PREVIOUS-epoch params. At an enactment boundary `prev` still holds the OLD value
+    // while `cur` holds the NEW, proving the flip lands exactly at THIS boundary (CRE enactment census).
+    let (prev_pp, _, _, _, prev_max_block_ex_units_mem) = read_conway_pparams(d, o, network_id)?;
+    let prev_max_tx_ex_units_mem = prev_pp.max_tx_ex_units_mem;
+    // skip the remaining govState fields (futurePParams [5], drepPulser [6]).
+    for _ in (CONWAY_GOV_STATE_CURPPARAMS_INDEX + 2)..(gn as usize) {
         skip_item(d, o)?;
     }
     // skip the remaining UTxOState fields (incrStake, donation, …).
@@ -1713,6 +1779,9 @@ fn read_conway_pparams_from_utxo_state(
         },
         deposited,
         max_block_ex_units_mem,
+        prev_max_tx_ex_units_mem,
+        prev_max_block_ex_units_mem,
+        enacted_pparam_update,
     ))
 }
 
@@ -2375,12 +2444,23 @@ fn nn_read_gov_action_state(d: &[u8], o: &mut usize) -> Rn<GovActionState> {
     })
 }
 
-/// The Conway live `Proposals` (gov-state index 0) = `array(2)[GovRelation, OMap]` where the OMap is a
-/// (usually indefinite) array of `GovActionState`. The `GovRelation` (roots/graph) is reconstructable
-/// from the OMap and is skipped; the OMap values are the authoritative proposal set.
-fn nn_read_proposals(d: &[u8], o: &mut usize) -> Rn<Vec<GovActionState>> {
+/// The Conway live `Proposals` (gov-state index 0) = `array(2)[GovRelation, OMap]`. The OMap is a (usually
+/// indefinite) array of `GovActionState` — the authoritative proposal set. The `GovRelation` is the ledger's
+/// enacted-authority roots (`prevGovActionIds`), whose PParamUpdate slot is decoded for the CRE enactment
+/// census (returned alongside the proposals); the other purposes are not this decode's authority.
+fn nn_read_proposals(d: &[u8], o: &mut usize) -> Rn<(Vec<GovActionState>, Option<GovActionId>)> {
     nn_expect_array(d, o, 2, "Proposals")?;
-    skip_item(d, o)?; // GovRelation (roots/graph) — reconstructable, not authoritative here
+    // [0] GovRelation = array(4)[ StrictMaybe GovActionId ; 4 ] — the enacted-authority root per purpose, in
+    // cardano-ledger order (PParamUpdate, HardFork, Committee, Constitution). cardano StrictMaybe encodes
+    // SNothing = array(0), SJust x = array(1)[x]. Element 0 (PParamUpdate) IS `prevGovActionIds.pgaPParamUpdate`:
+    // at an enactment boundary it becomes the enacting action's id, which the CRE census records as the proof
+    // that the enacted params were CAUSED by that action (not merely coincident with its observables). Elements
+    // 1..3 are not this census's authority (skipped). NEVER a live-gate input — read for the census only.
+    nn_expect_array(d, o, 4, "Proposals.GovRelation")?;
+    let enacted_pparam_update = nn_read_strict_maybe_gov_action_id(d, o, "GovRelation.pparamUpdate")?;
+    for _ in 1..4 {
+        skip_item(d, o)?; // HardFork, Committee, Constitution enacted roots — not this census's authority
+    }
     let enc = read_array_header(d, o)?;
     let mut out = Vec::new();
     match enc {
@@ -2396,7 +2476,20 @@ fn nn_read_proposals(d: &[u8], o: &mut usize) -> Rn<Vec<GovActionState>> {
             *o += 1; // consume break
         }
     }
-    Ok(out)
+    Ok((out, enacted_pparam_update))
+}
+
+/// A cardano `StrictMaybe GovActionId`: `SNothing = array(0)`, `SJust id = array(1)[GovActionId]`. Any other
+/// arity is TERMINAL (never coerced to `None`). Used to read the enacted-authority roots at the head of the
+/// Conway `Proposals` (the `GovRelation` of `prevGovActionIds`).
+fn nn_read_strict_maybe_gov_action_id(d: &[u8], o: &mut usize, what: &str) -> Rn<Option<GovActionId>> {
+    match nn_array_len(d, o, what)? {
+        0 => Ok(None),
+        1 => Ok(Some(nn_read_gov_action_id(d, o)?)),
+        n => Err(NativeNonUtxoError::MalformedGovernanceState(format!(
+            "{what}: StrictMaybe arity {n} not in {{0,1}}"
+        ))),
+    }
 }
 
 /// A CBOR `UnitInterval` = `tag(30) array(2)[num, den]` → `(num, den)`.

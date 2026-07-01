@@ -743,6 +743,9 @@ mod tests {
             reward_nibble_observation: RewardNibbleObservation::Mixed,
             max_block_ex_units_mem: 0,
             gov_deposit_pot: Coin(0),
+            prev_max_tx_ex_units_mem: 0,
+            prev_max_block_ex_units_mem: 0,
+            enacted_pparam_update: None,
         }
     }
 

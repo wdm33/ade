@@ -86,3 +86,32 @@ Every CE green in CI + the S6 oracle differential byte-exact for the extracted r
 CPDE terminals (vote tripwire, potentially-ratifiable) REMOVED and replaced by authoritative semantics.
 
 **Entry:** CPDE's −500B reward gap closed (done) + the continuity-blocker correction recorded.
+
+## 5. Enactment census (S6 ground truth) + the unbound-observable seam
+
+`crates/ade_testkit/tests/cre_enactment_census.rs` (`#[ignore]`, local db-analyser artifacts) is the
+byte-exact ratify→enact ground truth for the Preview param-update action `69c948cd..#0` ("Increase Tx/Block
+Memory Units pt1"), across epochs 1087–1103. Extracted via LOCAL `db-analyser --store-ledger` on the preview
+ChainDB (NetworkMagic 2), NOT explorer metadata. The census brackets the full lifecycle from the ledger
+itself: submit (action_present false→true @ **1089**) → carried/voted (1089–1095) → **enact @ 1096**, where
+four facts coincide at one boundary and the scaffold asserts them together:
+`maxTx/maxBlock` exec-mem 14M/62M → **16.5M/72M**; `prevPParams` still 14M/62M (flip is AT this boundary);
+target leaves the proposal map; and the enacted-authority root `prevGovActionIds.pgaPParamUpdate` flips
+`602d..#0` → **`69c948cd..#0`** — the ledger's OWN record attributing the enactment to the target action.
+
+To surface that last two, the decoder (`ledgerdb_state.rs`) now reads two previously-skipped ConwayGovState
+regions: prevPParams (field 4) and the `GovRelation` PParamUpdate root (Proposals field 0, element 0,
+`array(4)[StrictMaybe GovActionId]`). They land on `NativeSnapshotNonUtxoState` as
+`prev_max_tx_ex_units_mem` / `prev_max_block_ex_units_mem` / `enacted_pparam_update`.
+
+**SEAM (unbound observables — record before any promotion).** These three fields are census OBSERVABLES,
+NOT bootstrap authority, so they are DELIBERATELY not bound in `commit_native_nonutxo_state` (v10) — matching
+the sibling `max_block_ex_units_mem` / `gov_deposit_pot`, and unlike the S1 authority inputs
+(`pool_voting_thresholds` / `vote_delegations`), which ARE commitment-bound precisely because they feed the
+ratify gate. If a later slice (S4/S5) ever promotes any of these from census-observable to a live
+ratify/enact authority input, it MUST first commitment-bind it (bump the tag) — else it inherits an unbound,
+tamper-mutable input. This is the same import-not-activate discipline S1 followed.
+
+**Scope guard (unchanged):** the census is GROUND TRUTH ONLY. A *passed* action is a required negative
+control — it has LEFT the proposal map by enactment (present→absent), so S4 must recognize it as
+non-refundable/terminal, NOT "handle" it by growing into an enactment engine.

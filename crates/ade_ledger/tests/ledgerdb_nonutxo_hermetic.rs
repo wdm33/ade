@@ -223,15 +223,16 @@ fn build_state(k: &Knobs) -> Vec<u8> {
         // ConwayGovState = array(7)[Proposals, committee, constitution, curPParams, prev, future, drepPulser]
         concat(&[
             arr(7),
-            // Proposals = array(2)[GovRelation, OMap of GovActionState]; an empty set since S1's
-            // decoder now reads this field (was a skip_item placeholder when arr(0) sufficed).
-            concat(&[arr(2), arr(0), arr(0)]),
-            arr(0),       // committee (SNothing = array(0))
-            arr(0),       // constitution
-            pparams,      // curPParams
-            arr(0),       // prevPParams
-            arr(0),       // futurePParams
-            arr(0),       // drepPulser
+            // Proposals = array(2)[GovRelation, OMap of GovActionState]; an empty set. GovRelation =
+            // array(4)[ StrictMaybe GovActionId ; 4 ], all SNothing (no action enacted in this fixture) —
+            // the decoder reads its PParamUpdate root (element 0) for the CRE enactment census.
+            concat(&[arr(2), concat(&[arr(4), arr(0), arr(0), arr(0), arr(0)]), arr(0)]),
+            arr(0),          // committee (SNothing = array(0))
+            arr(0),          // constitution
+            pparams.clone(), // curPParams
+            pparams,         // prevPParams (full Conway PParams — now READ for the census, no longer skipped)
+            arr(0),          // futurePParams
+            arr(0),          // drepPulser
         ])
     };
     let utxo_state = concat(&[
@@ -376,6 +377,15 @@ fn happy_minimal_state_decodes_all_fields() {
     // block production (subset of CertState pools).
     assert_eq!(s.block_production.len(), 1);
     assert_eq!(s.block_production[&ade_types::tx::PoolId(ade_types::Hash28(POOL_ID))], 50);
+    // CRE enactment census: prevPParams (govState field 4) is READ, not skipped. This fixture sets
+    // prevPParams == curPParams, so the previous-epoch exec-mem equals the current — proving the field is
+    // decoded from its own array(31), not defaulted. (At a real enactment boundary prev holds the OLD value.)
+    assert_eq!(s.prev_max_tx_ex_units_mem, s.protocol_params.max_tx_ex_units_mem);
+    assert_eq!(s.prev_max_block_ex_units_mem, s.max_block_ex_units_mem);
+    // The enacted-authority PParamUpdate root (GovRelation element 0) is SNothing in this fixture (no action
+    // ever enacted) → None. The SJust case (the pointer naming the enacting action) is locked by the
+    // `nn_read_proposals_decodes_enacted_pparam_update_root` unit test.
+    assert_eq!(s.enacted_pparam_update, None, "fixture GovRelation is all-SNothing");
 }
 
 #[test]
