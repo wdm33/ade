@@ -198,8 +198,21 @@ fn build_state(k: &Knobs) -> Vec<u8> {
         map(0),
         arr(0),
     ]);
-    // CertState = [VState(empty), PState, DState]
-    let cert = concat(&[arr(3), arr(0), pstate, dstate]);
+    // VState = [vsDReps map{drepCred -> DRepState[expiry, anchor(SNothing), deposit, delegs]},
+    //           vsCommitteeState map{coldCred -> [0(MemberAuthorized), hotCred]}, vsNumDormantEpochs]
+    let drep_cred = concat(&[arr(2), uint(0), bytes(&[0xD1; 28])]);
+    let drep_state = concat(&[arr(4), uint(1350), arr(0), uint(500_000_000), arr(0)]);
+    let cold_cred = concat(&[arr(2), uint(0), bytes(&[0xC0; 28])]);
+    let hot_cred = concat(&[arr(2), uint(0), bytes(&[0xC1; 28])]);
+    let committee_auth = concat(&[arr(2), uint(0), hot_cred]);
+    let vstate = concat(&[
+        arr(3),
+        concat(&[map(1), drep_cred, drep_state]),
+        concat(&[map(1), cold_cred, committee_auth]),
+        uint(0),
+    ]);
+    // CertState = [VState, PState, DState]
+    let cert = concat(&[arr(3), vstate, pstate, dstate]);
 
     // UTxOState = [utxo(empty), deposited, fees, govState, incrStake, donation]
     let pparams = k.pparams_override.clone().unwrap_or_else(conway_pparams);

@@ -53,9 +53,14 @@ PROVE, not build-from-scratch.
   already present at bootstrap, so a go-stake undercount could flip a near-boundary ratio into a false
   rejection (the CE-3d window was safe only because it carries zero SPO votes — an accident of the corpus,
   not an invariant). So S1 imports the AUTHORITY; the ratify SEMANTIC activates deliberately in **S4** with
-  oracle verification. **Part 2 (VState import) NEXT:** `vote_delegations` (DState UMap field 3, skipped at
-  `ledgerdb_state.rs:795`) + `committee_hot_keys` + `drep_expiry` (the VState, skipped at `:731`) — the
-  inputs S4 needs to activate the DRep gate; same commitment binding.
+  oracle verification. **Part 2a DONE (vote_delegations):** `read_dstate` captures the DState-UMap drep
+  field (`read_native_drep`, robust to the DRep arity variance) → `ImportedGovState.vote_delegations`,
+  commitment **v9**; ground-truthed at 58,525 real delegations (all 4 DRep variants). **Part 2b DONE (the
+  VState):** `read_vstate` decodes `array(3)[vsDReps, vsCommitteeState, vsNumDormant]` (was skipped) →
+  `drep_expiry` (`DRepState[0]`, 8940 real DReps) + `committee_hot_keys` (variant-0 MemberAuthorized,
+  inverted hot→cold, 8 real members), commitment **v10**. **S1 IS COMPLETE** — all four inputs imported +
+  commitment-bound + ground-truthed, and ALL kept OUT of the live gate (import-not-activate); the ratify
+  SEMANTIC activates deliberately in **S4** with oracle verification.
 - **S2 — Live vote capture** (replace the S3 tripwire): decode field-19 voting_procedures into the
   proposals' committee/DRep/SPO vote maps, persisted, discriminant-correct voter resolution.
 - **S3 — DRep/SPO voting-stake derivation** (the InstantStake-equivalent distribution authority).

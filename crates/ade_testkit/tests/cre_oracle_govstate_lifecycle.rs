@@ -67,10 +67,11 @@ fn report_epoch(label: &str, g: &ImportedGovState) {
         }
     }
     eprintln!(
-        "epoch {label}: {} proposals ({} voted) | committee {} quorum {:?} | thresholds pool={:?} drep={:?} | vote_delegations {} (keyhash={} scripthash={} abstain={} noconf={}) | by kind: {:?}",
+        "epoch {label}: {} proposals ({} voted) | committee {} quorum {:?} | thresholds pool={:?} drep={:?} | vote_delegations {} (keyhash={} scripthash={} abstain={} noconf={}) | drep_expiry {} | committee_hot_keys {} | by kind: {:?}",
         g.proposals.len(), voted, g.committee.len(), g.committee_quorum,
         g.pool_voting_thresholds, g.drep_voting_thresholds,
-        g.vote_delegations.len(), kh, sh, abstain, noconf, by_kind
+        g.vote_delegations.len(), kh, sh, abstain, noconf,
+        g.drep_expiry.len(), g.committee_hot_keys.len(), by_kind
     );
 }
 
@@ -143,4 +144,15 @@ fn cre_oracle_govstate_lifecycle_1340_1342() {
         .values()
         .any(|d| matches!(d, DRep::AlwaysAbstain | DRep::AlwaysNoConfidence));
     assert!(has_hash && has_predef, "the drep decode spans hash-DReps and predefined DReps (both arities)");
+
+    // S1 part 2b ground truth: the VState decodes into the real DRep-expiry baseline (8940 registered DReps
+    // on preview @1340) and the committee hot->cold map (8 authorized members = the committee size). All
+    // expiries are real epochs; every hot key resolves to a cold member.
+    assert!(g1340.drep_expiry.len() > 1000, "real DRep-expiry baseline captured from vsDReps (8940 on preview)");
+    assert!(
+        !g1340.committee_hot_keys.is_empty() && g1340.committee_hot_keys.len() <= g1340.committee.len(),
+        "committee hot keys resolve to committee members (8 authorized of {} @1340)",
+        g1340.committee.len()
+    );
+    assert!(g1340.drep_expiry.values().all(|e| *e > 0), "DRep expiries are non-zero epoch numbers");
 }

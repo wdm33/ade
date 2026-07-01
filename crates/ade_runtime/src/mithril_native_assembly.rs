@@ -663,6 +663,9 @@ mod tests {
             pool_voting_thresholds: vec![(51, 100), (51, 100), (51, 100), (51, 100), (51, 100)],
             drep_voting_thresholds: vec![(51, 100); 10],
             vote_delegations: std::collections::BTreeMap::new(),
+            drep_expiry: std::collections::BTreeMap::new(),
+            committee_hot_keys: std::collections::BTreeMap::new(),
+            num_dormant_epochs: 0,
         }
     }
 

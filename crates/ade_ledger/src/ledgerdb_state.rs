@@ -528,6 +528,9 @@ mod tip_tests {
             pool_voting_thresholds: Vec::new(),
             drep_voting_thresholds: Vec::new(),
             vote_delegations: BTreeMap::new(),
+            drep_expiry: BTreeMap::new(),
+            committee_hot_keys: BTreeMap::new(),
+            num_dormant_epochs: 0,
         };
         let one = ImportedGovState {
             proposals: vec![GovActionState {
@@ -553,6 +556,12 @@ mod tip_tests {
                 StakeCredential::KeyHash(Hash28([0x11; 28])),
                 DRep::KeyHash(Hash28([0x22; 28])),
             )]),
+            drep_expiry: BTreeMap::from([(StakeCredential::KeyHash(Hash28([0x44; 28])), 1350)]),
+            committee_hot_keys: BTreeMap::from([(
+                StakeCredential::KeyHash(Hash28([0x55; 28])),
+                StakeCredential::ScriptHash(Hash28([0x66; 28])),
+            )]),
+            num_dormant_epochs: 3,
         };
         // deterministic
         assert_eq!(
@@ -598,10 +607,75 @@ mod tip_tests {
             .vote_delegations
             .insert(StakeCredential::KeyHash(Hash28([0x33; 28])), DRep::AlwaysNoConfidence);
         assert_ne!(
-            commit_native_nonutxo_state(&mk(one)),
+            commit_native_nonutxo_state(&mk(one.clone())),
             commit_native_nonutxo_state(&mk(diff_vd)),
-            "v9 binds the imported vote_delegations",
+            "v10 binds the imported vote_delegations",
         );
+        // the imported VState maps (drep_expiry + committee hot->cold) are bound (CRE S1 part 2b).
+        let mut diff_expiry = one.clone();
+        diff_expiry.drep_expiry.insert(StakeCredential::KeyHash(Hash28([0x77; 28])), 9999);
+        assert_ne!(
+            commit_native_nonutxo_state(&mk(one.clone())),
+            commit_native_nonutxo_state(&mk(diff_expiry)),
+            "v10 binds the imported drep_expiry",
+        );
+        let mut diff_hot = one.clone();
+        diff_hot.committee_hot_keys.insert(
+            StakeCredential::KeyHash(Hash28([0x88; 28])),
+            StakeCredential::KeyHash(Hash28([0x99; 28])),
+        );
+        assert_ne!(
+            commit_native_nonutxo_state(&mk(one)),
+            commit_native_nonutxo_state(&mk(diff_hot)),
+            "v10 binds the imported committee_hot_keys",
+        );
+    }
+
+    #[test]
+    fn read_vstate_is_fail_closed_on_malformed_governance() {
+        // cred = array(2)[0(keyhash), bytes28]
+        let cred = |b: u8| {
+            let mut v = vec![0x82, 0x00, 0x58, 0x1c];
+            v.extend_from_slice(&[b; 28]);
+            v
+        };
+        let run = |bytes: &[u8]| {
+            let mut o = 0usize;
+            read_vstate(bytes, &mut o)
+        };
+        // 1. empty DRepState array(0) -> TERMINAL
+        let mut b = vec![0x83, 0xa1];
+        b.extend(cred(0xD1));
+        b.extend([0x80, 0xa0, 0x00]);
+        assert!(run(&b).is_err(), "empty DRepState is terminal");
+        // 2. empty committee-auth array(0) -> TERMINAL
+        let mut b = vec![0x83, 0xa0, 0xa1];
+        b.extend(cred(0xC0));
+        b.extend([0x80, 0x00]);
+        assert!(run(&b).is_err(), "empty committee auth is terminal");
+        // 3. out-of-range committee variant (2) -> TERMINAL
+        let mut b = vec![0x83, 0xa0, 0xa1];
+        b.extend(cred(0xC0));
+        b.extend([0x82, 0x02, 0xf6, 0x00]);
+        assert!(run(&b).is_err(), "committee variant 2 is terminal");
+        // 4. arity-1 MemberAuthorized (variant 0, no hot cred) -> TERMINAL (the n<2 guard)
+        let mut b = vec![0x83, 0xa0, 0xa1];
+        b.extend(cred(0xC0));
+        b.extend([0x81, 0x00, 0x00]);
+        assert!(run(&b).is_err(), "arity-1 MemberAuthorized is terminal");
+        // sanity: a well-formed minimal VState decodes and consumes EXACTLY its bytes.
+        let mut b = vec![0x83, 0xa1];
+        b.extend(cred(0xD1));
+        b.extend([0x84, 0x01, 0x80, 0x00, 0x80]); // DRepState[expiry=1, anchor(arr0), deposit=0, delegs(arr0)]
+        b.push(0xa1);
+        b.extend(cred(0xC0));
+        b.extend([0x82, 0x00]); // auth = [0, hot]
+        b.extend(cred(0xC1));
+        b.push(0x05); // numDormant = 5
+        let mut o = 0usize;
+        let (de, chk, nd) = read_vstate(&b, &mut o).expect("well-formed VState decodes");
+        assert_eq!((de.len(), chk.len(), nd), (1, 1, 5));
+        assert_eq!(o, b.len(), "read_vstate consumes exactly the VState bytes");
     }
 }
 
@@ -743,14 +817,11 @@ pub fn probe_ledgerdb_state(state_cbor: &[u8], manifest_epoch: u64) -> R<LedgerD
 }
 
 /// Decode the CertState (LedgerState[0]) = array(3)[VState, PState, DState] -> (PoolState,
-/// DelegationState, vote_delegations). The VState (committee hot keys, DRep expiry) is still SKIPPED here —
-/// its capture is CRE S1 part 2b; part 2a captures only the DState UMap's per-credential drep field.
-fn read_cert_state(
-    d: &[u8],
-    o: &mut usize,
-) -> R<(PoolState, DelegationState, BTreeMap<StakeCredential, DRep>)> {
+/// DelegationState, BootstrapGovImport). The VState yields the DRep-expiry + committee-hot-key import (CRE
+/// S1 part 2b); the DState UMap yields the DRep vote-delegation baseline (part 2a).
+fn read_cert_state(d: &[u8], o: &mut usize) -> R<(PoolState, DelegationState, BootstrapGovImport)> {
     expect_array(d, o, 3, "CertState")?;
-    skip_item(d, o)?; // VState
+    let (drep_expiry, committee_hot_keys, num_dormant_epochs) = read_vstate(d, o)?; // VState
     // PState = array(4)[?, psStakePoolParams(28B->PoolParams), psFutureStakePoolParams, psRetiring]
     expect_array(d, o, 4, "PState")?;
     skip_item(d, o)?; // PState[0] (32-byte-key map; not the active pool params)
@@ -763,7 +834,96 @@ fn read_cert_state(
         retiring,
     };
     let (delegation, vote_delegations) = read_dstate(d, o)?;
-    Ok((pool, delegation, vote_delegations))
+    let gov_import = BootstrapGovImport {
+        vote_delegations,
+        drep_expiry,
+        committee_hot_keys,
+        num_dormant_epochs,
+    };
+    Ok((pool, delegation, gov_import))
+}
+
+/// The bootstrap governance inputs threaded out of the CertState decode into the gov import (CRE S1
+/// part 2): the DRep vote-delegation baseline (DState UMap) plus the DRep expiry and committee hot-key
+/// maps (VState). All three are IMPORTED (commitment-bound) but kept OUT of the live gate until S4.
+struct BootstrapGovImport {
+    vote_delegations: BTreeMap<StakeCredential, DRep>,
+    drep_expiry: BTreeMap<StakeCredential, u64>,
+    committee_hot_keys: BTreeMap<StakeCredential, StakeCredential>,
+    num_dormant_epochs: u64,
+}
+
+/// Decode the VState (CertState[0]) = `array(3)[vsDReps, vsCommitteeState, vsNumDormantEpochs]`:
+/// - `vsDReps` = `map { DRepCred => DRepState array(4)[expiry, anchor, deposit, delegs] }` → `drep_expiry`
+///   (field [0]).
+/// - `vsCommitteeState` = `map { ColdCred => array(2)[variant, payload] }` where variant 0 =
+///   MemberAuthorized(hotCred) and variant 1 = MemberResigned(anchor?) → `committee_hot_keys[hot] = cold`
+///   (inverted; the ratification committee gate looks up by the voter's HOT credential).
+/// FAIL-CLOSED: an out-of-range committee variant / empty DRepState is TERMINAL.
+fn read_vstate(
+    d: &[u8],
+    o: &mut usize,
+) -> R<(BTreeMap<StakeCredential, u64>, BTreeMap<StakeCredential, StakeCredential>, u64)> {
+    expect_array(d, o, 3, "VState")?;
+    let mut drep_expiry: BTreeMap<StakeCredential, u64> = BTreeMap::new();
+    map_each(d, o, "vsDReps", |o| {
+        let cred = read_credential(d, o)?;
+        let n = array_len(d, o, "DRepState")?;
+        if n == 0 {
+            return Err(malformed("DRepState: empty array".to_string()));
+        }
+        let expiry = read_u64(d, o, "DRepState.expiry")?;
+        for _ in 1..n {
+            skip_item(d, o)?;
+        }
+        drep_expiry.insert(cred, expiry);
+        Ok(())
+    })?;
+    let mut committee_hot_keys: BTreeMap<StakeCredential, StakeCredential> = BTreeMap::new();
+    map_each(d, o, "vsCommitteeState", |o| {
+        let cold = read_credential(d, o)?;
+        let n = array_len(d, o, "CommitteeAuthorization")?;
+        if n == 0 {
+            return Err(malformed("CommitteeAuthorization: empty array".to_string()));
+        }
+        match read_u64(d, o, "CommitteeAuthorization.variant")? {
+            0 => {
+                // MemberAuthorized(hotCred): the hot credential is element [1]. Reject an arity-1 auth BY
+                // CONSTRUCTION (fail-closed, symmetric to read_native_drep's guard) so the unconditional
+                // read_credential below cannot over-consume the following item's bytes on a malformed
+                // `[0]` (unreachable on honest cardano — always encodeListLen 2 — but terminal by design;
+                // the committee map is definite, so a silent misalignment would cascade through the decode).
+                if n < 2 {
+                    return Err(malformed(format!(
+                        "CommitteeAuthorization: MemberAuthorized with arity {n} < 2"
+                    )));
+                }
+                // index the hot credential -> cold (the gate resolves hot->cold).
+                let hot = read_credential(d, o)?;
+                committee_hot_keys.insert(hot, cold);
+                for _ in 2..n {
+                    skip_item(d, o)?;
+                }
+            }
+            1 => {
+                // MemberResigned(anchor?): no hot key; consume the anchor payload.
+                for _ in 1..n {
+                    skip_item(d, o)?;
+                }
+            }
+            v => {
+                return Err(malformed(format!(
+                    "CommitteeAuthorization: variant {v} out of range"
+                )))
+            }
+        }
+        Ok(())
+    })?;
+    // vsNumDormantEpochs — captured (NOT discarded): cardano's active-DRep test is
+    // `drepExpiry + numDormantEpochs >= currentEpoch`, so the S4 activation needs this offset to reproduce
+    // the ratification denominator; discarding it here would force a VState re-decode at S4.
+    let num_dormant_epochs = read_u64(d, o, "vsNumDormantEpochs")?;
+    Ok((drep_expiry, committee_hot_keys, num_dormant_epochs))
 }
 
 /// Decode a `Map PoolId PoolParams` (28-byte pool-id key -> PoolParams array).
@@ -1294,14 +1454,18 @@ pub fn decode_native_nonutxo_state(
     let (treasury, reserves) = read_account_state(d, o)?;
     // LedgerState = array(2)[CertState, UTxOState]
     nn_expect_array(d, o, 2, "LedgerState")?;
-    let (pool, delegation, bootstrap_vote_delegations) = nn_read_cert_state(d, o)?;
+    let (pool, delegation, gov_import) = nn_read_cert_state(d, o)?;
     // UTxOState = array(6)[utxo, deposited, fees, govState, incrStake, donation]
     let (protocol_params, epoch_fees, mut imported_gov) =
         read_conway_pparams_from_utxo_state(d, o, network_id)?;
-    // Thread the DState-UMap bootstrap-baseline DRep vote delegations into the gov import (CRE S1 part 2a).
-    // They live only in ImportedGovState (commitment-bound); NOT in the live cert `delegation` or the live
-    // ConwayGovState gate — the S4 activation threads them.
-    imported_gov.vote_delegations = bootstrap_vote_delegations;
+    // Thread the CertState bootstrap governance import (CRE S1 part 2): the DState-UMap DRep vote
+    // delegations (2a) + the VState DRep-expiry and committee-hot-key maps (2b). They live ONLY in
+    // ImportedGovState (commitment-bound); NOT in the live cert `delegation` or the live ConwayGovState gate
+    // — the S4 activation threads them.
+    imported_gov.vote_delegations = gov_import.vote_delegations;
+    imported_gov.drep_expiry = gov_import.drep_expiry;
+    imported_gov.committee_hot_keys = gov_import.committee_hot_keys;
+    imported_gov.num_dormant_epochs = gov_import.num_dormant_epochs;
     // EpochState.snapshots = SnapShots = array(4)[ssStakeMark, ssStakeSet, ssStakeGo, ssFee] (this ledger
     // version caches NO mark PoolDistr). CE-3d: decode the FULL mark/set/go stake snapshots (the reward +
     // leadership stake authority the EpochAccumulator seeds) — NOT just the ECA-5 mark PoolDistr, and
@@ -1520,9 +1684,13 @@ fn read_conway_pparams_from_utxo_state(
             gov_action_lifetime,
             pool_voting_thresholds,
             drep_voting_thresholds,
-            // Placeholder — the DState UMap drep field is decoded upstream (in the CertState) and threaded
-            // in by decode_native_nonutxo_state; the gov-state pass has no access to it here.
+            // Placeholders — vote_delegations (DState UMap) + drep_expiry/committee_hot_keys (VState) are
+            // decoded upstream in the CertState and threaded in by decode_native_nonutxo_state; the gov-state
+            // pass has no access to them here.
             vote_delegations: BTreeMap::new(),
+            drep_expiry: BTreeMap::new(),
+            committee_hot_keys: BTreeMap::new(),
+            num_dormant_epochs: 0,
         },
     ))
 }
@@ -1569,6 +1737,21 @@ pub struct ImportedGovState {
     /// until the CRE ratify activation (S4): a bootstrap baseline without the live cert deltas is a partial
     /// DRep-stake distribution, and activating the DRep gate on a partial distribution could under-count.
     pub vote_delegations: std::collections::BTreeMap<StakeCredential, ade_types::conway::cert::DRep>,
+    /// The bootstrap-baseline DRep expiry epochs (`DRepCred -> expiry`), captured from the VState `vsDReps`
+    /// map's `DRepState[0]` (CRE S1 part 2b). Required for a SAFE DRep-gate activation: the active-DRep
+    /// filter uses it to exclude expired DReps from the ratification denominator — without it the denominator
+    /// inflates and a live gate could falsely reject. Imported + commitment-bound; NOT threaded to the live
+    /// gate until S4.
+    pub drep_expiry: std::collections::BTreeMap<StakeCredential, u64>,
+    /// The bootstrap-baseline committee hot->cold key map (`hot -> cold`), captured from the VState
+    /// `vsCommitteeState` (variant-0 MemberAuthorized), inverted so the committee ratification gate can
+    /// resolve a voter's HOT credential to its active COLD member (CRE S1 part 2b). Imported +
+    /// commitment-bound; NOT threaded to the live gate until S4.
+    pub committee_hot_keys: std::collections::BTreeMap<StakeCredential, StakeCredential>,
+    /// `vsNumDormantEpochs` — the count of consecutive proposal-free epochs. cardano's active-DRep test is
+    /// `drepExpiry + numDormantEpochs >= currentEpoch`, so S4 needs this offset to reproduce the DRep
+    /// ratification denominator exactly. Imported + commitment-bound; applied at the S4 activation, not here.
+    pub num_dormant_epochs: u64,
 }
 
 /// Decode the Conway on-wire `curPParams` = `array(31)`. Field order (cardano-ledger
@@ -1772,7 +1955,7 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
     // v5: binds the certified epoch fee pot (`epoch_fees`) alongside the v4 seed-boundary RUPD pots
     // (`rupd_delta_treasury`/`rupd_delta_reserves`), the v3 `current_block_production` (nesBcur) and the
     // v1 `block_production` (nesBprev).
-    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v9");
+    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v10");
     v.push(s.era.as_u8());
     // The manifest-derived network id (a network identity perturbation flips the commitment).
     v.push(s.network_id);
@@ -1932,6 +2115,20 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
             DRep::AlwaysNoConfidence => v.push(3),
         }
     }
+    // v10: the bootstrap-baseline DRep expiry + committee hot->cold maps (VState, CRE S1 part 2b). Bound as
+    // fresh-bootstrap tamper-evidence; NOT threaded into the live gate until S4. Both are BTreeMaps
+    // (deterministic key order).
+    v.extend_from_slice(&(g.drep_expiry.len() as u64).to_be_bytes());
+    for (cred, expiry) in &g.drep_expiry {
+        commit_cred(&mut v, cred);
+        v.extend_from_slice(&expiry.to_be_bytes());
+    }
+    v.extend_from_slice(&(g.committee_hot_keys.len() as u64).to_be_bytes());
+    for (hot, cold) in &g.committee_hot_keys {
+        commit_cred(&mut v, hot);
+        commit_cred(&mut v, cold);
+    }
+    v.extend_from_slice(&g.num_dormant_epochs.to_be_bytes());
     // reward-account nibble observation (DIAGNOSTIC evidence — committed for determinism, NOT a
     // verdict): None=0, Uniform(n)=[1,n], Mixed=2.
     match &s.reward_nibble_observation {
@@ -2024,7 +2221,7 @@ fn nn_hash28(b: Vec<u8>) -> Hash28 {
 fn nn_read_cert_state(
     d: &[u8],
     o: &mut usize,
-) -> Rn<(PoolState, DelegationState, BTreeMap<StakeCredential, DRep>)> {
+) -> Rn<(PoolState, DelegationState, BootstrapGovImport)> {
     read_cert_state(d, o).map_err(|e| match e {
         LedgerDbStateError::ZeroVrf(p) => NativeNonUtxoError::ZeroVrf(p),
         LedgerDbStateError::MalformedCbor(s) => NativeNonUtxoError::MalformedCbor(s),
