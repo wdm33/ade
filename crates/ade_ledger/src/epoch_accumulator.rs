@@ -3141,6 +3141,25 @@ mod tests {
     }
 
     #[test]
+    fn cre_s2_vote_capture_is_replay_deterministic() {
+        // Exactness property (4): applying the same block's votes from the same start yields a byte-identical
+        // gov state — capture is a pure, deterministic function (no HashMap/clock/rand), so replay and the
+        // accumulator's reorg re-derivation reproduce the vote maps exactly.
+        let pid = GovActionId { tx_hash: Hash32([0xAB; 32]), index: 0 };
+        let run = || {
+            let mut gov = s3_empty_gov(6);
+            s3_tracked(&mut gov, pid.clone(), EpochNo(1339));
+            // three voters across three txs, mixed types + a re-vote (0x11 votes No then Yes).
+            let tx0 = s3_body(&[(19, cre_s2_field19(2, 0x11, &[(pid.clone(), 0)]))]);
+            let tx1 = s3_body(&[(19, cre_s2_field19(1, 0x22, &[(pid.clone(), 1)]))]);
+            let tx2 = s3_body(&[(19, cre_s2_field19(2, 0x11, &[(pid.clone(), 1)]))]);
+            let bodies = s3_tx_bodies(&[tx0, tx1, tx2]);
+            apply_block_governance(gov, &bodies, 3, &invalid_set(&[]), EpochNo(1338)).unwrap()
+        };
+        assert_eq!(run(), run(), "vote capture is replay-deterministic (byte-identical gov state)");
+    }
+
+    #[test]
     fn s3_invalid_tx_carrying_proposal_is_fail_closed() {
         let p = s3_proposal(1, 0xe0);
         let body = s3_body(&[(20, s3_field20(std::slice::from_ref(&p)))]);
