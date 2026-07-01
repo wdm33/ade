@@ -24,6 +24,7 @@ use ade_types::tx::Coin;
 use ade_types::Hash28;
 use crate::epoch::StakeSnapshot;
 use crate::rational::Rational;
+use crate::state::DormantEpochs;
 
 use std::collections::BTreeMap;
 
@@ -62,15 +63,32 @@ pub struct RatificationResult {
     pub remaining: Vec<GovActionState>,
 }
 
-/// Active DRep stake (denominator for the DRep ratification gate): excludes `AlwaysAbstain` and DReps
-/// whose term has expired (`drep_expiry < current_epoch`; absent ⇒ assumed active). Returns the filtered
-/// distribution and its total. Shared by [`evaluate_ratification`] and the S4.0 ratification census
-/// observer so both read the SAME denominator — there is one filter, not two.
+/// The DRep-expiry/ratification path needs the `num_dormant` offset (a non-empty `drep_expiry` is being
+/// evaluated) but the governance state is [`DormantEpochs::Unversioned`] — a TERMINAL, so the offset is never
+/// fabricated as 0. See `feedback_versioned_authoritative_state_no_fabricated_default`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DormantRequired;
+
+/// Active DRep stake (denominator for the DRep ratification gate): excludes `AlwaysAbstain` and DReps whose
+/// term has expired under cardano's rule `drepExpiry + numDormant >= current_epoch` (absent ⇒ assumed
+/// active). Returns the filtered distribution and its total. Shared by [`evaluate_ratification`] and the
+/// S4.0 ratification census observer so both read the SAME denominator — one filter, not two.
+///
+/// The dormancy offset only affects DReps actually expiry-checked (present in `drep_expiry`). A
+/// [`DormantEpochs::Unversioned`] state cannot supply the offset: if any expiry check would run this is a
+/// TERMINAL [`DormantRequired`], never a fabricated 0.
 pub(crate) fn active_drep_stake_filtered(
     drep_stake: &DRepStakeDistribution,
     drep_expiry: &BTreeMap<StakeCredential, u64>,
+    num_dormant: &DormantEpochs,
     current_epoch: u64,
-) -> (DRepStakeDistribution, u64) {
+) -> Result<(DRepStakeDistribution, u64), DormantRequired> {
+    let dormant = match num_dormant {
+        DormantEpochs::Bound(n) => *n,
+        // No DRep is expiry-checked ⇒ the offset is never applied ⇒ a V1 state is fine; else fail-closed.
+        DormantEpochs::Unversioned if drep_expiry.is_empty() => 0,
+        DormantEpochs::Unversioned => return Err(DormantRequired),
+    };
     let active: DRepStakeDistribution = drep_stake
         .iter()
         .filter(|(drep, _)| match drep {
@@ -79,18 +97,18 @@ pub(crate) fn active_drep_stake_filtered(
             // drep_expiry map is keyed by the discriminated credential.
             DRep::KeyHash(h) => drep_expiry
                 .get(&StakeCredential::KeyHash(h.clone()))
-                .map(|e| *e >= current_epoch)
+                .map(|e| e.saturating_add(dormant) >= current_epoch)
                 .unwrap_or(true),
             DRep::ScriptHash(h) => drep_expiry
                 .get(&StakeCredential::ScriptHash(h.clone()))
-                .map(|e| *e >= current_epoch)
+                .map(|e| e.saturating_add(dormant) >= current_epoch)
                 .unwrap_or(true),
             _ => true,
         })
         .map(|(k, v)| (k.clone(), *v))
         .collect();
     let total = active.values().sum::<u64>();
-    (active, total)
+    Ok((active, total))
 }
 
 /// Evaluate ratification for all proposals.
@@ -113,10 +131,12 @@ pub fn evaluate_ratification(
     current_epoch: u64,
     committee_hot_keys: &BTreeMap<StakeCredential, StakeCredential>, // hot → cold mapping
     drep_expiry: &BTreeMap<StakeCredential, u64>, // DRep credential → expiry epoch
-) -> RatificationResult {
+    num_dormant: &DormantEpochs,                  // versioned dormancy offset (authoritative)
+) -> Result<RatificationResult, DormantRequired> {
     // Active DRep stake (exclude AlwaysAbstain + expired DReps) — shared with the S4.0 census observer.
+    // Fail-closed if the dormancy offset is needed but the state is Unversioned.
     let (active_drep_stake, total_drep_active_stake) =
-        active_drep_stake_filtered(drep_stake, drep_expiry, current_epoch);
+        active_drep_stake_filtered(drep_stake, drep_expiry, num_dormant, current_epoch)?;
     let total_pool_stake: u64 = pool_stake.values().map(|c| c.0).sum();
 
     let mut ratified = Vec::new();
@@ -163,7 +183,7 @@ pub fn evaluate_ratification(
         }
     }
 
-    RatificationResult { ratified, expired, remaining }
+    Ok(RatificationResult { ratified, expired, remaining })
 }
 
 /// Map a governance action to its threshold index in the poolVotingThresholds
@@ -377,14 +397,15 @@ pub fn proposal_ratification_observation(
     current_epoch: u64,
     committee_hot_keys: &BTreeMap<StakeCredential, StakeCredential>,
     drep_expiry: &BTreeMap<StakeCredential, u64>,
-) -> RatificationObservation {
+    num_dormant: &DormantEpochs,
+) -> Result<RatificationObservation, DormantRequired> {
     let is_info_action = matches!(proposal.gov_action, GovAction::InfoAction);
     let requires_committee = !matches!(
         proposal.gov_action,
         GovAction::NoConfidence { .. } | GovAction::UpdateCommittee { .. }
     );
     let (active_drep_stake, total_drep_active_stake) =
-        active_drep_stake_filtered(drep_stake, drep_expiry, current_epoch);
+        active_drep_stake_filtered(drep_stake, drep_expiry, num_dormant, current_epoch)?;
     let total_pool_stake: u64 = pool_stake.values().map(|c| c.0).sum();
     let (pool_idx, drep_idx) = gov_action_threshold_index(&proposal.gov_action);
 
@@ -422,7 +443,7 @@ pub fn proposal_ratification_observation(
         )
     };
 
-    RatificationObservation {
+    Ok(RatificationObservation {
         potentially_ratifiable,
         is_info_action,
         requires_committee,
@@ -433,7 +454,7 @@ pub fn proposal_ratification_observation(
         drep_inputs_present,
         pool_threshold_index: pool_idx,
         spo_inputs_present,
-    }
+    })
 }
 
 // ─── Deposit-expiry-refund planner (CONWAY-PROPOSAL-DEPOSIT-EXPIRY S4) ───
@@ -458,6 +479,10 @@ pub enum RefundVerdict {
     /// Every required gate passed OR was skipped for absent inputs — it MIGHT ratify/enact. Ade does not
     /// model enactment, so this is terminal.
     PotentiallyRatifiable { action_id: GovActionId },
+    /// The DRep-expiry gate needs the `num_dormant` offset but the governance state is
+    /// [`DormantEpochs::Unversioned`] — fail-closed rather than fabricate the offset (S4.1). An activation
+    /// path reaching this has been fed a V1 state where V2 is required.
+    DormantRequired,
     /// A governance representation Ade does not support. Reserved for the closed verdict surface — no
     /// currently-decoded `GovAction` variant yields it (all seven are evaluable).
     UnsupportedGovernanceState { action_id: GovActionId, detail: &'static str },
@@ -508,10 +533,13 @@ pub fn plan_deposit_refunds(
     new_epoch: u64,
     committee_hot_keys: &BTreeMap<StakeCredential, StakeCredential>,
     drep_expiry: &BTreeMap<StakeCredential, u64>,
+    num_dormant: &DormantEpochs,
 ) -> Result<RefundPlan, RefundVerdict> {
     let ending_epoch = new_epoch.saturating_sub(1);
+    // Fail-closed if the dormancy offset is needed (non-empty drep_expiry) but the state is Unversioned.
     let (active_drep_stake, total_drep_active_stake) =
-        active_drep_stake_filtered(drep_stake, drep_expiry, ending_epoch);
+        active_drep_stake_filtered(drep_stake, drep_expiry, num_dormant, ending_epoch)
+            .map_err(|_| RefundVerdict::DormantRequired)?;
     let total_pool_stake: u64 = pool_stake.values().map(|c| c.0).sum();
 
     // Canonical, deterministic order over the WHOLE set.
@@ -917,13 +945,15 @@ mod committee_fidelity_tests {
         let run = |p: &GovActionState, cm: &BTreeMap<StakeCredential, u64>| -> (bool, bool) {
             let res = evaluate_ratification(
                 std::slice::from_ref(p), &empty_drep, &empty_pool, cm, &quorum,
-                &[], &[], 0, &empty_hot, &empty_drep_expiry,
-            );
+                &[], &[], 0, &empty_hot, &empty_drep_expiry, &DormantEpochs::Unversioned,
+            )
+            .expect("empty drep_expiry needs no dormancy offset");
             let ratified = res.ratified.iter().any(|q| q.action_id == p.action_id);
             let obs = proposal_ratification_observation(
                 p, &empty_drep, &empty_pool, cm, &quorum,
-                &[], &[], 0, &empty_hot, &empty_drep_expiry,
-            );
+                &[], &[], 0, &empty_hot, &empty_drep_expiry, &DormantEpochs::Unversioned,
+            )
+            .expect("empty drep_expiry needs no dormancy offset");
             (ratified, obs.potentially_ratifiable)
         };
 
@@ -946,16 +976,18 @@ mod committee_fidelity_tests {
         info.gov_action = GovAction::InfoAction;
         let res = evaluate_ratification(
             std::slice::from_ref(&info), &empty_drep, &empty_pool, &committee, &quorum,
-            &[], &[], 0, &empty_hot, &empty_drep_expiry,
-        );
+            &[], &[], 0, &empty_hot, &empty_drep_expiry, &DormantEpochs::Unversioned,
+        )
+        .expect("empty drep_expiry needs no dormancy offset");
         assert!(
             res.ratified.is_empty() && res.remaining.iter().any(|q| q.action_id == info.action_id),
             "InfoAction -> remaining, never ratified",
         );
         let obs = proposal_ratification_observation(
             &info, &empty_drep, &empty_pool, &committee, &quorum,
-            &[], &[], 0, &empty_hot, &empty_drep_expiry,
-        );
+            &[], &[], 0, &empty_hot, &empty_drep_expiry, &DormantEpochs::Unversioned,
+        )
+        .expect("empty drep_expiry needs no dormancy offset");
         assert!(!obs.potentially_ratifiable && obs.is_info_action, "InfoAction never enacts (observer)");
     }
 
@@ -969,7 +1001,7 @@ mod committee_fidelity_tests {
         let quorum = Rational::new(2, 3).unwrap();
         plan_deposit_refunds(
             proposals, &BTreeMap::new(), &BTreeMap::new(), &s4_committee(), &quorum,
-            &[], &[], 1341, &BTreeMap::new(), &BTreeMap::new(),
+            &[], &[], 1341, &BTreeMap::new(), &BTreeMap::new(), &DormantEpochs::Unversioned,
         )
     }
     fn s4_prop(
@@ -1216,6 +1248,7 @@ mod committee_fidelity_tests {
                 pool_voting_thresholds: Vec::new(),
                 drep_voting_thresholds: Vec::new(),
                 committee_hot_keys: Default::default(),
+                num_dormant: crate::state::DormantEpochs::Unversioned,
             });
             crate::fingerprint::fingerprint(&s).governance
         };
@@ -1296,7 +1329,8 @@ mod drep_voting_stake_derivation_tests {
                 .collect();
         let raw = derive_drep_voting_stake(&vd, &mark_with(&[(1, 900), (2, 100)]));
         assert_eq!(raw.get(&DRep::AlwaysAbstain), Some(&900), "derivation keeps the raw delegated stake");
-        let (active, total) = active_drep_stake_filtered(&raw, &BTreeMap::new(), 0);
+        let (active, total) =
+            active_drep_stake_filtered(&raw, &BTreeMap::new(), &DormantEpochs::Unversioned, 0).unwrap();
         assert_eq!(total, 100, "the active denominator excludes AlwaysAbstain");
         assert!(!active.contains_key(&DRep::AlwaysAbstain));
     }
@@ -1308,5 +1342,54 @@ mod drep_voting_stake_derivation_tests {
         let entries: Vec<(u8, u64)> = (0u8..50).map(|b| (b, (b as u64 + 1) * 7)).collect();
         let mark = mark_with(&entries);
         assert_eq!(derive_drep_voting_stake(&vd, &mark), derive_drep_voting_stake(&vd, &mark));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod s4_1_dormant_fail_closed_tests {
+    use super::*;
+    use crate::state::DormantEpochs;
+
+    fn one_drep_stake() -> (DRepStakeDistribution, BTreeMap<StakeCredential, u64>) {
+        let drep = DRep::KeyHash(Hash28([0x11; 28]));
+        let stake: DRepStakeDistribution = [(drep, 100u64)].into_iter().collect();
+        let mut expiry = BTreeMap::new();
+        expiry.insert(StakeCredential::KeyHash(Hash28([0x11; 28])), 300u64);
+        (stake, expiry)
+    }
+
+    /// GATE (missing dormant fails): a NON-EMPTY drep_expiry means the dormancy offset WOULD be applied, but
+    /// a V1 (`Unversioned`) state cannot supply it — TERMINAL, never a fabricated 0.
+    #[test]
+    fn unversioned_with_live_drep_expiry_is_terminal() {
+        let (stake, expiry) = one_drep_stake();
+        assert_eq!(
+            active_drep_stake_filtered(&stake, &expiry, &DormantEpochs::Unversioned, 305),
+            Err(DormantRequired),
+        );
+    }
+
+    /// GATE (no needless failure): with an EMPTY drep_expiry no DRep is expiry-checked, so the offset is
+    /// never applied and a V1 state is fine (no fabrication needed).
+    #[test]
+    fn unversioned_with_empty_drep_expiry_is_ok() {
+        let (stake, _) = one_drep_stake();
+        let (_a, total) =
+            active_drep_stake_filtered(&stake, &BTreeMap::new(), &DormantEpochs::Unversioned, 305).unwrap();
+        assert_eq!(total, 100);
+    }
+
+    /// GATE (the offset is authoritative): a DRep expiring at 300 is EXCLUDED at epoch 305 with `Bound(0)`
+    /// but INCLUDED with `Bound(10)` (300 + 10 >= 305) — the dormancy offset shifts the active denominator.
+    #[test]
+    fn bound_applies_the_dormancy_offset() {
+        let (stake, expiry) = one_drep_stake();
+        let (_a0, t0) =
+            active_drep_stake_filtered(&stake, &expiry, &DormantEpochs::Bound(0), 305).unwrap();
+        assert_eq!(t0, 0, "expired (300 < 305), no offset → excluded");
+        let (_a10, t10) =
+            active_drep_stake_filtered(&stake, &expiry, &DormantEpochs::Bound(10), 305).unwrap();
+        assert_eq!(t10, 100, "300 + 10 >= 305 → still active");
     }
 }

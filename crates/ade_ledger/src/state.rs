@@ -78,6 +78,24 @@ pub struct LedgerState {
     pub conway_deposit_params: Option<ConwayOnlyDepositParams>,
 }
 
+/// The Conway `numDormantEpochs` under a VERSIONED lineage. It is AUTHORITATIVE governance state — it
+/// changes the active-DRep denominator (`drepExpiry + numDormant >= currentEpoch`), so two states that
+/// differ in it MUST NOT share a governance fingerprint. There is NO default: a construction site must
+/// declare whether the state predates the field (`Unversioned`, V1 — historical fingerprint unchanged) or
+/// carries a value from a NAMED BOUND source (`Bound`, V2 — included in the canonical encoding + fingerprint).
+/// A `Unversioned` state is NEVER silently promoted to `Bound(0)`; the DRep-expiry/ratification path REJECTS
+/// `Unversioned` (fail-closed) rather than fabricate the offset. See
+/// `feedback_versioned_authoritative_state_no_fabricated_default`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DormantEpochs {
+    /// V1: `numDormantEpochs` was not part of this state's canonical encoding/fingerprint. Any path that
+    /// needs the dormancy offset must fail-closed on this variant, never coerce it to 0.
+    Unversioned,
+    /// V2: the authoritative `numDormantEpochs`, from a named bound source (imported Conway/ChainDB state, a
+    /// replay-derived epoch transition, or a verified migration input). Fingerprinted (V2).
+    Bound(u64),
+}
+
 /// Conway governance state at the epoch boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConwayGovState {
@@ -103,6 +121,10 @@ pub struct ConwayGovState {
         ade_types::shelley::cert::StakeCredential,
         ade_types::shelley::cert::StakeCredential,
     >,
+    /// `numDormantEpochs` under the versioned lineage (see [`DormantEpochs`]). AUTHORITATIVE: it shifts the
+    /// active-DRep denominator. No default — every construction path declares its source (`Unversioned` for
+    /// states predating the field, `Bound(n)` from a named source).
+    pub num_dormant: DormantEpochs,
 }
 
 impl LedgerState {

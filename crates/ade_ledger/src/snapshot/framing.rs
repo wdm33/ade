@@ -179,6 +179,7 @@ mod tests {
             pool_voting_thresholds: vec![(1, 2)],
             drep_voting_thresholds: vec![(67, 100)],
             committee_hot_keys: BTreeMap::new(),
+            num_dormant: crate::state::DormantEpochs::Unversioned,
         });
         s.conway_deposit_params = Some(ConwayOnlyDepositParams {
             drep_deposit: Coin(500_000_000),

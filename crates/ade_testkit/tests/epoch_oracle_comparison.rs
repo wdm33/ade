@@ -3270,7 +3270,8 @@ fn conway_governance_ratification_test() {
         528,
         &pre_state.gov_state.as_ref().map(|g| g.committee_hot_keys.clone()).unwrap_or_default(),
         &pre_state.gov_state.as_ref().map(|g| g.drep_expiry.clone()).unwrap_or_default(),
-    );
+        &ade_ledger::state::DormantEpochs::Unversioned,
+    ).expect("ratify gate (test; empty drep_expiry)");
 
     eprintln!("  Ratification result:");
     eprintln!("    ratified: {}", result.ratified.len());
@@ -3365,7 +3366,8 @@ fn conway_governance_ratification_test() {
             536,
             &p_pre_gov.committee_hot_keys,
             &p_pre_gov.drep_expiry,
-        );
+            &ade_ledger::state::DormantEpochs::Unversioned,
+        ).expect("ratify gate (test; empty drep_expiry)");
 
         eprintln!("    our ratified: {}", p_result.ratified.len());
         eprintln!("    our expired: {}", p_result.expired.len());
@@ -3510,7 +3512,8 @@ fn conway_governance_ratification_test() {
                 576,
                 &t_pre_gov.committee_hot_keys,
                 &t_pre_gov.drep_expiry,
-            );
+                &ade_ledger::state::DormantEpochs::Unversioned,
+            ).expect("ratify gate (test; empty drep_expiry)");
             eprintln!("    {snap_name}: ratified={} expired={} remaining={}",
                 snap_result.ratified.len(), snap_result.expired.len(), snap_result.remaining.len());
         }
@@ -3570,7 +3573,8 @@ fn conway_governance_ratification_test() {
             576,
             &t_pre_gov.committee_hot_keys,
             &t_pre_gov.drep_expiry,
-        );
+            &ade_ledger::state::DormantEpochs::Unversioned,
+        ).expect("ratify gate (test; empty drep_expiry)");
 
         eprintln!("    our ratified: {}", t_result.ratified.len());
         eprintln!("    our expired: {}", t_result.expired.len());
@@ -3762,7 +3766,7 @@ fn conway_epoch_boundary_end_to_end() {
     for (label, regs) in [("PRE", None), ("ALL", Some(&all_registered))] {
         let (rs, ac) = ade_ledger::rules::apply_epoch_boundary_with_registrations(
             &pre_state, new_epoch, regs, None, 21_600,
-        );
+        ).unwrap();
         let our_res_decr = pre_state.epoch_state.reserves.0.saturating_sub(rs.epoch_state.reserves.0);
         let oracle_res_decr = pre_state.epoch_state.reserves.0.saturating_sub(post_state.epoch_state.reserves.0);
         let res_ratio = if oracle_res_decr > 0 { our_res_decr as f64 / oracle_res_decr as f64 * 100.0 } else { 100.0 };
@@ -3847,7 +3851,7 @@ fn conway_epoch_boundary_end_to_end() {
     let regs_override = if oracle_regs.is_empty() { None } else { Some(&oracle_regs) };
     let (result_state, accounting) = ade_ledger::rules::apply_epoch_boundary_with_registrations(
         &adjusted_state, new_epoch, regs_override, None, 21_600,
-    );
+    ).unwrap();
 
     eprintln!("  RESULT: epoch={} reserves={} ADA  treasury={} ADA",
         result_state.epoch_state.epoch.0,
@@ -4014,7 +4018,7 @@ fn alonzo_epoch_boundary_end_to_end() {
     for (label, regs_override) in variants {
         let (rs, ac) = ade_ledger::rules::apply_epoch_boundary_with_registrations(
             &pre_state, new_epoch, *regs_override, None, 21_600,
-        );
+        ).unwrap();
         let our_res_decr = pre_state.epoch_state.reserves.0.saturating_sub(rs.epoch_state.reserves.0);
         let res_ratio = if oracle_res_decr > 0 {
             our_res_decr as f64 / oracle_res_decr as f64 * 100.0
@@ -4052,7 +4056,7 @@ fn alonzo_epoch_boundary_end_to_end() {
         eprintln!("  oracle tick registrations: {}", oracle_regs.len());
         let (rs, ac) = ade_ledger::rules::apply_epoch_boundary_with_registrations(
             &pre_state, new_epoch, Some(&oracle_regs), None, 21_600,
-        );
+        ).unwrap();
         let our_res_decr = pre_state.epoch_state.reserves.0.saturating_sub(rs.epoch_state.reserves.0);
         let res_ratio = if oracle_res_decr > 0 {
             our_res_decr as f64 / oracle_res_decr as f64 * 100.0
@@ -4687,7 +4691,8 @@ fn committee_oracle_mainnet_575_576_noop_agreement() {
         575,
         &g575.committee_hot_keys,
         &g575.drep_expiry,
-    );
+        &ade_ledger::state::DormantEpochs::Unversioned,
+    ).expect("ratify gate (test; empty drep_expiry)");
     let effects = ade_ledger::governance::enact_proposals(&result.ratified);
     let (next_committee, next_quorum) = ade_ledger::governance::apply_committee_enactment(
         &g575.committee,

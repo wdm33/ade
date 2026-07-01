@@ -367,6 +367,8 @@ fn cre_s4_oracle_anchor_ratify_decision() {
             .committee_quorum
             .map(|(n, d)| Rational::new(n as i128, d.max(1) as i128).unwrap())
             .unwrap_or_else(|| Rational::new(1, 1).unwrap());
+        // The census state is a real decoded Conway state (a named bound source) → V2 Bound dormancy.
+        let num_dormant = ade_ledger::state::DormantEpochs::Bound(g.num_dormant_epochs);
         let r = evaluate_ratification(
             &g.proposals,
             &drep_stake,
@@ -378,7 +380,9 @@ fn cre_s4_oracle_anchor_ratify_decision() {
             epoch,
             &g.committee_hot_keys,
             &g.drep_expiry,
-        );
+            &num_dormant,
+        )
+        .expect("ratify gate (Bound dormancy)");
         (r.ratified.iter().any(|p| p.action_id == target()), r.ratified.len(), g.proposals.len())
     }
 
@@ -387,8 +391,13 @@ fn cre_s4_oracle_anchor_ratify_decision() {
     eprintln!("=== CRE S4 ORACLE ANCHOR (real ratify gate on the census) ===");
     eprintln!("ending_epoch 1094 (n={p94}): target ratified={t94} | {n94} total ratified");
     eprintln!("ending_epoch 1095 (n={p95}): target ratified={t95} | {n95} total ratified");
-    // The oracle: 69c948cd..#0 enacted at 1096 => it ratifies at the 1095->1096 boundary.
-    assert!(t95, "the REAL ratify gate reproduces the oracle: 69c948cd..#0 ratifies at ending_epoch 1095");
+    // The oracle: 69c948cd..#0 enacted at 1096 ⇒ it ratifies at the 1095→1096 boundary. Under S4.1 the gate
+    // now runs with V2 Bound dormancy (from each decoded census state's real numDormant), and the outcome is
+    // UNCHANGED from the pre-S4.1 c2f5960e anchor — asserted EXPLICITLY (the full outcome, not a loose
+    // old==new): ratifies at 1095, NOT at 1094, and the target is the ONLY proposal ratified at 1095.
+    assert!(!t94, "not yet ratified at the 1094→1095 boundary (still voting)");
+    assert!(t95, "ratifies at the 1095→1096 boundary (the enacting boundary)");
+    assert_eq!(n95, 1, "the target is the ONLY proposal ratified at 1095 — no false positives");
 }
 
 // ============================================================================================

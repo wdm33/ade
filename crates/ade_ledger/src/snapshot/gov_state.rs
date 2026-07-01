@@ -30,7 +30,7 @@ use ade_types::{EpochNo, Hash28, Hash32};
 
 use crate::pparams::{ConwayOnlyDepositParams, MinUtxoRule, ProtocolParameters};
 use crate::rational::Rational;
-use crate::state::ConwayGovState;
+use crate::state::{ConwayGovState, DormantEpochs};
 
 use super::cert_state::read_stake_credential;
 use super::error::{SnapshotDecodeError, StructuralReason};
@@ -171,9 +171,15 @@ const GOV_FIELDS: u64 = 9;
 
 pub fn encode_gov_state(g: &ConwayGovState) -> Vec<u8> {
     let mut buf = Vec::new();
+    // VERSIONED: V1 (`Unversioned`) = the 9-field canonical layout (byte-identical to historical bytes);
+    // V2 (`Bound`) = 10 fields with `num_dormant` appended. The decoder branches on this count.
+    let n_fields: u64 = match g.num_dormant {
+        DormantEpochs::Unversioned => GOV_FIELDS,
+        DormantEpochs::Bound(_) => GOV_FIELDS + 1,
+    };
     write_array_header(
         &mut buf,
-        ContainerEncoding::Definite(GOV_FIELDS, canonical_width(GOV_FIELDS)),
+        ContainerEncoding::Definite(n_fields, canonical_width(n_fields)),
     );
     // proposals (Vec)
     write_array_header(
@@ -266,12 +272,23 @@ pub fn encode_gov_state(g: &ConwayGovState) -> Vec<u8> {
         write_stake_credential(&mut buf, hot);
         write_stake_credential(&mut buf, cold);
     }
+    // num_dormant (V2 ONLY — absent from the V1 layout, so V1 bytes are byte-identical to historical).
+    if let DormantEpochs::Bound(n) = g.num_dormant {
+        write_uint_canonical(&mut buf, n);
+    }
     buf
 }
 
 pub fn decode_gov_state(bytes: &[u8]) -> Result<ConwayGovState, SnapshotDecodeError> {
     let mut o = 0usize;
-    expect_array(bytes, &mut o, GOV_FIELDS)?;
+    // VERSIONED: a 9-field array is V1 (`Unversioned`); a 10-field array is V2 (`Bound`, `num_dormant`
+    // appended). Any other arity is a structural error. Historical V1 bytes decode unchanged.
+    let n_gov_fields = read_array_len(bytes, &mut o)?;
+    if n_gov_fields != GOV_FIELDS && n_gov_fields != GOV_FIELDS + 1 {
+        return Err(SnapshotDecodeError::Structural {
+            reason: StructuralReason::ArrayLengthMismatch,
+        });
+    }
     // proposals
     let n_proposals = read_array_len(bytes, &mut o)?;
     let mut proposals = Vec::with_capacity(n_proposals as usize);
@@ -333,6 +350,12 @@ pub fn decode_gov_state(bytes: &[u8]) -> Result<ConwayGovState, SnapshotDecodeEr
         let cold = read_stake_credential(bytes, &mut o)?;
         committee_hot_keys.insert(hot, cold);
     }
+    // num_dormant: V2 (10 fields) carries the bound value; V1 (9 fields) predates the field.
+    let num_dormant = if n_gov_fields == GOV_FIELDS + 1 {
+        DormantEpochs::Bound(read_u64(bytes, &mut o)?)
+    } else {
+        DormantEpochs::Unversioned
+    };
     Ok(ConwayGovState {
         proposals,
         committee,
@@ -343,6 +366,7 @@ pub fn decode_gov_state(bytes: &[u8]) -> Result<ConwayGovState, SnapshotDecodeEr
         pool_voting_thresholds,
         drep_voting_thresholds,
         committee_hot_keys,
+        num_dormant,
     })
 }
 
@@ -955,6 +979,7 @@ mod tests {
             pool_voting_thresholds: vec![(1, 2), (51, 100)],
             drep_voting_thresholds: vec![(67, 100)],
             committee_hot_keys: BTreeMap::new(),
+            num_dormant: crate::state::DormantEpochs::Unversioned,
         };
         g.committee
             .insert(StakeCredential::KeyHash(Hash28([0xAA; 28])), 600);
@@ -1053,6 +1078,7 @@ mod tests {
             pool_voting_thresholds: Vec::new(),
             drep_voting_thresholds: Vec::new(),
             committee_hot_keys: BTreeMap::new(),
+            num_dormant: crate::state::DormantEpochs::Unversioned,
         };
         let bytes = encode_gov_state(&g);
         let decoded = decode_gov_state(&bytes).expect("decode");
@@ -1073,5 +1099,43 @@ mod tests {
         let a = encode_gov_state(&g);
         let b = encode_gov_state(&g);
         assert_eq!(a, b);
+    }
+
+    // ── S4.1 versioned num_dormant gates ──
+
+    /// GATE (V1 unchanged): an `Unversioned` gov state encodes as the historical 9-field array (header
+    /// 0x89) with NO num_dormant field — byte-identical to pre-S4.1 governance bytes — and round-trips.
+    #[test]
+    fn gov_state_v1_unversioned_is_the_unchanged_9_field_layout() {
+        let mut g = make_gov_state();
+        g.num_dormant = crate::state::DormantEpochs::Unversioned;
+        let bytes = encode_gov_state(&g);
+        assert_eq!(bytes[0], 0x89, "V1 governance is a 9-element array (historical layout, unchanged)");
+        assert_eq!(decode_gov_state(&bytes).expect("decode"), g, "V1 round-trips to Unversioned");
+    }
+
+    /// GATE (V2 byte-identical round-trip + no collision): a `Bound(n)` gov state encodes as a 10-field
+    /// array (header 0x8a), round-trips preserving n, and two states differing ONLY in dormancy
+    /// (Unversioned / Bound(0) / Bound(3)) encode to DISTINCT bytes — the authoritative-state law.
+    #[test]
+    fn gov_state_v2_bound_roundtrips_and_never_collides_with_v1_or_other_dormancy() {
+        use crate::state::DormantEpochs;
+        let mk = |d: DormantEpochs| {
+            let mut g = make_gov_state();
+            g.num_dormant = d;
+            g
+        };
+        let b1 = encode_gov_state(&mk(DormantEpochs::Unversioned));
+        let b2_0 = encode_gov_state(&mk(DormantEpochs::Bound(0)));
+        let b2_3 = encode_gov_state(&mk(DormantEpochs::Bound(3)));
+        assert_eq!(b2_0[0], 0x8a, "V2 governance is a 10-element array");
+        assert_eq!(
+            decode_gov_state(&b2_0).expect("decode").num_dormant,
+            DormantEpochs::Bound(0),
+            "V2 round-trips preserving num_dormant"
+        );
+        assert_eq!(decode_gov_state(&b2_3).expect("decode").num_dormant, DormantEpochs::Bound(3));
+        assert_ne!(b1, b2_0, "Unversioned and Bound(0) are NOT byte-equal (no fabricated-0 collision)");
+        assert_ne!(b2_0, b2_3, "Bound(0) and Bound(3) are NOT byte-equal");
     }
 }

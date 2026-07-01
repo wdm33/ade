@@ -67,6 +67,7 @@ fn cpde_s5_planner_refunds_close_the_500b_on_real_proposals() {
         1341,
         &empty_hot,
         &empty_drep_expiry,
+        &ade_ledger::state::DormantEpochs::Unversioned,
     )
     .expect("the whole set is provably-safe -> a clean plan (no PotentiallyRatifiable)");
 

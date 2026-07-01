@@ -118,7 +118,9 @@ fn cpde_s4_0_ratification_census_committee_authority_resolves_whole_set() {
             ENDING_EPOCH,
             &empty_hot_keys,
             &empty_drep_expiry,
-        );
+            &ade_ledger::state::DormantEpochs::Unversioned,
+        )
+        .expect("empty drep_expiry needs no dormancy offset");
         let expiring = p.expires_after.0 < ENDING_EPOCH;
         let malformed_repr = p.return_addr.len() != 29;
         let observation = if malformed_repr {

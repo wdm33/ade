@@ -384,6 +384,9 @@ pub fn assemble_native_mithril_seed(
             pool_voting_thresholds: Vec::new(),
             drep_voting_thresholds: Vec::new(),
             committee_hot_keys: std::collections::BTreeMap::new(),
+            // V2 from the NAMED BOUND SOURCE: the imported Conway state's numDormantEpochs (never a fabricated
+            // default). The offset stays inert until S4.2 threads a non-empty drep_expiry into the live gate.
+            num_dormant: ade_ledger::state::DormantEpochs::Bound(s1a.imported_gov.num_dormant_epochs),
         }),
         conway_deposit_params: None,
     };

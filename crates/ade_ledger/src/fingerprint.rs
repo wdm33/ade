@@ -41,7 +41,7 @@ use crate::delegation::{CertState, PoolParams as CertPoolParams};
 use crate::epoch::{SnapshotState, StakeSnapshot};
 use crate::pparams::{ConwayOnlyDepositParams, ProtocolParameters};
 use crate::rational::Rational;
-use crate::state::{ConwayGovState, EpochState, LedgerState};
+use crate::state::{ConwayGovState, DormantEpochs, EpochState, LedgerState};
 use crate::utxo::{TxOut, UTxOState};
 use crate::value::{MultiAsset, Value};
 
@@ -489,7 +489,14 @@ fn fingerprint_governance(gov: Option<&ConwayGovState>) -> Hash32 {
     match gov {
         None => write_null(&mut buf),
         Some(g) => {
-            write_array_canonical(&mut buf, 9);
+            // VERSIONED: V1 (`Unversioned`) is a 9-field array — byte-identical to the historical
+            // fingerprint. V2 (`Bound`) is a 10-field array with `num_dormant` appended, so a state carrying
+            // dormancy can NEVER collide with a V1 state or with a differently-dormant V2 state.
+            let n_fields: u64 = match g.num_dormant {
+                DormantEpochs::Unversioned => 9,
+                DormantEpochs::Bound(_) => 10,
+            };
+            write_array_canonical(&mut buf, n_fields);
 
             // 1. proposals
             write_array_canonical(&mut buf, g.proposals.len() as u64);
@@ -547,6 +554,11 @@ fn fingerprint_governance(gov: Option<&ConwayGovState>) -> Hash32 {
             for (hot, cold) in &g.committee_hot_keys {
                 write_stake_credential(&mut buf, hot);
                 write_stake_credential(&mut buf, cold);
+            }
+
+            // 10. num_dormant (V2 ONLY — absent from the V1 byte layout above).
+            if let DormantEpochs::Bound(n) = g.num_dormant {
+                write_uint_canonical(&mut buf, n);
             }
         }
     }
@@ -948,6 +960,33 @@ mod tests {
         assert_eq!(f1, f2);
     }
 
+    /// GATE (S4.1, no collision): two governance states differing ONLY in `num_dormant` get DIFFERENT
+    /// fingerprints. `Unversioned` (V1, array-9) is distinct from any `Bound` (V2, array-10), AND `Bound(0)`
+    /// is distinct from `Bound(1)`. Had we fabricated a default 0, a V1 state and a real `numDormant=0` state
+    /// would have collided — this is the authoritative-state law that forbids it.
+    #[test]
+    fn governance_fingerprint_binds_num_dormant_no_collision() {
+        use crate::state::{ConwayGovState, DormantEpochs};
+        let mk = |d: DormantEpochs| ConwayGovState {
+            proposals: Vec::new(),
+            committee: BTreeMap::new(),
+            committee_quorum: (2, 3),
+            drep_expiry: BTreeMap::new(),
+            gov_action_lifetime: 6,
+            vote_delegations: BTreeMap::new(),
+            pool_voting_thresholds: Vec::new(),
+            drep_voting_thresholds: Vec::new(),
+            committee_hot_keys: BTreeMap::new(),
+            num_dormant: d,
+        };
+        let f_unver = fingerprint_governance(Some(&mk(DormantEpochs::Unversioned)));
+        let f_b0 = fingerprint_governance(Some(&mk(DormantEpochs::Bound(0))));
+        let f_b1 = fingerprint_governance(Some(&mk(DormantEpochs::Bound(1))));
+        assert_ne!(f_unver, f_b0, "V1 (Unversioned) must not share a fingerprint with V2 Bound(0)");
+        assert_ne!(f_b0, f_b1, "Bound(0) and Bound(1) must not share a fingerprint");
+        assert_ne!(f_unver, f_b1);
+    }
+
     // ---- MEM-OPT-UTXO-DISK S1.5a: the v2 fingerprint (Ristretto255 set commitment) ----
 
     fn byron_out(coin: u64, tag: u8) -> TxOut {
@@ -1315,6 +1354,7 @@ mod tests {
             pool_voting_thresholds: Vec::new(),
             drep_voting_thresholds: Vec::new(),
             committee_hot_keys: BTreeMap::new(),
+            num_dormant: crate::state::DormantEpochs::Unversioned,
         });
 
         let f_absent = fingerprint(&s_absent);
@@ -1358,6 +1398,7 @@ mod tests {
                 pool_voting_thresholds: Vec::new(),
                 drep_voting_thresholds: Vec::new(),
                 committee_hot_keys: BTreeMap::new(),
+                num_dormant: crate::state::DormantEpochs::Unversioned,
             });
             fingerprint(&s).governance
         };
@@ -1449,6 +1490,7 @@ mod tests {
                 pool_voting_thresholds: Vec::new(),
                 drep_voting_thresholds: Vec::new(),
                 committee_hot_keys: BTreeMap::new(),
+                num_dormant: crate::state::DormantEpochs::Unversioned,
             });
             s
         };

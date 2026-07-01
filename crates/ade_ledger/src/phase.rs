@@ -72,6 +72,7 @@ pub fn classify_failure_phase(err: &LedgerError) -> ValidationPhase {
         // LedgerError triggers a compile error here, forcing a
         // phase decision rather than silently defaulting.
         LedgerError::InputNotFound(_) => ValidationPhase::Phase1,
+        LedgerError::DormantStateRequired => ValidationPhase::Phase1,
         LedgerError::DuplicateInput(_) => ValidationPhase::Phase1,
         LedgerError::Conservation(_) => ValidationPhase::Phase1,
         LedgerError::NegativeValue(_) => ValidationPhase::Phase1,

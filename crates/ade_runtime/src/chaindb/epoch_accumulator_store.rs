@@ -522,6 +522,7 @@ mod tests {
             pool_voting_thresholds: Vec::new(),
             drep_voting_thresholds: Vec::new(),
             committee_hot_keys: std::collections::BTreeMap::new(),
+            num_dormant: ade_ledger::state::DormantEpochs::Unversioned,
         });
         s2.seal_bootstrap(&boot_empty, SlotNo(100)).unwrap();
         assert_eq!(

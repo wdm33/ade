@@ -71,6 +71,11 @@ pub enum LedgerError {
     // Structural domain (Alonzo+)
     StructuralViolation(StructuralError),
 
+    /// The ratification/DRep-expiry path was reached with a `DormantEpochs::Unversioned` (V1) governance
+    /// state where the `num_dormant` offset is required (non-empty drep_expiry) — a fail-closed terminal
+    /// (CRE S4.1), never a fabricated dormancy offset.
+    DormantStateRequired,
+
     // Late-era state-backed validation (Alonzo+) — O-27 obligations
     BadInputs(BadInputsError),
     NoCollateralInputs,
@@ -650,6 +655,12 @@ impl core::fmt::Display for LedgerError {
             LedgerError::NoCollateralInputs => {
                 write!(f, "no collateral inputs provided")
             }
+            LedgerError::DormantStateRequired => {
+                write!(
+                    f,
+                    "governance ratification requires the versioned num_dormant offset but the state is unversioned (V1)"
+                )
+            }
             LedgerError::InsufficientCollateral(e) => {
                 write!(
                     f,
@@ -759,6 +770,12 @@ impl core::fmt::Display for LedgerError {
 }
 
 impl std::error::Error for LedgerError {}
+
+impl From<crate::governance::DormantRequired> for LedgerError {
+    fn from(_: crate::governance::DormantRequired) -> Self {
+        LedgerError::DormantStateRequired
+    }
+}
 
 impl From<ade_codec::CodecError> for LedgerError {
     fn from(e: ade_codec::CodecError) -> Self {

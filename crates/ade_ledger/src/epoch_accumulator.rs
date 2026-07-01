@@ -451,14 +451,10 @@ fn apply_gov_deposit_refunds(
         // Active DRep stake from the imported vote delegations × the current mark snapshot (mirrors the
         // boundary fn's step 4b). For the accumulator `vote_delegations` is empty ⇒ empty, so the committee
         // gate is the proof (per the S4.0 census).
-        let mark = &acc.epoch_state.snapshots.mark;
-        let mut drep_stake: crate::governance::DRepStakeDistribution = BTreeMap::new();
-        for (cred, drep) in &gov.vote_delegations {
-            let stake = mark.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
-            if stake > 0 {
-                *drep_stake.entry(drep.clone()).or_insert(0) += stake;
-            }
-        }
+        let drep_stake = crate::governance::derive_drep_voting_stake(
+            &gov.vote_delegations,
+            &acc.epoch_state.snapshots.mark.0,
+        );
         let committee_quorum = crate::rational::Rational::new(
             gov.committee_quorum.0 as i128,
             gov.committee_quorum.1.max(1) as i128,
@@ -475,6 +471,7 @@ fn apply_gov_deposit_refunds(
             target.0,
             &gov.committee_hot_keys,
             &gov.drep_expiry,
+            &gov.num_dormant,
         )
         .map_err(LedgerTransitionError::GovDepositRefundTerminal)?
     };
@@ -594,7 +591,10 @@ pub fn cross_epoch_boundary(
         None,
         Some(&new_mark),
         ctx.active_slots_per_epoch,
-    );
+    )
+    .map_err(|_| {
+        LedgerTransitionError::GovDepositRefundTerminal(crate::governance::RefundVerdict::DormantRequired)
+    })?;
 
     // Read back. `new_view.epoch_state` already has epoch=target, rotated snapshots, updated pots, and
     // block_production/epoch_fees reset to empty/0 (the new epoch's fresh nesBcur). POOLREAP — future-pool
@@ -1826,6 +1826,7 @@ mod tests {
             pool_voting_thresholds: vec![(1, 2)],
             drep_voting_thresholds: vec![(67, 100)],
             committee_hot_keys: BTreeMap::new(),
+            num_dormant: crate::state::DormantEpochs::Unversioned,
         });
         acc.conway_deposit_params = Some(ConwayOnlyDepositParams {
             drep_deposit: Coin(500_000_000),
@@ -2934,6 +2935,7 @@ mod tests {
             pool_voting_thresholds: Vec::new(),
             drep_voting_thresholds: Vec::new(),
             committee_hot_keys: std::collections::BTreeMap::new(),
+            num_dormant: crate::state::DormantEpochs::Unversioned,
         }
     }
 

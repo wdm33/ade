@@ -120,7 +120,7 @@ pub fn apply_block_with_accounting(
     let pre_boundary_state = if let Some(new_epoch) = crate::state::detect_epoch_transition(
         state.epoch_state.epoch, slot,
     ) {
-        let (new_state, acct) = apply_epoch_boundary_full(state, new_epoch);
+        let (new_state, acct) = apply_epoch_boundary_full(state, new_epoch)?;
         accounting = Some(acct);
         new_state
     } else {
@@ -245,7 +245,7 @@ fn apply_shelley_era_block_with_verdicts(
         current_state.epoch_state.epoch,
         slot,
     ) {
-        let (new_state, _accounting) = apply_epoch_boundary_full(&current_state, new_epoch);
+        let (new_state, _accounting) = apply_epoch_boundary_full(&current_state, new_epoch)?;
         current_state = new_state;
     }
 
@@ -329,7 +329,7 @@ fn apply_shelley_era_block_classified(
         current_state.epoch_state.epoch,
         slot,
     ) {
-        let (new_state, _accounting) = apply_epoch_boundary_full(&current_state, new_epoch);
+        let (new_state, _accounting) = apply_epoch_boundary_full(&current_state, new_epoch)?;
         current_state = new_state;
     }
 
@@ -612,7 +612,7 @@ fn shelley_witness_sets(
 pub fn apply_epoch_boundary_full(
     state: &LedgerState,
     new_epoch: ade_types::EpochNo,
-) -> (LedgerState, EpochBoundaryAccounting) {
+) -> Result<(LedgerState, EpochBoundaryAccounting), crate::governance::DormantRequired> {
     // The live path passes `None` for the precomputed mark -> the boundary uses the
     // existing stub, UNCHANGED. Activation (S3f-4) calls _with_registrations with the
     // real aggregate via a distinct entry point, never through _full.
@@ -655,7 +655,7 @@ pub fn apply_epoch_boundary_with_registrations(
     // epoch length) — NOT a hardcoded mainnet constant. Preview's shorter epoch making this 5×
     // too large was the CE-3d reward-magnitude residual.
     active_slots_per_epoch: u64,
-) -> (LedgerState, EpochBoundaryAccounting) {
+) -> Result<(LedgerState, EpochBoundaryAccounting), crate::governance::DormantRequired> {
     // 1. Reward computation from PRE-rotation go snapshot
     //    Rewards must be computed before rotation — after rotation,
     //    the go snapshot becomes the old set (which may be empty).
@@ -1291,7 +1291,8 @@ pub fn apply_epoch_boundary_with_registrations(
                 ending_epoch,
                 &gov.committee_hot_keys,
                 &gov.drep_expiry,
-            );
+                &gov.num_dormant,
+            )?;
 
             let effects = crate::governance::enact_proposals(&result.ratified);
 
@@ -1333,6 +1334,9 @@ pub fn apply_epoch_boundary_with_registrations(
                 pool_voting_thresholds: gov.pool_voting_thresholds.clone(),
                 drep_voting_thresholds: gov.drep_voting_thresholds.clone(),
                 committee_hot_keys: gov.committee_hot_keys.clone(),
+                // Carry the versioned dormancy forward (preserves V1/V2 lineage — never a fabricated
+                // default). The per-epoch numDormant recomputation is deferred to the enact slice (S5).
+                num_dormant: gov.num_dormant.clone(),
             })
         } else {
             None
@@ -1408,7 +1412,7 @@ pub fn apply_epoch_boundary_with_registrations(
         conway_deposit_params: state.conway_deposit_params.clone(),
     };
 
-    (new_state, accounting)
+    Ok((new_state, accounting))
 }
 
 /// Structured summary of an epoch boundary transition.
@@ -2731,6 +2735,7 @@ mod cert_state_dispatch {
             pool_voting_thresholds: Vec::new(),
             drep_voting_thresholds: Vec::new(),
             committee_hot_keys: std::collections::BTreeMap::new(),
+            num_dormant: crate::state::DormantEpochs::Unversioned,
         }
     }
 
@@ -2785,7 +2790,7 @@ mod cert_state_dispatch {
 
         // Some(mark) -> the new MARK is the per-credential snapshot, used directly.
         let (with_mark, _) =
-            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&mark), 21_600);
+            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&mark), 21_600).unwrap();
         assert_eq!(
             with_mark.epoch_state.snapshots.mark.0.pool_stakes, pool_stakes,
             "the precomputed mark becomes the new MARK (pool_stakes)"
@@ -2798,7 +2803,7 @@ mod cert_state_dispatch {
         // None -> the existing stub (the full-ledger path UNCHANGED): the empty cert-state here
         // yields an empty stub mark, NOT the precomputed mark.
         let (no_mark, _) =
-            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600);
+            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
         assert!(
             no_mark.epoch_state.snapshots.mark.0.pool_stakes.is_empty(),
             "None uses the stub (empty cert-state -> empty mark), not the precomputed mark"
@@ -2840,9 +2845,9 @@ mod cert_state_dispatch {
         // The go snapshot is empty -> no member rewards; the pool pot returns to reserves, so the
         // treasury increase is exactly floor(deltaR1 * tau) -- a clean readout of the eta-scaled pot.
         let preview =
-            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 4_320).0;
+            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 4_320).unwrap().0;
         let mainnet =
-            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).0;
+            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap().0;
 
         let t_preview = preview.epoch_state.treasury.0;
         let t_mainnet = mainnet.epoch_state.treasury.0;
@@ -2897,7 +2902,7 @@ mod cert_state_dispatch {
         }];
         state.gov_state = Some(gov);
 
-        let (new_state, _acct) = apply_epoch_boundary_full(&state, EpochNo(501));
+        let (new_state, _acct) = apply_epoch_boundary_full(&state, EpochNo(501)).unwrap();
         let new_gov = new_state.gov_state.expect("conway gov state present");
         assert!(
             new_gov.committee.is_empty(),
@@ -2964,7 +2969,7 @@ mod cert_state_dispatch {
             retiring.insert(pid(0xC3), EpochNo(499)); // < e (stale) → kept under `==`, reaped under `<=`
 
             let (out, _ac) =
-                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600);
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
             let pool = &out.cert_state.pool;
 
             assert!(
@@ -2999,7 +3004,7 @@ mod cert_state_dispatch {
             regs.insert(registered.clone(), Coin(2_000_000));
 
             let (out, _ac) =
-                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600);
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
 
             assert_eq!(
                 out.cert_state.delegation.rewards.get(&registered),
@@ -3032,7 +3037,7 @@ mod cert_state_dispatch {
             delegs.insert(e.clone(), pid(0xB2));
 
             let (out, _ac) =
-                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600);
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
             let deleg = &out.cert_state.delegation;
 
             assert_eq!(
@@ -3065,7 +3070,7 @@ mod cert_state_dispatch {
             regs.insert(script_cred.clone(), Coin(2_000_000));
 
             let (out, _ac) =
-                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600);
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
             let rewards = &out.cert_state.delegation.rewards;
 
             assert_eq!(
@@ -3100,7 +3105,7 @@ mod cert_state_dispatch {
             future.insert(pid(0xB2), pool_with_account(0xB2, 0xE0, 0x02));
 
             let (out, _ac) =
-                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600);
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
             let pool = &out.cert_state.pool;
 
             assert_eq!(

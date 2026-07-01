@@ -183,6 +183,9 @@ impl LoadedSnapshot {
             pool_voting_thresholds,
             drep_voting_thresholds,
             committee_hot_keys,
+            // Harness reconstruction predating the versioned dormancy field (V1). Not a bootstrap/replay
+            // authority; never a fabricated Bound(0).
+            num_dormant: ade_ledger::state::DormantEpochs::Unversioned,
         })
     }
 

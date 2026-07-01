@@ -43,6 +43,7 @@ fn base_gov() -> ConwayGovState {
         pool_voting_thresholds: Vec::new(),
         drep_voting_thresholds: Vec::new(),
         committee_hot_keys: BTreeMap::new(),
+        num_dormant: ade_ledger::state::DormantEpochs::Unversioned,
     }
 }
 
