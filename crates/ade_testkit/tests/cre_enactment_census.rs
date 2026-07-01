@@ -235,6 +235,33 @@ fn window_slots() -> Vec<u64> {
     slots
 }
 
+#[test]
+#[ignore = "reads the local ImmutableDB; emits the selected-chain witness for every census boundary slot"]
+fn cre_census_chain_point_witnesses() {
+    use ade_testkit::harness::immutabledb_witness::witness_for_slot;
+    let dir = std::path::Path::new(IMMUTABLE_DIR);
+    let slots = window_slots();
+    assert!(!slots.is_empty(), "some window states extracted");
+    eprintln!("=== CRE census — selected-chain witnesses ({} rows) ===", slots.len());
+    let mut era_tags = std::collections::BTreeSet::new();
+    for &slot in &slots {
+        // A returned witness means the header bytes at the index offsets hash to the index's stored hash —
+        // an unambiguous chain-point binding, not just a state fingerprint.
+        let w = witness_for_slot(dir, slot).unwrap_or_else(|e| panic!("witness @{slot}: {e}"));
+        assert_eq!(w.slot, slot);
+        assert!(w.parent_header_hash.is_some(), "a real boundary block has a parent");
+        era_tags.insert(w.era_tag);
+        let hh: String = w.block_header_hash.iter().take(6).map(|b| format!("{b:02x}")).collect();
+        let ph: String = w
+            .parent_header_hash
+            .map(|p| p.iter().take(6).map(|b| format!("{b:02x}")).collect())
+            .unwrap_or_else(|| "genesis".into());
+        eprintln!("  slot {slot} block#{:<7} era_tag={} header={hh}.. parent={ph}..", w.block_no, w.era_tag);
+    }
+    // Every census boundary is the same era (Conway) — the era tag must be constant across the window.
+    assert_eq!(era_tags.len(), 1, "one era across the census window, got tags {era_tags:?}");
+}
+
 fn build_census(slots: &[u64]) -> Vec<CensusRow> {
     let dir = "/home/ts/.cardano-ce3d-extract/db/ledger";
     slots
@@ -314,4 +341,251 @@ fn enacted_str(r: &CensusRow) -> String {
             if r.enacted_is_target { "(TARGET)" } else { "" },
         ),
     }
+}
+
+// ============================================================================================
+// The PERMANENT differential fixture: every ground-truth row bound to its exact SELECTED-CHAIN POINT
+// (block_header_hash + parent + genesis/config hash + network_magic), NOT merely a decoded-state fingerprint.
+// A state commitment proves "these bytes decode to this state", NOT "these came from this exact historical
+// chain block" — two chain points can share a projection. See the chain-point-witness methodology note.
+// ============================================================================================
+
+use ade_testkit::harness::immutabledb_witness::{witness_for_slot, ChainPointWitness};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+const IMMUTABLE_DIR: &str = "/home/ts/.cardano-ce3d-extract/db/immutable";
+const LEDGER_DIR: &str = "/home/ts/.cardano-ce3d-extract/db/ledger";
+const TARGET_ACTION_STR: &str = "69c948cde90c6b9d7d61595e8534c106ec44132cb049ab2558399db1260c1f69#0";
+
+fn hex32(b: &[u8; 32]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// The four era genesis hashes from the node config — the machine-independent protocol identity that the
+/// db-analyser extraction was pinned to (`--config`). Read live so the fixture binds to the REAL config.
+fn genesis_hashes() -> BTreeMap<String, String> {
+    let cfg = std::fs::read_to_string(PREVIEW_CONFIG).expect("read config.json");
+    let v: serde_json::Value = serde_json::from_str(&cfg).expect("parse config.json");
+    let mut m = BTreeMap::new();
+    for (era, key) in [
+        ("byron", "ByronGenesisHash"),
+        ("shelley", "ShelleyGenesisHash"),
+        ("alonzo", "AlonzoGenesisHash"),
+        ("conway", "ConwayGenesisHash"),
+    ] {
+        m.insert(era.to_string(), v[key].as_str().expect("genesis hash").to_string());
+    }
+    m
+}
+
+/// A single config-identity digest over the four genesis hashes (fixed era order) — one value binding every
+/// row to the exact protocol configuration.
+fn genesis_config_hash(hashes: &BTreeMap<String, String>) -> String {
+    let mut buf = Vec::new();
+    for era in ["byron", "shelley", "alonzo", "conway"] {
+        let h = hashes.get(era).expect("era hash");
+        buf.extend_from_slice(&(0..h.len()).step_by(2).map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap()).collect::<Vec<u8>>());
+    }
+    hex32(&blake2b_256(&buf).0)
+}
+
+/// The constant acquisition + protocol provenance shared by every row (the manifest the row hashes bind to).
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+struct FixtureManifest {
+    description: String,
+    target_action: String,
+    network_magic: u64,
+    genesis_hashes: BTreeMap<String, String>,
+    genesis_config_hash: String,
+    dba_image: String,
+    dba_command: String,
+    preview_config: String,
+    window_epochs: [u64; 2],
+}
+
+/// One fully-witnessed census row: the selected-chain point + provenance + state fingerprints + the
+/// lifecycle observables, all bound into `row_hash`.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+struct WitnessedCensusRow {
+    epoch: u64,
+    slot: u64,
+    block_no: u64,
+    era: String,
+    era_tag: u8,
+    // (1) selected-chain identity — what a state fingerprint CANNOT provide.
+    block_header_hash: String,
+    parent_header_hash: String,
+    // (2) state fingerprints — the raw extracted blob + the canonical decoded projection.
+    raw_ledger_state_blob_hash: String,
+    canonical_decoded_state_hash: String,
+    // (3) lifecycle observables (the enactment evidence).
+    action_present: bool,
+    proposal_count: u64,
+    max_tx_ex_units_mem: u64,
+    max_block_ex_units_mem: u64,
+    prev_max_tx_ex_units_mem: u64,
+    prev_max_block_ex_units_mem: u64,
+    deposit_pot: u64,
+    enacted_pparam_update: Option<String>,
+    enacted_is_target: bool,
+    // the differential witness over EVERY field above + the manifest's network_magic + genesis_config_hash.
+    row_hash: String,
+}
+
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+struct CensusFixture {
+    manifest: FixtureManifest,
+    rows: Vec<WitnessedCensusRow>,
+}
+
+fn fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/cre_enactment_census/census_1087_1103.json")
+}
+
+fn build_witnessed_row(
+    epoch: u64,
+    slot: u64,
+    network_magic: u64,
+    genesis_config_hash: &str,
+) -> WitnessedCensusRow {
+    // Decode the ledger-state projection (the census observables + the canonical state commitment).
+    let raw = std::fs::read(format!("{LEDGER_DIR}/{slot}_db-analyser/state")).expect("state");
+    let point = SeedPoint { slot: SlotNo(slot), block_hash: Hash32([0u8; 32]) };
+    let (s1a, commitment) = decode_native_nonutxo_state(&raw, point, epoch, 2)
+        .unwrap_or_else(|e| panic!("decode epoch {epoch} @{slot}: {e:?}"));
+    let g = &s1a.imported_gov;
+    let action_present = g.proposals.iter().any(|p| p.action_id == target());
+    let enacted = s1a.enacted_pparam_update.clone();
+    let enacted_is_target = enacted.as_ref().map(|id| *id == target()).unwrap_or(false);
+    // Bind the row to its exact selected-chain point (block_header_hash + parent), from the ImmutableDB.
+    let w: ChainPointWitness =
+        witness_for_slot(Path::new(IMMUTABLE_DIR), slot).unwrap_or_else(|e| panic!("witness @{slot}: {e}"));
+    assert_eq!(w.slot, slot);
+    assert_eq!(w.era_tag, 7, "every census boundary is Conway (HFC era tag 7)");
+    let raw_blob_hash = blake2b_256(&raw).0;
+    let parent = w.parent_header_hash.expect("a real boundary block has a parent");
+
+    // canonical row encoding (fixed order, big-endian) -> the differential witness hash. Binds the
+    // chain-point identity, the config/network provenance, the state fingerprints, AND the observables.
+    let gch: Vec<u8> = (0..genesis_config_hash.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&genesis_config_hash[i..i + 2], 16).unwrap())
+        .collect();
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&epoch.to_be_bytes());
+    buf.extend_from_slice(&slot.to_be_bytes());
+    buf.extend_from_slice(&w.block_no.to_be_bytes());
+    buf.push(w.era_tag);
+    buf.extend_from_slice(&w.block_header_hash);
+    buf.extend_from_slice(&parent);
+    buf.extend_from_slice(&network_magic.to_be_bytes());
+    buf.extend_from_slice(&gch);
+    buf.extend_from_slice(&raw_blob_hash);
+    buf.extend_from_slice(&commitment.0);
+    buf.push(action_present as u8);
+    buf.extend_from_slice(&(g.proposals.len() as u64).to_be_bytes());
+    buf.extend_from_slice(&s1a.protocol_params.max_tx_ex_units_mem.to_be_bytes());
+    buf.extend_from_slice(&s1a.max_block_ex_units_mem.to_be_bytes());
+    buf.extend_from_slice(&s1a.prev_max_tx_ex_units_mem.to_be_bytes());
+    buf.extend_from_slice(&s1a.prev_max_block_ex_units_mem.to_be_bytes());
+    buf.extend_from_slice(&s1a.gov_deposit_pot.0.to_be_bytes());
+    match &enacted {
+        None => buf.push(0x00),
+        Some(id) => {
+            buf.push(0x01);
+            buf.extend_from_slice(&id.tx_hash.0);
+            buf.extend_from_slice(&id.index.to_be_bytes());
+        }
+    }
+    buf.push(enacted_is_target as u8);
+
+    WitnessedCensusRow {
+        epoch,
+        slot,
+        block_no: w.block_no,
+        era: format!("{:?}", s1a.era),
+        era_tag: w.era_tag,
+        block_header_hash: hex32(&w.block_header_hash),
+        parent_header_hash: hex32(&parent),
+        raw_ledger_state_blob_hash: hex32(&raw_blob_hash),
+        canonical_decoded_state_hash: hex32(&commitment.0),
+        action_present,
+        proposal_count: g.proposals.len() as u64,
+        max_tx_ex_units_mem: s1a.protocol_params.max_tx_ex_units_mem,
+        max_block_ex_units_mem: s1a.max_block_ex_units_mem,
+        prev_max_tx_ex_units_mem: s1a.prev_max_tx_ex_units_mem,
+        prev_max_block_ex_units_mem: s1a.prev_max_block_ex_units_mem,
+        deposit_pot: s1a.gov_deposit_pot.0,
+        enacted_pparam_update: enacted
+            .map(|id| format!("{}#{}", hex32(&id.tx_hash.0), id.index)),
+        enacted_is_target,
+        row_hash: hex32(&blake2b_256(&buf).0),
+    }
+}
+
+fn build_fixture() -> CensusFixture {
+    let hashes = genesis_hashes();
+    let gch = genesis_config_hash(&hashes);
+    let network_magic = 2u64;
+    let slots = window_slots();
+    let rows: Vec<WitnessedCensusRow> = slots
+        .iter()
+        .map(|&slot| {
+            let epoch = 1341 - (115_862_400 - slot + 86_399) / 86_400;
+            build_witnessed_row(epoch, slot, network_magic, &gch)
+        })
+        .collect();
+    CensusFixture {
+        manifest: FixtureManifest {
+            description: "CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY enactment ground truth — the Preview \
+                param-update 69c948cd..#0 (Increase Tx/Block Memory Units pt1): present@1089, ratified+enacted \
+                @1096 (14M/62M -> 16.5M/72M), persisted to 1103. Every row bound to its selected-chain point."
+                .to_string(),
+            target_action: TARGET_ACTION_STR.to_string(),
+            network_magic,
+            genesis_hashes: hashes,
+            genesis_config_hash: gch,
+            dba_image: DBA_IMAGE.to_string(),
+            dba_command: DBA_COMMAND.to_string(),
+            preview_config: PREVIEW_CONFIG.to_string(),
+            window_epochs: [1087, 1103],
+        },
+        rows,
+    }
+}
+
+/// Emit / gate the PERMANENT differential fixture: every row bound to its exact selected-chain point. On the
+/// first run (fixture absent) this WRITES the committed JSON; thereafter it re-derives from the live
+/// ChainDB + config and asserts BYTE-EQUALITY (the reproducibility gate) + replay determinism.
+#[test]
+#[ignore = "reads the local ChainDB (ImmutableDB + ledger states) + node config; emits/gates the witnessed fixture"]
+fn cre_census_emit_and_gate_witnessed_fixture() {
+    let fixture = build_fixture();
+    assert_eq!(fixture.rows.len(), 17, "the full 1087-1103 window");
+    // the enactment row (epoch 1096) names the target as the enacted authority.
+    let enact = fixture.rows.iter().find(|r| r.epoch == 1096).expect("1096 row");
+    assert!(enact.enacted_is_target, "the 1096 row's enacted PParamUpdate root IS the target");
+    assert_eq!(enact.max_tx_ex_units_mem, 16_500_000);
+    assert_eq!(enact.prev_max_tx_ex_units_mem, 14_000_000);
+    assert_eq!(enact.block_no, 3_715_747, "the enactment block's selected-chain identity is pinned");
+
+    let json = serde_json::to_string_pretty(&fixture).expect("serialize");
+    let path = fixture_path();
+    if path.exists() {
+        let on_disk = std::fs::read_to_string(&path).expect("read committed fixture");
+        assert_eq!(
+            json.trim(),
+            on_disk.trim(),
+            "regenerated witnessed fixture != the committed one (reproducibility gate)"
+        );
+        eprintln!("fixture reproducibility gate PASSED: {} rows @ {}", fixture.rows.len(), path.display());
+    } else {
+        std::fs::create_dir_all(path.parent().unwrap()).expect("mkdir fixtures");
+        std::fs::write(&path, &json).expect("write fixture");
+        eprintln!("WROTE witnessed fixture ({} rows) -> {}", fixture.rows.len(), path.display());
+    }
+    // replay determinism: re-derive from the same inputs -> byte-identical.
+    assert_eq!(json, serde_json::to_string_pretty(&build_fixture()).unwrap(), "fixture derivation is deterministic");
 }
