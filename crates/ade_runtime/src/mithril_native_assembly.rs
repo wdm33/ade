@@ -871,6 +871,30 @@ mod tests {
         );
     }
 
+    /// S4.1b GATE (bootstrap binding, non-fabricated): the assembled seed's governance dormancy is
+    /// `Bound(imported.num_dormant_epochs)` — bound DIRECTLY to the decoded `vsNumDormantEpochs`, exercised
+    /// with a NON-ZERO value so a laundered/fabricated 0 cannot pass. This is the V2 seed's source-binding
+    /// half (the durable persist/recover half is proven in `epoch_accumulator` `s4_1b_*`).
+    #[test]
+    fn s4_1b_assembled_seed_binds_num_dormant_to_the_decoded_source() {
+        let mut s1a = s1a_state();
+        s1a.imported_gov.num_dormant_epochs = 5; // a REAL, non-zero decoded value (not a default)
+        let seed = assemble_native_mithril_seed(
+            &s1a,
+            s1a_commitment_fixture(),
+            stage2_utxo(),
+            &binding(),
+            &genesis(),
+            &schedule(),
+        )
+        .expect("assemble");
+        assert_eq!(
+            seed.ledger.gov_state.as_ref().expect("gov").num_dormant,
+            ade_ledger::state::DormantEpochs::Bound(5),
+            "the V2 seed's dormancy is Bound to the decoded source field (non-zero, non-fabricated)",
+        );
+    }
+
     #[test]
     fn native_assembly_maps_each_field_from_its_source() {
         let s1a = s1a_state();

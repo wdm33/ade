@@ -400,6 +400,76 @@ fn cre_s4_oracle_anchor_ratify_decision() {
     assert_eq!(n95, 1, "the target is the ONLY proposal ratified at 1095 — no false positives");
 }
 
+/// CRE S4.1b GATE 6 — the c2f5960e anchor rerun AGAINST A PERSISTED+RECOVERED V2 STORE. Build the live
+/// governance store from the census 1095 state (dormancy `Bound` to the real decoded numDormant), persist it
+/// through the DURABLE codec, recover it, and prove: (a) it is restart-equal with the real offset preserved,
+/// and (b) the RECOVERED store reproduces the oracle — 69c948cd..#0 ratifies at 1095, and only it. Separates
+/// "is the V2 seed correct" (this) from "does the live path consume it" (S4.2).
+#[test]
+#[ignore = "reads local census states; S4.1b — the recovered V2 governance store ratifies the anchor outcome"]
+fn cre_s4_1b_recovered_v2_store_ratifies_the_anchor_outcome() {
+    use ade_ledger::governance::{derive_drep_voting_stake, evaluate_ratification};
+    use ade_ledger::rational::Rational;
+    use ade_ledger::snapshot::{decode_gov_state, encode_gov_state};
+    use ade_ledger::state::{ConwayGovState, DormantEpochs};
+
+    let dir = "/home/ts/.cardano-ce3d-extract/db/ledger";
+    let state = std::fs::read(format!("{dir}/94608021_db-analyser/state")).expect("state");
+    let point = SeedPoint { slot: SlotNo(94_608_021), block_hash: Hash32([0u8; 32]) };
+    let (s1a, _) = decode_native_nonutxo_state(&state, point, 1095, 2).expect("decode");
+    let g = &s1a.imported_gov;
+
+    // Build the V2 governance store (Bound to the REAL decoded numDormant), then PERSIST → RECOVER it.
+    let store = ConwayGovState {
+        proposals: g.proposals.clone(),
+        committee: g.committee.clone(),
+        committee_quorum: g.committee_quorum.unwrap_or((1, 1)),
+        drep_expiry: g.drep_expiry.clone(),
+        gov_action_lifetime: g.gov_action_lifetime,
+        vote_delegations: g.vote_delegations.clone(),
+        pool_voting_thresholds: g.pool_voting_thresholds.clone(),
+        drep_voting_thresholds: g.drep_voting_thresholds.clone(),
+        committee_hot_keys: g.committee_hot_keys.clone(),
+        num_dormant: DormantEpochs::Bound(g.num_dormant_epochs),
+    };
+    let recovered = decode_gov_state(&encode_gov_state(&store)).expect("recover the V2 store");
+    assert_eq!(recovered, store, "the V2 governance store is restart-equal");
+    assert_eq!(
+        recovered.num_dormant,
+        DormantEpochs::Bound(g.num_dormant_epochs),
+        "the real dormant offset survives the durable round-trip"
+    );
+
+    // Rerun the anchor AGAINST the recovered store.
+    let drep_stake = derive_drep_voting_stake(&recovered.vote_delegations, &s1a.snapshots.mark.0);
+    let quorum =
+        Rational::new(recovered.committee_quorum.0 as i128, recovered.committee_quorum.1.max(1) as i128).unwrap();
+    let r = evaluate_ratification(
+        &recovered.proposals,
+        &drep_stake,
+        &s1a.snapshots.go.0.pool_stakes,
+        &recovered.committee,
+        &quorum,
+        &recovered.pool_voting_thresholds,
+        &recovered.drep_voting_thresholds,
+        1095,
+        &recovered.committee_hot_keys,
+        &recovered.drep_expiry,
+        &recovered.num_dormant,
+    )
+    .expect("ratify against the recovered V2 store");
+    assert!(
+        r.ratified.iter().any(|p| p.action_id == target()),
+        "the RECOVERED V2 store ratifies 69c948cd..#0 at 1095"
+    );
+    assert_eq!(r.ratified.len(), 1, "no false positives from the recovered store");
+    eprintln!(
+        "CRE S4.1b: recovered V2 store (Bound({})) ratifies the target at 1095, {} total",
+        g.num_dormant_epochs,
+        r.ratified.len()
+    );
+}
+
 // ============================================================================================
 // The PERMANENT differential fixture: every ground-truth row bound to its exact SELECTED-CHAIN POINT
 // (block_header_hash + parent + genesis/config hash + network_magic), NOT merely a decoded-state fingerprint.

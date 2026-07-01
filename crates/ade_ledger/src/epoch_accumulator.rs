@@ -1973,6 +1973,62 @@ mod tests {
         );
     }
 
+    // ----- S4.1b: V2 governance seed binding + restart proof -----
+
+    /// S4.1b GATE (durable restart equality): a V2 (`Bound`) governance dormancy survives the DURABLE
+    /// accumulator round-trip — persist → recover yields the SAME `Bound(n)` value and a restart-equal
+    /// accumulator. Fingerprint stability follows (the governance fingerprint is a pure function of an equal
+    /// value). This is the replay-stable-across-restart half of the proof — NOT "old==new" (V1/V2 differ).
+    #[test]
+    fn s4_1b_v2_bound_dormancy_survives_durable_restart() {
+        let mut acc = populated();
+        acc.gov_state.as_mut().expect("gov").num_dormant = crate::state::DormantEpochs::Bound(4);
+        let bytes = encode_epoch_accumulator(&acc);
+        let recovered = decode_epoch_accumulator(&bytes).expect("recover");
+        assert_eq!(
+            recovered.gov_state.as_ref().expect("gov recovered").num_dormant,
+            crate::state::DormantEpochs::Bound(4),
+            "the real V2 dormant offset reappears after a durable restart"
+        );
+        assert_eq!(recovered, acc, "the whole V2 accumulator is restart-equal");
+    }
+
+    /// S4.1b GATE (legacy-`Unversioned` fail-closed regression): a V1 store whose DRep-expiry path is
+    /// exercised (non-empty `drep_expiry`) still FAILS CLOSED at the boundary — the planner refuses to invent
+    /// the dormancy offset. The legacy store is a NEGATIVE fixture, never migrated to a fabricated `Bound(0)`.
+    #[test]
+    fn s4_1b_legacy_unversioned_store_with_live_drep_expiry_is_terminal() {
+        let mut acc = populated();
+        {
+            let gov = acc.gov_state.as_mut().expect("gov");
+            gov.num_dormant = crate::state::DormantEpochs::Unversioned;
+            gov.drep_expiry.insert(key_cred(0x11), 300);
+        }
+        let err = apply_gov_deposit_refunds(&mut acc, EpochNo(1341)).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                LedgerTransitionError::GovDepositRefundTerminal(
+                    crate::governance::RefundVerdict::DormantRequired
+                )
+            ),
+            "Unversioned + live drep_expiry must fail-closed at the accumulator boundary, got {err:?}"
+        );
+    }
+
+    /// S4.1b GATE (durable restart preserves the V1 lineage too): a legacy `Unversioned` store round-trips
+    /// through the durable codec as `Unversioned` (never silently promoted to `Bound(0)`).
+    #[test]
+    fn s4_1b_unversioned_store_stays_unversioned_across_restart() {
+        let acc = populated(); // gov is Unversioned
+        let recovered = decode_epoch_accumulator(&encode_epoch_accumulator(&acc)).expect("recover");
+        assert_eq!(
+            recovered.gov_state.as_ref().expect("gov").num_dormant,
+            crate::state::DormantEpochs::Unversioned,
+            "a V1 store is never silently promoted to a fabricated Bound(0) on restart"
+        );
+    }
+
     #[test]
     fn codec_rejects_unknown_version() {
         let acc = populated();
