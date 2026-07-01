@@ -364,28 +364,39 @@ pub fn assemble_native_mithril_seed(
         // proof reads; `gov_action_lifetime` is the era-correct `govActionLifetime` read from the
         // certified `curPParams` (S3) — the persisted timing authority for a LIVE proposal's
         // `expires_after`, bound into the bootstrap commitment as fresh-bootstrap tamper-evidence (a
-        // pre-S3 store recovers 0 and fail-closes at the runtime capture guard, never here). The per-action
-        // SPO/DRep voting thresholds (curPParams 22/23) ARE imported + commitment-bound in the
-        // `ImportedGovState` (CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S1), but are DELIBERATELY NOT
-        // threaded into the live `ConwayGovState` here. The SPO ratification gate has NO active-stake guard
-        // (governance.rs:281 — only `voted_stake > 0`), and its inputs (the `go` pool stake + the proposals'
-        // `spo_votes`) are ALREADY present at bootstrap — so feeding it the thresholds would ACTIVATE the SPO
-        // gate on the authoritative epoch boundary (a semantic activation, where a go-stake undercount could
-        // flip a near-boundary ratio into a false rejection). The ratify SEMANTIC activates deliberately in
-        // the CRE ratify slice (S4) with oracle verification, never as a side-effect of the import; so the
-        // live gate stays empty (skipped) here.
+        // pre-S3 store recovers 0 and fail-closes at the runtime capture guard, never here). CRE S4.2 threads
+        // the imported DRep/committee ratification authority (drep_voting_thresholds[23], vote_delegations,
+        // drep_expiry, committee_hot_keys, + the Bound num_dormant) into the live `ConwayGovState` — a
+        // deliberate, oracle-verified activation of the MONOTONE gates. The one field still withheld is
+        // `pool_voting_thresholds`: the SPO gate is NON-MONOTONE (governance.rs:325, `voted_stake = yes + no`,
+        // no active-stake guard), and its inputs (the `go` pool stake + the proposals' `spo_votes`) are
+        // already present, so threading the SPO threshold would activate a gate where a go-stake undercount +
+        // a captured No could flip a near-boundary ratio into a false rejection AND drive a wrongful refund
+        // under the current terminal. That activation is S4.3, WITH the PotentiallyRatifiable terminal
+        // replaced by oracle-verified ratify-then-enact — so the SPO field stays empty (skipped) here.
         gov_state: Some(ade_ledger::state::ConwayGovState {
             proposals: s1a.imported_gov.proposals.clone(),
             committee: s1a.imported_gov.committee.clone(),
             committee_quorum: s1a.imported_gov.committee_quorum.unwrap_or((1, 1)),
-            drep_expiry: std::collections::BTreeMap::new(),
+            // CRE S4.2: thread the imported DRep/committee ratification authority into the LIVE gate. These
+            // gates are MONOTONE (committee + DRep count only Yes; the DRep denominator is the fixed active
+            // total, so a No/absent DRep merely fails to add Yes — never inflates the denominator). Verified
+            // against the CE-3d oracle: with these live, `potentially_ratifiable == 0` for the whole POST-1340
+            // set, so no provably-unratifiable proposal flips to a halt or a wrongful refund
+            // (`cre_s4_2_threading_drep_introduces_no_halt_or_wrongful_refund`).
+            drep_expiry: s1a.imported_gov.drep_expiry.clone(),
             gov_action_lifetime: s1a.imported_gov.gov_action_lifetime,
-            vote_delegations: std::collections::BTreeMap::new(),
+            vote_delegations: s1a.imported_gov.vote_delegations.clone(),
+            // SPO stays INERT: `pool_voting_thresholds` is the ONLY field left empty. The SPO gate is
+            // NON-MONOTONE (`voted_stake = yes + no`, governance.rs:325), so a captured No could flip a
+            // borderline proposal to unratifiable and drive a WRONGFUL refund under the current
+            // PotentiallyRatifiable terminal. Threading it is deferred to S4.3, WITH the terminal replaced by
+            // oracle-verified ratify-then-enact (a ratified proposal takes the ENACT path, never the refund).
             pool_voting_thresholds: Vec::new(),
-            drep_voting_thresholds: Vec::new(),
-            committee_hot_keys: std::collections::BTreeMap::new(),
+            drep_voting_thresholds: s1a.imported_gov.drep_voting_thresholds.clone(),
+            committee_hot_keys: s1a.imported_gov.committee_hot_keys.clone(),
             // V2 from the NAMED BOUND SOURCE: the imported Conway state's numDormantEpochs (never a fabricated
-            // default). The offset stays inert until S4.2 threads a non-empty drep_expiry into the live gate.
+            // default). Now LIVE alongside the threaded `drep_expiry` — it shifts the active-DRep denominator.
             num_dormant: ade_ledger::state::DormantEpochs::Bound(s1a.imported_gov.num_dormant_epochs),
         }),
         conway_deposit_params: None,
@@ -937,13 +948,26 @@ mod tests {
                 Some(&1340u64),
                 "imported committee member preserved",
             );
-            // CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S1: the imported per-action voting thresholds
-            // (curPParams 22/23) are commitment-bound in the ImportedGovState but DELIBERATELY NOT threaded
-            // into the live gate — the SPO ratification gate has no active-stake guard, so threading would
-            // activate it on the authoritative boundary. The live gate stays empty until the CRE ratify
-            // slice (S4) activates the semantic with oracle verification.
-            assert!(gov.pool_voting_thresholds.is_empty(), "SPO threshold NOT activated into the live gate at import");
-            assert!(gov.drep_voting_thresholds.is_empty(), "DRep threshold NOT activated into the live gate at import");
+            // CRE S4.2: the imported DRep/committee ratification authority (drep_voting_thresholds[23] +
+            // vote_delegations + drep_expiry + committee_hot_keys) is now THREADED into the live gate — the
+            // deliberate, oracle-verified activation of the MONOTONE gates. The SPO threshold
+            // (pool_voting_thresholds) is the ONE field still withheld — the non-monotone gate is deferred to
+            // S4.3, WITH the terminal replaced by ratify-then-enact.
+            assert_eq!(
+                gov.drep_voting_thresholds, s1a.imported_gov.drep_voting_thresholds,
+                "S4.2: imported DRep thresholds threaded into the live gate",
+            );
+            assert!(!gov.drep_voting_thresholds.is_empty(), "the sample imports non-empty DRep thresholds");
+            assert_eq!(gov.vote_delegations, s1a.imported_gov.vote_delegations, "S4.2: vote_delegations threaded");
+            assert_eq!(gov.drep_expiry, s1a.imported_gov.drep_expiry, "S4.2: drep_expiry threaded");
+            assert_eq!(
+                gov.committee_hot_keys, s1a.imported_gov.committee_hot_keys,
+                "S4.2: committee_hot_keys threaded",
+            );
+            assert!(
+                gov.pool_voting_thresholds.is_empty(),
+                "SPO threshold STAYS withheld (non-monotone) — S4.3 activates it with the terminal replacement",
+            );
             let p = &gov.proposals[0];
             assert_eq!(p.action_id.tx_hash, Hash32(SAMPLE_GAS_TXID), "GovActionId tx_hash bound");
             assert_eq!(p.action_id.index, 0, "GovActionId index bound");
