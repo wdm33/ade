@@ -94,8 +94,11 @@ fn build_state(current_era_index: u64, pool_vrf: [u8; 32], pool_distr_vrf: [u8; 
         map(0),
         arr(0),
     ]);
-    // CertState = [VState(empty), PState, DState]
-    let cert = concat(&[arr(3), arr(0), pstate, dstate]);
+    // CertState = [VState, PState, DState]. VState = array(3)[vsDReps, vsCommitteeState, vsNumDormantEpochs]
+    // — a minimal empty VState (the CRE S1 `read_vstate` tightening requires array(3), not the old arr(0)
+    // stub; this probe asserts only PState/DState counts, so empty dreps/committee is fine).
+    let vstate = concat(&[arr(3), map(0), map(0), uint(0)]);
+    let cert = concat(&[arr(3), vstate, pstate, dstate]);
     // LedgerState = [CertState, UTxOState(dummy)]
     let ls = concat(&[arr(2), cert, arr(0)]);
     // EpochState = [acct, LedgerState, snaps, nonmyopic]
