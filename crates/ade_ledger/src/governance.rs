@@ -22,12 +22,34 @@ use ade_types::conway::governance::{GovAction, GovActionId, GovActionState, Vote
 use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::Coin;
 use ade_types::Hash28;
+use crate::epoch::StakeSnapshot;
 use crate::rational::Rational;
 
 use std::collections::BTreeMap;
 
 /// DRep stake distribution: maps each DRep to its total delegated voting stake.
 pub type DRepStakeDistribution = BTreeMap<DRep, u64>;
+
+/// Derive the DRep voting-stake distribution (CRE S3, the "distribution authority"): each DRep's voting
+/// stake is the exact sum of the MARK stake of the credentials that delegated their vote to it. Only
+/// positive stake contributes; an absent delegator is 0, never a default/guess. The mark snapshot is the
+/// most recent (current-epoch) stake — the closest native analogue of the Haskell DRepPulser's InstantStake
+/// (the byte-exact InstantStake match is S6's oracle gate, not this slice). Pure, deterministic,
+/// replay-identical (ordered containers, no I/O). NOT threaded into the live ratification gate in S3 —
+/// import-not-activate; S4 is the deliberate, oracle-verified activation.
+pub fn derive_drep_voting_stake(
+    vote_delegations: &BTreeMap<StakeCredential, DRep>,
+    mark: &StakeSnapshot,
+) -> DRepStakeDistribution {
+    let mut out: DRepStakeDistribution = BTreeMap::new();
+    for (cred, drep) in vote_delegations {
+        let stake = mark.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
+        if stake > 0 {
+            *out.entry(drep.clone()).or_insert(0) += stake;
+        }
+    }
+    out
+}
 
 /// Result of ratification evaluation for a single proposal.
 #[derive(Debug, Clone)]
@@ -142,21 +164,6 @@ pub fn evaluate_ratification(
     }
 
     RatificationResult { ratified, expired, remaining }
-}
-
-/// Compute total active DRep stake (excluding AlwaysAbstain).
-/// This is the denominator for DRep threshold checks (Haskell: dRepAcceptedRatio).
-///
-/// The Haskell DRepPulser computes this from live InstantStake (post-applyRUpd).
-/// Our approximation uses the most recent snapshot. Known gap: ~400M ADA at
-/// epoch 576 (7% of total), causing 1 of 2 oracle-enacted TreasuryWithdrawals
-/// to not meet our threshold. Closing requires a Conway mid-epoch dump with
-/// the DRepPulser's computed distribution.
-fn compute_active_drep_stake(drep_stake: &DRepStakeDistribution) -> u64 {
-    drep_stake.iter()
-        .filter(|(drep, _)| !matches!(drep, DRep::AlwaysAbstain))
-        .map(|(_, stake)| *stake)
-        .sum()
 }
 
 /// Map a governance action to its threshold index in the poolVotingThresholds
@@ -1220,5 +1227,86 @@ mod committee_fidelity_tests {
         );
         // Byte-identical gov-state fingerprint across runs.
         assert_eq!(build(), build());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod drep_voting_stake_derivation_tests {
+    use super::*;
+    use ade_types::shelley::cert::StakeCredential;
+    use ade_types::tx::PoolId;
+    use ade_types::Hash28;
+
+    fn key(b: u8) -> StakeCredential {
+        StakeCredential::KeyHash(Hash28([b; 28]))
+    }
+
+    /// A mark snapshot where each `(byte, coin)` is a credential (hash = `[byte;28]`) with `coin` stake
+    /// delegated to a throwaway pool. Only `delegations` matters to the DRep derivation.
+    fn mark_with(entries: &[(u8, u64)]) -> StakeSnapshot {
+        let mut delegations = BTreeMap::new();
+        for (b, coin) in entries {
+            delegations.insert(Hash28([*b; 28]), (PoolId(Hash28([0xEE; 28])), Coin(*coin)));
+        }
+        StakeSnapshot { delegations, pool_stakes: BTreeMap::new() }
+    }
+
+    #[test]
+    fn sums_delegator_mark_stake_per_drep() {
+        let drep_a = DRep::KeyHash(Hash28([0xAA; 28]));
+        let drep_b = DRep::ScriptHash(Hash28([0xBB; 28]));
+        let vd: BTreeMap<StakeCredential, DRep> =
+            [(key(1), drep_a.clone()), (key(2), drep_a.clone()), (key(3), drep_b.clone())]
+                .into_iter()
+                .collect();
+        let d = derive_drep_voting_stake(&vd, &mark_with(&[(1, 100), (2, 250), (3, 70)]));
+        assert_eq!(d.get(&drep_a), Some(&350), "DRep A = 100 + 250");
+        assert_eq!(d.get(&drep_b), Some(&70));
+        assert_eq!(d.len(), 2);
+    }
+
+    #[test]
+    fn zero_and_absent_stake_contribute_nothing() {
+        let drep = DRep::KeyHash(Hash28([0xAA; 28]));
+        // cred 1 absent from mark; cred 2 has zero stake; cred 3 has real stake.
+        let vd: BTreeMap<StakeCredential, DRep> =
+            [(key(1), drep.clone()), (key(2), drep.clone()), (key(3), drep.clone())]
+                .into_iter()
+                .collect();
+        let d = derive_drep_voting_stake(&vd, &mark_with(&[(2, 0), (3, 500)]));
+        assert_eq!(d.get(&drep), Some(&500), "only the positive-stake delegator counts");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn empty_delegations_yield_empty_distribution() {
+        // The live path (import-not-activate) feeds empty vote_delegations -> no distribution -> no gate.
+        let d = derive_drep_voting_stake(&BTreeMap::new(), &mark_with(&[(1, 100)]));
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn always_abstain_is_derived_raw_but_filtered_from_the_active_denominator() {
+        // The derivation records AlwaysAbstain's raw delegated stake; the SEPARATE active-denominator filter
+        // (the single `active_drep_stake_filtered`) is what excludes it downstream — no second filter.
+        let vd: BTreeMap<StakeCredential, DRep> =
+            [(key(1), DRep::AlwaysAbstain), (key(2), DRep::KeyHash(Hash28([0xAA; 28])))]
+                .into_iter()
+                .collect();
+        let raw = derive_drep_voting_stake(&vd, &mark_with(&[(1, 900), (2, 100)]));
+        assert_eq!(raw.get(&DRep::AlwaysAbstain), Some(&900), "derivation keeps the raw delegated stake");
+        let (active, total) = active_drep_stake_filtered(&raw, &BTreeMap::new(), 0);
+        assert_eq!(total, 100, "the active denominator excludes AlwaysAbstain");
+        assert!(!active.contains_key(&DRep::AlwaysAbstain));
+    }
+
+    #[test]
+    fn derivation_is_replay_deterministic() {
+        let drep = DRep::KeyHash(Hash28([0x11; 28]));
+        let vd: BTreeMap<StakeCredential, DRep> = (0u8..50).map(|b| (key(b), drep.clone())).collect();
+        let entries: Vec<(u8, u64)> = (0u8..50).map(|b| (b, (b as u64 + 1) * 7)).collect();
+        let mark = mark_with(&entries);
+        assert_eq!(derive_drep_voting_stake(&vd, &mark), derive_drep_voting_stake(&vd, &mark));
     }
 }

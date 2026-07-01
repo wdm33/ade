@@ -1262,20 +1262,15 @@ pub fn apply_epoch_boundary_with_registrations(
     let mut governance_treasury_withdrawn = 0u64;
     let new_gov_state = if state.era == ade_types::CardanoEra::Conway {
         if let Some(ref gov) = state.gov_state {
-            // Compute DRep stake distribution from vote delegations + mark snapshot.
-            // The mark snapshot is the most recent (current epoch), closest to the
-            // Haskell DRepPulser's InstantStake. Using go would be 2 epochs stale.
-            let mark = &state.epoch_state.snapshots.mark;
-            let mut drep_stake: crate::governance::DRepStakeDistribution =
-                std::collections::BTreeMap::new();
-            for (cred, drep) in &gov.vote_delegations {
-                let stake = mark.0.delegations.get(cred.hash())
-                    .map(|(_, c)| c.0)
-                    .unwrap_or(0);
-                if stake > 0 {
-                    *drep_stake.entry(drep.clone()).or_insert(0) += stake;
-                }
-            }
+            // DRep voting-stake distribution = vote_delegations × the MARK snapshot (current-epoch stake,
+            // closest to the Haskell DRepPulser's InstantStake; `go` would be 2 epochs stale). CRE S3: the
+            // derivation is the pure `governance::derive_drep_voting_stake` "distribution authority" (shared,
+            // tested), not an inline block. In the live path `vote_delegations` is still empty until S4's
+            // deliberate activation, so this feeds the gate nothing — import-not-activate.
+            let drep_stake = crate::governance::derive_drep_voting_stake(
+                &gov.vote_delegations,
+                &state.epoch_state.snapshots.mark.0,
+            );
 
             let committee_quorum = crate::rational::Rational::new(
                 gov.committee_quorum.0 as i128,

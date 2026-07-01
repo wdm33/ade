@@ -156,3 +156,53 @@ fn cre_oracle_govstate_lifecycle_1340_1342() {
     );
     assert!(g1340.drep_expiry.values().all(|e| *e > 0), "DRep expiries are non-zero epoch numbers");
 }
+
+/// CRE S3: the DRep voting-stake DERIVATION (`governance::derive_drep_voting_stake`, the "distribution
+/// authority") run over the REAL 58k+ bootstrap vote delegations × the real mark snapshot at epoch 1340.
+/// Proves the derivation produces a non-trivial, conserved, deterministic distribution at scale — the input
+/// the ratification gate consumes. NOT the byte-exact InstantStake oracle match (that is S6); this is the
+/// derivation's correctness on real data. Read-only, import-not-activate (nothing threaded into a live gate).
+#[test]
+#[ignore = "reads the local POST-1340 preview state; run explicitly (CRE S3 DRep voting-stake derivation)"]
+fn cre_s3_drep_voting_stake_derivation_on_real_state() {
+    use ade_ledger::governance::derive_drep_voting_stake;
+    let path = std::env::var("CE3D_REF_1340")
+        .unwrap_or_else(|_| "/home/ts/.cardano-ce3d-extract/db/ledger/115776011_db-analyser/state".to_string());
+    let state = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    let point = SeedPoint { slot: SlotNo(115_776_011), block_hash: Hash32([0u8; 32]) };
+    let (s1a, _c) = decode_native_nonutxo_state(&state, point, 1340, 2)
+        .unwrap_or_else(|e| panic!("decode {path}: {e:?}"));
+
+    let vd = &s1a.imported_gov.vote_delegations;
+    let mark = &s1a.snapshots.mark.0;
+    assert!(vd.len() > 10_000, "the real 58k+ vote delegations");
+    assert!(!mark.delegations.is_empty(), "the real mark stake snapshot is populated");
+
+    let dist = derive_drep_voting_stake(vd, mark);
+    assert!(!dist.is_empty(), "the derivation yields real DRep voting stake");
+    let total: u128 = dist.values().map(|s| *s as u128).sum();
+    assert!(total > 0, "positive total DRep voting stake");
+
+    // No phantom DReps: everything in the distribution was actually delegated to.
+    let delegated: std::collections::BTreeSet<_> = vd.values().cloned().collect();
+    assert!(dist.keys().all(|d| delegated.contains(d)), "no DRep appears that was not delegated to");
+
+    // Conservation: the grand total (summed per DRep) equals the grand total summed per positive-stake
+    // delegator — the derivation neither invents nor drops stake across the regrouping.
+    let independent: u128 = vd
+        .keys()
+        .filter_map(|c| mark.delegations.get(c.hash()).map(|(_, coin)| coin.0 as u128))
+        .filter(|s| *s > 0)
+        .sum();
+    assert_eq!(total, independent, "derived total == summed positive-delegator mark stake (conservation)");
+
+    // Replay determinism on real data.
+    assert_eq!(dist, derive_drep_voting_stake(vd, mark), "derivation is replay-identical");
+
+    eprintln!(
+        "CRE S3: {} vote delegations x real mark -> {} DReps with stake, total {} ADA",
+        vd.len(),
+        dist.len(),
+        total / 1_000_000
+    );
+}

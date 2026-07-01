@@ -72,7 +72,15 @@ PROVE, not build-from-scratch.
   potentially-ratifiable terminal (fail-safe, never a wrongful refund) until S4. Safe on the proven CE-3d
   window (no votes on tracked proposals there → no-op; the −500B closure unchanged). Live-delta ground truth
   (real vote windows) is available via a local `dba.sh` preview dump, same as S4.
-- **S3 — DRep/SPO voting-stake derivation** (the InstantStake-equivalent distribution authority).
+- **S3 — DRep/SPO voting-stake derivation [DONE].** The inline `vote_delegations × mark` block at the
+  Conway epoch boundary is extracted to the pure, tested `governance::derive_drep_voting_stake` (the
+  "distribution authority"); the dead `compute_active_drep_stake` is removed (the single active-DRep
+  denominator stays `active_drep_stake_filtered`). Verified on real data: the 58,525 bootstrap vote
+  delegations × the real mark snapshot @1340 → 200 DReps, 288,963,470 ADA, conservation + replay-identical.
+  Import-not-activate holds (the live `vote_delegations` is still empty until S4). See
+  `S3-drep-spo-voting-stake-derivation.md`. **Deferred to S6:** the byte-exact InstantStake oracle match (the
+  DRepPulser `psDRepDistr`), and the two open basis questions (mark-vs-InstantStake; DRep-`mark`/SPO-`go`
+  asymmetry). **Deferred to S4:** the `num_dormant_epochs` offset + live-gate activation + SPO sequencing.
 - **S4 — Deterministic RATIFY** (remove the S4-CPDE terminal): full ordering, delays, previous-action /
   reference-hash protections.
 - **S5 — Deterministic ENACT** (complete the application) for every action kind + deposit accounting on
