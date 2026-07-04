@@ -532,15 +532,52 @@ pub enum MalformedGovDetail {
     ReturnAddrNotRewardAccount,
 }
 
+/// Why a threshold-passing ratified action is OUTSIDE the S4.3c exec-units enactment subset (closed; never a
+/// free-form string). Each is a fail-closed terminal: the boundary halts with ZERO mutation rather than enact an
+/// action it does not support, silently drop it, or fabricate an effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnsupportedActionKind {
+    /// A ratified action that is not a `ParameterChange` (a delaying action — no-confidence / update-committee /
+    /// new-constitution / hard-fork — or a treasury withdrawal). Conservatively treated as ratified-and-unsupported:
+    /// halting is safe whether it is delaying (it would delay the parameter change) or simply un-enactable here.
+    NotParameterChange,
+    /// A ratified `ParameterChange` touching a protocol-parameter field OUTSIDE the exec-units subset {20, 21}.
+    NonExecUnitsField,
+    /// A ratified exec-units `ParameterChange` that carried NEITHER `maxTxExUnits` nor `maxBlockExUnits` (nothing
+    /// to enact).
+    NoExecUnitsField,
+    /// A ratified exec-units `ParameterChange` whose `steps` differs from the current bound `steps` — S4.3c is the
+    /// MEMORY-ONLY subset (steps preserved); a steps change is a later slice, never a silent memory-only enactment.
+    ChangedSteps,
+    /// The ratified `ParameterChange.update` bytes exceed the fixed length / CBOR nesting-depth bound (checked
+    /// BEFORE the recursive-descent decoder runs on attacker-influenced bytes). See T-RESOURCE-01.
+    OversizedUpdate,
+    /// The ratified `ParameterChange.update` bytes are not a well-formed exec-units `protocol_param_update` map.
+    MalformedUpdate,
+    /// A ratified (threshold-passing) `ParameterChange` chains directly onto the winner (`prev_action` == the
+    /// winner id). Conway would chain-enact it in the SAME boundary (tip: parent → winner → child); S4.3c enacts
+    /// AT MOST ONE action per boundary, so it halts rather than silently drop the child or diverge. A later slice
+    /// generalises to multi-enactment.
+    ChainedEnactment,
+    /// MORE THAN ONE ratifiable `ParameterChange` shares the current enacted root (competing siblings both
+    /// chaining onto the tip, both threshold-passing). cardano-ledger enacts the SUBMISSION-first (OMap order),
+    /// which Ade cannot reconstruct from the canonical state — so it halts rather than pick the GovActionId-first
+    /// and risk silently diverging. Fail-closed, symmetric with [`ChainedEnactment`]; a later slice resolves it.
+    CompetingRatifiableActions,
+}
+
 /// The single governance-boundary terminal surface. ANY terminal halts the boundary with ZERO mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GovernanceTerminal {
-    /// A proposal met its voting thresholds — it MIGHT ratify. S4.3 does not YET enact this action kind, so it is
-    /// terminal on BOTH the accumulator and replay paths (identical). S4.3c replaces this with atomic enactment for
-    /// the exec-memory `ParameterChange` subset; every other ratified kind stays terminal until its own slice. This
-    /// is a threshold-pass, NOT a full-RATIFY "ratified" decision (lineage/delay/committee-term/treasury conditions
-    /// are not yet checked — CRE S4.3c).
-    PotentiallyRatifiable { action_id: GovActionId },
+    /// A threshold-passing ratified action falls OUTSIDE the S4.3c supported exec-units-memory `ParameterChange`
+    /// subset (see [`UnsupportedActionKind`]). Terminal on BOTH the accumulator and replay paths (identical), zero
+    /// mutation. This REPLACES the pre-S4.3c `PotentiallyRatifiable` threshold-pass terminal: a supported exec-units
+    /// change now ENACTS atomically; every other ratified kind stays terminal until its own slice.
+    UnsupportedRatifiedAction { action_id: GovActionId, kind: UnsupportedActionKind },
+    /// A supported exec-units `ParameterChange` reached the enact path but the boundary state's `max_block_ex_units`
+    /// or `prev_pparam_action` is `Unversioned` (a pre-V11 store) — fail-closed rather than fabricate the block
+    /// ExUnits or the lineage root. A miswire (the enact path requires a V11 source-bound state).
+    UnversionedStateOnEnactPath { action_id: GovActionId },
     /// The DRep-expiry gate needs the `num_dormant` offset but the governance state is `Unversioned` (S4.1) —
     /// fail-closed rather than fabricate the offset.
     DormantRequired,
@@ -560,23 +597,42 @@ pub struct ConwayGovernanceEpochInput<'a> {
     pub committee_hot_keys: &'a BTreeMap<StakeCredential, StakeCredential>,
     pub drep_expiry: &'a BTreeMap<StakeCredential, u64>,
     pub num_dormant: &'a DormantEpochs,
+    /// The current (pre-boundary) protocol parameters — the exec-units enactment reads `max_tx_ex_units_cpu` /
+    /// `max_block_ex_units` to enforce the memory-only (steps-unchanged) rule and to build the new limits. Source-bound
+    /// (a V11 store binds `max_block_ex_units`); a `MaxBlockExUnits::Unversioned` on the enact path is a terminal.
+    pub current_pparams: &'a crate::pparams::ProtocolParameters,
+    /// The current (pre-boundary) enacted previous-`ParameterChange` root — the exec-units enactment verifies the
+    /// winner's `prev_action` lineage against it and advances it. `Unversioned` on the enact path is a terminal (never
+    /// a fabricated root).
+    pub current_prev_pparam_action: &'a crate::state::PreviousPParamAction,
     /// The epoch being entered; ratification/expiry use `new_epoch - 1` (the ending epoch).
     pub new_epoch: u64,
 }
 
-/// The SINGLE Conway governance epoch authority (CRE S4.3). Pure, deterministic, whole-set; examined BEFORE any
-/// mutation. For every proposal, in `GovActionId` order, it composes the voting-threshold gate ([`check_ratification`],
-/// thresholds-only) with expiry:
-/// - thresholds accepted ⇒ [`GovernanceTerminal::PotentiallyRatifiable`] (S4.3 does not yet enact — terminal, zero
-///   mutation, identically on the accumulator and replay boundaries);
-/// - threshold-failed ∧ expired (`expires_after < new_epoch - 1`) ⇒ removed (`Expired`) with an explicit
-///   [`DepositReturn`] (registered return-addr → reward account, deregistered → treasury, none → `NoDeposit`);
-/// - threshold-failed ∧ not expired ⇒ carried forward (no entry).
+/// The SINGLE Conway governance epoch authority (CRE S4.3c). Pure, deterministic, whole-set; examined BEFORE any
+/// mutation, producing ONE atomic [`ConwayGovernanceEpochPlan`] or ONE [`GovernanceTerminal`]. In `GovActionId`
+/// order it runs full RATIFY (thresholds — [`check_ratification`] — AND previous-action lineage), then, for the
+/// supported subset, one atomic enactment:
 ///
-/// A refundable proposal whose return address is malformed is [`GovernanceTerminal::Malformed`]. The next proposal set
-/// preserves the ORIGINAL order (identity-significant); the removal/return lists are in `GovActionId` order.
-/// `is_registered` decides deposit routing — the routing decision lives HERE (the authority), never in a caller.
-/// S4.3a: no enactment; `pparams`/`prev_pparam_action` are always `Unchanged`.
+/// - **Ratify scan.** For each proposal (skipping `InfoAction`, which never enacts): if it fails thresholds it is
+///   not ratifiable. A threshold-passing action that is NOT an exec-units `ParameterChange` is a fail-closed
+///   [`GovernanceTerminal::UnsupportedRatifiedAction`] (`NotParameterChange` — a delaying action would delay the
+///   change; a treasury withdrawal cannot be dropped). A threshold-passing `ParameterChange` whose `prev_action`
+///   does NOT match the current root is not ratifiable ⇒ carried (never enacted). A threshold-passing
+///   `ParameterChange` with MATCHING lineage is RATIFIED: it must be a bounded, well-formed, exec-units-ONLY,
+///   memory-only (steps unchanged) update, else a structured `UnsupportedRatifiedAction`; a pre-V11
+///   (`Unversioned`) boundary state on this path is [`GovernanceTerminal::UnversionedStateOnEnactPath`]. The FIRST
+///   such winner (canonical order) enacts; later matching siblings are pruned.
+/// - **Removals + refunds** (all in `GovActionId` order, each with a total [`DepositReturn`]): the enacted winner
+///   (`Enacted`); the superseded siblings/subtree sharing the winner's parent root (`PrunedByEnactment`); and any
+///   other proposal past its lifetime (`Expired`). Registered return-addr → reward account, deregistered →
+///   treasury, none → `NoDeposit`; a malformed return address is [`GovernanceTerminal::Malformed`].
+/// - **Atomic delta.** On enactment: `pparams` = the new Tx/block memory limits (`Set`, steps preserved) and
+///   `prev_pparam_action` = the winner id (`Set`); the next proposal set is the ORIGINAL order minus every removal.
+///   With no enactment both deltas are `Unchanged` (the S4.3a expiry-only shape).
+///
+/// `is_registered` decides deposit routing — the routing lives HERE (the authority), never in a caller. Enacting
+/// this plan is one construction at the single application point; no half of it can land without the others.
 pub fn plan_conway_governance_epoch(
     input: &ConwayGovernanceEpochInput<'_>,
     is_registered: impl Fn(&StakeCredential) -> bool,
@@ -588,80 +644,380 @@ pub fn plan_conway_governance_epoch(
             .map_err(|_| GovernanceTerminal::DormantRequired)?;
     let total_pool_stake: u64 = input.pool_stake.values().map(|c| c.0).sum();
 
-    // Canonical `GovActionId` order over the WHOLE set for the removal/return lists.
+    // Canonical `GovActionId` order over the WHOLE set for the ratify scan and the removal/return lists.
     let mut sorted: Vec<&GovActionState> = input.proposals.iter().collect();
     sorted.sort_by(|a, b| a.action_id.cmp(&b.action_id));
+
+    // ── Phase 1: scan for the boundary's enactment CANDIDATES; fail-closed on unsupported ratified kinds. ──
+    // A candidate is a threshold-passing `ParameterChange` whose `prev_action` == the current enacted root (it
+    // chains onto the tip). cardano-ledger enacts the SUBMISSION-first (OMap order) candidate; Ade cannot
+    // reconstruct submission order from the canonical state, so >1 candidate is fail-closed below (never a
+    // GovActionId-order guess that could silently diverge). `threshold_passing_pc_ids` feeds the chain check.
+    let mut threshold_passing_pc_ids: std::collections::BTreeSet<GovActionId> =
+        std::collections::BTreeSet::new();
+    let mut candidates: Vec<&GovActionState> = Vec::new();
+    for p in &sorted {
+        if matches!(p.gov_action, GovAction::InfoAction) {
+            continue; // InfoAction never enacts (mirrors evaluate_ratification's special case).
+        }
+        let thresholds_accepted = check_ratification(
+            p,
+            gov_action_threshold_index(&p.gov_action),
+            &total_drep_active_stake,
+            &active_drep_stake,
+            total_pool_stake,
+            input.pool_stake,
+            input.committee_members,
+            input.committee_quorum,
+            input.pool_thresholds,
+            input.drep_thresholds,
+            ending_epoch,
+            input.committee_hot_keys,
+        );
+        if !thresholds_accepted {
+            continue; // Not a threshold-passer — carried/expired below, never enacted.
+        }
+        match &p.gov_action {
+            GovAction::ParameterChange { prev_action, .. } => {
+                threshold_passing_pc_ids.insert(p.action_id.clone());
+                // A pre-V11 (Unversioned) boundary state cannot supply the lineage root or the block ExUnits —
+                // fail-closed (the enact path requires a source-bound V11 state), never a fabricated value.
+                if matches!(input.current_prev_pparam_action, crate::state::PreviousPParamAction::Unversioned)
+                    || matches!(
+                        input.current_pparams.max_block_ex_units,
+                        crate::pparams::MaxBlockExUnits::Unversioned
+                    )
+                {
+                    return Err(GovernanceTerminal::UnversionedStateOnEnactPath {
+                        action_id: p.action_id.clone(),
+                    });
+                }
+                // Previous-action lineage: a candidate's `prev_action` must equal the current enacted root. A
+                // mismatch ⇒ NOT ratifiable this boundary ⇒ carried (a chain child prev==winner is caught by the
+                // Phase-2 chain check). Collect the ratifiable candidates; the single-winner decision is below.
+                let lineage_ok = match input.current_prev_pparam_action {
+                    crate::state::PreviousPParamAction::NoPreviousAction => prev_action.is_none(),
+                    crate::state::PreviousPParamAction::Enacted(root) => prev_action.as_ref() == Some(root),
+                    crate::state::PreviousPParamAction::Unversioned => false, // guarded above
+                };
+                if lineage_ok {
+                    candidates.push(p);
+                }
+            }
+            _ => {
+                // A ratified action outside the exec-units subset — fail-closed (halt, zero mutation).
+                return Err(GovernanceTerminal::UnsupportedRatifiedAction {
+                    action_id: p.action_id.clone(),
+                    kind: UnsupportedActionKind::NotParameterChange,
+                });
+            }
+        }
+    }
+
+    // At most ONE action enacts per boundary. cardano-ledger enacts the submission-first candidate; >1 competing
+    // candidate is submission-order dependent ⇒ fail-closed. Exactly one ⇒ the unambiguous winner, which must be
+    // a supported memory-only exec-units update (else a structured terminal). `enactment` = (winner id, the
+    // winner's superseded parent root, the fully-built new pparams).
+    let enactment: Option<(GovActionId, Option<GovActionId>, crate::pparams::ProtocolParameters)> =
+        match candidates.as_slice() {
+            [] => None,
+            [winner] => {
+                let (prev_action, update) = match &winner.gov_action {
+                    GovAction::ParameterChange { prev_action, update, .. } => (prev_action, update),
+                    _ => unreachable!("candidates holds only ParameterChanges (pushed in the ParameterChange arm)"),
+                };
+                let unsupported = |kind| GovernanceTerminal::UnsupportedRatifiedAction {
+                    action_id: winner.action_id.clone(),
+                    kind,
+                };
+                // Bound the attacker-influenced bytes BEFORE the recursive-descent decoder (T-RESOURCE-01).
+                if !exec_units_update_within_bounds(update) {
+                    return Err(unsupported(UnsupportedActionKind::OversizedUpdate));
+                }
+                let decoded = decode_exec_units_param_update(update)
+                    .map_err(|_| unsupported(UnsupportedActionKind::MalformedUpdate))?;
+                if !decoded.unsupported_fields.0.is_empty() {
+                    return Err(unsupported(UnsupportedActionKind::NonExecUnitsField));
+                }
+                if decoded.max_tx_ex_units.is_none() && decoded.max_block_ex_units.is_none() {
+                    return Err(unsupported(UnsupportedActionKind::NoExecUnitsField));
+                }
+                // MEMORY-ONLY: every supplied `steps` must equal the current bound `steps`.
+                if let Some(tx) = decoded.max_tx_ex_units {
+                    if tx.steps != input.current_pparams.max_tx_ex_units_cpu {
+                        return Err(unsupported(UnsupportedActionKind::ChangedSteps));
+                    }
+                }
+                if let Some(blk) = decoded.max_block_ex_units {
+                    let cur_block_steps = match input.current_pparams.max_block_ex_units {
+                        crate::pparams::MaxBlockExUnits::Bound { steps, .. } => steps,
+                        crate::pparams::MaxBlockExUnits::Unversioned => {
+                            return Err(GovernanceTerminal::UnversionedStateOnEnactPath {
+                                action_id: winner.action_id.clone(),
+                            }) // guarded above; defensive.
+                        }
+                    };
+                    if blk.steps != cur_block_steps {
+                        return Err(unsupported(UnsupportedActionKind::ChangedSteps));
+                    }
+                }
+                let new_pparams = build_enacted_pparams(input.current_pparams, &decoded);
+                Some((winner.action_id.clone(), prev_action.clone(), new_pparams))
+            }
+            _ => {
+                // More than one ratifiable candidate competes for the single enactment slot — cardano-ledger's
+                // pick is submission-order dependent, which Ade cannot reconstruct ⇒ fail-closed (a later slice
+                // may enact multiply). Report the canonical-first for a stable diagnostic id.
+                return Err(GovernanceTerminal::UnsupportedRatifiedAction {
+                    action_id: candidates[0].action_id.clone(),
+                    kind: UnsupportedActionKind::CompetingRatifiableActions,
+                });
+            }
+        };
+
+    // ── Phase 2: enactment-driven removals — the winner's LOSING competitors, plus the fail-closed chain check. ──
+    let winner_id: Option<GovActionId> = enactment.as_ref().map(|(id, _, _)| id.clone());
+    // Proposals orphaned by the enactment: the winner's SIBLINGS (ParameterChanges sharing the winner's parent
+    // root, EXCLUDING the winner) and their descendant subtrees (to a fixpoint). The enacted action re-roots the
+    // PParamUpdate lineage, so every competing subtree is dead. The winner's OWN descendants are deliberately NOT
+    // pruned: a child chaining onto the winner is the new lineage (Conway carries it if pending), never a loser.
+    let mut pruned: std::collections::BTreeSet<GovActionId> = std::collections::BTreeSet::new();
+    if let Some((wid, superseded_parent, _)) = enactment.as_ref() {
+        for p in input.proposals.iter() {
+            if p.action_id == *wid {
+                continue;
+            }
+            if let GovAction::ParameterChange { prev_action, .. } = &p.gov_action {
+                if prev_action == superseded_parent {
+                    pruned.insert(p.action_id.clone());
+                }
+            }
+        }
+        loop {
+            let mut added = false;
+            for p in input.proposals.iter() {
+                if p.action_id == *wid || pruned.contains(&p.action_id) {
+                    continue;
+                }
+                if let GovAction::ParameterChange { prev_action, .. } = &p.gov_action {
+                    if prev_action.as_ref().map_or(false, |pa| pruned.contains(pa)) {
+                        pruned.insert(p.action_id.clone());
+                        added = true;
+                    }
+                }
+            }
+            if !added {
+                break;
+            }
+        }
+        // Fail-closed chain check: a ratifiable (threshold-passing) `ParameterChange` chaining DIRECTLY onto the
+        // winner would chain-enact in Conway (tip: parent → winner → child). S4.3c enacts at most one action per
+        // boundary — halt with ZERO mutation rather than silently drop the child or diverge from Conway.
+        for p in input.proposals.iter() {
+            if let GovAction::ParameterChange { prev_action, .. } = &p.gov_action {
+                if prev_action.as_ref() == Some(wid) && threshold_passing_pc_ids.contains(&p.action_id) {
+                    return Err(GovernanceTerminal::UnsupportedRatifiedAction {
+                        action_id: p.action_id.clone(),
+                        kind: UnsupportedActionKind::ChainedEnactment,
+                    });
+                }
+            }
+        }
+    }
+
+    // ── Phase 3: classify every proposal (GovActionId order) → removal + total deposit return, or carry. ──
+    let route_deposit = |p: &GovActionState| -> Result<DepositReturn, GovernanceTerminal> {
+        if p.deposit.0 == 0 {
+            return Ok(DepositReturn::NoDeposit { action_id: p.action_id.clone() });
+        }
+        match crate::epoch_accumulator::reward_account_credential(&p.return_addr) {
+            Some(cred) => Ok(if is_registered(&cred) {
+                DepositReturn::ToRewardAccount {
+                    action_id: p.action_id.clone(),
+                    credential: cred,
+                    amount: p.deposit,
+                }
+            } else {
+                DepositReturn::ToTreasury { action_id: p.action_id.clone(), amount: p.deposit }
+            }),
+            None => Err(GovernanceTerminal::Malformed {
+                action_id: p.action_id.clone(),
+                detail: MalformedGovDetail::ReturnAddrNotRewardAccount,
+            }),
+        }
+    };
 
     let mut removals: Vec<RemovedProposal> = Vec::new();
     let mut deposit_returns: Vec<DepositReturn> = Vec::new();
     let mut removed_ids: std::collections::BTreeSet<GovActionId> = std::collections::BTreeSet::new();
-
-    for p in sorted {
-        // Voting-threshold gate (thresholds only — NOT full RATIFY). InfoAction never enacts (mirrors
-        // evaluate_ratification's special case) so it is never "potentially ratifiable".
-        if !matches!(p.gov_action, GovAction::InfoAction) {
-            let action_idx = gov_action_threshold_index(&p.gov_action);
-            let thresholds_accepted = check_ratification(
-                p,
-                action_idx,
-                &total_drep_active_stake,
-                &active_drep_stake,
-                total_pool_stake,
-                input.pool_stake,
-                input.committee_members,
-                input.committee_quorum,
-                input.pool_thresholds,
-                input.drep_thresholds,
-                ending_epoch,
-                input.committee_hot_keys,
-            );
-            if thresholds_accepted {
-                // Might ratify — S4.3 does not yet enact this ⇒ terminal (both paths), zero mutation.
-                return Err(GovernanceTerminal::PotentiallyRatifiable { action_id: p.action_id.clone() });
-            }
-        }
-        // Threshold-failed. Remove + refund ONLY if expired; else carry forward.
-        if p.expires_after.0 < ending_epoch {
-            let ret = if p.deposit.0 > 0 {
-                match crate::epoch_accumulator::reward_account_credential(&p.return_addr) {
-                    Some(cred) => {
-                        if is_registered(&cred) {
-                            DepositReturn::ToRewardAccount {
-                                action_id: p.action_id.clone(),
-                                credential: cred,
-                                amount: p.deposit,
-                            }
-                        } else {
-                            DepositReturn::ToTreasury { action_id: p.action_id.clone(), amount: p.deposit }
-                        }
-                    }
-                    None => {
-                        return Err(GovernanceTerminal::Malformed {
-                            action_id: p.action_id.clone(),
-                            detail: MalformedGovDetail::ReturnAddrNotRewardAccount,
-                        })
-                    }
-                }
-            } else {
-                DepositReturn::NoDeposit { action_id: p.action_id.clone() }
-            };
-            removals.push(RemovedProposal { action_id: p.action_id.clone(), cause: RemovalCause::Expired });
-            deposit_returns.push(ret);
-            removed_ids.insert(p.action_id.clone());
-        }
+    for p in &sorted {
+        let cause = if winner_id.as_ref() == Some(&p.action_id) {
+            RemovalCause::Enacted
+        } else if pruned.contains(&p.action_id) {
+            RemovalCause::PrunedByEnactment
+        } else if p.expires_after.0 < ending_epoch {
+            // Not the winner, not pruned, past its lifetime ⇒ expired (threshold-failed, or a threshold-passing
+            // but lineage-mismatched change that can never ratify). Conway returns its deposit too.
+            RemovalCause::Expired
+        } else {
+            continue; // carried forward
+        };
+        deposit_returns.push(route_deposit(p)?);
+        removals.push(RemovedProposal { action_id: p.action_id.clone(), cause });
+        removed_ids.insert(p.action_id.clone());
     }
 
     // The next proposal set: filter the ORIGINAL (order-preserving) — the fingerprint is order-significant.
     let proposals: Vec<GovActionState> =
         input.proposals.iter().filter(|p| !removed_ids.contains(&p.action_id)).cloned().collect();
 
-    Ok(ConwayGovernanceEpochPlan {
-        proposals,
-        removals,
-        deposit_returns,
-        pparams: PParamsDelta::Unchanged,
-        prev_pparam_action: PrevPParamActionDelta::Unchanged,
-    })
+    let (pparams, prev_pparam_action) = match enactment {
+        Some((wid, _, new_pparams)) => (
+            PParamsDelta::Set(Box::new(new_pparams)),
+            PrevPParamActionDelta::Set(wid),
+        ),
+        None => (PParamsDelta::Unchanged, PrevPParamActionDelta::Unchanged),
+    };
+
+    Ok(ConwayGovernanceEpochPlan { proposals, removals, deposit_returns, pparams, prev_pparam_action })
+}
+
+/// Build the enacted protocol parameters for a supported exec-units, memory-only `ParameterChange`: clone the
+/// current parameters and overwrite ONLY the supplied memory limits, leaving `steps` (verified equal by the
+/// caller) and every other parameter untouched. The block limit stays `Bound` (the caller guaranteed the current
+/// value is `Bound`), so the versioned lineage is preserved.
+fn build_enacted_pparams(
+    current: &crate::pparams::ProtocolParameters,
+    decoded: &ExecUnitsParamUpdate,
+) -> crate::pparams::ProtocolParameters {
+    let mut pp = current.clone();
+    if let Some(tx) = decoded.max_tx_ex_units {
+        pp.max_tx_ex_units_mem = tx.mem; // steps == max_tx_ex_units_cpu (verified) — leave cpu unchanged.
+    }
+    if let Some(blk) = decoded.max_block_ex_units {
+        pp.max_block_ex_units = crate::pparams::MaxBlockExUnits::Bound { mem: blk.mem, steps: blk.steps };
+    }
+    pp
+}
+
+/// Fail-closed pre-decode bound (CRE S4.3c hard boundary #3 / T-RESOURCE-01): reject a ratified
+/// `ParameterChange.update` whose byte length or CBOR nesting depth exceeds a fixed cap BEFORE the recursive
+/// `skip_item`-based [`decode_exec_units_param_update`] runs on attacker-influenced bytes, so the decoder's
+/// recursion can never be driven to a stack overflow. Iterative (no recursion); parses only CBOR heads. A
+/// legitimate `protocol_param_update` is a shallow map of small values — the real witness is 33 bytes, depth 3.
+fn exec_units_update_within_bounds(update: &[u8]) -> bool {
+    const MAX_LEN: usize = 4096;
+    const MAX_DEPTH: usize = 16;
+    if update.is_empty() || update.len() > MAX_LEN {
+        return false;
+    }
+    // `stack[i]` = items still to parse at nesting level i; depth = stack.len(). A synthetic top level holds the
+    // single expected data item (the update map). A container pushes a child level and is "consumed" from its
+    // parent only when that child level empties; a leaf is consumed immediately.
+    let mut stack: Vec<u64> = vec![1];
+    let mut o = 0usize;
+    loop {
+        // Propagate completed levels upward (an emptied container consumes one slot of its parent).
+        while let Some(&top) = stack.last() {
+            if top == 0 {
+                stack.pop();
+                if let Some(parent) = stack.last_mut() {
+                    *parent -= 1;
+                }
+            } else {
+                break;
+            }
+        }
+        if stack.is_empty() {
+            break;
+        }
+        if o >= update.len() {
+            return false; // truncated
+        }
+        let ib = update[o];
+        o += 1;
+        let major = ib >> 5;
+        let ai = ib & 0x1f;
+        let arg: u64 = match ai {
+            0..=23 => ai as u64,
+            24 => {
+                if o >= update.len() {
+                    return false;
+                }
+                let v = update[o] as u64;
+                o += 1;
+                v
+            }
+            25 => {
+                if o + 2 > update.len() {
+                    return false;
+                }
+                let v = u16::from_be_bytes([update[o], update[o + 1]]) as u64;
+                o += 2;
+                v
+            }
+            26 => {
+                if o + 4 > update.len() {
+                    return false;
+                }
+                let v = u32::from_be_bytes([update[o], update[o + 1], update[o + 2], update[o + 3]]) as u64;
+                o += 4;
+                v
+            }
+            27 => {
+                if o + 8 > update.len() {
+                    return false;
+                }
+                let mut b = [0u8; 8];
+                b.copy_from_slice(&update[o..o + 8]);
+                o += 8;
+                u64::from_be_bytes(b)
+            }
+            _ => return false, // 28..=30 reserved; 31 indefinite — non-canonical for a Conway pparam update.
+        };
+        match major {
+            0 | 1 => {
+                *stack.last_mut().expect("non-empty") -= 1; // uint / nint leaf
+            }
+            2 | 3 => {
+                // byte / text string: skip its `arg` payload bytes (a leaf).
+                if o.checked_add(arg as usize).map_or(true, |e| e > update.len()) {
+                    return false;
+                }
+                o += arg as usize;
+                *stack.last_mut().expect("non-empty") -= 1;
+            }
+            4 => {
+                if stack.len() >= MAX_DEPTH {
+                    return false;
+                }
+                stack.push(arg); // array of `arg` items
+            }
+            5 => {
+                if stack.len() >= MAX_DEPTH {
+                    return false;
+                }
+                match arg.checked_mul(2) {
+                    Some(items) => stack.push(items), // map of `arg` pairs
+                    None => return false,
+                }
+            }
+            6 => {
+                if stack.len() >= MAX_DEPTH {
+                    return false;
+                }
+                stack.push(1); // tag wraps exactly one following item
+            }
+            7 => {
+                if ai == 31 {
+                    return false; // BREAK in a definite context
+                }
+                *stack.last_mut().expect("non-empty") -= 1; // simple / float leaf
+            }
+            _ => return false,
+        }
+    }
+    o == update.len()
 }
 
 // ─── CRE S4.3b: closed Conway exec-units parameter-update decoder (INERT) ──
@@ -883,6 +1239,283 @@ mod cre_s4_3b_decoder_tests {
             decoded.unsupported_fields.0.is_empty(),
             "the witness touches ONLY the two exec-units keys: {:?}",
             decoded.unsupported_fields
+        );
+    }
+}
+
+#[cfg(test)]
+mod cre_s4_3c_enactment_tests {
+    //! CRE S4.3c — the atomic exec-units enactment authority. These pure-planner gates prove the supported
+    //! memory-only `ParameterChange` subset ENACTS (limits change, steps preserved, root advances, siblings
+    //! prune, deposits refund) and that EVERYTHING outside the subset is a fail-closed terminal with zero
+    //! mutation. Mirrors the real 1095→1096 witness structure (winner + five siblings sharing the superseded
+    //! root); the `#[ignore]` corpus differential drives the real state.
+    use super::*;
+    use ade_types::conway::governance::{GovAction, GovActionId, GovActionState, Vote};
+    use ade_types::shelley::cert::StakeCredential;
+    use ade_types::tx::Coin;
+    use ade_types::{EpochNo, Hash28, Hash32};
+    use crate::pparams::{MaxBlockExUnits, ProtocolParameters};
+    use crate::state::PreviousPParamAction;
+    use crate::rational::Rational;
+    use std::collections::BTreeMap;
+
+    /// The REAL 69c948cd..#0 witness update: maxTx {16.5M mem, 10e9 steps} + maxBlock {72M mem, 20e9 steps} —
+    /// memory-only vs the 1095 curPParams. Same canonical bytes proven in `cre_s4_3b_gate5_real_witness_manifest`.
+    const WITNESS_UPDATE: &[u8] = &[
+        0xa2, 0x14, 0x82, 0x1a, 0x00, 0xfb, 0xc5, 0x20, 0x1b, 0x00, 0x00, 0x00, 0x02, 0x54, 0x0b, 0xe4,
+        0x00, 0x15, 0x82, 0x1a, 0x04, 0x4a, 0xa2, 0x00, 0x1b, 0x00, 0x00, 0x00, 0x04, 0xa8, 0x17, 0xc8,
+        0x00,
+    ];
+
+    fn key(b: u8) -> StakeCredential { StakeCredential::KeyHash(Hash28([b; 28])) }
+    fn gaid(b: u8) -> GovActionId { GovActionId { tx_hash: Hash32([b; 32]), index: 0 } }
+    fn pc(prev: Option<GovActionId>, update: Vec<u8>) -> GovAction {
+        GovAction::ParameterChange { prev_action: prev, update, policy_hash: None }
+    }
+    /// 1095 curPParams shape: maxTx {14M mem, 10e9 steps} (the `Default`) + maxBlock `Bound {62M, 20e9}`.
+    fn pp_1095() -> ProtocolParameters {
+        ProtocolParameters {
+            max_block_ex_units: MaxBlockExUnits::Bound { mem: 62_000_000, steps: 20_000_000_000 },
+            ..Default::default()
+        }
+    }
+    fn committee() -> BTreeMap<StakeCredential, u64> {
+        [(key(0xC1), 1400u64), (key(0xC2), 1400), (key(0xC3), 1400)].into_iter().collect()
+    }
+    fn yes_2of3() -> Vec<(StakeCredential, Vote)> { vec![(key(0xC1), Vote::Yes), (key(0xC2), Vote::Yes)] }
+    /// A gov-action proposal with a 100k deposit and a registered reward-account return address.
+    fn prop(id: u8, action: GovAction, votes: Vec<(StakeCredential, Vote)>, expires_after: u64) -> GovActionState {
+        GovActionState {
+            action_id: gaid(id),
+            committee_votes: votes,
+            drep_votes: Vec::new(),
+            spo_votes: Vec::new(),
+            deposit: Coin(100_000_000_000),
+            return_addr: vec![0xe0; 29],
+            gov_action: action,
+            proposed_in: EpochNo(1309),
+            expires_after: EpochNo(expires_after),
+        }
+    }
+    fn plan_enact(
+        proposals: &[GovActionState], cur_pparams: &ProtocolParameters, cur_prev: &PreviousPParamAction,
+    ) -> Result<ConwayGovernanceEpochPlan, GovernanceTerminal> {
+        let quorum = Rational::new(2, 3).unwrap();
+        let empty_stake = BTreeMap::new();
+        let empty_pool = BTreeMap::new();
+        let comm = committee();
+        let empty_hot = BTreeMap::new();
+        let empty_expiry = BTreeMap::new();
+        let dormant = DormantEpochs::Unversioned;
+        let input = ConwayGovernanceEpochInput {
+            proposals,
+            drep_stake: &empty_stake,
+            pool_stake: &empty_pool,
+            committee_members: &comm,
+            committee_quorum: &quorum,
+            pool_thresholds: &[],
+            drep_thresholds: &[],
+            committee_hot_keys: &empty_hot,
+            drep_expiry: &empty_expiry,
+            num_dormant: &dormant,
+            current_pparams: cur_pparams,
+            current_prev_pparam_action: cur_prev,
+            new_epoch: 1341, // ending_epoch 1340
+        };
+        plan_conway_governance_epoch(&input, |_| true)
+    }
+    /// A `protocol_param_update` map carrying ONLY `maxTxExUnits = [mem, steps]` (map key 20).
+    fn tx_update(mem: u64, steps: u64) -> Vec<u8> {
+        let mut v = vec![0xa1, 0x14, 0x82, 0x1b];
+        v.extend_from_slice(&mem.to_be_bytes());
+        v.push(0x1b);
+        v.extend_from_slice(&steps.to_be_bytes());
+        v
+    }
+
+    #[test]
+    fn cre_s4_3c_supported_witness_enacts_prunes_siblings_refunds_all() {
+        let root = gaid(0x60);
+        let cur_prev = PreviousPParamAction::Enacted(root.clone());
+        let winner = prop(0x69, pc(Some(root.clone()), WITNESS_UPDATE.to_vec()), yes_2of3(), 1339);
+        let mut proposals = vec![winner.clone()];
+        for b in [0xF0u8, 0xF1, 0xF2, 0xF3, 0xF4] {
+            // The five siblings share the superseded root, FAIL thresholds (no votes), and are pruned.
+            proposals.push(prop(b, pc(Some(root.clone()), WITNESS_UPDATE.to_vec()), Vec::new(), 1339));
+        }
+        let plan = plan_enact(&proposals, &pp_1095(), &cur_prev).expect("the supported memory-only witness enacts");
+
+        // (1) The two memory limits change; BOTH steps preserved.
+        match &plan.pparams {
+            PParamsDelta::Set(pp) => {
+                assert_eq!(pp.max_tx_ex_units_mem, 16_500_000, "maxTx mem 14M -> 16.5M");
+                assert_eq!(pp.max_tx_ex_units_cpu, 10_000_000_000, "maxTx steps preserved");
+                assert_eq!(
+                    pp.max_block_ex_units,
+                    MaxBlockExUnits::Bound { mem: 72_000_000, steps: 20_000_000_000 },
+                    "maxBlock mem 62M -> 72M, steps preserved"
+                );
+            }
+            other => panic!("expected pparams Set, got {other:?}"),
+        }
+        // (2) The enacted root advances to the winner.
+        assert_eq!(plan.prev_pparam_action, PrevPParamActionDelta::Set(winner.action_id.clone()));
+        // (3) Six removals: 1 Enacted (winner, canonical-first) + 5 PrunedByEnactment (siblings).
+        assert_eq!(plan.removals.len(), 6);
+        assert_eq!(plan.removals[0].action_id, winner.action_id);
+        assert_eq!(plan.removals[0].cause, RemovalCause::Enacted);
+        assert_eq!(plan.removals.iter().filter(|r| r.cause == RemovalCause::Enacted).count(), 1);
+        assert_eq!(plan.removals.iter().filter(|r| r.cause == RemovalCause::PrunedByEnactment).count(), 5);
+        // (4) Every deposit (100k) refunds to its registered reward account.
+        assert_eq!(plan.deposit_returns.len(), 6);
+        assert!(plan.deposit_returns.iter().all(|d| matches!(
+            d, DepositReturn::ToRewardAccount { amount: Coin(100_000_000_000), .. }
+        )));
+        // (5) The next proposal set: the whole competing forest leaves the set.
+        assert!(plan.proposals.is_empty(), "winner + all siblings removed");
+    }
+
+    #[test]
+    fn cre_s4_3c_changed_steps_is_unsupported_zero_mutation() {
+        let root = gaid(0x60);
+        // maxTx steps 5e9 != the current 10e9 -> a steps change (outside the memory-only subset).
+        let winner = prop(0x69, pc(Some(root.clone()), tx_update(16_500_000, 5_000_000_000)), yes_2of3(), 1339);
+        let err = plan_enact(&[winner], &pp_1095(), &PreviousPParamAction::Enacted(root)).unwrap_err();
+        assert!(matches!(
+            err, GovernanceTerminal::UnsupportedRatifiedAction { kind: UnsupportedActionKind::ChangedSteps, .. }
+        ), "got {err:?}");
+    }
+
+    #[test]
+    fn cre_s4_3c_foreign_pparam_field_is_unsupported() {
+        let root = gaid(0x60);
+        // A valid maxTx exec-units field RIDING ALONGSIDE a non-exec-units key (0 = minFeeA) -> fail-closed;
+        // the exec part must NOT be applied when a foreign field is present.
+        let mut update = vec![0xa2, 0x14, 0x82, 0x1b];
+        update.extend_from_slice(&16_500_000u64.to_be_bytes());
+        update.push(0x1b);
+        update.extend_from_slice(&10_000_000_000u64.to_be_bytes());
+        update.extend_from_slice(&[0x00, 0x18, 44]); // key 0 -> uint 44
+        let winner = prop(0x69, pc(Some(root.clone()), update), yes_2of3(), 1339);
+        let err = plan_enact(&[winner], &pp_1095(), &PreviousPParamAction::Enacted(root)).unwrap_err();
+        assert!(matches!(
+            err, GovernanceTerminal::UnsupportedRatifiedAction { kind: UnsupportedActionKind::NonExecUnitsField, .. }
+        ), "got {err:?}");
+    }
+
+    #[test]
+    fn cre_s4_3c_lineage_mismatch_carries_never_enacts() {
+        let root = gaid(0x60);
+        // Threshold-passing, but prev_action != the current root -> NOT ratifiable this boundary. Non-expiring
+        // (1366 >= ending 1340) -> carried; no enactment, no terminal.
+        let p = prop(0x69, pc(Some(gaid(0x99)), WITNESS_UPDATE.to_vec()), yes_2of3(), 1366);
+        let plan = plan_enact(std::slice::from_ref(&p), &pp_1095(), &PreviousPParamAction::Enacted(root))
+            .expect("a lineage-mismatched change carries (not a terminal)");
+        assert_eq!(plan.pparams, PParamsDelta::Unchanged);
+        assert_eq!(plan.prev_pparam_action, PrevPParamActionDelta::Unchanged);
+        assert!(plan.removals.is_empty());
+        assert_eq!(plan.proposals.len(), 1, "carried forward");
+    }
+
+    #[test]
+    fn cre_s4_3c_unversioned_state_on_enact_path_is_terminal() {
+        let root = gaid(0x60);
+        let winner = prop(0x69, pc(Some(root.clone()), WITNESS_UPDATE.to_vec()), yes_2of3(), 1339);
+        // (a) block ExUnits Unversioned (the pre-V11 `Default`) with a threshold-passing enact candidate.
+        let err = plan_enact(
+            std::slice::from_ref(&winner), &ProtocolParameters::default(),
+            &PreviousPParamAction::Enacted(root.clone()),
+        ).unwrap_err();
+        assert!(matches!(err, GovernanceTerminal::UnversionedStateOnEnactPath { .. }), "block Unversioned: {err:?}");
+        // (b) prev_pparam_action Unversioned (with Bound pparams).
+        let err2 = plan_enact(std::slice::from_ref(&winner), &pp_1095(), &PreviousPParamAction::Unversioned)
+            .unwrap_err();
+        assert!(matches!(err2, GovernanceTerminal::UnversionedStateOnEnactPath { .. }), "prev Unversioned: {err2:?}");
+    }
+
+    #[test]
+    fn cre_s4_3c_malformed_update_is_terminal() {
+        let root = gaid(0x60);
+        // Valid CBOR, but key 20's value is a uint, not array(2)[mem,steps].
+        let winner = prop(0x69, pc(Some(root.clone()), vec![0xa1, 0x14, 0x01]), yes_2of3(), 1339);
+        let err = plan_enact(&[winner], &pp_1095(), &PreviousPParamAction::Enacted(root)).unwrap_err();
+        assert!(matches!(
+            err, GovernanceTerminal::UnsupportedRatifiedAction { kind: UnsupportedActionKind::MalformedUpdate, .. }
+        ), "got {err:?}");
+    }
+
+    #[test]
+    fn cre_s4_3c_oversized_or_overnested_update_is_terminal() {
+        let root = gaid(0x60);
+        // (a) length > 4096 bytes -> rejected before the decoder runs.
+        let big = prop(0x69, pc(Some(root.clone()), vec![0x00; 5000]), yes_2of3(), 1339);
+        let err = plan_enact(std::slice::from_ref(&big), &pp_1095(), &PreviousPParamAction::Enacted(root.clone()))
+            .unwrap_err();
+        assert!(matches!(
+            err, GovernanceTerminal::UnsupportedRatifiedAction { kind: UnsupportedActionKind::OversizedUpdate, .. }
+        ), "oversized: {err:?}");
+        // (b) CBOR nesting depth > 16 (20 nested arrays) -> rejected before the recursive-descent decoder.
+        let nested = prop(0x69, pc(Some(root.clone()), vec![0x81; 20]), yes_2of3(), 1339);
+        let err2 = plan_enact(std::slice::from_ref(&nested), &pp_1095(), &PreviousPParamAction::Enacted(root))
+            .unwrap_err();
+        assert!(matches!(
+            err2, GovernanceTerminal::UnsupportedRatifiedAction { kind: UnsupportedActionKind::OversizedUpdate, .. }
+        ), "over-nested: {err2:?}");
+    }
+
+    #[test]
+    fn cre_s4_3c_ratifiable_chain_child_of_winner_halts() {
+        let root = gaid(0x60);
+        let winner = prop(0x69, pc(Some(root.clone()), WITNESS_UPDATE.to_vec()), yes_2of3(), 1339);
+        // A child chaining onto the winner (prev = winner id) that ALSO passes thresholds -> Conway would
+        // chain-enact (tip: root -> winner -> child); S4.3c enacts at most one -> ChainedEnactment, zero mutation.
+        let child = prop(0x70, pc(Some(winner.action_id.clone()), WITNESS_UPDATE.to_vec()), yes_2of3(), 1339);
+        let err = plan_enact(&[winner, child], &pp_1095(), &PreviousPParamAction::Enacted(root)).unwrap_err();
+        assert!(matches!(
+            err, GovernanceTerminal::UnsupportedRatifiedAction { kind: UnsupportedActionKind::ChainedEnactment, .. }
+        ), "got {err:?}");
+    }
+
+    #[test]
+    fn cre_s4_3c_pending_chain_child_is_carried_not_pruned() {
+        // THE regression guard for the Phase-2 divergence: a NON-ratifiable child chaining onto the winner
+        // (prev = winner, fails thresholds) is the NEW lineage -> Conway carries it. It must NOT be pruned as a
+        // "descendant of the enacted action" (which would drop the proposal AND wrongly refund its deposit).
+        let root = gaid(0x60);
+        let winner = prop(0x69, pc(Some(root.clone()), WITNESS_UPDATE.to_vec()), yes_2of3(), 1339);
+        let child = prop(0x70, pc(Some(winner.action_id.clone()), WITNESS_UPDATE.to_vec()), Vec::new(), 1366);
+        let plan = plan_enact(&[winner.clone(), child.clone()], &pp_1095(), &PreviousPParamAction::Enacted(root))
+            .expect("winner enacts; the pending chain child carries");
+        assert!(matches!(plan.pparams, PParamsDelta::Set(_)), "the winner still enacts");
+        // The winner enacts and is removed; the child is NOT removed and its deposit stays escrowed.
+        assert_eq!(plan.removals.len(), 1, "only the winner leaves; the chain child is carried");
+        assert_eq!(plan.removals[0].action_id, winner.action_id);
+        assert_eq!(plan.removals[0].cause, RemovalCause::Enacted);
+        assert_eq!(plan.deposit_returns.len(), 1, "the child's deposit is NOT refunded");
+        assert_eq!(plan.proposals.len(), 1);
+        assert_eq!(plan.proposals[0].action_id, child.action_id, "the chain child remains in the set");
+    }
+
+    #[test]
+    fn cre_s4_3c_competing_ratifiable_siblings_halt() {
+        // Two threshold-passing ParameterChanges sharing the current root both chain onto the tip; cardano-ledger
+        // enacts the SUBMISSION-first (OMap order), which Ade cannot reconstruct from canonical state -> halt
+        // (CompetingRatifiableActions), symmetric with the chain-child halt. NEVER a GovActionId-order guess that
+        // could silently diverge. (The single-winner path is proven above where only one sibling passes votes.)
+        let root = gaid(0x60);
+        let a = prop(0x61, pc(Some(root.clone()), WITNESS_UPDATE.to_vec()), yes_2of3(), 1339);
+        let b = prop(0x62, pc(Some(root.clone()), WITNESS_UPDATE.to_vec()), yes_2of3(), 1339);
+        let err = plan_enact(&[a, b], &pp_1095(), &PreviousPParamAction::Enacted(root)).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                GovernanceTerminal::UnsupportedRatifiedAction {
+                    kind: UnsupportedActionKind::CompetingRatifiableActions,
+                    ..
+                }
+            ),
+            "got {err:?}"
         );
     }
 }
@@ -1303,6 +1936,11 @@ mod committee_fidelity_tests {
         let empty_hot = BTreeMap::new();
         let empty_expiry = BTreeMap::new();
         let dormant = DormantEpochs::Unversioned;
+        // These CPDE-S4 planner tests exercise only non-`ParameterChange` actions (treasury / no-confidence /
+        // info) and expiry — the exec-units enact path (which reads the two below) is never reached, so
+        // defaults suffice: a `NotParameterChange` terminal returns before the pparams/lineage are consulted.
+        let cur_pparams = crate::pparams::ProtocolParameters::default();
+        let cur_prev_action = crate::state::PreviousPParamAction::NoPreviousAction;
         let input = ConwayGovernanceEpochInput {
             proposals,
             drep_stake: &empty_stake,
@@ -1314,6 +1952,8 @@ mod committee_fidelity_tests {
             committee_hot_keys: &empty_hot,
             drep_expiry: &empty_expiry,
             num_dormant: &dormant,
+            current_pparams: &cur_pparams,
+            current_prev_pparam_action: &cur_prev_action,
             new_epoch: 1341,
         };
         // These planner unit tests don't model registration: treat every return address as registered so a
@@ -1361,9 +2001,13 @@ mod committee_fidelity_tests {
 
     #[test]
     fn s4_committee_pass_is_terminal() {
-        // 2 of 3 committee Yes (= 2/3 >= quorum) -> potentially ratifiable -> the whole boundary terminals.
+        // 2 of 3 committee Yes (= 2/3 >= quorum) -> a ratified TreasuryWithdrawals (non-ParameterChange) -> the
+        // whole boundary terminals (UnsupportedRatifiedAction / NotParameterChange), zero mutation.
         let p = s4_prop(0x01, tw_action(), vec![(key(0xC1), Vote::Yes), (key(0xC2), Vote::Yes)], 1339, 1, vec![0xe0; 29]);
-        assert!(matches!(s4_plan(std::slice::from_ref(&p)).unwrap_err(), GovernanceTerminal::PotentiallyRatifiable { .. }));
+        assert!(matches!(
+            s4_plan(std::slice::from_ref(&p)).unwrap_err(),
+            GovernanceTerminal::UnsupportedRatifiedAction { kind: UnsupportedActionKind::NotParameterChange, .. }
+        ));
     }
 
     #[test]
@@ -1372,7 +2016,10 @@ mod committee_fidelity_tests {
         // -> potentially ratifiable -> terminal (committee-only authority cannot disprove it). The census
         // proved no such proposal exists in the CE-3d set; this pins the fail-closed behavior if one did.
         let p = s4_prop(0x01, GovAction::NoConfidence { prev_action: None }, Vec::new(), 1339, 1, vec![0xe0; 29]);
-        assert!(matches!(s4_plan(std::slice::from_ref(&p)).unwrap_err(), GovernanceTerminal::PotentiallyRatifiable { .. }));
+        assert!(matches!(
+            s4_plan(std::slice::from_ref(&p)).unwrap_err(),
+            GovernanceTerminal::UnsupportedRatifiedAction { kind: UnsupportedActionKind::NotParameterChange, .. }
+        ));
     }
 
     #[test]
@@ -1425,10 +2072,11 @@ mod committee_fidelity_tests {
         let r_late = s4_prop(0x03, tw_action(), Vec::new(), 1339, 1, vec![0xe0; 29]);
         let r_early = s4_prop(0x01, tw_action(), Vec::new(), 1339, 1, vec![0xe0; 29]);
         let ratifiable = s4_prop(0x02, tw_action(), vec![(key(0xC1), Vote::Yes), (key(0xC2), Vote::Yes)], 1339, 1, vec![0xe0; 29]);
-        // ANY ratifiable proposal -> the WHOLE plan is terminal (zero mutation), even though two others would refund.
+        // ANY ratified action -> the WHOLE plan is terminal (zero mutation), even though two others would refund.
+        // Here the ratified one is a TreasuryWithdrawals (non-ParameterChange) -> UnsupportedRatifiedAction.
         assert!(matches!(
             s4_plan(&[r_late.clone(), r_early.clone(), ratifiable]).unwrap_err(),
-            GovernanceTerminal::PotentiallyRatifiable { .. }
+            GovernanceTerminal::UnsupportedRatifiedAction { kind: UnsupportedActionKind::NotParameterChange, .. }
         ));
         // Without it, the two refunds come back in GovActionId order (0x01 before 0x03).
         let plan = s4_plan(&[r_late, r_early]).expect("clean plan");

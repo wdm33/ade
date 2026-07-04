@@ -57,6 +57,12 @@ fn cpde_s5_planner_refunds_close_the_500b_on_real_proposals() {
     // would activate SPO ratification — that is the CRE ratify slice, S4). So the committee gate is the
     // binding authority for the CPDE -500B closure, exactly as on the live boundary.
     let dormant = ade_ledger::state::DormantEpochs::Unversioned;
+    // The real POST-1340 pparams + enacted PParamUpdate root (source-bound). The exec-units enact path is never
+    // reached here (the S4.0 census proved the set has no ratifiable action), so the plan is the 5-refund set.
+    let cur_prev_action = match &s1a.enacted_pparam_update {
+        Some(id) => ade_ledger::state::PreviousPParamAction::Enacted(id.clone()),
+        None => ade_ledger::state::PreviousPParamAction::NoPreviousAction,
+    };
     let input = ConwayGovernanceEpochInput {
         proposals: &g.proposals,
         drep_stake: &empty_drep,
@@ -68,13 +74,15 @@ fn cpde_s5_planner_refunds_close_the_500b_on_real_proposals() {
         committee_hot_keys: &empty_hot,
         drep_expiry: &empty_drep_expiry,
         num_dormant: &dormant,
+        current_pparams: &s1a.protocol_params,
+        current_prev_pparam_action: &cur_prev_action,
         new_epoch: 1341,
     };
     // The five CE-3d refunds go to their registered reward accounts (acct1/acct2) — treat every return address as
     // registered so they route ToRewardAccount (deregistered->treasury is a separate case). The routing DECISION
     // lives in the planner (the single CRE S4.3 authority).
     let plan = plan_conway_governance_epoch(&input, |_| true)
-        .expect("the whole set is provably-safe -> a clean plan (no PotentiallyRatifiable)");
+        .expect("the whole set is provably-safe -> a clean plan (no ratified action / terminal)");
 
     // Exactly the five expiring TreasuryWithdrawals refund.
     assert_eq!(plan.removals.len(), 5, "the five expiring proposals refund");

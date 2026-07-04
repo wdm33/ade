@@ -112,6 +112,12 @@ fn cre_s4_2_refund_plan_is_identical_before_and_after_drep_threading() {
     let dormant = DormantEpochs::Bound(g.num_dormant_epochs);
     let empty_pool_stake = BTreeMap::new();
     let no_spo: &[(u64, u64)] = &[];
+    // The real POST-1340 pparams + enacted PParamUpdate root, shared by both configs (source-bound). The enact
+    // path is never reached (no ratifiable action in the set) so both plans stay the identical refund set.
+    let cur_prev_action = match &s1a.enacted_pparam_update {
+        Some(id) => ade_ledger::state::PreviousPParamAction::Enacted(id.clone()),
+        None => ade_ledger::state::PreviousPParamAction::NoPreviousAction,
+    };
 
     // (a) CURRENT live boundary: DRep authority + committee_hot_keys EMPTY (committee + quorum seeded).
     let empty_drep = BTreeMap::new();
@@ -129,6 +135,8 @@ fn cre_s4_2_refund_plan_is_identical_before_and_after_drep_threading() {
         committee_hot_keys: &empty_hot,
         drep_expiry: &empty_expiry,
         num_dormant: &dormant,
+        current_pparams: &s1a.protocol_params,
+        current_prev_pparam_action: &cur_prev_action,
         new_epoch: 1341,
     };
     let plan_before = plan_conway_governance_epoch(&input_before, |_| true).expect("pre-S4.2 plan is clean");
@@ -146,10 +154,12 @@ fn cre_s4_2_refund_plan_is_identical_before_and_after_drep_threading() {
         committee_hot_keys: &g.committee_hot_keys,
         drep_expiry: &g.drep_expiry,
         num_dormant: &dormant,
+        current_pparams: &s1a.protocol_params,
+        current_prev_pparam_action: &cur_prev_action,
         new_epoch: 1341,
     };
     let plan_after =
-        plan_conway_governance_epoch(&input_after, |_| true).expect("S4.2 plan is clean (no PotentiallyRatifiable)");
+        plan_conway_governance_epoch(&input_after, |_| true).expect("S4.2 plan is clean (no ratified action / terminal)");
 
     assert_eq!(
         plan_before, plan_after,

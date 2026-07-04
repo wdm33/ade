@@ -690,6 +690,8 @@ pub fn apply_epoch_boundary_with_registrations(
                     committee_hot_keys: &gov.committee_hot_keys,
                     drep_expiry: &gov.drep_expiry,
                     num_dormant: &gov.num_dormant,
+                    current_pparams: &state.protocol_params,
+                    current_prev_pparam_action: &gov.prev_pparam_action,
                     new_epoch: new_epoch.0,
                 };
                 // Freeze the registration view used for deposit routing: the PRE-boundary registrations
@@ -1326,8 +1328,9 @@ pub fn apply_epoch_boundary_with_registrations(
                     crate::governance::DepositReturn::NoDeposit { .. } => {}
                 }
             }
-            // S4.3a: no enactment effects — committee/quorum/thresholds/delegations/dormancy carry forward
-            // unchanged; only the removed proposals leave the set (original order preserved by the planner).
+            // Committee/quorum/thresholds/delegations/dormancy carry forward unchanged; the removed proposals
+            // leave the set (original order preserved by the planner). CRE S4.3c: the previous-pparam-action root
+            // ADVANCES to the enacted winner when the plan enacts (`Set`), else carries forward (`Unchanged`).
             Some(crate::state::ConwayGovState {
                 proposals: plan.proposals.clone(),
                 committee: gov.committee.clone(),
@@ -1339,8 +1342,12 @@ pub fn apply_epoch_boundary_with_registrations(
                 drep_voting_thresholds: gov.drep_voting_thresholds.clone(),
                 committee_hot_keys: gov.committee_hot_keys.clone(),
                 num_dormant: gov.num_dormant.clone(),
-                // S4.3b (inert): carry the previous-pparam-action root forward unchanged.
-                prev_pparam_action: gov.prev_pparam_action.clone(),
+                prev_pparam_action: match &plan.prev_pparam_action {
+                    crate::governance::PrevPParamActionDelta::Set(id) => {
+                        crate::state::PreviousPParamAction::Enacted(id.clone())
+                    }
+                    crate::governance::PrevPParamActionDelta::Unchanged => gov.prev_pparam_action.clone(),
+                },
             })
         }
         _ => state.gov_state.clone(),
@@ -1404,7 +1411,13 @@ pub fn apply_epoch_boundary_with_registrations(
             block_production: std::collections::BTreeMap::new(),
             epoch_fees: ade_types::tx::Coin(0),
         },
-        protocol_params: state.protocol_params.clone(),
+        // CRE S4.3c: a supported exec-units enactment writes the new Tx/block memory limits (steps preserved) in
+        // the SAME boundary construction as the proposal removal + deposit returns + root advance; otherwise the
+        // parameters carry forward unchanged. One atomic result — no half of the enactment can land alone.
+        protocol_params: match gov_plan.as_ref().map(|p| &p.pparams) {
+            Some(crate::governance::PParamsDelta::Set(pp)) => (**pp).clone(),
+            _ => state.protocol_params.clone(),
+        },
         era: state.era,
         track_utxo: state.track_utxo,
         cert_state,
@@ -2911,8 +2924,14 @@ mod cert_state_dispatch {
         // action subset in S4.3c.
         let err = apply_epoch_boundary_full(&state, EpochNo(501)).unwrap_err();
         assert!(
-            matches!(err, crate::governance::GovernanceTerminal::PotentiallyRatifiable { .. }),
-            "a ratifiable NoConfidence terminals the boundary (enactment deferred), got {err:?}",
+            matches!(
+                err,
+                crate::governance::GovernanceTerminal::UnsupportedRatifiedAction {
+                    kind: crate::governance::UnsupportedActionKind::NotParameterChange,
+                    ..
+                }
+            ),
+            "a ratified NoConfidence (non-ParameterChange) terminals the boundary, got {err:?}",
         );
     }
 

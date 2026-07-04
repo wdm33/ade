@@ -3320,6 +3320,8 @@ mod tests {
             committee_hot_keys: &gov.committee_hot_keys,
             drep_expiry: &gov.drep_expiry,
             num_dormant: &gov.num_dormant,
+            current_pparams: &acc.protocol_params,
+            current_prev_pparam_action: &gov.prev_pparam_action,
             new_epoch: target,
         };
         let regs = &acc.cert_state.delegation.registrations;
@@ -3368,8 +3370,14 @@ mod tests {
         ]);
         let err = s4_plan_for(&acc, 1341).unwrap_err();
         assert!(
-            matches!(err, crate::governance::GovernanceTerminal::PotentiallyRatifiable { .. }),
-            "a potentially-ratifiable proposal terminals the boundary, got {err:?}"
+            matches!(
+                err,
+                crate::governance::GovernanceTerminal::UnsupportedRatifiedAction {
+                    kind: crate::governance::UnsupportedActionKind::NotParameterChange,
+                    ..
+                }
+            ),
+            "a ratified non-ParameterChange proposal terminals the boundary, got {err:?}"
         );
         // Zero mutation is structural: the planner borrows only, and the boundary applies NOTHING on a terminal
         // (proof-gate `cre_s4_3a_terminal_atomicity_*` exercises the full boundary path on both entries).
@@ -3459,6 +3467,78 @@ mod tests {
         assert_eq!(replay.cert_state.delegation.rewards.get(&e0), Some(&Coin(100_000_000_000)));
     }
 
+    /// CRE S4.3c GATE — cross-path enactment identity. A supported exec-units `ParameterChange` ENACTS identically
+    /// on the direct-replay and accumulator-follow configs: the same enacted pparams (memory limits, steps
+    /// preserved), the same advanced gov state (root + removed proposals), the same deposit refunds and treasury
+    /// delta. Proves the S4.3a single authority carries a REAL enactment atomically through the ONE application
+    /// point, independent of the caller-varying params (mark / active-slots).
+    #[test]
+    fn cre_s4_3c_enactment_is_identical_on_replay_and_accumulator_paths() {
+        const WITNESS: &[u8] = &[
+            0xa2, 0x14, 0x82, 0x1a, 0x00, 0xfb, 0xc5, 0x20, 0x1b, 0x00, 0x00, 0x00, 0x02, 0x54, 0x0b, 0xe4,
+            0x00, 0x15, 0x82, 0x1a, 0x04, 0x4a, 0xa2, 0x00, 0x1b, 0x00, 0x00, 0x00, 0x04, 0xa8, 0x17, 0xc8,
+            0x00,
+        ];
+        let root = GovActionId { tx_hash: Hash32([0x60; 32]), index: 0 };
+        let pc = |prev, upd: &[u8]| GovAction::ParameterChange {
+            prev_action: prev, update: Vec::from(upd), policy_hash: None,
+        };
+        let yes = vec![
+            (StakeCredential::KeyHash(Hash28([0xC1; 28])), Vote::Yes),
+            (StakeCredential::KeyHash(Hash28([0xC2; 28])), Vote::Yes),
+        ];
+        // Winner (0x69, threshold-passing) + one sibling (0xF0, no votes) sharing the superseded root.
+        let mut acc = s4_acc_with_gov(vec![
+            s4_gas(0x69, pc(Some(root.clone()), WITNESS), yes, 1339, 100_000_000_000, 0xe0),
+            s4_gas(0xF0, pc(Some(root.clone()), WITNESS), Vec::new(), 1339, 100_000_000_000, 0xe1),
+        ]);
+        // Make the state V11-enact-ready: Bound block ExUnits + an enacted lineage root the winner chains onto.
+        acc.protocol_params.max_block_ex_units =
+            crate::pparams::MaxBlockExUnits::Bound { mem: 62_000_000, steps: 20_000_000_000 };
+        acc.gov_state.as_mut().unwrap().prev_pparam_action =
+            crate::state::PreviousPParamAction::Enacted(root.clone());
+        let ledger = acc.as_ledger_view();
+
+        let (replay, _) = apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, None, 21_600)
+            .expect("replay enacts");
+        let mark = StakeSnapshot::new();
+        let (accum, _) = apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&mark), 4_320)
+            .expect("accum enacts");
+
+        // The enactment REALLY happened (not a trivial equality): the memory limits advanced, steps preserved.
+        assert_eq!(replay.protocol_params.max_tx_ex_units_mem, 16_500_000, "maxTx mem enacted");
+        assert_eq!(replay.protocol_params.max_tx_ex_units_cpu, 10_000_000_000, "maxTx steps preserved");
+        assert_eq!(
+            replay.protocol_params.max_block_ex_units,
+            crate::pparams::MaxBlockExUnits::Bound { mem: 72_000_000, steps: 20_000_000_000 },
+            "maxBlock mem enacted, steps preserved",
+        );
+        assert_eq!(
+            replay.gov_state.as_ref().unwrap().prev_pparam_action,
+            crate::state::PreviousPParamAction::Enacted(GovActionId { tx_hash: Hash32([0x69; 32]), index: 0 }),
+            "the enacted PParamUpdate root advances to the winner",
+        );
+        assert!(replay.gov_state.as_ref().unwrap().proposals.is_empty(), "winner enacted + sibling pruned");
+
+        // IDENTICAL on both paths: pparams, gov state (fingerprint), refunds, treasury.
+        assert_eq!(replay.protocol_params, accum.protocol_params, "identical enacted pparams on both paths");
+        assert_eq!(replay.gov_state, accum.gov_state, "identical next governance state on both paths");
+        let e0 = StakeCredential::KeyHash(Hash28([0xe0; 28]));
+        let e1 = StakeCredential::KeyHash(Hash28([0xe1; 28]));
+        assert_eq!(
+            replay.cert_state.delegation.rewards.get(&e0), accum.cert_state.delegation.rewards.get(&e0),
+            "identical winner deposit refund on both paths",
+        );
+        assert_eq!(
+            replay.cert_state.delegation.rewards.get(&e1), accum.cert_state.delegation.rewards.get(&e1),
+            "identical pruned-sibling deposit refund on both paths",
+        );
+        assert_eq!(replay.epoch_state.treasury, accum.epoch_state.treasury, "identical treasury delta");
+        // Both deposits refund to their registered accounts (winner -> 0xe0, pruned sibling -> 0xe1).
+        assert_eq!(replay.cert_state.delegation.rewards.get(&e0), Some(&Coin(100_000_000_000)), "winner refund");
+        assert_eq!(replay.cert_state.delegation.rewards.get(&e1), Some(&Coin(100_000_000_000)), "sibling refund");
+    }
+
     /// GATE 2 — the 1340→1341 replay correction. Five expiring proposals crossed via the DIRECT-REPLAY path now
     /// REFUND (previously the replay path dropped expired proposals with no refund — the bug this slice corrects).
     /// Mirrors the CE-3d −500B shape: +400,000 ADA to 0xe0 (4) + +100,000 ADA to 0xe1 (1).
@@ -3511,8 +3591,18 @@ mod tests {
         let mark = StakeSnapshot::new();
         let err_accum =
             apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&mark), 4_320).unwrap_err();
-        assert!(matches!(err_replay, crate::governance::GovernanceTerminal::PotentiallyRatifiable { .. }));
-        assert!(matches!(err_accum, crate::governance::GovernanceTerminal::PotentiallyRatifiable { .. }));
+        assert!(matches!(
+            err_replay,
+            crate::governance::GovernanceTerminal::UnsupportedRatifiedAction {
+                kind: crate::governance::UnsupportedActionKind::NotParameterChange, ..
+            }
+        ));
+        assert!(matches!(
+            err_accum,
+            crate::governance::GovernanceTerminal::UnsupportedRatifiedAction {
+                kind: crate::governance::UnsupportedActionKind::NotParameterChange, ..
+            }
+        ));
     }
 
     /// GATE 4 — RUPD consumed once at the bootstrap boundary WHILE a governance refund occurs in the same boundary

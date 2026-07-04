@@ -68,6 +68,162 @@ fn cre_census_probe_epoch_1088() {
     );
 }
 
+/// CRE S4.3c grounding: decode the real epoch-1095 (pre) and epoch-1096 (post) states, diff the proposal
+/// sets, and classify each of the six removals (enacted winner / expired / pruned) with its kind, expiry,
+/// deposit and return address — the acceptance-witness data S4.3c must explain in full.
+#[test]
+#[ignore = "reads local db-analyser 1095 + 1096 states; classifies the six 1095->1096 removals (CRE S4.3c grounding)"]
+fn cre_s4_3c_classify_1095_1096_removals() {
+    use ade_types::conway::governance::GovAction;
+    let dec = |slot: u64, epoch: u64| {
+        let st = std::fs::read(ledger_state_path(slot)).unwrap_or_else(|e| panic!("read {slot}: {e}"));
+        let pt = SeedPoint { slot: SlotNo(slot), block_hash: Hash32([0u8; 32]) };
+        decode_native_nonutxo_state(&st, pt, epoch, 2).unwrap_or_else(|e| panic!("decode {slot}: {e:?}"))
+    };
+    let hx = |b: &[u8]| b.iter().take(8).map(|x| format!("{x:02x}")).collect::<String>();
+    let (pre, _) = dec(94_608_021, 1095);
+    let (post, _) = dec(94_694_406, 1096);
+    let post_ids: std::collections::BTreeSet<GovActionId> =
+        post.imported_gov.proposals.iter().map(|p| p.action_id.clone()).collect();
+    let removed: Vec<_> = pre.imported_gov.proposals.iter().filter(|p| !post_ids.contains(&p.action_id)).collect();
+    eprintln!("=== CRE S4.3c: 1095->1096 removals ===");
+    eprintln!(
+        "1095 proposals={} enacted_root={:?} | 1096 proposals={} enacted_root={:?} | removed={}",
+        pre.imported_gov.proposals.len(),
+        pre.enacted_pparam_update.as_ref().map(|g| hx(&g.tx_hash.0)),
+        post.imported_gov.proposals.len(),
+        post.enacted_pparam_update.as_ref().map(|g| hx(&g.tx_hash.0)),
+        removed.len()
+    );
+    for p in &removed {
+        let kind = match &p.gov_action {
+            GovAction::ParameterChange { prev_action, update, .. } => format!(
+                "ParameterChange prev={:?} update_len={}",
+                prev_action.as_ref().map(|g| hx(&g.tx_hash.0)),
+                update.len()
+            ),
+            other => format!("{}", std::any::type_name_of_val(other)).replace("ade_types::conway::governance::", ""),
+        };
+        eprintln!(
+            "  {}#{}: expires_after={} deposit={} return_len={} enacted_target={} | {}",
+            hx(&p.action_id.tx_hash.0),
+            p.action_id.index,
+            p.expires_after.0,
+            p.deposit.0,
+            p.return_addr.len(),
+            p.action_id == target(),
+            kind
+        );
+    }
+}
+
+/// CRE S4.3c CORPUS DIFFERENTIAL (real 1095 state): run the SINGLE enactment authority
+/// (`plan_conway_governance_epoch`) over the REAL decoded epoch-1095 proposal set + real ratify authority +
+/// real pparams/lineage, and assert it reproduces the on-chain 1095→1096 enactment — 69c948cd..#0 ENACTS
+/// (maxTx.mem 14M→16.5M, maxBlock.mem 62M→72M, steps preserved), the root advances 602d8572→69c948cd, the six
+/// removals classify (1 Enacted + 5 PrunedByEnactment), all six deposits refund, and the set shrinks 59→53.
+/// This is the acceptance witness: the same real authority the S4.4 anchor proves RATIFIES the target.
+#[test]
+#[ignore = "reads the local db-analyser epoch-1095 state; the S4.3c enactment corpus differential"]
+fn cre_s4_3c_enactment_differential_1095() {
+    use ade_ledger::governance::{
+        derive_drep_voting_stake, plan_conway_governance_epoch, ConwayGovernanceEpochInput, DepositReturn,
+        PParamsDelta, PrevPParamActionDelta, RemovalCause,
+    };
+    use ade_ledger::pparams::MaxBlockExUnits;
+    use ade_ledger::rational::Rational;
+    use ade_ledger::state::{DormantEpochs, PreviousPParamAction};
+
+    let slot = 94_608_021u64; // epoch 1095, before the 1095→1096 enactment
+    let state = std::fs::read(ledger_state_path(slot)).expect("read 1095 state");
+    let point = SeedPoint { slot: SlotNo(slot), block_hash: Hash32([0u8; 32]) };
+    let (s1a, _) = decode_native_nonutxo_state(&state, point, 1095, 2).expect("decode 1095");
+    let g = &s1a.imported_gov;
+
+    // The current (pre-boundary) pparams: real tx exec-units from the decoded state; the block ExUnits is the
+    // real 1095 curPParams value (62M/20e9) — set explicitly only if the census decode left it Unversioned.
+    let mut cur_pp = s1a.protocol_params.clone();
+    if matches!(cur_pp.max_block_ex_units, MaxBlockExUnits::Unversioned) {
+        cur_pp.max_block_ex_units = MaxBlockExUnits::Bound { mem: 62_000_000, steps: 20_000_000_000 };
+    }
+    eprintln!(
+        "1095 curPParams exec-units: maxTx {{mem {}, steps {}}} | maxBlock {:?} | enacted_root present={}",
+        cur_pp.max_tx_ex_units_mem, cur_pp.max_tx_ex_units_cpu, cur_pp.max_block_ex_units,
+        s1a.enacted_pparam_update.is_some(),
+    );
+    let cur_prev = match &s1a.enacted_pparam_update {
+        Some(id) => PreviousPParamAction::Enacted(id.clone()),
+        None => PreviousPParamAction::NoPreviousAction,
+    };
+
+    // The real ratify authority (identical to the S4.4 oracle anchor `cre_s4_oracle_anchor_ratify_decision`).
+    let drep_stake = derive_drep_voting_stake(&g.vote_delegations, &s1a.snapshots.mark.0);
+    let quorum = g
+        .committee_quorum
+        .map(|(n, d)| Rational::new(n as i128, d.max(1) as i128).unwrap())
+        .unwrap_or_else(|| Rational::new(1, 1).unwrap());
+    let num_dormant = DormantEpochs::Bound(g.num_dormant_epochs);
+    let input = ConwayGovernanceEpochInput {
+        proposals: &g.proposals,
+        drep_stake: &drep_stake,
+        pool_stake: &s1a.snapshots.go.0.pool_stakes,
+        committee_members: &g.committee,
+        committee_quorum: &quorum,
+        pool_thresholds: &g.pool_voting_thresholds,
+        drep_thresholds: &g.drep_voting_thresholds,
+        committee_hot_keys: &g.committee_hot_keys,
+        drep_expiry: &g.drep_expiry,
+        num_dormant: &num_dormant,
+        current_pparams: &cur_pp,
+        current_prev_pparam_action: &cur_prev,
+        new_epoch: 1096, // ending_epoch 1095 (the enacting boundary)
+    };
+    // Deposit routing is not under test here (the registration set is not in the non-UTxO state); treat all as
+    // registered so refunds route ToRewardAccount. The DECISION (six refunds of 100k) is what we assert.
+    let plan = plan_conway_governance_epoch(&input, |_| true).expect("the 1095 boundary enacts (no terminal)");
+
+    // (1) The enacted delta: maxTx.mem 16.5M, maxBlock.mem 72M, BOTH steps preserved.
+    match &plan.pparams {
+        PParamsDelta::Set(pp) => {
+            assert_eq!(pp.max_tx_ex_units_mem, 16_500_000, "maxTx mem 14M -> 16.5M");
+            assert_eq!(pp.max_tx_ex_units_cpu, cur_pp.max_tx_ex_units_cpu, "maxTx steps preserved");
+            assert_eq!(
+                pp.max_block_ex_units,
+                MaxBlockExUnits::Bound { mem: 72_000_000, steps: 20_000_000_000 },
+                "maxBlock mem 62M -> 72M, steps preserved"
+            );
+        }
+        other => panic!("expected an enactment (pparams Set), got {other:?}"),
+    }
+    // (2) The enacted root advances to the target 69c948cd..#0.
+    assert_eq!(plan.prev_pparam_action, PrevPParamActionDelta::Set(target()), "root advances to 69c948cd");
+    // (3) Exactly six removals: the target Enacted + five PrunedByEnactment siblings.
+    assert_eq!(plan.removals.len(), 6, "the six 1095->1096 removals");
+    let enacted: Vec<_> = plan.removals.iter().filter(|r| r.cause == RemovalCause::Enacted).collect();
+    assert_eq!(enacted.len(), 1);
+    assert_eq!(enacted[0].action_id, target(), "the target is the enacted winner");
+    assert_eq!(
+        plan.removals.iter().filter(|r| r.cause == RemovalCause::PrunedByEnactment).count(),
+        5,
+        "five superseded siblings pruned",
+    );
+    // (4) All six deposits refund (100k each).
+    assert_eq!(plan.deposit_returns.len(), 6);
+    assert!(
+        plan.deposit_returns.iter().all(|d| matches!(
+            d, DepositReturn::ToRewardAccount { amount, .. } if amount.0 == 100_000_000_000
+        )),
+        "all six deposits refund 100k",
+    );
+    // (5) The set shrinks 59 -> 53.
+    assert_eq!(g.proposals.len(), 59, "the real 1095 proposal set");
+    assert_eq!(plan.proposals.len(), 53, "59 - 6 = 53 after the enactment");
+    eprintln!(
+        "CRE S4.3c differential OK: enacted 69c948cd; 6 removals (1 Enacted + 5 Pruned); 59->53; \
+         maxTx.mem->16.5M maxBlock.mem->72M (steps preserved)"
+    );
+}
+
 /// CRE S4.3b GATE 5 (real witness) — the DEFINITIVE key-20/21 validation against REAL on-chain bytes.
 /// Reads proposal 69c948cd..#0's raw `ParameterChange.update` from the local Preview epoch-1095 ledger state
 /// (the proposal is live at 1095, before its 1095->1096 enactment) and proves: keys 20/21 decode to the full
