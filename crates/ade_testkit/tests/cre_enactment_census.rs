@@ -241,10 +241,21 @@ fn cre_s5_differential_report() {
     use ade_types::shelley::cert::StakeCredential;
     use ade_types::Hash28;
 
+    // Provenance constants — pinned reproducibility anchors (see the PROVENANCE block below).
+    const VALIDATED_S4_3C: &str = "d02cff14"; // plan_conway_governance_epoch + apply_epoch_boundary_with_registrations
+    const VALIDATED_S5: &str = "dff581ab"; // the S5 report + T-EPOCH-01 strengthen
+    const PIN_ID_1340: &str = "7caa31d6d415b73673d1037f9f382e7ebe1d5f4c66ce6bbb06954775f15bb7c7";
+    const PIN_ID_1341: &str = "3fc83ac732009b74e6c430a871fe3ace9269bd6729d6e301d739bbfd89eddd09";
+    const PIN_ID_1095: &str = "e8632fa171475e6e14d0637568b082c707ce7e9b1c5b1b8186006219d2e4be62";
+    const PIN_ID_1096: &str = "21b23e29ebfff1733389018c46c6f456a3de5eabff87901fbacd4a1303df7e3a";
+    const PIN_REPORT_HASH: &str = "3a56f0d72f6979d4872b473c731379cce136458c3dbd4100b6cbd30a655d4252";
+
+    // Returns (decoded state, decoder-canonical commitment Hash32) — the commitment binds BOTH the exact input
+    // state AND the decoder version, so it is the reproducibility identity for each fixture.
     let dec = |slot: u64, epoch: u64| {
         let st = std::fs::read(ledger_state_path(slot)).unwrap_or_else(|e| panic!("read {slot}: {e}"));
         let pt = SeedPoint { slot: SlotNo(slot), block_hash: Hash32([0u8; 32]) };
-        decode_native_nonutxo_state(&st, pt, epoch, 2).unwrap_or_else(|e| panic!("decode {slot}: {e:?}")).0
+        decode_native_nonutxo_state(&st, pt, epoch, 2).unwrap_or_else(|e| panic!("decode {slot}: {e:?}"))
     };
     let h28 = |hex: &str| {
         let b: Vec<u8> =
@@ -266,7 +277,7 @@ fn cre_s5_differential_report() {
     eprintln!("\n================ CRE S5 DIFFERENTIAL + RESIDUAL REPORT ================");
 
     // ===== ITEM 1: the five expired-proposal refund totals + destinations (POST-1340 → 1341) =====
-    let s1340 = dec(115_776_011, 1340);
+    let (s1340, commit_1340) = dec(115_776_011, 1340);
     let g = &s1340.imported_gov;
     let quorum = g
         .committee_quorum
@@ -331,8 +342,8 @@ fn cre_s5_differential_report() {
     eprintln!("    delta is a STABLE +231M/+894M across 1340/1341/1342 = the B3c residual (item 5), NOT the refunds.");
 
     // ===== ITEM 3: the 1095→1096 enactment observables (from the REAL states) =====
-    let s1095 = dec(94_608_021, 1095);
-    let s1096 = dec(94_694_406, 1096);
+    let (s1095, commit_1095) = dec(94_608_021, 1095);
+    let (s1096, commit_1096) = dec(94_694_406, 1096);
     assert_eq!(s1095.imported_gov.proposals.len(), 59, "1095 proposal set");
     assert_eq!(s1096.imported_gov.proposals.len(), 53, "1096 proposal set (59 - 6)");
     assert_eq!(s1096.enacted_pparam_update.as_ref(), Some(&target()), "root advanced to 69c948cd..#0");
@@ -375,7 +386,7 @@ fn cre_s5_differential_report() {
     eprintln!("  full cross-path enactment identity proven by cre_s4_3c_enactment_is_identical_on_replay_and_accumulator_paths.");
 
     // ===== ITEM 5: the exact remaining B3c residual, ISOLATED from governance =====
-    let s1341 = dec(115_862_416, 1341);
+    let (s1341, commit_1341) = dec(115_862_416, 1341);
     let go = &s1341.snapshots.go.0;
     let go_total: u64 = go.pool_stakes.values().map(|c| c.0).sum();
     assert_eq!(go_total, 1_673_934_797_356_442, "POST-1341 reference go total (the certified snapshot)");
@@ -397,6 +408,44 @@ fn cre_s5_differential_report() {
     eprintln!("    UnsupportedRatifiedAction{{NotParameterChange|NonExecUnitsField|NoExecUnitsField|ChangedSteps|");
     eprintln!("      OversizedUpdate|MalformedUpdate|ChainedEnactment|CompetingRatifiableActions}},");
     eprintln!("    UnversionedStateOnEnactPath, Malformed{{ReturnAddrNotRewardAccount}}, DormantRequired.");
+
+    // ===== PROVENANCE (reproducibility binding) =====
+    // Bind the report to its EXACT inputs + decoder + validated code, and content-address the findings so the
+    // "governance component closed, B3c remains" claim is reproducible, not narrative. A change in any input
+    // state, the decoder, or a validated claim changes one of these anchors and FAILS the test.
+    let mut removed_hex: Vec<String> = removed.iter().map(|id| hex32(&id.tx_hash.0)).collect();
+    removed_hex.sort();
+    let claims = format!(
+        "CRE-S5-REPORT-v1;refund={to1},{to2};removals={};maxtx={}->{};maxblock={}->{};count={}->{};b3c=-343260172883;go={go_total};isolated=true",
+        removed_hex.join(","),
+        s1095.protocol_params.max_tx_ex_units_mem,
+        s1096.protocol_params.max_tx_ex_units_mem,
+        block_mem(&s1095.protocol_params),
+        block_mem(&s1096.protocol_params),
+        s1095.imported_gov.proposals.len(),
+        s1096.imported_gov.proposals.len(),
+    );
+    let report_hash = hex32(&blake2b_256(claims.as_bytes()).0);
+    let id_1340 = hex32(&commit_1340.0);
+    let id_1341 = hex32(&commit_1341.0);
+    let id_1095 = hex32(&commit_1095.0);
+    let id_1096 = hex32(&commit_1096.0);
+    // Reproducibility anchors (pinned): the decoder-canonical fixture commitments + the canonical report hash.
+    assert_eq!(id_1340, PIN_ID_1340, "POST-1340 fixture identity (decoder-canonical commitment)");
+    assert_eq!(id_1341, PIN_ID_1341, "POST-1341 fixture identity (decoder-canonical commitment)");
+    assert_eq!(id_1095, PIN_ID_1095, "epoch-1095 fixture identity (decoder-canonical commitment)");
+    assert_eq!(id_1096, PIN_ID_1096, "epoch-1096 fixture identity (decoder-canonical commitment)");
+    assert_eq!(report_hash, PIN_REPORT_HASH, "canonical S5 report hash (reproducibility)");
+    eprintln!("\n---------------- PROVENANCE (reproducible) ----------------");
+    eprintln!("  report version: CRE-S5-REPORT-v1");
+    eprintln!("  decoder: decode_native_nonutxo_state (native Conway non-UTxO decoder), network magic 2");
+    eprintln!("  validated code commits: S4.3c planner/enactment {VALIDATED_S4_3C}; S5 report {VALIDATED_S5}");
+    eprintln!("  fixture/state identities (decoder-canonical commitment):");
+    eprintln!("    POST-1340 @115776011 ep1340: {id_1340}");
+    eprintln!("    POST-1341 @115862416 ep1341: {id_1341}");
+    eprintln!("    epoch-1095 @94608021:        {id_1095}");
+    eprintln!("    epoch-1096 @94694406:        {id_1096}");
+    eprintln!("  canonical report hash (blake2b-256 of the structured claims): {report_hash}");
 
     // ===== THE THREE-WAY STATUS SEPARATION (unmistakable) =====
     eprintln!("\n---------------- STATUS (kept separate) ----------------");

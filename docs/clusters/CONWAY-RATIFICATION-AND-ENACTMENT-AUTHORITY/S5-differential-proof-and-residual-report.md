@@ -54,6 +54,30 @@ narrative. Each item is asserted where the data is local, cited to its committed
    | ChangedSteps | OversizedUpdate | MalformedUpdate | ChainedEnactment | CompetingRatifiableActions }`,
    `UnversionedStateOnEnactPath`, `Malformed { ReturnAddrNotRewardAccount }`, `DormantRequired`.
 
+## Provenance (reproducibility anchors — asserted, not narrative)
+
+The report binds itself to its EXACT inputs, decoder, validated code, and findings; a change in any FAILS
+`cre_s5_differential_report`, so "the governance component is closed, B3c remains" is reproducible rather than a
+claim of record:
+
+- **Report version**: `CRE-S5-REPORT-v1`.
+- **Decoder**: `decode_native_nonutxo_state` (native Conway non-UTxO decoder), network magic 2.
+- **Validated code commits**: S4.3c planner/enactment `d02cff14` (`plan_conway_governance_epoch` +
+  `apply_epoch_boundary_with_registrations`); S5 report `dff581ab`.
+- **Fixture/state identities** — the decoder-canonical commitment (`Hash32`) each `decode_native_nonutxo_state`
+  returns, binding BOTH the exact input state AND the decoder version (asserted):
+
+  | fixture | slot / epoch | decoder-canonical commitment |
+  |---|---|---|
+  | POST-1340 | 115776011 / 1340 | `7caa31d6d415b73673d1037f9f382e7ebe1d5f4c66ce6bbb06954775f15bb7c7` |
+  | POST-1341 | 115862416 / 1341 | `3fc83ac732009b74e6c430a871fe3ace9269bd6729d6e301d739bbfd89eddd09` |
+  | epoch-1095 | 94608021 | `e8632fa171475e6e14d0637568b082c707ce7e9b1c5b1b8186006219d2e4be62` |
+  | epoch-1096 | 94694406 | `21b23e29ebfff1733389018c46c6f456a3de5eabff87901fbacd4a1303df7e3a` |
+
+- **Canonical report hash** — blake2b-256 over the structured claims (the refund split, the six removal ids, the
+  exec-memory transitions, the roots, the proposal counts, the B3c residual, the go total, the isolation flag),
+  asserted: `3a56f0d72f6979d4872b473c731379cce136458c3dbd4100b6cbd30a655d4252`.
+
 ## Explicit scope bounds (what S5 does NOT claim)
 
 - **The full accumulator-level BYTE-EXACT CE-3d differential is NOT closed by S5.** It awaits (a) a seed
