@@ -186,6 +186,8 @@ impl LoadedSnapshot {
             // Harness reconstruction predating the versioned dormancy field (V1). Not a bootstrap/replay
             // authority; never a fabricated Bound(0).
             num_dormant: ade_ledger::state::DormantEpochs::Unversioned,
+            // Harness reconstruction predating the S4.3b previous-pparam-action field. Never fabricated.
+            prev_pparam_action: ade_ledger::state::PreviousPParamAction::Unversioned,
         })
     }
 
@@ -228,6 +230,8 @@ impl LoadedSnapshot {
             max_tx_ex_units_cpu: 10_000_000_000,
             network_id: 1,
             cost_models_cbor: None,
+            // Harness oracle-value reconstruction, NOT the certified Conway source — Unversioned block ExUnits.
+            max_block_ex_units: ade_ledger::pparams::MaxBlockExUnits::Unversioned,
         };
 
         // Try to parse d from the actual snapshot CBOR (ground truth).

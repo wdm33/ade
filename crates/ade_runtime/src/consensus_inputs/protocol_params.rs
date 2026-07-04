@@ -116,6 +116,9 @@ pub fn parse_protocol_parameters_json(
         network_id,
         // Plutus budget semantics — outside S2a's empty-block forge-header surface.
         cost_models_cbor: None,
+        // CRE S4.3b: the CLI empty-block-forge path is NOT the certified Conway source — block ExUnits stays
+        // Unversioned here (never a fabricated default); it is authoritative only via the native decoder.
+        max_block_ex_units: ade_ledger::pparams::MaxBlockExUnits::Unversioned,
     })
 }
 

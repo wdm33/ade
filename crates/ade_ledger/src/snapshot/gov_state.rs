@@ -30,7 +30,7 @@ use ade_types::{EpochNo, Hash28, Hash32};
 
 use crate::pparams::{ConwayOnlyDepositParams, MinUtxoRule, ProtocolParameters};
 use crate::rational::Rational;
-use crate::state::{ConwayGovState, DormantEpochs};
+use crate::state::{ConwayGovState, DormantEpochs, PreviousPParamAction};
 
 use super::cert_state::read_stake_credential;
 use super::error::{SnapshotDecodeError, StructuralReason};
@@ -43,10 +43,13 @@ const PPARAMS_FIELDS: u64 = 24;
 
 pub fn encode_pparams(pp: &ProtocolParameters) -> Vec<u8> {
     let mut buf = Vec::new();
-    write_array_header(
-        &mut buf,
-        ContainerEncoding::Definite(PPARAMS_FIELDS, canonical_width(PPARAMS_FIELDS)),
-    );
+    // VERSIONED (CRE S4.3b): Unversioned block ex-units = the historical PPARAMS_FIELDS arity (byte-identical);
+    // Bound = PPARAMS_FIELDS + 2 with [mem, steps] appended. The two reserved trailing fields stay 0,0 in both.
+    let n_pp: u64 = match pp.max_block_ex_units {
+        crate::pparams::MaxBlockExUnits::Unversioned => PPARAMS_FIELDS,
+        crate::pparams::MaxBlockExUnits::Bound { .. } => PPARAMS_FIELDS + 2,
+    };
+    write_array_header(&mut buf, ContainerEncoding::Definite(n_pp, canonical_width(n_pp)));
     write_uint_canonical(&mut buf, pp.min_fee_a.0);
     write_uint_canonical(&mut buf, pp.min_fee_b.0);
     write_uint_canonical(&mut buf, pp.max_block_body_size as u64);
@@ -73,15 +76,27 @@ pub fn encode_pparams(pp: &ProtocolParameters) -> Vec<u8> {
     write_uint_canonical(&mut buf, pp.max_tx_ex_units_cpu);
     write_uint_canonical(&mut buf, pp.network_id as u64);
     write_opt_bytes(&mut buf, pp.cost_models_cbor.as_deref());
-    // Final 2 reserved fields: placeholders for forward-compatible extension.
+    // Final 2 reserved fields: placeholders for forward-compatible extension. Left 0,0 in BOTH versions —
+    // the S4.3b block-ex-units extension appends AFTER them under the +2 arity, per the versioning rule.
     write_uint_canonical(&mut buf, 0);
     write_uint_canonical(&mut buf, 0);
+    if let crate::pparams::MaxBlockExUnits::Bound { mem, steps } = pp.max_block_ex_units {
+        write_uint_canonical(&mut buf, mem);
+        write_uint_canonical(&mut buf, steps);
+    }
     buf
 }
 
 pub fn decode_pparams(bytes: &[u8]) -> Result<ProtocolParameters, SnapshotDecodeError> {
     let mut o = 0usize;
-    expect_array(bytes, &mut o, PPARAMS_FIELDS)?;
+    // VERSIONED (CRE S4.3b): PPARAMS_FIELDS = Unversioned block ex-units (historical, byte-identical);
+    // PPARAMS_FIELDS + 2 = Bound [mem, steps]. Any other arity is a structural error.
+    let n_pp = read_array_len(bytes, &mut o)?;
+    if n_pp != PPARAMS_FIELDS && n_pp != PPARAMS_FIELDS + 2 {
+        return Err(SnapshotDecodeError::Structural {
+            reason: StructuralReason::ArrayLengthMismatch,
+        });
+    }
     let min_fee_a = Coin(read_u64(bytes, &mut o)?);
     let min_fee_b = Coin(read_u64(bytes, &mut o)?);
     let max_block_body_size = read_u64(bytes, &mut o)? as u32;
@@ -109,6 +124,14 @@ pub fn decode_pparams(bytes: &[u8]) -> Result<ProtocolParameters, SnapshotDecode
     // Reserved fields.
     let _ = read_u64(bytes, &mut o)?;
     let _ = read_u64(bytes, &mut o)?;
+    // CRE S4.3b: Bound block ExUnits present iff the +2 arity; else Unversioned (NEVER {0,0}).
+    let max_block_ex_units = if n_pp == PPARAMS_FIELDS + 2 {
+        let mem = read_u64(bytes, &mut o)?;
+        let steps = read_u64(bytes, &mut o)?;
+        crate::pparams::MaxBlockExUnits::Bound { mem, steps }
+    } else {
+        crate::pparams::MaxBlockExUnits::Unversioned
+    };
     Ok(ProtocolParameters {
         min_fee_a,
         min_fee_b,
@@ -132,6 +155,7 @@ pub fn decode_pparams(bytes: &[u8]) -> Result<ProtocolParameters, SnapshotDecode
         max_tx_ex_units_cpu,
         network_id,
         cost_models_cbor,
+        max_block_ex_units,
     })
 }
 
@@ -173,10 +197,12 @@ pub fn encode_gov_state(g: &ConwayGovState) -> Vec<u8> {
     let mut buf = Vec::new();
     // VERSIONED: V1 (`Unversioned`) = the 9-field canonical layout (byte-identical to historical bytes);
     // V2 (`Bound`) = 10 fields with `num_dormant` appended. The decoder branches on this count.
-    let n_fields: u64 = match g.num_dormant {
-        DormantEpochs::Unversioned => GOV_FIELDS,
-        DormantEpochs::Bound(_) => GOV_FIELDS + 1,
-    };
+    // V1 (Unversioned num_dormant) = 9; V2 (Bound num_dormant) = 10; V3 (+ Known prev_pparam_action) = 11.
+    // Well-formedness: a Known prev-action ⟹ Bound num_dormant (both bound by the V11 bootstrap).
+    let dormant_bound = matches!(g.num_dormant, DormantEpochs::Bound(_));
+    let prev_known = !matches!(g.prev_pparam_action, PreviousPParamAction::Unversioned);
+    debug_assert!(!prev_known || dormant_bound, "V3 prev_pparam_action requires Bound num_dormant");
+    let n_fields: u64 = GOV_FIELDS + (dormant_bound as u64) + (prev_known as u64);
     write_array_header(
         &mut buf,
         ContainerEncoding::Definite(n_fields, canonical_width(n_fields)),
@@ -276,6 +302,18 @@ pub fn encode_gov_state(g: &ConwayGovState) -> Vec<u8> {
     if let DormantEpochs::Bound(n) = g.num_dormant {
         write_uint_canonical(&mut buf, n);
     }
+    // prev_pparam_action (V3 ONLY — Known variants; Unversioned emits nothing, keeping V1/V2 byte-identical).
+    // SNothing -> array(0); SJust id -> array(1)[id].
+    match &g.prev_pparam_action {
+        PreviousPParamAction::Unversioned => {}
+        PreviousPParamAction::NoPreviousAction => {
+            write_array_header(&mut buf, ContainerEncoding::Definite(0, IntWidth::Inline));
+        }
+        PreviousPParamAction::Enacted(id) => {
+            write_array_header(&mut buf, ContainerEncoding::Definite(1, IntWidth::Inline));
+            write_gov_action_id(&mut buf, id);
+        }
+    }
     buf
 }
 
@@ -284,7 +322,7 @@ pub fn decode_gov_state(bytes: &[u8]) -> Result<ConwayGovState, SnapshotDecodeEr
     // VERSIONED: a 9-field array is V1 (`Unversioned`); a 10-field array is V2 (`Bound`, `num_dormant`
     // appended). Any other arity is a structural error. Historical V1 bytes decode unchanged.
     let n_gov_fields = read_array_len(bytes, &mut o)?;
-    if n_gov_fields != GOV_FIELDS && n_gov_fields != GOV_FIELDS + 1 {
+    if n_gov_fields != GOV_FIELDS && n_gov_fields != GOV_FIELDS + 1 && n_gov_fields != GOV_FIELDS + 2 {
         return Err(SnapshotDecodeError::Structural {
             reason: StructuralReason::ArrayLengthMismatch,
         });
@@ -350,11 +388,27 @@ pub fn decode_gov_state(bytes: &[u8]) -> Result<ConwayGovState, SnapshotDecodeEr
         let cold = read_stake_credential(bytes, &mut o)?;
         committee_hot_keys.insert(hot, cold);
     }
-    // num_dormant: V2 (10 fields) carries the bound value; V1 (9 fields) predates the field.
-    let num_dormant = if n_gov_fields == GOV_FIELDS + 1 {
+    // num_dormant: V2/V3 (>=10 fields) carry the bound value; V1 (9) predates it.
+    let num_dormant = if n_gov_fields >= GOV_FIELDS + 1 {
         DormantEpochs::Bound(read_u64(bytes, &mut o)?)
     } else {
         DormantEpochs::Unversioned
+    };
+    // prev_pparam_action: V3 (11 fields) carries it (array(0)=NoPreviousAction, array(1)[id]=Enacted); V1/V2
+    // predate it -> Unversioned (NEVER fabricated).
+    let prev_pparam_action = if n_gov_fields == GOV_FIELDS + 2 {
+        let n = read_array_len(bytes, &mut o)?;
+        match n {
+            0 => PreviousPParamAction::NoPreviousAction,
+            1 => PreviousPParamAction::Enacted(read_gov_action_id(bytes, &mut o)?),
+            _ => {
+                return Err(SnapshotDecodeError::Structural {
+                    reason: StructuralReason::ArrayLengthMismatch,
+                })
+            }
+        }
+    } else {
+        PreviousPParamAction::Unversioned
     };
     Ok(ConwayGovState {
         proposals,
@@ -367,6 +421,7 @@ pub fn decode_gov_state(bytes: &[u8]) -> Result<ConwayGovState, SnapshotDecodeEr
         drep_voting_thresholds,
         committee_hot_keys,
         num_dormant,
+        prev_pparam_action,
     })
 }
 
@@ -968,8 +1023,95 @@ mod tests {
         assert_eq!(decoded, p);
     }
 
+    // ── CRE S4.3b gates: versioned block ExUnits + previous-pparam-action (INERT) ──
+
+    /// GATE 1 + 4: a V10 (Unversioned block ex-units) pparams round-trips to Unversioned — NEVER a fabricated
+    /// {0,0} — encodes at the historical 24-field arity (a V11 Bound store is strictly longer), and re-encode
+    /// is a fixpoint (byte-identical to the historical encoding).
+    #[test]
+    fn cre_s4_3b_gate1_v10_pparams_unversioned_byte_identical() {
+        let pp = ProtocolParameters::default();
+        assert_eq!(pp.max_block_ex_units, crate::pparams::MaxBlockExUnits::Unversioned);
+        let v10 = encode_pparams(&pp);
+        let dec = decode_pparams(&v10).expect("decode");
+        assert_eq!(dec.max_block_ex_units, crate::pparams::MaxBlockExUnits::Unversioned);
+        assert_eq!(dec, pp);
+        assert_eq!(encode_pparams(&dec), v10, "V10 re-encode fixpoint (byte-identical)");
+        let mut bound = pp.clone();
+        bound.max_block_ex_units =
+            crate::pparams::MaxBlockExUnits::Bound { mem: 72_000_000, steps: 20_000_000_000 };
+        assert!(encode_pparams(&bound).len() > v10.len(), "V11 Bound store carries the extra [mem, steps]");
+    }
+
+    /// GATE 3: a V11 (Bound) pparams round-trips (encode→decode→re-encode fixpoint); any mem/steps pair survives.
+    #[test]
+    fn cre_s4_3b_gate3_v11_pparams_bound_round_trips() {
+        for (mem, steps) in [(72_000_000u64, 20_000_000_000u64), (1, 2), (u64::MAX, 0)] {
+            let mut pp = ProtocolParameters::default();
+            pp.max_block_ex_units = crate::pparams::MaxBlockExUnits::Bound { mem, steps };
+            let enc = encode_pparams(&pp);
+            let dec = decode_pparams(&enc).expect("decode");
+            assert_eq!(dec.max_block_ex_units, crate::pparams::MaxBlockExUnits::Bound { mem, steps });
+            assert_eq!(dec, pp);
+            assert_eq!(encode_pparams(&dec), enc, "V11 re-encode fixpoint");
+        }
+    }
+
+    /// GATE 1 + 4 (gov-state): V1/V2 gov states round-trip to `PreviousPParamAction::Unversioned` (NEVER a
+    /// fabricated NoPreviousAction), byte-identically to the historical 9/10-field arity.
+    #[test]
+    fn cre_s4_3b_gate1_v1_v2_gov_unversioned_byte_identical() {
+        let mut g = make_gov_state();
+        assert_eq!(g.prev_pparam_action, crate::state::PreviousPParamAction::Unversioned);
+        let v1 = encode_gov_state(&g);
+        let d1 = decode_gov_state(&v1).expect("decode");
+        assert_eq!(d1.prev_pparam_action, crate::state::PreviousPParamAction::Unversioned);
+        assert_eq!(d1, g);
+        assert_eq!(encode_gov_state(&d1), v1, "V1 fixpoint");
+        g.num_dormant = crate::state::DormantEpochs::Bound(3);
+        let v2 = encode_gov_state(&g);
+        let d2 = decode_gov_state(&v2).expect("decode");
+        assert_eq!(d2.prev_pparam_action, crate::state::PreviousPParamAction::Unversioned);
+        assert_eq!(d2, g);
+        assert!(v2.len() > v1.len(), "V2 carries num_dormant");
+    }
+
+    /// GATE 3 (gov-state): a V3 gov state (Bound num_dormant + Known prev-action) round-trips both
+    /// NoPreviousAction and Enacted(id) byte-identically.
+    #[test]
+    fn cre_s4_3b_gate3_v3_gov_round_trips_prev_action() {
+        let mut g = make_gov_state();
+        g.num_dormant = crate::state::DormantEpochs::Bound(4);
+        for prev in [
+            crate::state::PreviousPParamAction::NoPreviousAction,
+            crate::state::PreviousPParamAction::Enacted(GovActionId {
+                tx_hash: Hash32([0x9A; 32]),
+                index: 7,
+            }),
+        ] {
+            g.prev_pparam_action = prev.clone();
+            let enc = encode_gov_state(&g);
+            let dec = decode_gov_state(&enc).expect("decode");
+            assert_eq!(dec.prev_pparam_action, prev);
+            assert_eq!(dec, g);
+            assert_eq!(encode_gov_state(&dec), enc, "V3 fixpoint");
+        }
+    }
+
+    /// GATE 7: BOTH max_tx exec-units components (mem AND steps/cpu) are present and survive persist→recover.
+    #[test]
+    fn cre_s4_3b_gate7_max_tx_mem_and_steps_survive_round_trip() {
+        let mut pp = ProtocolParameters::default();
+        pp.max_tx_ex_units_mem = 16_500_000;
+        pp.max_tx_ex_units_cpu = 12_345_678_901;
+        let dec = decode_pparams(&encode_pparams(&pp)).expect("decode");
+        assert_eq!(dec.max_tx_ex_units_mem, 16_500_000);
+        assert_eq!(dec.max_tx_ex_units_cpu, 12_345_678_901);
+    }
+
     fn make_gov_state() -> ConwayGovState {
         let mut g = ConwayGovState {
+            prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
             committee_quorum: (2, 3),
@@ -1069,6 +1211,7 @@ mod tests {
     #[test]
     fn gov_state_round_trip_empty() {
         let g = ConwayGovState {
+            prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
             committee_quorum: (0, 0),

@@ -56,6 +56,8 @@ const FINGERPRINT_VERSION: u64 = 1;
 /// component (PHASE4-B3-S1). Emitted only when the params are present, so the
 /// non-Conway pparams encoding is unchanged.
 const CONWAY_DEPOSIT_PARAMS_TAG: u64 = 1;
+/// CRE S4.3b: versioned tag for the block-ExUnits pparams-fingerprint extension (distinct from the deposit tag).
+const MAX_BLOCK_EX_UNITS_TAG: u64 = 2;
 
 /// Per-component fingerprint of a ledger state.
 ///
@@ -480,6 +482,14 @@ fn fingerprint_pparams(
         write_coin(&mut buf, c.gov_action_deposit);
         write_uint_canonical(&mut buf, c.drep_activity);
     }
+    // CRE S4.3b: block ExUnits enter the fingerprint ONLY when Bound, under a versioned tag AFTER the body
+    // (+ any conway-deposit tag). Unversioned emits nothing → old pparams fingerprints byte-identical.
+    if let crate::pparams::MaxBlockExUnits::Bound { mem, steps } = pp.max_block_ex_units {
+        write_uint_canonical(&mut buf, MAX_BLOCK_EX_UNITS_TAG);
+        write_array_canonical(&mut buf, 2);
+        write_uint_canonical(&mut buf, mem);
+        write_uint_canonical(&mut buf, steps);
+    }
     blake2b_256(&buf)
 }
 
@@ -492,10 +502,10 @@ fn fingerprint_governance(gov: Option<&ConwayGovState>) -> Hash32 {
             // VERSIONED: V1 (`Unversioned`) is a 9-field array — byte-identical to the historical
             // fingerprint. V2 (`Bound`) is a 10-field array with `num_dormant` appended, so a state carrying
             // dormancy can NEVER collide with a V1 state or with a differently-dormant V2 state.
-            let n_fields: u64 = match g.num_dormant {
-                DormantEpochs::Unversioned => 9,
-                DormantEpochs::Bound(_) => 10,
-            };
+            let dormant_bound = matches!(g.num_dormant, DormantEpochs::Bound(_));
+            let prev_known =
+                !matches!(g.prev_pparam_action, crate::state::PreviousPParamAction::Unversioned);
+            let n_fields: u64 = 9 + (dormant_bound as u64) + (prev_known as u64);
             write_array_canonical(&mut buf, n_fields);
 
             // 1. proposals
@@ -559,6 +569,18 @@ fn fingerprint_governance(gov: Option<&ConwayGovState>) -> Hash32 {
             // 10. num_dormant (V2 ONLY — absent from the V1 byte layout above).
             if let DormantEpochs::Bound(n) = g.num_dormant {
                 write_uint_canonical(&mut buf, n);
+            }
+            // 11. prev_pparam_action (V3 ONLY). NoPreviousAction -> array(0); Enacted(id) -> array(1)[id];
+            // Unversioned emits nothing (V1/V2 byte-identical).
+            match &g.prev_pparam_action {
+                crate::state::PreviousPParamAction::Unversioned => {}
+                crate::state::PreviousPParamAction::NoPreviousAction => {
+                    write_array_canonical(&mut buf, 0);
+                }
+                crate::state::PreviousPParamAction::Enacted(id) => {
+                    write_array_canonical(&mut buf, 1);
+                    write_gov_action_id(&mut buf, id);
+                }
             }
         }
     }
@@ -968,6 +990,7 @@ mod tests {
     fn governance_fingerprint_binds_num_dormant_no_collision() {
         use crate::state::{ConwayGovState, DormantEpochs};
         let mk = |d: DormantEpochs| ConwayGovState {
+            prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
             committee_quorum: (2, 3),
@@ -985,6 +1008,65 @@ mod tests {
         assert_ne!(f_unver, f_b0, "V1 (Unversioned) must not share a fingerprint with V2 Bound(0)");
         assert_ne!(f_b0, f_b1, "Bound(0) and Bound(1) must not share a fingerprint");
         assert_ne!(f_unver, f_b1);
+    }
+
+    /// GATE 3 (S4.3b, no collision): a `Bound { mem, steps }` block-ExUnits pparams fingerprint differs from the
+    /// Unversioned one AND from a Bound with different mem OR different steps. A fabricated {0,0} would collide a
+    /// V10 state with a real `{mem:0,steps:0}` — forbidden.
+    #[test]
+    fn cre_s4_3b_pparams_fingerprint_binds_block_ex_units_no_collision() {
+        use crate::pparams::{MaxBlockExUnits, ProtocolParameters};
+        let mk = |m: MaxBlockExUnits| {
+            let mut pp = ProtocolParameters::default();
+            pp.max_block_ex_units = m;
+            pp
+        };
+        let f_unver = fingerprint_pparams(&mk(MaxBlockExUnits::Unversioned), None);
+        let f_a =
+            fingerprint_pparams(&mk(MaxBlockExUnits::Bound { mem: 72_000_000, steps: 20_000_000_000 }), None);
+        let f_b =
+            fingerprint_pparams(&mk(MaxBlockExUnits::Bound { mem: 62_000_000, steps: 20_000_000_000 }), None);
+        let f_c =
+            fingerprint_pparams(&mk(MaxBlockExUnits::Bound { mem: 72_000_000, steps: 10_000_000_000 }), None);
+        assert_ne!(f_unver, f_a, "Unversioned must not collide with a Bound block-ExUnits");
+        assert_ne!(f_a, f_b, "different mem must not collide");
+        assert_ne!(f_a, f_c, "different steps must not collide (steps is bound, not dropped)");
+    }
+
+    /// GATE 3 (S4.3b, no collision): a gov fingerprint binds `prev_pparam_action` — Unversioned (V1/V2),
+    /// NoPreviousAction (V3 SNothing), and Enacted(id) are all distinct, and two Enacted with different ids
+    /// differ. A fabricated NoPreviousAction would collide a V2 store with a real SNothing — forbidden.
+    #[test]
+    fn cre_s4_3b_governance_fingerprint_binds_prev_pparam_action_no_collision() {
+        use crate::state::{ConwayGovState, DormantEpochs, PreviousPParamAction};
+        use ade_types::conway::governance::GovActionId;
+        use ade_types::Hash32;
+        let mk = |p: PreviousPParamAction| ConwayGovState {
+            prev_pparam_action: p,
+            proposals: Vec::new(),
+            committee: BTreeMap::new(),
+            committee_quorum: (2, 3),
+            drep_expiry: BTreeMap::new(),
+            gov_action_lifetime: 6,
+            vote_delegations: BTreeMap::new(),
+            pool_voting_thresholds: Vec::new(),
+            drep_voting_thresholds: Vec::new(),
+            committee_hot_keys: BTreeMap::new(),
+            num_dormant: DormantEpochs::Bound(4),
+        };
+        let f_unver = fingerprint_governance(Some(&mk(PreviousPParamAction::Unversioned)));
+        let f_none = fingerprint_governance(Some(&mk(PreviousPParamAction::NoPreviousAction)));
+        let f_e1 = fingerprint_governance(Some(&mk(PreviousPParamAction::Enacted(GovActionId {
+            tx_hash: Hash32([0x01; 32]),
+            index: 0,
+        }))));
+        let f_e2 = fingerprint_governance(Some(&mk(PreviousPParamAction::Enacted(GovActionId {
+            tx_hash: Hash32([0x02; 32]),
+            index: 0,
+        }))));
+        assert_ne!(f_unver, f_none, "Unversioned (V2) must not collide with NoPreviousAction (V3 SNothing)");
+        assert_ne!(f_none, f_e1, "NoPreviousAction must not collide with Enacted");
+        assert_ne!(f_e1, f_e2, "different enacted roots must not collide");
     }
 
     // ---- MEM-OPT-UTXO-DISK S1.5a: the v2 fingerprint (Ristretto255 set commitment) ----
@@ -1345,6 +1427,7 @@ mod tests {
         let s_absent = LedgerState::new(CardanoEra::Conway);
         let mut s_present = LedgerState::new(CardanoEra::Conway);
         s_present.gov_state = Some(ConwayGovState {
+            prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
             committee_quorum: (2, 3),
@@ -1379,6 +1462,7 @@ mod tests {
         let mk = |action: GovAction| {
             let mut s = LedgerState::new(CardanoEra::Conway);
             s.gov_state = Some(ConwayGovState {
+                prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
                 proposals: vec![GovActionState {
                     action_id: GovActionId { tx_hash: Hash32([0x07; 32]), index: 0 },
                     committee_votes: Vec::new(),
@@ -1481,6 +1565,7 @@ mod tests {
             let mut drep_expiry = BTreeMap::new();
             drep_expiry.insert(cred, 600u64);
             s.gov_state = Some(ConwayGovState {
+                prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
                 proposals: Vec::new(),
                 committee: BTreeMap::new(),
                 committee_quorum: (2, 3),

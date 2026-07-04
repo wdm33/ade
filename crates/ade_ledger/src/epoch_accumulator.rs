@@ -1735,6 +1735,7 @@ mod tests {
             .insert(pool(0x44), sample_pool_params(0x44, key_account(0x0B)));
         acc.protocol_params = conway_params();
         acc.gov_state = Some(ConwayGovState {
+            prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
             committee_quorum: (2, 3),
@@ -2897,6 +2898,7 @@ mod tests {
 
     fn s3_empty_gov(lifetime: u64) -> ConwayGovState {
         ConwayGovState {
+            prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: std::collections::BTreeMap::new(),
             committee_quorum: (2, 3),

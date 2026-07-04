@@ -46,6 +46,7 @@ fn h(b: u8) -> Hash28 {
 
 fn base_gov() -> ConwayGovState {
     ConwayGovState {
+        prev_pparam_action: ade_ledger::state::PreviousPParamAction::Unversioned,
         proposals: Vec::new(),
         committee: BTreeMap::new(),
         committee_quorum: (2, 3),

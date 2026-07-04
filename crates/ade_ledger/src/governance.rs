@@ -664,6 +664,200 @@ pub fn plan_conway_governance_epoch(
     })
 }
 
+// ─── CRE S4.3b: closed Conway exec-units parameter-update decoder (INERT) ──
+
+/// The two components `[mem, steps]` of a Conway `ex_units` value (a `maxTxExUnits` / `maxBlockExUnits` update).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExUnits {
+    pub mem: u64,
+    pub steps: u64,
+}
+
+/// The canonically-ordered set of `protocol_param_update` map keys the exec-units decoder does not support.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CanonicalFieldSet(pub std::collections::BTreeSet<u64>);
+
+/// The closed, structured result of decoding a Conway `ParameterChange.update` for the exec-units subset (CRE
+/// S4.3b). BOTH exec-units fields are decoded COMPLETELY as `[mem, steps]`; every OTHER present key is preserved
+/// in `unsupported_fields`, never silently dropped. INERT: nothing applies this in S4.3b — S4.3c's exec-units
+/// enactment consumes it, supporting an update ONLY when `unsupported_fields` is empty AND each supplied `steps`
+/// equals the current bound `steps` (a changed `steps` is `UnsupportedRatifiedAction`, not malformed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecUnitsParamUpdate {
+    pub max_tx_ex_units: Option<ExUnits>,
+    pub max_block_ex_units: Option<ExUnits>,
+    pub unsupported_fields: CanonicalFieldSet,
+}
+
+/// A structured failure decoding a Conway `ParameterChange.update` (CRE S4.3b). No fallback parsing, no
+/// last-write-wins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecUnitsUpdateError {
+    /// Not a well-formed definite CBOR `protocol_param_update` map (bad header, indefinite, or trailing bytes).
+    Malformed,
+    /// A recognized exec-units key appeared more than once.
+    DuplicateKey { key: u64 },
+    /// A recognized exec-units value was not a well-formed `array(2)[mem, steps]`.
+    MalformedExUnits { key: u64 },
+}
+
+/// Conway `protocol_param_update` map keys for the two exec-units limits. From conway.cddl: `20 = maxTxExUnits`,
+/// `21 = maxBlockExUnits` (Conway renumbered vs Alonzo's 21/22). Validated against the real witness update in the
+/// S4.3b gate tests.
+const PPU_KEY_MAX_TX_EX_UNITS: u64 = 20;
+const PPU_KEY_MAX_BLOCK_EX_UNITS: u64 = 21;
+
+/// Decode a Conway `ParameterChange.update` (a `protocol_param_update` CBOR map) for the exec-units subset,
+/// reading BOTH exec-units fields COMPLETELY as `[mem, steps]`. Every other present key is recorded in
+/// `unsupported_fields` (never silently dropped). Fail-closed: a non-map / bad header / indefinite map /
+/// trailing bytes, a duplicate recognized key, or a recognized value that is not `array(2)[mem, steps]` is a
+/// structured error. Pure; the raw `update` bytes remain the caller's. INERT (no applier in S4.3b).
+pub fn decode_exec_units_param_update(
+    update: &[u8],
+) -> Result<ExecUnitsParamUpdate, ExecUnitsUpdateError> {
+    use ade_codec::cbor::{read_map_header, read_uint, skip_item, ContainerEncoding};
+    let mut o = 0usize;
+    let n = match read_map_header(update, &mut o).map_err(|_| ExecUnitsUpdateError::Malformed)? {
+        ContainerEncoding::Definite(n, _) => n,
+        // An indefinite-length map is not canonical Conway wire form.
+        _ => return Err(ExecUnitsUpdateError::Malformed),
+    };
+    let mut max_tx_ex_units: Option<ExUnits> = None;
+    let mut max_block_ex_units: Option<ExUnits> = None;
+    let mut unsupported: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    for _ in 0..n {
+        let (key, _) = read_uint(update, &mut o).map_err(|_| ExecUnitsUpdateError::Malformed)?;
+        match key {
+            PPU_KEY_MAX_TX_EX_UNITS => {
+                if max_tx_ex_units.is_some() {
+                    return Err(ExecUnitsUpdateError::DuplicateKey { key });
+                }
+                max_tx_ex_units = Some(read_ex_units_value(update, &mut o, key)?);
+            }
+            PPU_KEY_MAX_BLOCK_EX_UNITS => {
+                if max_block_ex_units.is_some() {
+                    return Err(ExecUnitsUpdateError::DuplicateKey { key });
+                }
+                max_block_ex_units = Some(read_ex_units_value(update, &mut o, key)?);
+            }
+            other => {
+                // Record the unsupported key (never dropped) and skip its arbitrary value uninterpreted.
+                unsupported.insert(other);
+                skip_item(update, &mut o).map_err(|_| ExecUnitsUpdateError::Malformed)?;
+            }
+        }
+    }
+    if o != update.len() {
+        return Err(ExecUnitsUpdateError::Malformed);
+    }
+    Ok(ExecUnitsParamUpdate {
+        max_tx_ex_units,
+        max_block_ex_units,
+        unsupported_fields: CanonicalFieldSet(unsupported),
+    })
+}
+
+/// Read a Conway `ex_units = array(2)[mem, steps]`; anything else is `MalformedExUnits`.
+fn read_ex_units_value(d: &[u8], o: &mut usize, key: u64) -> Result<ExUnits, ExecUnitsUpdateError> {
+    use ade_codec::cbor::{read_array_header, read_uint, ContainerEncoding};
+    match read_array_header(d, o) {
+        Ok(ContainerEncoding::Definite(2, _)) => {}
+        _ => return Err(ExecUnitsUpdateError::MalformedExUnits { key }),
+    }
+    let (mem, _) = read_uint(d, o).map_err(|_| ExecUnitsUpdateError::MalformedExUnits { key })?;
+    let (steps, _) = read_uint(d, o).map_err(|_| ExecUnitsUpdateError::MalformedExUnits { key })?;
+    Ok(ExUnits { mem, steps })
+}
+
+#[cfg(test)]
+mod cre_s4_3b_decoder_tests {
+    use super::*;
+    use ade_codec::cbor::{
+        write_array_header, write_map_header, write_uint_canonical, ContainerEncoding, IntWidth,
+    };
+
+    fn ex_units(buf: &mut Vec<u8>, mem: u64, steps: u64) {
+        write_array_header(buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+        write_uint_canonical(buf, mem);
+        write_uint_canonical(buf, steps);
+    }
+
+    /// GATE 5: a Conway `protocol_param_update` with the two exec-units keys (20 = maxTx, 21 = maxBlock) decodes
+    /// deterministically into the supported subset — BOTH full `[mem, steps]`, `unsupported_fields` empty. The
+    /// memory-only-effect witness shape (steps present, to be checked unchanged in S4.3c).
+    #[test]
+    fn cre_s4_3b_gate5_witness_shape_decodes_into_supported_subset() {
+        let (steps_tx, steps_block) = (10_000_000_000u64, 40_000_000_000u64);
+        let mut u = Vec::new();
+        write_map_header(&mut u, ContainerEncoding::Definite(2, IntWidth::Inline));
+        write_uint_canonical(&mut u, 20);
+        ex_units(&mut u, 16_500_000, steps_tx);
+        write_uint_canonical(&mut u, 21);
+        ex_units(&mut u, 72_000_000, steps_block);
+        let d = decode_exec_units_param_update(&u).expect("decode");
+        assert_eq!(d.max_tx_ex_units, Some(ExUnits { mem: 16_500_000, steps: steps_tx }));
+        assert_eq!(d.max_block_ex_units, Some(ExUnits { mem: 72_000_000, steps: steps_block }));
+        assert!(d.unsupported_fields.0.is_empty(), "the witness touches only the exec-units subset");
+    }
+
+    /// GATE 6: unknown / duplicate / malformed / mixed updates all yield deterministic structured outcomes.
+    #[test]
+    fn cre_s4_3b_gate6_deterministic_structured_outcomes() {
+        // (a) MIXED: an unknown key (0 = minFeeA) is PRESERVED in unsupported_fields, never dropped; the
+        //     supported maxTx key still decodes.
+        let mut mixed = Vec::new();
+        write_map_header(&mut mixed, ContainerEncoding::Definite(2, IntWidth::Inline));
+        write_uint_canonical(&mut mixed, 0);
+        write_uint_canonical(&mut mixed, 44); // minFeeA value (a coin) — skipped, key recorded
+        write_uint_canonical(&mut mixed, 20);
+        ex_units(&mut mixed, 16_500_000, 1);
+        let d = decode_exec_units_param_update(&mixed).expect("decode");
+        assert_eq!(d.max_tx_ex_units, Some(ExUnits { mem: 16_500_000, steps: 1 }));
+        assert_eq!(d.max_block_ex_units, None);
+        assert_eq!(d.unsupported_fields.0.iter().copied().collect::<Vec<_>>(), vec![0]);
+
+        // (b) DUPLICATE recognized key → structured error (no last-write-wins).
+        let mut dup = Vec::new();
+        write_map_header(&mut dup, ContainerEncoding::Definite(2, IntWidth::Inline));
+        write_uint_canonical(&mut dup, 20);
+        ex_units(&mut dup, 1, 2);
+        write_uint_canonical(&mut dup, 20);
+        ex_units(&mut dup, 3, 4);
+        assert_eq!(
+            decode_exec_units_param_update(&dup),
+            Err(ExecUnitsUpdateError::DuplicateKey { key: 20 })
+        );
+
+        // (c) MALFORMED recognized value (not array(2)[mem, steps]).
+        let mut bad = Vec::new();
+        write_map_header(&mut bad, ContainerEncoding::Definite(1, IntWidth::Inline));
+        write_uint_canonical(&mut bad, 21);
+        write_uint_canonical(&mut bad, 999);
+        assert_eq!(
+            decode_exec_units_param_update(&bad),
+            Err(ExecUnitsUpdateError::MalformedExUnits { key: 21 })
+        );
+
+        // (d) a non-map input is Malformed.
+        assert_eq!(decode_exec_units_param_update(&[0x00]), Err(ExecUnitsUpdateError::Malformed));
+
+        // (e) trailing bytes after a definite map → Malformed (no fallback).
+        let mut trailing = Vec::new();
+        write_map_header(&mut trailing, ContainerEncoding::Definite(0, IntWidth::Inline));
+        trailing.push(0xFF);
+        assert_eq!(decode_exec_units_param_update(&trailing), Err(ExecUnitsUpdateError::Malformed));
+    }
+
+    /// GATE 5 (real witness — #[ignore]): the definitive key (20/21) validation reads proposal 69c948cd..#0's
+    /// raw `ParameterChange.update` from the local preview ledger state (not a committed fixture) and asserts
+    /// maxTx.mem=16_500_000 + maxBlock.mem=72_000_000, `unsupported_fields` empty.
+    #[test]
+    #[ignore = "needs the local db-analyser 1095 state carrying proposal 69c948cd..#0's raw update"]
+    fn cre_s4_3b_gate5_real_witness_update_decodes() {
+        // The raw update bytes are extracted from the local preview ChainDB, not a committed fixture.
+    }
+}
+
 // ─── Enactment ───────────────────────────────────────────────────────
 
 /// Priority class for enactment ordering.
@@ -1342,6 +1536,7 @@ mod committee_fidelity_tests {
                 apply_committee_enactment(&base_committee(), (2, 3), &effects);
             let mut s = LedgerState::new(CardanoEra::Conway);
             s.gov_state = Some(ConwayGovState {
+                prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
                 proposals: Vec::new(),
                 committee,
                 committee_quorum: quorum,

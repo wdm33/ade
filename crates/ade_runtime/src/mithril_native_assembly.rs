@@ -398,6 +398,12 @@ pub fn assemble_native_mithril_seed(
             // V2 from the NAMED BOUND SOURCE: the imported Conway state's numDormantEpochs (never a fabricated
             // default). Now LIVE alongside the threaded `drep_expiry` — it shifts the active-DRep denominator.
             num_dormant: ade_ledger::state::DormantEpochs::Bound(s1a.imported_gov.num_dormant_epochs),
+            // CRE S4.3b: promote the enacted previous-pparam-action root from the certified source (SJust ->
+            // Enacted, SNothing -> NoPreviousAction — never fabricated). Commitment-bound (v11). INERT.
+            prev_pparam_action: match &s1a.enacted_pparam_update {
+                Some(id) => ade_ledger::state::PreviousPParamAction::Enacted(id.clone()),
+                None => ade_ledger::state::PreviousPParamAction::NoPreviousAction,
+            },
         }),
         conway_deposit_params: None,
     };
@@ -903,6 +909,78 @@ mod tests {
             seed.ledger.gov_state.as_ref().expect("gov").num_dormant,
             ade_ledger::state::DormantEpochs::Bound(5),
             "the V2 seed's dormancy is Bound to the decoded source field (non-zero, non-fabricated)",
+        );
+    }
+
+    /// GATE 2 (S4.3b): the V11 bootstrap binds BOTH the previous-pparam-action root (SJust(id) -> Enacted(id))
+    /// AND the source-bound block ExUnits into the live seed — never fabricated.
+    #[test]
+    fn cre_s4_3b_gate2_v11_bootstrap_binds_prev_action_and_block_ex_units() {
+        let mut s1a = s1a_state();
+        let root = ade_types::conway::governance::GovActionId {
+            tx_hash: ade_types::Hash32([0x69; 32]),
+            index: 0,
+        };
+        s1a.enacted_pparam_update = Some(root.clone());
+        s1a.protocol_params.max_block_ex_units =
+            ade_ledger::pparams::MaxBlockExUnits::Bound { mem: 72_000_000, steps: 40_000_000_000 };
+        let seed = assemble_native_mithril_seed(
+            &s1a,
+            s1a_commitment_fixture(),
+            stage2_utxo(),
+            &binding(),
+            &genesis(),
+            &schedule(),
+        )
+        .expect("assemble");
+        assert_eq!(
+            seed.ledger.gov_state.as_ref().expect("gov").prev_pparam_action,
+            ade_ledger::state::PreviousPParamAction::Enacted(root),
+            "the V11 seed binds the enacted previous-pparam-action root from SJust(id)",
+        );
+        assert_eq!(
+            seed.ledger.protocol_params.max_block_ex_units,
+            ade_ledger::pparams::MaxBlockExUnits::Bound { mem: 72_000_000, steps: 40_000_000_000 },
+            "the V11 seed carries the source-bound block ExUnits into the live pparams",
+        );
+    }
+
+    /// GATE 2 (S4.3b, SNothing half): a decoded `SNothing` binds `NoPreviousAction` — an explicit source fact,
+    /// never a fabricated default.
+    #[test]
+    fn cre_s4_3b_gate2_v11_bootstrap_binds_snothing_to_no_previous_action() {
+        let mut s1a = s1a_state();
+        s1a.enacted_pparam_update = None;
+        let seed = assemble_native_mithril_seed(
+            &s1a,
+            s1a_commitment_fixture(),
+            stage2_utxo(),
+            &binding(),
+            &genesis(),
+            &schedule(),
+        )
+        .expect("assemble");
+        assert_eq!(
+            seed.ledger.gov_state.as_ref().expect("gov").prev_pparam_action,
+            ade_ledger::state::PreviousPParamAction::NoPreviousAction,
+            "a decoded SNothing binds NoPreviousAction",
+        );
+    }
+
+    /// GATE 7 (S4.3b, no-default regression): the Conway-native bootstrap assembly NEVER falls back to
+    /// `ProtocolParameters::default()` — the exec-units limits are always source-bound. Compile-time source scan
+    /// (BLUE-safe, no runtime I/O); the needle is split so this test does not match its own literal.
+    #[test]
+    fn cre_s4_3b_gate7_native_bootstrap_never_defaults_pparams() {
+        let src = include_str!("mithril_native_assembly.rs");
+        // Scan PRODUCTION only (before the first `#[cfg(test)]`); test fixtures legitimately build synthetic
+        // params via `default()`. The needle + marker are split so this test never matches its own source.
+        let test_marker = concat!("#[cfg", "(test)]");
+        let prod = src.split(test_marker).next().unwrap_or(src);
+        let needle = concat!("ProtocolParameters::", "default()");
+        assert!(
+            !prod.contains(needle),
+            "the native bootstrap (production) assembly must not construct default pparams (exec-units are source-bound)",
         );
     }
 

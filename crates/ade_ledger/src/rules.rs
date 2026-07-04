@@ -1339,6 +1339,8 @@ pub fn apply_epoch_boundary_with_registrations(
                 drep_voting_thresholds: gov.drep_voting_thresholds.clone(),
                 committee_hot_keys: gov.committee_hot_keys.clone(),
                 num_dormant: gov.num_dormant.clone(),
+                // S4.3b (inert): carry the previous-pparam-action root forward unchanged.
+                prev_pparam_action: gov.prev_pparam_action.clone(),
             })
         }
         _ => state.gov_state.clone(),
@@ -2725,6 +2727,7 @@ mod cert_state_dispatch {
 
     fn empty_gov() -> ConwayGovState {
         ConwayGovState {
+            prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: std::collections::BTreeMap::new(),
             committee_quorum: (2, 3),

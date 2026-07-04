@@ -43,6 +43,17 @@ impl MinUtxoRule {
     }
 }
 
+/// The Conway `maxBlockExUnits` (block-level execution-units limit `[mem, steps]`) as VERSIONED authoritative
+/// state (CRE S4.3b, INERT). `Unversioned` = a snapshot predating this field's canonical encoding/fingerprint;
+/// any path needing the block limit must fail-closed on it, NEVER coerce it to `{mem:0, steps:0}` or a
+/// defaulted limit. `Bound` = the full ExUnits from a named certified Conway source. No consensus check reads
+/// it in S4.3b; the exec-units enactment (S4.3c) activates it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaxBlockExUnits {
+    Unversioned,
+    Bound { mem: u64, steps: u64 },
+}
+
 /// Full protocol parameters for Shelley through Mary eras.
 ///
 /// All monetary values in lovelace. All rationals use exact integer arithmetic.
@@ -136,6 +147,9 @@ pub struct ProtocolParameters {
     /// Preserved byte-for-byte from the snapshot so aiken's decoder sees
     /// the exact wire form the on-chain node used.
     pub cost_models_cbor: Option<Vec<u8>>,
+    /// Conway `maxBlockExUnits` = `[mem, steps]`, VERSIONED + source-bound (CRE S4.3b, INERT). Old snapshots
+    /// decode `Unversioned`. See [`MaxBlockExUnits`].
+    pub max_block_ex_units: MaxBlockExUnits,
 }
 
 impl Default for ProtocolParameters {
@@ -168,6 +182,7 @@ impl Default for ProtocolParameters {
             max_tx_ex_units_cpu: 10_000_000_000,
             network_id: 1,
             cost_models_cbor: None,
+            max_block_ex_units: MaxBlockExUnits::Unversioned,
         }
     }
 }

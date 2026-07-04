@@ -182,6 +182,7 @@ fn make_shelley_state_at_hfc() -> LedgerState {
             epoch_fees: Coin(0),
         },
         protocol_params: ProtocolParameters {
+            max_block_ex_units: ade_ledger::pparams::MaxBlockExUnits::Unversioned,
             min_fee_a: Coin(44),
             min_fee_b: Coin(155_381),
             max_block_body_size: 65536,

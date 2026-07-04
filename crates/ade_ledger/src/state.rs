@@ -125,6 +125,22 @@ pub struct ConwayGovState {
     /// active-DRep denominator. No default — every construction path declares its source (`Unversioned` for
     /// states predating the field, `Bound(n)` from a named source).
     pub num_dormant: DormantEpochs,
+    /// The enacted previous-`ParameterChange` root (`prevGovActionIds.pgaPParamUpdate`) under the versioned
+    /// lineage (see [`PreviousPParamAction`]). AUTHORITATIVE (CRE S4.3b, INERT): no default — `Unversioned`
+    /// for states predating the field, `NoPreviousAction`/`Enacted` only from a decoded source fact.
+    pub prev_pparam_action: PreviousPParamAction,
+}
+
+/// The enacted previous-`ParameterChange` action root (`prevGovActionIds.pgaPParamUpdate`) as VERSIONED
+/// authoritative state (CRE S4.3b). `Unversioned` = a state predating this field's canonical
+/// encoding/fingerprint (old snapshots) — the ratify-lineage path must fail-closed on it, NEVER fabricate a
+/// root. `NoPreviousAction` = the certified source decoded an explicit `SNothing` (no root exists).
+/// `Enacted(id)` = the source decoded `SJust id`. INERT in S4.3b (S4.3c's lineage check activates it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreviousPParamAction {
+    Unversioned,
+    NoPreviousAction,
+    Enacted(ade_types::conway::governance::GovActionId),
 }
 
 impl LedgerState {

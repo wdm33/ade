@@ -121,6 +121,7 @@ mod tests {
             Coin(2_000_000),
         );
         l.gov_state = Some(ConwayGovState {
+            prev_pparam_action: ade_ledger::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
             committee_quorum: (2, 3),

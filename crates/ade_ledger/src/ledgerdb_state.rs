@@ -1902,7 +1902,7 @@ fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<ConwayPPar
     let cost_models_cbor = Some(read_raw_item(d, o, "pp.costModels")?);
     skip_item(d, o)?; // [16] prices (not on the shared params)
     let (max_tx_ex_units_mem, max_tx_ex_units_cpu) = read_ex_units(d, o)?; // [17] maxTxExUnits
-    let (max_block_ex_units_mem, _) = read_ex_units(d, o)?; // [18] maxBlockExUnits (mem for the CRE census)
+    let (max_block_ex_units_mem, max_block_ex_units_steps) = read_ex_units(d, o)?; // [18] maxBlockExUnits (full [mem, steps] — S4.3b)
     skip_item(d, o)?; // [19] maxValSize
     let collateral_percent = nn_read_u64(d, o, "pp.collateralPercentage")?.min(u16::MAX as u64) as u16; // [20]
     // [21..=30]: maxCollateralInputs, poolVotingThresholds, drepVotingThresholds,
@@ -1950,6 +1950,12 @@ fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<ConwayPPar
         // bound from the manifest network magic (the authority), not decoded from the array.
         network_id,
         cost_models_cbor,
+        // CRE S4.3b: source-bind the full block ExUnits [mem, steps] from the certified curPParams (never a
+        // fabricated default). This is the certified Conway source — the ONLY constructor that emits `Bound`.
+        max_block_ex_units: crate::pparams::MaxBlockExUnits::Bound {
+            mem: max_block_ex_units_mem,
+            steps: max_block_ex_units_steps,
+        },
     }, gov_action_lifetime, pool_voting_thresholds, drep_voting_thresholds, max_block_ex_units_mem))
 }
 
@@ -2045,7 +2051,10 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
     // v5: binds the certified epoch fee pot (`epoch_fees`) alongside the v4 seed-boundary RUPD pots
     // (`rupd_delta_treasury`/`rupd_delta_reserves`), the v3 `current_block_production` (nesBcur) and the
     // v1 `block_production` (nesBprev).
-    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v10");
+    // v11 (CRE S4.3b): additionally binds the enacted previous-pparam-action root (below) and the block
+    // ExUnits (via the versioned `encode_pparams` arity) — both promoted from census-observables to live
+    // ratify/enact inputs, so both are now commitment-bound (the §5 seam).
+    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v11");
     v.push(s.era.as_u8());
     // The manifest-derived network id (a network identity perturbation flips the commitment).
     v.push(s.network_id);
@@ -2086,6 +2095,16 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
         crate::pparams::MinUtxoRule::PerByte(_) => 1,
     };
     v.push(min_utxo_rule_kind);
+    // CRE S4.3b (v11): bind the enacted previous-pparam-action root — promoted from a census-observable to a
+    // live ratify-lineage input, so it MUST be commitment-bound. SNothing vs SJust(id) commit distinctly.
+    match &s.enacted_pparam_update {
+        None => v.push(0),
+        Some(id) => {
+            v.push(1);
+            v.extend_from_slice(&id.tx_hash.0);
+            v.extend_from_slice(&(id.index as u64).to_be_bytes());
+        }
+    }
     // pots.
     v.extend_from_slice(&s.reserves.0.to_be_bytes());
     v.extend_from_slice(&s.treasury.0.to_be_bytes());

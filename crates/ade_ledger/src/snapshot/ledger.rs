@@ -239,6 +239,7 @@ mod tests {
             .block_production
             .insert(PoolId(Hash28([0x44; 28])), 7);
         s.gov_state = Some(ConwayGovState {
+            prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
             committee_quorum: (2, 3),

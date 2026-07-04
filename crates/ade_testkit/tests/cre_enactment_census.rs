@@ -421,6 +421,7 @@ fn cre_s4_1b_recovered_v2_store_ratifies_the_anchor_outcome() {
 
     // Build the V2 governance store (Bound to the REAL decoded numDormant), then PERSIST → RECOVER it.
     let store = ConwayGovState {
+        prev_pparam_action: ade_ledger::state::PreviousPParamAction::Unversioned,
         proposals: g.proposals.clone(),
         committee: g.committee.clone(),
         committee_quorum: g.committee_quorum.unwrap_or((1, 1)),
