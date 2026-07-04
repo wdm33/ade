@@ -68,6 +68,96 @@ fn cre_census_probe_epoch_1088() {
     );
 }
 
+/// CRE S4.3b GATE 5 (real witness) — the DEFINITIVE key-20/21 validation against REAL on-chain bytes.
+/// Reads proposal 69c948cd..#0's raw `ParameterChange.update` from the local Preview epoch-1095 ledger state
+/// (the proposal is live at 1095, before its 1095->1096 enactment) and proves: keys 20/21 decode to the full
+/// ExUnits pairs (maxTx.mem=16.5M, maxBlock.mem=72M), no unsupported field, AND a MEMORY-ONLY effect — the
+/// update's steps equal the currently-bound steps (else S4.3c must classify it UnsupportedRatifiedAction,
+/// never silently enact memory only).
+#[test]
+#[ignore = "reads the local db-analyser epoch-1095 state carrying 69c948cd..#0's raw update"]
+fn cre_s4_3b_gate5_real_witness_update_decodes() {
+    use ade_ledger::governance::decode_exec_units_param_update;
+    use ade_ledger::pparams::MaxBlockExUnits;
+    use ade_types::conway::governance::GovAction;
+
+    let slot = 94_608_021u64; // epoch 1095 first-block slot (census row)
+    let path = ledger_state_path(slot);
+    let state = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    let point = SeedPoint { slot: SlotNo(slot), block_hash: Hash32([0u8; 32]) };
+    let (s1a, _commit) = decode_native_nonutxo_state(&state, point, 1095, 2)
+        .unwrap_or_else(|e| panic!("decode epoch 1095 @{slot}: {e:?}"));
+
+    let prop = s1a
+        .imported_gov
+        .proposals
+        .iter()
+        .find(|p| p.action_id == target())
+        .expect("target 69c948cd..#0 present at epoch 1095");
+    let update = match &prop.gov_action {
+        GovAction::ParameterChange { update, .. } => update.clone(),
+        other => panic!("target is not a ParameterChange: {other:?}"),
+    };
+
+    let raw_hash = blake2b_256(&update);
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    eprintln!("--- CRE S4.3b real-witness manifest ---");
+    eprintln!("point: slot {slot}, epoch 1095, era Conway, network preview(magic 2)");
+    eprintln!("target: 69c948cde90c6b9d7d61595e8534c106ec44132cb049ab2558399db1260c1f69#0");
+    eprintln!("raw update: {} bytes, blake2b256={}", update.len(), hex(&raw_hash.0));
+    eprintln!("raw update hex: {}", hex(&update));
+
+    // Faithfulness: the live-extracted bytes ARE the committed hermetic witness
+    // (ade_ledger governance.rs cre_s4_3b_gate5_real_witness_manifest), so the committed decode-proof is
+    // provably the real chain's — not a synthetic round-trip that shares the decoder's key assumption.
+    const COMMITTED_WITNESS: &[u8] = &[
+        0xa2, 0x14, 0x82, 0x1a, 0x00, 0xfb, 0xc5, 0x20, 0x1b, 0x00, 0x00, 0x00, 0x02, 0x54, 0x0b, 0xe4,
+        0x00, 0x15, 0x82, 0x1a, 0x04, 0x4a, 0xa2, 0x00, 0x1b, 0x00, 0x00, 0x00, 0x04, 0xa8, 0x17, 0xc8,
+        0x00,
+    ];
+    assert_eq!(update.as_slice(), COMMITTED_WITNESS, "live bytes match the committed hermetic witness");
+    assert_eq!(
+        hex(&raw_hash.0),
+        "4b70f9513bb1768b34680ada28c9bf27bfe4f0cdf885d4003de9f9c78cec4d2b",
+        "committed manifest blake2b matches the live extraction"
+    );
+
+    let decoded = decode_exec_units_param_update(&update).expect("decode the REAL update bytes");
+    eprintln!(
+        "decoded: max_tx={:?} max_block={:?} unsupported={:?}",
+        decoded.max_tx_ex_units, decoded.max_block_ex_units, decoded.unsupported_fields
+    );
+
+    let tx = decoded.max_tx_ex_units.expect("maxTxExUnits present (key 20)");
+    let blk = decoded.max_block_ex_units.expect("maxBlockExUnits present (key 21)");
+    assert_eq!(tx.mem, 16_500_000, "REAL maxTxExUnits.mem via key 20");
+    assert_eq!(blk.mem, 72_000_000, "REAL maxBlockExUnits.mem via key 21");
+    assert!(
+        decoded.unsupported_fields.0.is_empty(),
+        "the witness touches ONLY the two exec-units keys; unsupported={:?}",
+        decoded.unsupported_fields
+    );
+
+    // MEMORY-ONLY effect: the update's steps == the currently-bound steps.
+    let cur_tx_steps = s1a.protocol_params.max_tx_ex_units_cpu;
+    let (cur_blk_mem, cur_blk_steps) = match s1a.protocol_params.max_block_ex_units {
+        MaxBlockExUnits::Bound { mem, steps } => (mem, steps),
+        MaxBlockExUnits::Unversioned => {
+            panic!("V11 decode must Bind block ExUnits from the certified 1095 curPParams")
+        }
+    };
+    eprintln!(
+        "current 1095 curPParams: maxTx.mem={} maxTx.steps={} maxBlock.mem={} maxBlock.steps={}",
+        s1a.protocol_params.max_tx_ex_units_mem, cur_tx_steps, cur_blk_mem, cur_blk_steps
+    );
+    assert_eq!(tx.steps, cur_tx_steps, "MEMORY-ONLY: maxTx steps unchanged (else UnsupportedRatifiedAction)");
+    assert_eq!(blk.steps, cur_blk_steps, "MEMORY-ONLY: maxBlock steps unchanged (else UnsupportedRatifiedAction)");
+    eprintln!(
+        "VERDICT: real witness decodes via keys 20/21 to maxTx(16.5M,{}) maxBlock(72M,{}) — memory-only, supported.",
+        tx.steps, blk.steps
+    );
+}
+
 /// Partial census over whatever window states are extracted so far (auto-discovers the *_db-analyser
 /// snapshots in the 1087-1103 slot range). Reports the lifecycle-so-far: action presence + maxTxExUnits.mem.
 #[test]

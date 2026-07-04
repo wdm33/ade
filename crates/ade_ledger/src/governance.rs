@@ -848,13 +848,42 @@ mod cre_s4_3b_decoder_tests {
         assert_eq!(decode_exec_units_param_update(&trailing), Err(ExecUnitsUpdateError::Malformed));
     }
 
-    /// GATE 5 (real witness — #[ignore]): the definitive key (20/21) validation reads proposal 69c948cd..#0's
-    /// raw `ParameterChange.update` from the local preview ledger state (not a committed fixture) and asserts
-    /// maxTx.mem=16_500_000 + maxBlock.mem=72_000_000, `unsupported_fields` empty.
+    /// GATE 5 (real witness — HERMETIC): the DEFINITIVE key-20/21 validation over REAL on-chain bytes.
+    /// `WITNESS_UPDATE` is proposal 69c948cd..#0's ACTUAL `ParameterChange.update`, extracted from the local
+    /// Preview epoch-1095 ledger state and committed here as the canonical witness. That the committed bytes
+    /// ARE the chain's is proven by the `#[ignore]` live re-extraction
+    /// `cre_s4_3b_gate5_real_witness_update_decodes` (ade_testkit tests/cre_enactment_census.rs), which
+    /// re-derives them from the db-analyser state and asserts the identical bytes + blake2b.
+    ///
+    /// Manifest — point: slot 94608021 / epoch 1095 / era Conway / network Preview (magic 2); source:
+    /// `db-analyser --store-ledger 94608021` on cardano-node 11.0.1; raw-update blake2b256 =
+    /// 4b70f9513bb1768b34680ada28c9bf27bfe4f0cdf885d4003de9f9c78cec4d2b; decoded = maxTxExUnits{mem 16_500_000,
+    /// steps 10_000_000_000} + maxBlockExUnits{mem 72_000_000, steps 20_000_000_000}, unsupported {}. The
+    /// effect is MEMORY-ONLY: both steps equal the 1095 curPParams steps (10e9 / 20e9), so S4.3c supports it;
+    /// a changed steps would be UnsupportedRatifiedAction (never a silent memory-only enactment).
     #[test]
-    #[ignore = "needs the local db-analyser 1095 state carrying proposal 69c948cd..#0's raw update"]
-    fn cre_s4_3b_gate5_real_witness_update_decodes() {
-        // The raw update bytes are extracted from the local preview ChainDB, not a committed fixture.
+    fn cre_s4_3b_gate5_real_witness_manifest() {
+        const WITNESS_UPDATE: &[u8] = &[
+            0xa2, 0x14, 0x82, 0x1a, 0x00, 0xfb, 0xc5, 0x20, 0x1b, 0x00, 0x00, 0x00, 0x02, 0x54, 0x0b, 0xe4,
+            0x00, 0x15, 0x82, 0x1a, 0x04, 0x4a, 0xa2, 0x00, 0x1b, 0x00, 0x00, 0x00, 0x04, 0xa8, 0x17, 0xc8,
+            0x00,
+        ];
+        let decoded = decode_exec_units_param_update(WITNESS_UPDATE).expect("decode the real witness update");
+        assert_eq!(
+            decoded.max_tx_ex_units,
+            Some(ExUnits { mem: 16_500_000, steps: 10_000_000_000 }),
+            "maxTxExUnits (map key 20) from the REAL on-chain update"
+        );
+        assert_eq!(
+            decoded.max_block_ex_units,
+            Some(ExUnits { mem: 72_000_000, steps: 20_000_000_000 }),
+            "maxBlockExUnits (map key 21) from the REAL on-chain update"
+        );
+        assert!(
+            decoded.unsupported_fields.0.is_empty(),
+            "the witness touches ONLY the two exec-units keys: {:?}",
+            decoded.unsupported_fields
+        );
     }
 }
 
