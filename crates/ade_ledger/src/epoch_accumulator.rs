@@ -383,7 +383,7 @@ pub enum LedgerTransitionError {
     /// proposal is potentially ratifiable, malformed, or unsupported. The boundary fails closed with ZERO
     /// mutation (no refund credited, no proposal removed) rather than refund past an unproven disposition.
     /// Carries the structured verdict that tripped it.
-    GovDepositRefundTerminal(crate::governance::RefundVerdict),
+    GovernanceEpochTerminal(crate::governance::GovernanceTerminal),
 }
 
 /// Apply one durable selected-chain block to the accumulator. Total, deterministic, replay-equivalent.
@@ -429,83 +429,6 @@ pub fn apply_selected_block(
     acc = apply_within_epoch(acc, &block, era, ctx)?;
     acc.epoch_state.slot = ctx.block_slot;
     Ok(acc)
-}
-
-/// Apply the CONWAY-PROPOSAL-DEPOSIT-EXPIRY S4 deposit-expiry refunds at an epoch boundary into `target`
-/// (DC-GOV-01). Builds the canonical ratification inputs from the accumulator's governance state + the
-/// current (pre-rotation) snapshots, plans the whole-set refund (`governance::plan_deposit_refunds`), and —
-/// ONLY on a fully-safe plan — credits each refunded deposit to its return-address reward account and
-/// removes the proposal, in `GovActionId` order. A non-`ProvablyUnratifiable` proposal anywhere returns the
-/// structured terminal `GovDepositRefundTerminal` with ZERO mutation. Governance-untracked (`None`) is a
-/// no-op. The deposit pot is IMPLICIT: removal IS the debit, so Σcredits == Σremoved deposits by construction.
-fn apply_gov_deposit_refunds(
-    acc: &mut EpochAccumulator,
-    target: EpochNo,
-) -> Result<(), LedgerTransitionError> {
-    // Plan first (immutable borrows of gov_state + snapshots); mutate `acc` only on a clean plan.
-    let plan = {
-        let gov = match acc.gov_state.as_ref() {
-            Some(g) => g,
-            None => return Ok(()), // governance not tracked
-        };
-        // Active DRep stake from the imported vote delegations × the current mark snapshot (mirrors the
-        // boundary fn's step 4b). For the accumulator `vote_delegations` is empty ⇒ empty, so the committee
-        // gate is the proof (per the S4.0 census).
-        let drep_stake = crate::governance::derive_drep_voting_stake(
-            &gov.vote_delegations,
-            &acc.epoch_state.snapshots.mark.0,
-        );
-        let committee_quorum = crate::rational::Rational::new(
-            gov.committee_quorum.0 as i128,
-            gov.committee_quorum.1.max(1) as i128,
-        )
-        .unwrap_or_else(crate::rational::Rational::one);
-        crate::governance::plan_deposit_refunds(
-            &gov.proposals,
-            &drep_stake,
-            &acc.epoch_state.snapshots.go.0.pool_stakes,
-            &gov.committee,
-            &committee_quorum,
-            &gov.pool_voting_thresholds,
-            &gov.drep_voting_thresholds,
-            target.0,
-            &gov.committee_hot_keys,
-            &gov.drep_expiry,
-            &gov.num_dormant,
-        )
-        .map_err(LedgerTransitionError::GovDepositRefundTerminal)?
-    };
-
-    // Apply atomically — nothing above mutated `acc` (a terminal returned with zero mutation). The refund
-    // routes EXACTLY as POOLREAP (rules.rs) and reward distribution do: a REGISTERED return-address
-    // credential is credited to its reward account; a DEREGISTERED one goes to the TREASURY (cardano's
-    // unredeemed path) — never an orphan `rewards` entry (the codebase-wide invariant "every rewards key is
-    // registered"). Treasury is credited before the boundary view, so the boundary fn's `treasury + deltas`
-    // carries it. GovActionId order (the planner already sorted `removed`).
-    for entry in &plan.removed {
-        if let Some((cred, deposit)) = &entry.credit {
-            if acc.cert_state.delegation.registrations.contains_key(cred) {
-                let bal = acc
-                    .cert_state
-                    .delegation
-                    .rewards
-                    .entry(cred.clone())
-                    .or_insert(Coin(0));
-                bal.0 = bal.0.saturating_add(deposit.0);
-            } else {
-                acc.epoch_state.treasury.0 =
-                    acc.epoch_state.treasury.0.saturating_add(deposit.0);
-            }
-        }
-    }
-    if !plan.removed.is_empty() {
-        if let Some(gov) = acc.gov_state.as_mut() {
-            let removed: std::collections::BTreeSet<_> =
-                plan.removed.iter().map(|e| e.action_id.clone()).collect();
-            gov.proposals.retain(|p| !removed.contains(&p.action_id));
-        }
-    }
-    Ok(())
 }
 
 /// Cross ONE epoch boundary into `target`. Reuses the validated `apply_epoch_boundary_with_registrations`
@@ -566,14 +489,6 @@ pub fn cross_epoch_boundary(
     let finished_blocks = std::mem::take(&mut acc.epoch_state.block_production);
     let finished_fees = acc.epoch_state.epoch_fees;
 
-    // CONWAY-PROPOSAL-DEPOSIT-EXPIRY S4 (DC-GOV-01): the deposit-expiry-refund transition, BEFORE the
-    // boundary view. The whole-set planner refunds each EXPIRED + provably-unratifiable proposal's deposit
-    // to its return address and removes it; any potentially-ratifiable / malformed / unsupported proposal
-    // fails the boundary closed with ZERO mutation. Removing the expired proposals here means the boundary
-    // fn's own governance pass (which would otherwise silently DROP the expired set) sees a reduced set and
-    // is a no-op for them, and the refund credits flow into the new epoch's snapshot.
-    apply_gov_deposit_refunds(&mut acc, target)?;
-
     // Reward inputs: at the seed boundary, EMPTY (the bootstrap RUPD carries the reward, so the native
     // reward computes exactly zero); otherwise the held nesBprev + prev fees.
     let mut view = acc.as_ledger_view();
@@ -585,6 +500,11 @@ pub fn cross_epoch_boundary(
         view.epoch_state.epoch_fees = acc.prev_epoch_fees;
     }
 
+    // CRE S4.3: the Conway governance epoch (expiry refund + terminals) is decided and applied INSIDE
+    // `apply_epoch_boundary_with_registrations` — the SINGLE authority + application point shared with the
+    // direct-replay path. The accumulator no longer runs a separate pre-pass, so neither entry path decides
+    // proposal removal or deposit routing independently (no path-dependent governance). A structured
+    // `GovernanceTerminal` propagates verbatim (action id + reason preserved, never a fabricated DormantRequired).
     let (new_view, _accounting) = apply_epoch_boundary_with_registrations(
         &view,
         target,
@@ -592,9 +512,7 @@ pub fn cross_epoch_boundary(
         Some(&new_mark),
         ctx.active_slots_per_epoch,
     )
-    .map_err(|_| {
-        LedgerTransitionError::GovDepositRefundTerminal(crate::governance::RefundVerdict::DormantRequired)
-    })?;
+    .map_err(LedgerTransitionError::GovernanceEpochTerminal)?;
 
     // Read back. `new_view.epoch_state` already has epoch=target, rotated snapshots, updated pots, and
     // block_production/epoch_fees reset to empty/0 (the new epoch's fresh nesBcur). POOLREAP — future-pool
@@ -2004,15 +1922,12 @@ mod tests {
             gov.num_dormant = crate::state::DormantEpochs::Unversioned;
             gov.drep_expiry.insert(key_cred(0x11), 300);
         }
-        let err = apply_gov_deposit_refunds(&mut acc, EpochNo(1341)).unwrap_err();
+        // The single governance authority refuses to invent the dormancy offset — a fail-closed terminal, never a
+        // fabricated Bound(0). Identical decision on the accumulator and replay paths (CRE S4.3, one authority).
+        let err = s4_plan_for(&acc, 1341).unwrap_err();
         assert!(
-            matches!(
-                err,
-                LedgerTransitionError::GovDepositRefundTerminal(
-                    crate::governance::RefundVerdict::DormantRequired
-                )
-            ),
-            "Unversioned + live drep_expiry must fail-closed at the accumulator boundary, got {err:?}"
+            matches!(err, crate::governance::GovernanceTerminal::DormantRequired),
+            "Unversioned + live drep_expiry must fail-closed, got {err:?}"
         );
     }
 
@@ -3378,29 +3293,67 @@ mod tests {
         acc
     }
 
+    /// Run the CRE S4.3 single governance authority against the accumulator's state, exactly as the boundary fn
+    /// does (same inputs + the frozen pre-boundary registration view). Returns the plan or the structured terminal.
+    fn s4_plan_for(
+        acc: &EpochAccumulator,
+        target: u64,
+    ) -> Result<crate::governance::ConwayGovernanceEpochPlan, crate::governance::GovernanceTerminal> {
+        let gov = acc.gov_state.as_ref().expect("gov");
+        let drep_stake =
+            crate::governance::derive_drep_voting_stake(&gov.vote_delegations, &acc.epoch_state.snapshots.mark.0);
+        let committee_quorum = crate::rational::Rational::new(
+            gov.committee_quorum.0 as i128,
+            gov.committee_quorum.1.max(1) as i128,
+        )
+        .unwrap_or_else(crate::rational::Rational::one);
+        let input = crate::governance::ConwayGovernanceEpochInput {
+            proposals: &gov.proposals,
+            drep_stake: &drep_stake,
+            pool_stake: &acc.epoch_state.snapshots.go.0.pool_stakes,
+            committee_members: &gov.committee,
+            committee_quorum: &committee_quorum,
+            pool_thresholds: &gov.pool_voting_thresholds,
+            drep_thresholds: &gov.drep_voting_thresholds,
+            committee_hot_keys: &gov.committee_hot_keys,
+            drep_expiry: &gov.drep_expiry,
+            num_dormant: &gov.num_dormant,
+            new_epoch: target,
+        };
+        let regs = &acc.cert_state.delegation.registrations;
+        crate::governance::plan_conway_governance_epoch(&input, |cred| regs.contains_key(cred))
+    }
+
     #[test]
     fn s4_boundary_refunds_expiring_unratifiable_and_carries_the_rest() {
         // 0x01: expiring (1339 < ending 1340) + 0 committee Yes -> refund to 0xe0; 0x02: non-expiring -> carried.
-        let mut acc = s4_acc_with_gov(vec![
+        let acc = s4_acc_with_gov(vec![
             s4_gas(0x01, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
             s4_gas(0x02, s4_tw(), Vec::new(), 1366, 100_000_000_000, 0xe1),
         ]);
-        apply_gov_deposit_refunds(&mut acc, EpochNo(1341)).expect("clean refund");
+        let plan = s4_plan_for(&acc, 1341).expect("clean plan");
+        // 0x01 expired + committee-fail -> removed(Expired), deposit refunded to its registered return account 0xe0.
+        assert_eq!(plan.removals.len(), 1);
+        assert_eq!(plan.removals[0].cause, crate::governance::RemovalCause::Expired);
         assert_eq!(
-            acc.cert_state.delegation.rewards.get(&StakeCredential::KeyHash(Hash28([0xe0; 28]))),
-            Some(&Coin(100_000_000_000)),
-            "the expired proposal's deposit refunds to its return-address reward account",
+            plan.deposit_returns[0],
+            crate::governance::DepositReturn::ToRewardAccount {
+                action_id: GovActionId { tx_hash: Hash32([0x01; 32]), index: 0 },
+                credential: StakeCredential::KeyHash(Hash28([0xe0; 28])),
+                amount: Coin(100_000_000_000),
+            },
+            "the expired proposal's deposit routes to its return-address reward account",
         );
-        let gov = acc.gov_state.as_ref().unwrap();
-        assert_eq!(gov.proposals.len(), 1, "expired removed, non-expiring carried");
-        assert_eq!(gov.proposals[0].action_id.tx_hash, Hash32([0x02; 32]));
+        // 0x02 non-expiring -> carried forward, original order preserved.
+        assert_eq!(plan.proposals.len(), 1, "expired removed, non-expiring carried");
+        assert_eq!(plan.proposals[0].action_id.tx_hash, Hash32([0x02; 32]));
     }
 
     #[test]
     fn s4_boundary_terminal_on_ratifiable_is_zero_mutation() {
         // A ratifiable proposal (2/3 committee Yes) alongside an expiring one -> the whole boundary terminals
         // with ZERO mutation (no refund credited, no proposal removed).
-        let mut acc = s4_acc_with_gov(vec![
+        let acc = s4_acc_with_gov(vec![
             s4_gas(0x01, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
             s4_gas(
                 0x02, s4_tw(),
@@ -3411,13 +3364,13 @@ mod tests {
                 1339, 100_000_000_000, 0xe1,
             ),
         ]);
-        let before = acc.clone();
-        let err = apply_gov_deposit_refunds(&mut acc, EpochNo(1341)).unwrap_err();
+        let err = s4_plan_for(&acc, 1341).unwrap_err();
         assert!(
-            matches!(err, LedgerTransitionError::GovDepositRefundTerminal(_)),
-            "a potentially-ratifiable proposal fails the boundary closed, got {err:?}"
+            matches!(err, crate::governance::GovernanceTerminal::PotentiallyRatifiable { .. }),
+            "a potentially-ratifiable proposal terminals the boundary, got {err:?}"
         );
-        assert_eq!(acc, before, "a terminal boundary makes ZERO mutation");
+        // Zero mutation is structural: the planner borrows only, and the boundary applies NOTHING on a terminal
+        // (proof-gate `cre_s4_3a_terminal_atomicity_*` exercises the full boundary path on both entries).
     }
 
     #[test]
@@ -3426,42 +3379,242 @@ mod tests {
             s4_gas(0x03, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
             s4_gas(0x01, s4_tw(), Vec::new(), 1339, 50_000_000_000, 0xe0),
         ]);
-        let (mut a, mut b) = (acc0.clone(), acc0);
-        apply_gov_deposit_refunds(&mut a, EpochNo(1341)).expect("a");
-        apply_gov_deposit_refunds(&mut b, EpochNo(1341)).expect("b");
-        assert_eq!(a, b, "same prior + same boundary ⇒ identical accumulator");
-        // both 0xe0 deposits (50k + 100k) accrued to the one return account.
-        assert_eq!(
-            a.cert_state.delegation.rewards.get(&StakeCredential::KeyHash(Hash28([0xe0; 28]))),
-            Some(&Coin(150_000_000_000)),
-        );
-        assert!(a.gov_state.as_ref().unwrap().proposals.is_empty(), "both expired removed");
+        let a = s4_plan_for(&acc0, 1341).expect("a");
+        let b = s4_plan_for(&acc0, 1341).expect("b");
+        assert_eq!(a, b, "same prior + same boundary inputs ⇒ identical plan (replay-equivalent)");
+        // both 0xe0 deposits (50k + 100k) route to the one registered return account, in GovActionId order.
+        assert_eq!(a.removals.len(), 2);
+        let to_e0: u64 = a
+            .deposit_returns
+            .iter()
+            .filter_map(|r| match r {
+                crate::governance::DepositReturn::ToRewardAccount { credential, amount, .. }
+                    if *credential == StakeCredential::KeyHash(Hash28([0xe0; 28])) =>
+                {
+                    Some(amount.0)
+                }
+                _ => None,
+            })
+            .sum();
+        assert_eq!(to_e0, 150_000_000_000);
+        assert!(a.proposals.is_empty(), "both expired removed");
     }
 
     #[test]
     fn s4_boundary_deregistered_return_account_routes_deposit_to_treasury() {
         // The return account 0xee is NOT registered ⇒ the refund goes to TREASURY (cardano's unredeemed
         // path), never an orphan reward entry — matching POOLREAP + reward distribution.
-        let mut acc =
+        let acc =
             s4_acc_with_gov(vec![s4_gas(0x01, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xee)]);
-        let treasury_before = acc.epoch_state.treasury.0;
-        apply_gov_deposit_refunds(&mut acc, EpochNo(1341)).expect("clean refund");
+        let plan = s4_plan_for(&acc, 1341).expect("clean plan");
+        // 0xee is NOT registered ⇒ the deposit routes to TREASURY (cardano's unredeemed path), never an orphan
+        // reward entry — the routing DECISION lives in the planner (the single authority), applied by the boundary.
+        assert_eq!(plan.removals.len(), 1);
         assert_eq!(
-            acc.epoch_state.treasury.0,
-            treasury_before + 100_000_000_000,
-            "an unregistered return account's deposit goes to treasury",
+            plan.deposit_returns[0],
+            crate::governance::DepositReturn::ToTreasury {
+                action_id: GovActionId { tx_hash: Hash32([0x01; 32]), index: 0 },
+                amount: Coin(100_000_000_000),
+            },
+            "an unregistered return account's deposit routes to treasury",
         );
-        assert!(
-            acc.cert_state
-                .delegation
-                .rewards
-                .get(&StakeCredential::KeyHash(Hash28([0xee; 28])))
-                .is_none(),
-            "no orphan reward entry for the unregistered account",
+        assert!(plan.proposals.is_empty(), "the expired proposal is removed regardless of destination");
+    }
+
+    // ─── CRE S4.3a proof gates: one governance authority; the accumulator + replay paths agree ───
+
+    /// A zero-reward Conway `LedgerState` (reserves/snapshots empty ⇒ the reward path contributes nothing) with
+    /// one expiring (0x01 → registered 0xe0) + one carried (0x02) proposal, so the ONLY boundary delta is the
+    /// governance delta.
+    fn s43a_zero_reward_ledger() -> crate::state::LedgerState {
+        s4_acc_with_gov(vec![
+            s4_gas(0x01, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
+            s4_gas(0x02, s4_tw(), Vec::new(), 1366, 100_000_000_000, 0xe1),
+        ])
+        .as_ledger_view()
+    }
+
+    /// GATE 1 — cross-path equality. The single authority lives inside the shared boundary fn and ignores the
+    /// caller-varying params (mark / active-slots), so the accumulator-follow and direct-replay configs produce
+    /// the IDENTICAL governance delta (next proposal state, deposit credit, treasury delta) from identical inputs.
+    #[test]
+    fn cre_s4_3a_cross_path_gov_delta_is_identical() {
+        let ledger = s43a_zero_reward_ledger();
+        let (replay, _) =
+            apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, None, 21_600).expect("replay");
+        let mark = StakeSnapshot::new();
+        let (accum, _) =
+            apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&mark), 4_320).expect("accum");
+        let e0 = StakeCredential::KeyHash(Hash28([0xe0; 28]));
+        assert_eq!(replay.gov_state, accum.gov_state, "identical next governance state (fingerprint) on both paths");
+        assert_eq!(
+            replay.cert_state.delegation.rewards.get(&e0),
+            accum.cert_state.delegation.rewards.get(&e0),
+            "identical deposit-return credit on both paths",
         );
+        assert_eq!(replay.epoch_state.treasury, accum.epoch_state.treasury, "identical treasury delta");
+        assert_eq!(replay.gov_state.as_ref().unwrap().proposals.len(), 1, "0x01 removed, 0x02 carried");
+        assert_eq!(replay.cert_state.delegation.rewards.get(&e0), Some(&Coin(100_000_000_000)));
+    }
+
+    /// GATE 2 — the 1340→1341 replay correction. Five expiring proposals crossed via the DIRECT-REPLAY path now
+    /// REFUND (previously the replay path dropped expired proposals with no refund — the bug this slice corrects).
+    /// Mirrors the CE-3d −500B shape: +400,000 ADA to 0xe0 (4) + +100,000 ADA to 0xe1 (1).
+    #[test]
+    fn cre_s4_3a_replay_path_refunds_all_five_expiries() {
+        let ledger = s4_acc_with_gov(vec![
+            s4_gas(0x01, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
+            s4_gas(0x02, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
+            s4_gas(0x03, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
+            s4_gas(0x04, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
+            s4_gas(0x05, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe1),
+        ])
+        .as_ledger_view();
+        let (after, _) =
+            crate::rules::apply_epoch_boundary_full(&ledger, EpochNo(1341)).expect("replay refunds the expiries");
         assert!(
-            acc.gov_state.as_ref().unwrap().proposals.is_empty(),
-            "the expired proposal is removed regardless of refund destination",
+            after.gov_state.as_ref().unwrap().proposals.is_empty(),
+            "all five expired proposals leave the set on the replay path (no silent disappearance)",
+        );
+        assert_eq!(
+            after.cert_state.delegation.rewards.get(&StakeCredential::KeyHash(Hash28([0xe0; 28]))),
+            Some(&Coin(400_000_000_000)),
+            "four deposits refund to 0xe0 (+400,000 ADA) — the replay path now returns them",
+        );
+        assert_eq!(
+            after.cert_state.delegation.rewards.get(&StakeCredential::KeyHash(Hash28([0xe1; 28]))),
+            Some(&Coin(100_000_000_000)),
+            "one deposit refunds to 0xe1 (+100,000 ADA)",
+        );
+    }
+
+    /// GATE 3 — terminal atomicity on BOTH paths. A potentially-ratifiable proposal terminals the boundary (zero
+    /// mutation) identically on the replay and accumulator configs — the plan is validated before any state is
+    /// constructed, so a terminal is a pure `Err` with no partial finalization.
+    #[test]
+    fn cre_s4_3a_potentially_ratifiable_terminals_both_paths() {
+        let ledger = s4_acc_with_gov(vec![s4_gas(
+            0x01,
+            s4_tw(),
+            vec![
+                (StakeCredential::KeyHash(Hash28([0xC1; 28])), Vote::Yes),
+                (StakeCredential::KeyHash(Hash28([0xC2; 28])), Vote::Yes),
+            ],
+            1339,
+            100_000_000_000,
+            0xe0,
+        )])
+        .as_ledger_view();
+        let err_replay = crate::rules::apply_epoch_boundary_full(&ledger, EpochNo(1341)).unwrap_err();
+        let mark = StakeSnapshot::new();
+        let err_accum =
+            apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&mark), 4_320).unwrap_err();
+        assert!(matches!(err_replay, crate::governance::GovernanceTerminal::PotentiallyRatifiable { .. }));
+        assert!(matches!(err_accum, crate::governance::GovernanceTerminal::PotentiallyRatifiable { .. }));
+    }
+
+    /// GATE 4 — RUPD consumed once at the bootstrap boundary WHILE a governance refund occurs in the same boundary
+    /// result. A targeted regression (NOT inferred from a green suite): the boundary applies the expired-deposit
+    /// refund AND the bound one-shot RUPD (pots + rs), and consumes the RUPD exactly once.
+    #[test]
+    fn cre_s4_3a_rupd_consumed_once_with_governance_refund_at_seed_boundary() {
+        let mut acc = reward_fixture();
+        acc.epoch_state.epoch = EpochNo(1339);
+        let mut gov = s3_empty_gov(6); // committee_quorum (2, 3)
+        gov.committee = [
+            (StakeCredential::KeyHash(Hash28([0xC1; 28])), 1400u64),
+            (StakeCredential::KeyHash(Hash28([0xC2; 28])), 1400),
+            (StakeCredential::KeyHash(Hash28([0xC3; 28])), 1400),
+        ]
+        .into_iter()
+        .collect();
+        // Expired (1338 < ending 1339) + 0 committee Yes ⇒ provably unratifiable ⇒ refunded.
+        gov.proposals = vec![s4_gas(0x01, s4_tw(), Vec::new(), 1338, 100_000_000_000, 0xe0)];
+        acc.gov_state = Some(gov);
+        acc.cert_state
+            .delegation
+            .registrations
+            .insert(StakeCredential::KeyHash(Hash28([0xe0; 28])), Coin(2_000_000));
+        let delta_treasury = Coin(1_000);
+        let delta_reserves = Coin(2_000);
+        let mut rd = BTreeMap::new();
+        rd.insert(key_cred(0xCC), Coin(4_242));
+        let commitment = bootstrap_rupd_commitment(
+            &Hash32([0x01; 32]),
+            SlotNo(1),
+            &Hash32([0x02; 32]),
+            EpochNo(1339),
+            delta_treasury,
+            delta_reserves,
+            &rd,
+        );
+        acc.pending_reward_update = Some(BootstrapRewardUpdate {
+            manifest_commitment: Hash32([0x01; 32]),
+            source_point_slot: SlotNo(1),
+            source_point_hash: Hash32([0x02; 32]),
+            target_epoch: EpochNo(1339),
+            delta_treasury,
+            delta_reserves,
+            reward_delta: rd,
+            canonical_commitment: commitment,
+        });
+        let reserves_before = acc.epoch_state.reserves.0;
+        let treasury_before = acc.epoch_state.treasury.0;
+        let ctx = SelectedBlockCtx {
+            era: CardanoEra::Conway,
+            block_epoch: EpochNo(1340),
+            block_slot: SlotNo(0),
+            issuer_pool: pool(0xAA),
+            boundary_mark: Some(sample_mark(0xAA, 1_000_000_000_000)),
+            active_slots_per_epoch: 21_600,
+        };
+        let after = cross_epoch_boundary(acc, EpochNo(1340), &ctx).expect("seed boundary");
+        // (a) one-shot RUPD: pots move by the bound deltas + the rs credit, and it is consumed exactly once.
+        assert!(after.pending_reward_update.is_none(), "the one-shot bootstrap RUPD is consumed once");
+        assert_eq!(after.epoch_state.treasury.0, treasury_before + delta_treasury.0, "RUPD deltaT (no gov to treasury)");
+        assert_eq!(after.epoch_state.reserves.0, reserves_before - delta_reserves.0, "RUPD delta_reserves");
+        assert_eq!(after.cert_state.delegation.rewards.get(&key_cred(0xCC)), Some(&Coin(4_242)), "RUPD rs");
+        // (b) the governance expired-deposit refund occurred in the SAME boundary result.
+        assert_eq!(
+            after.cert_state.delegation.rewards.get(&StakeCredential::KeyHash(Hash28([0xe0; 28]))),
+            Some(&Coin(100_000_000_000)),
+            "the expired proposal's deposit is refunded in the same boundary that consumes the RUPD",
+        );
+        assert!(after.gov_state.as_ref().unwrap().proposals.is_empty(), "the expired proposal is removed");
+    }
+
+    /// GATE 5 — single authority. No second production path removes a governance proposal or decides a refund
+    /// destination: the deleted accumulator pre-pass stays deleted, the old CPDE planner is gone, and the sole
+    /// production invocation of the governance authority is the shared boundary fn (rules.rs). The source is read
+    /// at COMPILE time (`include_str!`, no runtime I/O — BLUE-safe), and the needles are split via `concat!` so
+    /// this scan does not match its own literals.
+    #[test]
+    fn cre_s4_3a_single_governance_authority_no_second_path() {
+        let acc_src = include_str!("epoch_accumulator.rs");
+        let rules_src = include_str!("rules.rs");
+        let old_prepass = concat!("fn apply_gov", "_deposit_refunds");
+        let old_planner = concat!("plan_deposit", "_refunds");
+        let authority = concat!("plan_conway_governance", "_epoch(");
+        assert!(!acc_src.contains(old_prepass), "the accumulator gov pre-pass must not return");
+        assert!(
+            !acc_src.contains(old_planner) && !rules_src.contains(old_planner),
+            "the old CPDE planner is gone (no second authority)",
+        );
+        assert_eq!(
+            rules_src.matches(authority).count(),
+            1,
+            "exactly one production applier of the governance authority (the shared boundary fn)",
+        );
+        // TOTAL single-authority: the accumulator's PRODUCTION code (before its sole `#[cfg(test)]` marker)
+        // makes ZERO planner calls — the one occurrence in this file is the `s4_plan_for` TEST helper. A future
+        // production pre-pass under ANY name pushes this above 0 and trips the gate (closes the review's
+        // completeness gap: the guard no longer relies only on the old symbol names being absent).
+        let test_marker = concat!("#[cfg", "(test)]");
+        let acc_prod = acc_src.split(test_marker).next().unwrap_or(acc_src);
+        assert_eq!(
+            acc_prod.matches(authority).count(),
+            0,
+            "no production governance-planner call in the accumulator — the shared boundary fn is the sole applier",
         );
     }
 }

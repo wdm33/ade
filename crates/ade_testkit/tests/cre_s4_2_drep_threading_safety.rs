@@ -97,12 +97,12 @@ fn cre_s4_2_threading_drep_introduces_no_halt_or_wrongful_refund() {
 
 /// S4.2 refund-set differential (the mechanical version of the safety argument): plan the CE-3d 1340->1341
 /// boundary refunds with the CURRENT live authority (empty DRep + empty committee_hot_keys) and with the S4.2
-/// live authority (threaded DRep + committee_hot_keys), SPO empty in BOTH, and assert the two `RefundPlan`s are
+/// live authority (threaded DRep + committee_hot_keys), SPO empty in BOTH, and assert the two `ConwayGovernanceEpochPlan`s are
 /// BYTE-IDENTICAL. This converts "potentially_ratifiable==0 ⇒ same refund set" from an argument into a check.
 #[test]
 #[ignore = "reads the local POST-1340 state; CRE S4.2 refund-set differential"]
 fn cre_s4_2_refund_plan_is_identical_before_and_after_drep_threading() {
-    use ade_ledger::governance::plan_deposit_refunds;
+    use ade_ledger::governance::{plan_conway_governance_epoch, ConwayGovernanceEpochInput};
     let state = std::fs::read(POST_1340_STATE).unwrap_or_else(|e| panic!("read: {e}"));
     let point = SeedPoint { slot: SlotNo(POST_1340_SLOT), block_hash: Hash32([0u8; 32]) };
     let (s1a, _) = decode_native_nonutxo_state(&state, point, 1340, 2).expect("decode");
@@ -114,24 +114,47 @@ fn cre_s4_2_refund_plan_is_identical_before_and_after_drep_threading() {
     let no_spo: &[(u64, u64)] = &[];
 
     // (a) CURRENT live boundary: DRep authority + committee_hot_keys EMPTY (committee + quorum seeded).
-    let plan_before = plan_deposit_refunds(
-        &g.proposals, &BTreeMap::new(), &empty_pool_stake, &g.committee, &quorum, no_spo, &[], 1341,
-        &BTreeMap::new(), &BTreeMap::new(), &dormant,
-    )
-    .expect("pre-S4.2 plan is clean");
+    let empty_drep = BTreeMap::new();
+    let empty_hot = BTreeMap::new();
+    let empty_expiry = BTreeMap::new();
+    let no_drep_thresh: &[(u64, u64)] = &[];
+    let input_before = ConwayGovernanceEpochInput {
+        proposals: &g.proposals,
+        drep_stake: &empty_drep,
+        pool_stake: &empty_pool_stake,
+        committee_members: &g.committee,
+        committee_quorum: &quorum,
+        pool_thresholds: no_spo,
+        drep_thresholds: no_drep_thresh,
+        committee_hot_keys: &empty_hot,
+        drep_expiry: &empty_expiry,
+        num_dormant: &dormant,
+        new_epoch: 1341,
+    };
+    let plan_before = plan_conway_governance_epoch(&input_before, |_| true).expect("pre-S4.2 plan is clean");
 
     // (b) S4.2 live boundary: real DRep authority + committee_hot_keys threaded; SPO still empty.
     let drep_stake = derive_drep_voting_stake(&g.vote_delegations, &s1a.snapshots.mark.0);
-    let plan_after = plan_deposit_refunds(
-        &g.proposals, &drep_stake, &empty_pool_stake, &g.committee, &quorum, no_spo,
-        &g.drep_voting_thresholds, 1341, &g.committee_hot_keys, &g.drep_expiry, &dormant,
-    )
-    .expect("S4.2 plan is clean (no PotentiallyRatifiable)");
+    let input_after = ConwayGovernanceEpochInput {
+        proposals: &g.proposals,
+        drep_stake: &drep_stake,
+        pool_stake: &empty_pool_stake,
+        committee_members: &g.committee,
+        committee_quorum: &quorum,
+        pool_thresholds: no_spo,
+        drep_thresholds: &g.drep_voting_thresholds,
+        committee_hot_keys: &g.committee_hot_keys,
+        drep_expiry: &g.drep_expiry,
+        num_dormant: &dormant,
+        new_epoch: 1341,
+    };
+    let plan_after =
+        plan_conway_governance_epoch(&input_after, |_| true).expect("S4.2 plan is clean (no PotentiallyRatifiable)");
 
     assert_eq!(
         plan_before, plan_after,
         "threading the DRep/committee authority produces a BYTE-IDENTICAL refund plan — S4.2 is a provable \
          no-op on the CPDE refund set"
     );
-    eprintln!("CRE S4.2 differential: refund plan identical ({} removed) before/after DRep threading", plan_after.removed.len());
+    eprintln!("CRE S4.2 differential: refund plan identical ({} removed) before/after DRep threading", plan_after.removals.len());
 }

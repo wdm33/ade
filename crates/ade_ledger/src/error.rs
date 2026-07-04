@@ -76,6 +76,11 @@ pub enum LedgerError {
     /// (CRE S4.1), never a fabricated dormancy offset.
     DormantStateRequired,
 
+    /// A Conway governance epoch boundary returned a structured terminal (a potentially-ratifiable proposal,
+    /// or a malformed refundable proposal) — the boundary halts with ZERO mutation. Carries the terminal
+    /// verbatim (action id + reason preserved, never collapsed to a string). (CRE S4.3.)
+    GovernanceBoundaryTerminal(crate::governance::GovernanceTerminal),
+
     // Late-era state-backed validation (Alonzo+) — O-27 obligations
     BadInputs(BadInputsError),
     NoCollateralInputs,
@@ -661,6 +666,9 @@ impl core::fmt::Display for LedgerError {
                     "governance ratification requires the versioned num_dormant offset but the state is unversioned (V1)"
                 )
             }
+            LedgerError::GovernanceBoundaryTerminal(t) => {
+                write!(f, "conway governance epoch boundary terminal: {:?}", t)
+            }
             LedgerError::InsufficientCollateral(e) => {
                 write!(
                     f,
@@ -774,6 +782,17 @@ impl std::error::Error for LedgerError {}
 impl From<crate::governance::DormantRequired> for LedgerError {
     fn from(_: crate::governance::DormantRequired) -> Self {
         LedgerError::DormantStateRequired
+    }
+}
+
+impl From<crate::governance::GovernanceTerminal> for LedgerError {
+    fn from(t: crate::governance::GovernanceTerminal) -> Self {
+        // Preserve the terminal structurally — action id + reason survive the conversion. The dormant case
+        // keeps its long-standing dedicated variant; every other terminal carries through verbatim.
+        match t {
+            crate::governance::GovernanceTerminal::DormantRequired => LedgerError::DormantStateRequired,
+            other => LedgerError::GovernanceBoundaryTerminal(other),
+        }
     }
 }
 

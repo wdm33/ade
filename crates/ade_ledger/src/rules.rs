@@ -612,7 +612,7 @@ fn shelley_witness_sets(
 pub fn apply_epoch_boundary_full(
     state: &LedgerState,
     new_epoch: ade_types::EpochNo,
-) -> Result<(LedgerState, EpochBoundaryAccounting), crate::governance::DormantRequired> {
+) -> Result<(LedgerState, EpochBoundaryAccounting), crate::governance::GovernanceTerminal> {
     // The live path passes `None` for the precomputed mark -> the boundary uses the
     // existing stub, UNCHANGED. Activation (S3f-4) calls _with_registrations with the
     // real aggregate via a distinct entry point, never through _full.
@@ -655,12 +655,55 @@ pub fn apply_epoch_boundary_with_registrations(
     // epoch length) — NOT a hardcoded mainnet constant. Preview's shorter epoch making this 5×
     // too large was the CE-3d reward-magnitude residual.
     active_slots_per_epoch: u64,
-) -> Result<(LedgerState, EpochBoundaryAccounting), crate::governance::DormantRequired> {
+) -> Result<(LedgerState, EpochBoundaryAccounting), crate::governance::GovernanceTerminal> {
     // 1. Reward computation from PRE-rotation go snapshot
     //    Rewards must be computed before rotation — after rotation,
     //    the go snapshot becomes the old set (which may be empty).
     let reserves = state.epoch_state.reserves;
     let treasury = state.epoch_state.treasury;
+
+    // 0. CRE S4.3 — plan the Conway governance epoch FIRST, from the immutable pre-boundary view, BEFORE any
+    // reward/treasury/proposal mutation. A terminal (potentially-ratifiable / malformed / dormant-required)
+    // returns HERE with zero resulting-state change. This is the SINGLE governance authority shared by the
+    // accumulator-follow and direct-replay boundaries — neither caller decides proposal removal or deposit
+    // routing independently. The plan is APPLIED once below, into the constructed next state.
+    let gov_plan: Option<crate::governance::ConwayGovernanceEpochPlan> =
+        if state.era == ade_types::CardanoEra::Conway {
+            if let Some(gov) = state.gov_state.as_ref() {
+                let drep_stake = crate::governance::derive_drep_voting_stake(
+                    &gov.vote_delegations,
+                    &state.epoch_state.snapshots.mark.0,
+                );
+                let committee_quorum = crate::rational::Rational::new(
+                    gov.committee_quorum.0 as i128,
+                    gov.committee_quorum.1.max(1) as i128,
+                )
+                .unwrap_or_else(crate::rational::Rational::one);
+                let input = crate::governance::ConwayGovernanceEpochInput {
+                    proposals: &gov.proposals,
+                    drep_stake: &drep_stake,
+                    pool_stake: &state.epoch_state.snapshots.go.0.pool_stakes,
+                    committee_members: &gov.committee,
+                    committee_quorum: &committee_quorum,
+                    pool_thresholds: &gov.pool_voting_thresholds,
+                    drep_thresholds: &gov.drep_voting_thresholds,
+                    committee_hot_keys: &gov.committee_hot_keys,
+                    drep_expiry: &gov.drep_expiry,
+                    num_dormant: &gov.num_dormant,
+                    new_epoch: new_epoch.0,
+                };
+                // Freeze the registration view used for deposit routing: the PRE-boundary registrations
+                // (no caller re-checks registration against a partially-updated state).
+                let registrations = &state.cert_state.delegation.registrations;
+                Some(crate::governance::plan_conway_governance_epoch(&input, |c| {
+                    registrations.contains_key(c)
+                })?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
     // --- Shelley eta: decentralization-adjusted monetary expansion ---
     // eta = min(1, blocksMade / expectedBlocks) when d < 0.8
@@ -1258,91 +1301,47 @@ pub fn apply_epoch_boundary_with_registrations(
         pool_state.retiring.remove(pool_id);
     }
 
-    // 4b. Conway governance: ratification, enactment, expiry
-    let mut governance_treasury_withdrawn = 0u64;
-    let new_gov_state = if state.era == ade_types::CardanoEra::Conway {
-        if let Some(ref gov) = state.gov_state {
-            // DRep voting-stake distribution = vote_delegations × the MARK snapshot (current-epoch stake,
-            // closest to the Haskell DRepPulser's InstantStake; `go` would be 2 epochs stale). CRE S3: the
-            // derivation is the pure `governance::derive_drep_voting_stake` "distribution authority" (shared,
-            // tested), not an inline block. In the live path `vote_delegations` is still empty until S4's
-            // deliberate activation, so this feeds the gate nothing — import-not-activate.
-            let drep_stake = crate::governance::derive_drep_voting_stake(
-                &gov.vote_delegations,
-                &state.epoch_state.snapshots.mark.0,
-            );
-
-            let committee_quorum = crate::rational::Rational::new(
-                gov.committee_quorum.0 as i128,
-                gov.committee_quorum.1.max(1) as i128,
-            ).unwrap_or_else(crate::rational::Rational::one);
-
-            // Ratification uses the ENDING epoch (before boundary), not the new epoch.
-            // Proposals with expires_after >= ending_epoch are still active.
-            let ending_epoch = new_epoch.0.saturating_sub(1);
-            let result = crate::governance::evaluate_ratification(
-                &gov.proposals,
-                &drep_stake,
-                &go.0.pool_stakes,
-                &gov.committee,
-                &committee_quorum,
-                &gov.pool_voting_thresholds,
-                &gov.drep_voting_thresholds,
-                ending_epoch,
-                &gov.committee_hot_keys,
-                &gov.drep_expiry,
-                &gov.num_dormant,
-            )?;
-
-            let effects = crate::governance::enact_proposals(&result.ratified);
-
-            // Deposit refunds: enacted proposal deposits returned from treasury.
-            // Only enacted proposals have deposits refunded from treasury.
-            // Expired proposal deposits are returned from the deposit pot, not treasury.
-            let enacted_deposit_refunds: u64 = effects.deposits_returned.iter()
-                .map(|(_, c)| c.0)
-                .sum();
-
-            // Deposit refunds for enacted proposals: in Conway, proposal deposits
-            // go to the governance deposit pot. When enacted, deposits are returned
-            // from that pot, not from treasury. Test both.
-            // Treasury outflows from governance:
-            // 1. Treasury withdrawals from enacted TreasuryWithdrawal proposals
-            // 2. Deposit refunds NOT from treasury (deposits come from deposit pot)
-            governance_treasury_withdrawn = effects.treasury_withdrawn;
-            eprintln!("  [governance] ratified={} expired={} remaining={} treasury_withdrawn={} ADA deposit_refunds={} ADA",
-                result.ratified.len(), result.expired.len(), result.remaining.len(),
-                effects.treasury_withdrawn / 1_000_000, enacted_deposit_refunds / 1_000_000);
-
-            // Committee write-back (ENACTMENT-COMMITTEE-WRITEBACK): apply the
-            // ratified committee-changing effects to the next-epoch committee +
-            // quorum via the pure transition, instead of cloning them unchanged.
-            let (new_committee, new_committee_quorum) =
-                crate::governance::apply_committee_enactment(
-                    &gov.committee,
-                    gov.committee_quorum,
-                    &effects,
-                );
-
+    // 4b. CRE S4.3 — APPLY the pre-computed governance plan into the boundary result. The plan was validated
+    // up-front (a terminal already returned before any mutation). S4.3a applies the next proposal set + the
+    // explicit deposit returns ONLY: a registered return-address credential is credited to its reward account;
+    // a deregistered one routes to the TREASURY (unclaimed). No enactment (pparams/committee/constitution/root
+    // unchanged) — a threshold-passing proposal is terminal (returned above), never enacted here. This
+    // expired-deposit REFUND now runs on BOTH the accumulator and direct-replay boundaries; the replay path
+    // previously dropped expired proposals with no refund (a path-dependent partial-finalization bug).
+    let mut gov_deposit_to_treasury = 0u64;
+    let new_gov_state = match (state.gov_state.as_ref(), gov_plan.as_ref()) {
+        (Some(gov), Some(plan)) => {
+            for ret in &plan.deposit_returns {
+                match ret {
+                    crate::governance::DepositReturn::ToRewardAccount { credential, amount, .. } => {
+                        let bal = delegation
+                            .rewards
+                            .entry(credential.clone())
+                            .or_insert(ade_types::tx::Coin(0));
+                        bal.0 = bal.0.saturating_add(amount.0);
+                    }
+                    crate::governance::DepositReturn::ToTreasury { amount, .. } => {
+                        gov_deposit_to_treasury = gov_deposit_to_treasury.saturating_add(amount.0);
+                    }
+                    crate::governance::DepositReturn::NoDeposit { .. } => {}
+                }
+            }
+            // S4.3a: no enactment effects — committee/quorum/thresholds/delegations/dormancy carry forward
+            // unchanged; only the removed proposals leave the set (original order preserved by the planner).
             Some(crate::state::ConwayGovState {
-                proposals: result.remaining,
-                committee: new_committee,
-                committee_quorum: new_committee_quorum,
+                proposals: plan.proposals.clone(),
+                committee: gov.committee.clone(),
+                committee_quorum: gov.committee_quorum,
                 drep_expiry: gov.drep_expiry.clone(),
                 gov_action_lifetime: gov.gov_action_lifetime,
                 vote_delegations: gov.vote_delegations.clone(),
                 pool_voting_thresholds: gov.pool_voting_thresholds.clone(),
                 drep_voting_thresholds: gov.drep_voting_thresholds.clone(),
                 committee_hot_keys: gov.committee_hot_keys.clone(),
-                // Carry the versioned dormancy forward (preserves V1/V2 lineage — never a fabricated
-                // default). The per-epoch numDormant recomputation is deferred to the enact slice (S5).
                 num_dormant: gov.num_dormant.clone(),
             })
-        } else {
-            None
         }
-    } else {
-        state.gov_state.clone()
+        _ => state.gov_state.clone(),
     };
 
     // 5. Update reserves and treasury per Shelley spec:
@@ -1361,7 +1360,7 @@ pub fn apply_epoch_boundary_with_registrations(
             .saturating_add(treasury_delta)
             .saturating_add(delta_t2)
             .saturating_add(poolreap_to_treasury)
-            .saturating_sub(governance_treasury_withdrawn)
+            .saturating_add(gov_deposit_to_treasury)
     );
 
     let cert_state = crate::delegation::CertState {
@@ -2867,13 +2866,13 @@ mod cert_state_dispatch {
         );
     }
 
-    /// ENACTMENT-COMMITTEE-WRITEBACK S2: the epoch-boundary apply site now writes
-    /// the committee back. A ratified NoConfidence (empty stake distributions →
-    /// DRep/SPO gates skip; committee gate skipped for NoConfidence) dissolves the
-    /// committee in the next-epoch ConwayGovState — it used to be cloned unchanged.
-    /// Proves the wiring, not just the pure helper.
+    /// CRE S4.3a: a ratifiable NoConfidence (empty DRep/SPO stake ⇒ those gates skip; committee gate skipped
+    /// for NoConfidence ⇒ thresholds pass) is TERMINAL at the boundary on both paths — S4.3a performs no
+    /// enactment, so the boundary must NOT silently dissolve the committee (the pre-S4.3 partial-enactment path).
+    /// Atomic committee dissolution for the supported subset lands in S4.3c; `apply_committee_enactment` stays
+    /// unit-tested in `governance.rs`.
     #[test]
-    fn epoch_boundary_ratified_noconfidence_dissolves_committee() {
+    fn epoch_boundary_ratifiable_noconfidence_is_terminal_pending_enactment() {
         use crate::state::LedgerState;
         use super::apply_epoch_boundary_full;
         use ade_types::conway::governance::{GovAction, GovActionId, GovActionState};
@@ -2902,11 +2901,15 @@ mod cert_state_dispatch {
         }];
         state.gov_state = Some(gov);
 
-        let (new_state, _acct) = apply_epoch_boundary_full(&state, EpochNo(501)).unwrap();
-        let new_gov = new_state.gov_state.expect("conway gov state present");
+        // CRE S4.3a: a threshold-passing (potentially-ratifiable) action is TERMINAL at the boundary on BOTH the
+        // replay and accumulator paths — S4.3a performs NO enactment. The boundary must NOT silently dissolve the
+        // committee (that was the pre-S4.3 partial-enactment path). Committee dissolution
+        // (`apply_committee_enactment`) is unit-tested in `governance.rs` and wired atomically for the supported
+        // action subset in S4.3c.
+        let err = apply_epoch_boundary_full(&state, EpochNo(501)).unwrap_err();
         assert!(
-            new_gov.committee.is_empty(),
-            "ratified NoConfidence must dissolve the committee at the epoch boundary",
+            matches!(err, crate::governance::GovernanceTerminal::PotentiallyRatifiable { .. }),
+            "a ratifiable NoConfidence terminals the boundary (enactment deferred), got {err:?}",
         );
     }
 

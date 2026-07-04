@@ -73,6 +73,10 @@ pub fn classify_failure_phase(err: &LedgerError) -> ValidationPhase {
         // phase decision rather than silently defaulting.
         LedgerError::InputNotFound(_) => ValidationPhase::Phase1,
         LedgerError::DormantStateRequired => ValidationPhase::Phase1,
+        // A Conway governance epoch-boundary terminal halts the boundary deterministically with zero mutation —
+        // not a per-tx script phase. Phase1 for totality (ValidationPhase only models tx script phases; there is
+        // never a phase-2 collateral consequence). (CRE S4.3.)
+        LedgerError::GovernanceBoundaryTerminal(_) => ValidationPhase::Phase1,
         LedgerError::DuplicateInput(_) => ValidationPhase::Phase1,
         LedgerError::Conservation(_) => ValidationPhase::Phase1,
         LedgerError::NegativeValue(_) => ValidationPhase::Phase1,

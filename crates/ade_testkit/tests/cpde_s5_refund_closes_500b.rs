@@ -4,7 +4,7 @@
 //! current code (S1 governance import), because the existing seed predates S1 and carries NO tracked
 //! proposals — so the refund has nothing to refund and the -500B persists. This test proves the closure
 //! WITHOUT that heavy re-bootstrap: it decodes the REAL certified POST-1340 governance state (the same 50
-//! proposals S1 imports), runs the PUBLIC S4 planner `governance::plan_deposit_refunds` over them at the
+//! proposals S1 imports), runs the PUBLIC governance authority `governance::plan_conway_governance_epoch` over them at the
 //! 1340->1341 boundary with Ade's current committee-only authority, and asserts the planned refunds are
 //! EXACTLY the -500B: +400,000 ADA to acct1 (00ceb134..) and +100,000 ADA to acct2 (00f53256..).
 //!
@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 
 use ade_ledger::bootstrap_anchor::SeedPoint;
-use ade_ledger::governance::plan_deposit_refunds;
+use ade_ledger::governance::{plan_conway_governance_epoch, ConwayGovernanceEpochInput, DepositReturn};
 use ade_ledger::ledgerdb_state::decode_native_nonutxo_state;
 use ade_ledger::rational::Rational;
 use ade_types::shelley::cert::StakeCredential;
@@ -56,36 +56,45 @@ fn cpde_s5_planner_refunds_close_the_500b_on_real_proposals() {
     // but does NOT thread them into the live gate (the SPO gate has no active-stake guard, so threading
     // would activate SPO ratification — that is the CRE ratify slice, S4). So the committee gate is the
     // binding authority for the CPDE -500B closure, exactly as on the live boundary.
-    let plan = plan_deposit_refunds(
-        &g.proposals,
-        &empty_drep,
-        &empty_pool,
-        &g.committee,
-        &quorum,
-        &[],
-        &[],
-        1341,
-        &empty_hot,
-        &empty_drep_expiry,
-        &ade_ledger::state::DormantEpochs::Unversioned,
-    )
-    .expect("the whole set is provably-safe -> a clean plan (no PotentiallyRatifiable)");
+    let dormant = ade_ledger::state::DormantEpochs::Unversioned;
+    let input = ConwayGovernanceEpochInput {
+        proposals: &g.proposals,
+        drep_stake: &empty_drep,
+        pool_stake: &empty_pool,
+        committee_members: &g.committee,
+        committee_quorum: &quorum,
+        pool_thresholds: &[],
+        drep_thresholds: &[],
+        committee_hot_keys: &empty_hot,
+        drep_expiry: &empty_drep_expiry,
+        num_dormant: &dormant,
+        new_epoch: 1341,
+    };
+    // The five CE-3d refunds go to their registered reward accounts (acct1/acct2) — treat every return address as
+    // registered so they route ToRewardAccount (deregistered->treasury is a separate case). The routing DECISION
+    // lives in the planner (the single CRE S4.3 authority).
+    let plan = plan_conway_governance_epoch(&input, |_| true)
+        .expect("the whole set is provably-safe -> a clean plan (no PotentiallyRatifiable)");
 
     // Exactly the five expiring TreasuryWithdrawals refund.
-    assert_eq!(plan.removed.len(), 5, "the five expiring proposals refund");
+    assert_eq!(plan.removals.len(), 5, "the five expiring proposals refund");
 
     // The two real CE-3d return accounts (key-hash reward-account credentials).
     let acct1 = StakeCredential::KeyHash(h28("ceb13422f661e2ecb6cdffedb71aea95053d66cd527cc7ed55d976b4"));
     let acct2 = StakeCredential::KeyHash(h28("f53256bcaa4c5e36a48b3863069cc6e0e8a6ec7a4eff702ac662a4cb"));
     let (mut sum1, mut sum2) = (0u128, 0u128);
-    for e in &plan.removed {
-        let (cred, deposit) = e.credit.as_ref().expect("a 100k-ADA deposit");
-        if *cred == acct1 {
-            sum1 += deposit.0 as u128;
-        } else if *cred == acct2 {
-            sum2 += deposit.0 as u128;
-        } else {
-            panic!("unexpected refund return account: {cred:?}");
+    for r in &plan.deposit_returns {
+        match r {
+            DepositReturn::ToRewardAccount { credential, amount, .. } => {
+                if *credential == acct1 {
+                    sum1 += amount.0 as u128;
+                } else if *credential == acct2 {
+                    sum2 += amount.0 as u128;
+                } else {
+                    panic!("unexpected refund return account: {credential:?}");
+                }
+            }
+            other => panic!("expected a reward-account refund, got {other:?}"),
         }
     }
 
