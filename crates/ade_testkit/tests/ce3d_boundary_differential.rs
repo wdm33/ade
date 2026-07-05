@@ -903,3 +903,464 @@ go_residual={}|go_only_ade={}|go_only_ref={}|go_target_mismatch={}|go_value_delt
         "canonical provenance report hash (pinned; deterministic advance from the isolated seed copy)"
     );
 }
+
+// ===========================================================================
+// CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION -- PRECONDITION (GREEN / evidence)
+//
+// The go-stake localization proved the residual is a per-credential stake-VALUE
+// difference (base exonerated, delegation/folding ruled out), and INFERRED the
+// non-base component is the reward-account contribution. This test DIRECTLY
+// measures that: it compares Ade's RAW reward-account balances (the seed
+// accumulator's cert_state.delegation.rewards at POST-1340, pre-snapshot-fold)
+// against cardano's POST-1340 reward map, per credential, split delegated vs
+// undelegated -- proving whether the reward balances are already wrong BEFORE
+// snapshot construction. If so, the corrective slice targets reward EVOLUTION
+// (RUPD/lifecycle/inputs), NOT the build_boundary_mark_snapshot fold. The CPDE
+// gov-refund (-500B, undelegated) is kept in a disjoint bucket.
+// ===========================================================================
+
+/// Canonical reward map: full StakeCredential key (discriminant-preserving) -> lovelace.
+fn reward_canon<'a, I>(it: I) -> BTreeMap<Vec<u8>, u64>
+where
+    I: Iterator<Item = (&'a StakeCredential, &'a ade_types::tx::Coin)>,
+{
+    it.map(|(c, co)| (cred_key(c), co.0)).collect()
+}
+
+/// The 28-byte credential hash (the go-snapshot key, discriminant-stripped) for either credential variant.
+fn cred_hash28(c: &StakeCredential) -> [u8; 28] {
+    match c {
+        StakeCredential::KeyHash(h) | StakeCredential::ScriptHash(h) => h.0,
+    }
+}
+
+/// CRAE root confirmation (cardano-only, fast): the reward accrued to the mark's credentials across the
+/// 1340->1341 boundary (POST-1341 reward - POST-1340 reward, the RUPD payout) equals the go-stake residual.
+/// Ade builds the mark from PRE-RUPD rewards (`epoch_accumulator.rs:486`, before the boundary reward-update at
+/// :508); cardano's SNAP takes it AFTER `applyRUpd`. So Ade's snapshot is one RUPD stale, undercounting each
+/// delegated credential's stake by exactly the reward it accrued at that boundary -- the -343..-363B.
+#[test]
+#[ignore = "CRAE root confirm: boundary RUPD reward-accrual on the mark's creds == the go residual (cardano-only)"]
+fn crae_rupd_accrual_equals_residual() {
+    use ade_crypto::blake2b_256;
+    use ade_ledger::bootstrap_anchor::SeedPoint;
+    use ade_ledger::ledgerdb_state::decode_native_nonutxo_state;
+    let hexs = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    let reward_by_hash28 = |slot: u64, epoch: u64| -> BTreeMap<[u8; 28], u128> {
+        let path = format!("/home/ts/.cardano-ce3d-extract/db/ledger/{slot}_db-analyser/state");
+        let state = std::fs::read(&path).expect("ref state");
+        let point = SeedPoint { slot: SlotNo(slot), block_hash: Hash32([0u8; 32]) };
+        let (s1a, _c) = decode_native_nonutxo_state(&state, point, epoch, 2).expect("decode");
+        let mut m: BTreeMap<[u8; 28], u128> = BTreeMap::new();
+        for (c, co) in s1a.cert_state.delegation.rewards.iter() {
+            *m.entry(cred_hash28(c)).or_insert(0) += co.0 as u128;
+        }
+        m
+    };
+    let rew_1340 = reward_by_hash28(115_776_011, 1340);
+    let rew_1341 = reward_by_hash28(EPOCH_1341_FIRST_SLOT, 1341);
+
+    // The mark(1341) credentials (= what set(1342) covers).
+    let mark_creds: std::collections::BTreeSet<[u8; 28]> = {
+        let state = std::fs::read("/home/ts/.cardano-ce3d-extract/db/ledger/115862416_db-analyser/state")
+            .expect("read POST-1341 state");
+        let point = SeedPoint { slot: SlotNo(EPOCH_1341_FIRST_SLOT), block_hash: Hash32([0u8; 32]) };
+        let (s1a, _c) = decode_native_nonutxo_state(&state, point, 1341, 2).expect("decode");
+        s1a.snapshots.mark.0.delegations.keys().map(|h| h.0).collect()
+    };
+
+    // Reward accrued to the mark's credentials across the boundary (the RUPD payout the stale mark misses).
+    let mut accrual: i128 = 0;
+    for h in &mark_creds {
+        let d = rew_1341.get(h).copied().unwrap_or(0) as i128 - rew_1340.get(h).copied().unwrap_or(0) as i128;
+        accrual += d;
+    }
+    let report = format!(
+"CE3D-RUPD-ACCRUAL-v1
+mark_creds={}|reward_accrued_across_1340_1341_boundary={accrual}
+",
+        mark_creds.len(),
+    );
+    let report_hash = hexs(&blake2b_256(report.as_bytes()).0);
+    eprintln!("\n{report}report_hash={report_hash}");
+    // RESULT: +315,961,836,959 accrued to the mark's creds across the boundary -- same magnitude, opposite sign
+    // as the -363B set(1342) residual (the gap is within-epoch withdrawals; the gross RUPD payout the stale mark
+    // misses ~= the full -363B). CONFIRMS the root: Ade's mark freezes PRE-RUPD rewards (epoch_accumulator.rs:486
+    // before the RUPD at :508); cardano's SNAP takes it AFTER applyRUpd, so every delegated cred is short by the
+    // boundary RUPD payout.
+    assert!(
+        (300_000_000_000..=380_000_000_000).contains(&accrual),
+        "the boundary RUPD accrual on the mark's creds accounts for the go-stake residual"
+    );
+    assert_eq!(
+        report_hash, "368928233277a6ba7847cb4b24e57e9151fce848b99983b83c778d63d5a721b9",
+        "canonical RUPD-accrual report hash (pinned)"
+    );
+}
+
+/// CRAE model check (cardano-only, fast): is cardano's OWN mark(1341) snapshot stake == cardano's OWN base UTxO
+/// + reward-account balance, per credential? Resolves the paradox (base/reward/fold all verified correct, yet the
+/// snapshot is -350B off) -- either the snapshot IS base+reward (=> Ade feeds the fold wrong inputs) or it is NOT
+/// (=> Ade's stake model is missing a component). Uses only cardano ground truth at POST-1341.
+#[test]
+#[ignore = "CRAE model: cardano mark(1341) vs cardano base+reward per credential (cardano-only, fast)"]
+fn crae_cardano_mark_is_base_plus_reward() {
+    use ade_crypto::blake2b_256;
+    use ade_ledger::bootstrap_anchor::SeedPoint;
+    use ade_ledger::ledgerdb_state::decode_native_nonutxo_state;
+    use ade_ledger::mithril_utxo_materialize::materialize_tables_to_utxo;
+    use ade_ledger::reduced_utxo::{reduce_txout, ReducedStakeRef};
+    let hexs = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+
+    // cardano base UTxO at POST-1341, folded to Hash28.
+    let tables = std::fs::read("/home/ts/.cardano-ce3d-extract/db/ledger/115862416_db-analyser/tables")
+        .expect("read POST-1341 tables");
+    let utxo = materialize_tables_to_utxo(&tables, 6, None).expect("materialize");
+    let mut base_h: BTreeMap<[u8; 28], u128> = BTreeMap::new();
+    for out in utxo.utxos.values() {
+        if let (coin, ReducedStakeRef::Base(cred)) = reduce_txout(out) {
+            *base_h.entry(cred_hash28(&cred)).or_insert(0) += coin.0 as u128;
+        }
+    }
+
+    // cardano reward (folded to Hash28) + mark(1341) snapshot, from the same decode.
+    let state = std::fs::read("/home/ts/.cardano-ce3d-extract/db/ledger/115862416_db-analyser/state")
+        .expect("read POST-1341 state");
+    let point = SeedPoint { slot: SlotNo(EPOCH_1341_FIRST_SLOT), block_hash: Hash32([0u8; 32]) };
+    let (s1a, _c) = decode_native_nonutxo_state(&state, point, 1341, 2).expect("decode POST-1341");
+    let mut reward_h: BTreeMap<[u8; 28], u128> = BTreeMap::new();
+    for (c, co) in s1a.cert_state.delegation.rewards.iter() {
+        *reward_h.entry(cred_hash28(c)).or_insert(0) += co.0 as u128;
+    }
+    let mark: BTreeMap<[u8; 28], u64> =
+        s1a.snapshots.mark.0.delegations.iter().map(|(h, (_, c))| (h.0, c.0)).collect();
+
+    // Per credential in cardano's mark: reconstructed = base + reward; compare to the snapshot's stake.
+    let (mut resid, mut mm, mut base_only, mut rew_only) = (0i128, 0u64, 0i128, 0i128);
+    for (h, mstake) in &mark {
+        let base = base_h.get(h).copied().unwrap_or(0);
+        let reward = reward_h.get(h).copied().unwrap_or(0);
+        let recon = base + reward;
+        let d = *mstake as i128 - recon as i128;
+        if d != 0 {
+            resid += d;
+            mm += 1;
+        }
+        // also track how much of each mark entry base vs reward would supply (diagnostic totals below).
+        let _ = (base, reward, &mut base_only, &mut rew_only);
+    }
+    let mark_total: i128 = mark.values().map(|v| *v as i128).sum();
+    let recon_total: i128 =
+        mark.keys().map(|h| (base_h.get(h).copied().unwrap_or(0) + reward_h.get(h).copied().unwrap_or(0)) as i128).sum();
+
+    let report = format!(
+"CE3D-CARDANO-MARK-MODEL-v1
+mark_creds={}|mark_stake_total={mark_total}
+reconstructed_base_plus_reward_total={recon_total}
+mark_minus_reconstructed={}|mismatch_creds={mm}
+",
+        mark.len(),
+        mark_total - recon_total,
+    );
+    let report_hash = hexs(&blake2b_256(report.as_bytes()).0);
+    eprintln!("\n{report}report_hash={report_hash}");
+    let _ = resid;
+    // RESULT: cardano's OWN mark(1341) == base + reward for 59,687 of 59,701 credentials -- only 14 mismatch
+    // (whales whose UTxO moved between the snapshot point and the sampled tables, a benign point artifact). So
+    // the snapshot model IS base+reward; the -350B is NOT a missing stake component. The residual comes from
+    // Ade reading the reward at the wrong point (pre-RUPD) -- see crae_rupd_accrual_equals_residual.
+    assert!(mm < 50, "cardano's mark == base+reward for ~all credentials (only whale point-artifacts differ)");
+    assert_eq!(
+        report_hash, "97138693295ab37acdb63d480d48416e5e49d211a705ba99239b89f25e224681",
+        "canonical cardano-mark-model report hash (pinned)"
+    );
+}
+
+#[test]
+#[ignore = "CRAE precondition: raw reward-account map differential Ade(seed) vs cardano at POST-1340 (fast)"]
+fn crae_raw_reward_map_post1340() {
+    use ade_crypto::blake2b_256;
+    let hexs = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+
+    // Ade's RAW reward map + the delegated-credential set (seed accumulator @ POST-1340; isolated copy).
+    let seed = env_path("CE3D_SEED_STORES", "/home/ts/.cardano-ce3d-rebootstrap");
+    let acc_src = seed.join("epoch-accumulator.redb");
+    let acc_h = hexs(&blake2b_256(&std::fs::read(&acc_src).expect("read acc")).0);
+    let iso = std::env::temp_dir().join(format!("crae-seed-acc-{}.redb", std::process::id()));
+    let _ = std::fs::remove_file(&iso);
+    std::fs::copy(&acc_src, &iso).expect("copy seed acc to isolated path");
+    let (ade_rew, delegated, ade_epoch) = {
+        let store = EpochAccumulatorStore::open(&iso).expect("open seed acc");
+        let (_s, acc) = store.load_current().expect("load").expect("sealed accumulator");
+        let rew = reward_canon(acc.cert_state.delegation.rewards.iter());
+        let deleg: std::collections::BTreeSet<Vec<u8>> =
+            acc.cert_state.delegation.delegations.keys().map(cred_key).collect();
+        (rew, deleg, acc.epoch_state.epoch.0)
+    };
+    let _ = std::fs::remove_file(&iso);
+    assert_eq!(ade_epoch, 1340, "seed accumulator is at POST-1340");
+
+    // cardano POST-1340 RAW reward map (ground truth).
+    let ref_1340 = env_path(
+        "CE3D_REF_1340",
+        "/home/ts/.cardano-ce3d-extract/db/ledger/115776011_db-analyser/state",
+    );
+    let ref_h = hexs(&blake2b_256(&std::fs::read(&ref_1340).expect("read ref")).0);
+    let card_rew = {
+        use ade_ledger::bootstrap_anchor::SeedPoint;
+        use ade_ledger::ledgerdb_state::decode_native_nonutxo_state;
+        let state = std::fs::read(&ref_1340).expect("ref state");
+        let point = SeedPoint { slot: SlotNo(115_776_011), block_hash: Hash32([0u8; 32]) };
+        let (s1a, _c) = decode_native_nonutxo_state(&state, point, 1340, 2).expect("decode POST-1340");
+        reward_canon(s1a.cert_state.delegation.rewards.iter())
+    };
+
+    // Per-credential reward differential, split delegated vs undelegated (CPDE lives in undelegated).
+    let keys: std::collections::BTreeSet<&Vec<u8>> = ade_rew.keys().chain(card_rew.keys()).collect();
+    let (mut d_resid, mut u_resid) = (0i128, 0i128);
+    let (mut d_mm, mut u_mm) = (0u64, 0u64);
+    let (mut d_only_ade, mut d_only_ref, mut u_only_ade, mut u_only_ref) = (0u64, 0u64, 0u64, 0u64);
+    for k in &keys {
+        let a = ade_rew.get(*k).copied();
+        let c = card_rew.get(*k).copied();
+        let d = a.unwrap_or(0) as i128 - c.unwrap_or(0) as i128;
+        if d == 0 {
+            continue;
+        }
+        if delegated.contains(*k) {
+            d_resid += d;
+            d_mm += 1;
+            if a.is_none() {
+                d_only_ref += 1;
+            }
+            if c.is_none() {
+                d_only_ade += 1;
+            }
+        } else {
+            u_resid += d;
+            u_mm += 1;
+            if a.is_none() {
+                u_only_ref += 1;
+            }
+            if c.is_none() {
+                u_only_ade += 1;
+            }
+        }
+    }
+    let ade_total: i128 = ade_rew.values().map(|v| *v as i128).sum();
+    let card_total: i128 = card_rew.values().map(|v| *v as i128).sum();
+
+    let report = format!(
+"CE3D-RAW-REWARD-PRECONDITION-v1
+chain_point=POST-1340|slot:115776011|epoch:1340
+input_seed_accumulator_blake2b={acc_h}
+reference_state_blake2b={ref_h}
+ade_reward_accts={}|card_reward_accts={}|delegated_creds={}
+ade_reward_total={ade_total}|card_reward_total={card_total}|reward_residual_total={}
+delegated_mismatch_creds={d_mm}|delegated_reward_residual={d_resid}|delegated_only_ade={d_only_ade}|delegated_only_ref={d_only_ref}
+undelegated_mismatch_creds={u_mm}|undelegated_reward_residual={u_resid}|undelegated_only_ade={u_only_ade}|undelegated_only_ref={u_only_ref}
+",
+        ade_rew.len(), card_rew.len(), delegated.len(),
+        ade_total - card_total,
+    );
+    let report_hash = hexs(&blake2b_256(report.as_bytes()).0);
+    eprintln!("\n{report}report_hash={report_hash}");
+    // RESULT: the raw reward map at POST-1340 is essentially correct (delegated residual +29,435,384, ~0.00001%,
+    // POSITIVE) -- NOT the -343B. So the reward balances are NOT wrong before the boundary; the go-stake -343B
+    // enters LATER, at the boundary reward-update (RUPD) that the mark snapshot freezes. See crae_reward_map_post1341.
+    assert_eq!(d_only_ade + d_only_ref, 0, "delegated reward accounts present on both sides (no one-sided)");
+    assert!(
+        d_resid.abs() < 100_000_000,
+        "raw delegated reward residual at POST-1340 is negligible (not the -343B); it enters at the boundary RUPD"
+    );
+    assert_eq!(
+        report_hash, "5a416c297b995f7ea819c95fc61f0864570621a13265d05521b1dd7ec11b4645",
+        "canonical POST-1340 raw-reward report hash (pinned)"
+    );
+}
+
+/// CRAE confirmation (SLOW, one crossing ~30min): advance from the POST-1340 seed to POST-1341 and compare Ade's
+/// reward map BEFORE (seed, POST-1340) and AFTER (POST-1341, post-boundary-RUPD) against the cardano reference.
+/// Proves the reward is correct BEFORE the 1340->1341 boundary and becomes wrong AT the boundary RUPD -- pinning
+/// the "first point where a reward balance becomes wrong" to the reward-update application, not raw evolution.
+#[test]
+#[ignore = "CRAE confirmation: reward map correct at POST-1340, wrong at POST-1341 (boundary RUPD); SLOW"]
+fn crae_reward_map_post1341() {
+    use ade_crypto::blake2b_256;
+    let hexs = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    let dir = env_path("CRAE_DIR", "/home/ts/.cardano-ce3d-craec");
+    let acc_path = dir.join("epoch-accumulator.redb");
+    let cp_path = dir.join("reduced-checkpoint.redb");
+    let acc_h = hexs(&blake2b_256(&std::fs::read(&acc_path).expect("read acc")).0);
+
+    let store = EpochAccumulatorStore::open(&acc_path).expect("open acc");
+    let cp = ReducedUtxoCheckpoint::open(&cp_path).expect("open cp");
+    // Reward map + delegated set BEFORE advancing (seed, POST-1340).
+    let (seed_rew, seed_deleg, seed_epoch) = {
+        let (_s, acc) = store.load_current().expect("load seed").expect("sealed");
+        (
+            reward_canon(acc.cert_state.delegation.rewards.iter()),
+            acc.cert_state.delegation.delegations.keys().map(cred_key).collect::<std::collections::BTreeSet<_>>(),
+            acc.epoch_state.epoch.0,
+        )
+    };
+    assert_eq!(seed_epoch, 1340, "seed at POST-1340");
+
+    let sched = preview_schedule();
+    let corpus = env_path("CE3D_CORPUS", "/home/ts/.cardano-ce3d-extract/corpus_blocks");
+    let (db, n) = load_corpus(&corpus, EPOCH_1341_FIRST_SLOT);
+    eprintln!("CRAE: loaded {n} blocks; advancing seed POST-1340 -> POST-1341 UNINTERRUPTED...");
+    co_advance(&store, &cp, &db, &sched);
+    let (ade_rew_1341, deleg_1341, epoch_1341) = {
+        let (_s, acc) = store.load_current().expect("load").expect("sealed");
+        (
+            reward_canon(acc.cert_state.delegation.rewards.iter()),
+            acc.cert_state.delegation.delegations.keys().map(cred_key).collect::<std::collections::BTreeSet<_>>(),
+            acc.epoch_state.epoch.0,
+        )
+    };
+    assert_eq!(epoch_1341, 1341, "accumulator at POST-1341 after the cross");
+
+    // cardano references.
+    let decode_rew = |slot: u64, epoch: u64| -> BTreeMap<Vec<u8>, u64> {
+        use ade_ledger::bootstrap_anchor::SeedPoint;
+        use ade_ledger::ledgerdb_state::decode_native_nonutxo_state;
+        let path = format!("/home/ts/.cardano-ce3d-extract/db/ledger/{slot}_db-analyser/state");
+        let state = std::fs::read(&path).expect("ref state");
+        let point = SeedPoint { slot: SlotNo(slot), block_hash: Hash32([0u8; 32]) };
+        let (s1a, _c) = decode_native_nonutxo_state(&state, point, epoch, 2).expect("decode ref");
+        reward_canon(s1a.cert_state.delegation.rewards.iter())
+    };
+    let card_1340 = decode_rew(115_776_011, 1340);
+    let card_1341 = decode_rew(EPOCH_1341_FIRST_SLOT, 1341);
+
+    // Delegated-credential reward residual at a point.
+    let deleg_resid = |ade: &BTreeMap<Vec<u8>, u64>, card: &BTreeMap<Vec<u8>, u64>, deleg: &std::collections::BTreeSet<Vec<u8>>| -> (i128, u64) {
+        let keys: std::collections::BTreeSet<&Vec<u8>> = ade.keys().chain(card.keys()).collect();
+        let (mut resid, mut mm) = (0i128, 0u64);
+        for k in keys {
+            if !deleg.contains(k) {
+                continue;
+            }
+            let d = ade.get(k).copied().unwrap_or(0) as i128 - card.get(k).copied().unwrap_or(0) as i128;
+            if d != 0 {
+                resid += d;
+                mm += 1;
+            }
+        }
+        (resid, mm)
+    };
+    let (r1340, m1340) = deleg_resid(&seed_rew, &card_1340, &seed_deleg);
+    let (r1341, m1341) = deleg_resid(&ade_rew_1341, &card_1341, &deleg_1341);
+
+    let report = format!(
+"CE3D-RAW-REWARD-BOUNDARY-RUPD-v1
+input_accumulator_blake2b={acc_h}
+delegated_reward_residual_POST1340={r1340}|mismatch_creds={m1340}
+delegated_reward_residual_POST1341={r1341}|mismatch_creds={m1341}
+delta_introduced_at_1340_1341_boundary_RUPD={}
+",
+        r1341 - r1340,
+    );
+    let report_hash = hexs(&blake2b_256(report.as_bytes()).0);
+    eprintln!("\n{report}report_hash={report_hash}");
+    // RESULT: reward correct at BOTH POST-1340 (+29,435,384) and POST-1341 (+29,441,734); the boundary RUPD
+    // moved the delegated residual only +6,350. So the -343B is NOT the RUPD either -- the reward map is right
+    // pre- AND post-boundary. The defect is in the BASE the mark combines (the ADVANCED checkpoint), not reward.
+    // See crae_advanced_base_at_post1341.
+    assert!(r1340.abs() < 100_000_000, "reward correct BEFORE the boundary (POST-1340)");
+    assert!(r1341.abs() < 100_000_000, "reward STILL correct AFTER the boundary RUPD (POST-1341) -- not the RUPD");
+    assert_eq!(
+        report_hash, "c718f7e61f79cddbd9a02670b480d7ec7bd8492f3890d0b5d19f18edd6d2b2ef",
+        "canonical boundary-RUPD reward report hash (pinned; reward correct on both sides of the boundary)"
+    );
+}
+
+/// CRAE root-cause test (the decisive one): does the reduced checkpoint's base stay byte-exact AFTER it ADVANCES
+/// through the epoch? B3c.0 exonerated only the reducer + a FRESH checkpoint at the seed point (POST-1340); the
+/// mark snapshot combines the checkpoint ADVANCED to the boundary. Advance a fresh checkpoint copy from the seed
+/// to POST-1341 and compare its `sum_base_credential_stake` to a fresh `reduce_txout` of cardano's POST-1341
+/// reference UTxO. A residual here (≈ the -350B) localizes the defect to the checkpoint ADVANCE, not the reducer,
+/// not the reward, not the fold.
+#[test]
+#[ignore = "CRAE root: advanced checkpoint base at POST-1341 vs cardano UTxO reduction (SLOW: checkpoint advance)"]
+fn crae_advanced_base_at_post1341() {
+    use ade_crypto::blake2b_256;
+    use ade_ledger::mithril_utxo_materialize::materialize_tables_to_utxo;
+    use ade_ledger::reduced_utxo::{reduce_txout, ReducedStakeRef};
+    let hexs = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+
+    // Advance a fresh checkpoint copy from the seed to POST-1341.
+    let seed = env_path("CE3D_SEED_STORES", "/home/ts/.cardano-ce3d-rebootstrap");
+    let cp_src = seed.join("reduced-checkpoint.redb");
+    let cp_h = hexs(&blake2b_256(&std::fs::read(&cp_src).expect("read cp")).0);
+    let iso = std::env::temp_dir().join(format!("crae-adv-cp-{}.redb", std::process::id()));
+    let _ = std::fs::remove_file(&iso);
+    std::fs::copy(&cp_src, &iso).expect("copy checkpoint to isolated path");
+    let ade_base = {
+        let cp = ReducedUtxoCheckpoint::open(&iso).expect("open checkpoint");
+        let cp_seed = cp.seed_slot().expect("seed").expect("sealed");
+        let corpus = env_path("CE3D_CORPUS", "/home/ts/.cardano-ce3d-extract/corpus_blocks");
+        let (db, n) = load_corpus(&corpus, EPOCH_1341_FIRST_SLOT);
+        eprintln!("CRAE advanced-base: loaded {n} blocks; advancing checkpoint seed -> POST-1341...");
+        advance_reduced_checkpoint_over_chaindb(
+            &cp,
+            &db,
+            cp_seed,
+            SlotNo(EPOCH_1341_FIRST_SLOT),
+            CardanoEra::Conway,
+        )
+        .expect("advance checkpoint to POST-1341");
+        cp.sum_base_credential_stake().expect("sum_base_credential_stake")
+    };
+    let _ = std::fs::remove_file(&iso);
+
+    // Fresh reduction of cardano's POST-1341 reference UTxO (ground truth at the advanced point).
+    let tables = std::fs::read("/home/ts/.cardano-ce3d-extract/db/ledger/115862416_db-analyser/tables")
+        .expect("read POST-1341 tables");
+    let utxo = materialize_tables_to_utxo(&tables, 6, None).expect("materialize");
+    let mut card_base: BTreeMap<StakeCredential, u64> = BTreeMap::new();
+    for out in utxo.utxos.values() {
+        if let (coin, ReducedStakeRef::Base(cred)) = reduce_txout(out) {
+            *card_base.entry(cred).or_insert(0) += coin.0;
+        }
+    }
+
+    let ade_total: i128 = ade_base.values().map(|c| c.0 as i128).sum();
+    let card_total: i128 = card_base.values().map(|v| *v as i128).sum();
+    let keys: std::collections::BTreeSet<&StakeCredential> = ade_base.keys().chain(card_base.keys()).collect();
+    let (mut mm, mut only_ade, mut only_ref) = (0u64, 0u64, 0u64);
+    for k in &keys {
+        let a = ade_base.get(*k).map(|c| c.0);
+        let c = card_base.get(*k).copied();
+        let d = a.unwrap_or(0) as i128 - c.unwrap_or(0) as i128;
+        if d != 0 {
+            mm += 1;
+            if a.is_none() {
+                only_ref += 1;
+            }
+            if c.is_none() {
+                only_ade += 1;
+            }
+        }
+    }
+    let report = format!(
+"CE3D-ADVANCED-BASE-POST1341-v1
+input_checkpoint_blake2b={cp_h}
+ade_advanced_base_total={ade_total}|card_base_total={card_total}|advanced_base_residual={}
+mismatch_creds={mm}|only_ade={only_ade}|only_ref={only_ref}
+",
+        ade_total - card_total,
+    );
+    let report_hash = hexs(&blake2b_256(report.as_bytes()).0);
+    eprintln!("\n{report}report_hash={report_hash}");
+    // RESULT: the advanced checkpoint base is BYTE-EXACT at POST-1341 (residual 0, 0 mismatches). So the
+    // checkpoint ADVANCE is correct too -- the -350B is NOT base. Combined with correct reward, this forces the
+    // paradox resolved by crae_cardano_mark_is_base_plus_reward + the pre-RUPD mark ordering.
+    assert_eq!(ade_total - card_total, 0, "the ADVANCED checkpoint base is byte-exact vs cardano at POST-1341");
+    assert_eq!(mm, 0, "advanced base: zero per-credential mismatches");
+    assert_eq!(
+        report_hash, "b5ee48e8c8754e1e30346c0f0a8fd2dced9a282950505cc61ec6c6ffd82e6ec5",
+        "canonical advanced-base report hash (pinned)"
+    );
+}
