@@ -583,6 +583,12 @@ pub enum GovernanceTerminal {
     DormantRequired,
     /// A refundable proposal's representation is malformed.
     Malformed { action_id: GovActionId, detail: MalformedGovDetail },
+    /// A caller requested a FULL epoch-boundary result/verdict (rewards, pots, mark/set/go, governance) but the
+    /// boundary crossed in the REDUCED-VALIDATION plane (`track_utxo=false`, no `BoundaryBaseStake`). The reduced
+    /// plane produced a `reduced_boundary::ReducedBoundaryProjection` (`StructuralValidity` only) and MUST NOT be
+    /// promoted to full authority merely because it crossed without error. Fail-closed, structured — never a
+    /// silent success (REDUCED-VALIDATION-BOUNDARY-PLANE I-RVB-3).
+    FullBoundaryStateRequired { boundary_point: ade_types::SlotNo },
 }
 
 /// Canonical inputs to [`plan_conway_governance_epoch`] — all borrows, pure (no I/O, no ledger/accumulator handle).
