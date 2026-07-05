@@ -578,3 +578,328 @@ ade_reserves={}|card_reserves={}|reserves_residual={}
         "canonical adjudication report hash (pinned; runs A+B byte-identical from isolated copies)"
     );
 }
+
+// ===========================================================================
+// CE3D-GO-STAKE-DERIVATION-LOCALIZATION (GREEN / evidence; NO BLUE change)
+//
+// Localizes the REAL -343,260,172,883 go-stake residual at the CREDENTIAL level,
+// across the mark/set/go snapshot phases. Base UTxO is already EXONERATED (B3c.0);
+// this reads the accumulator's existing `snapshots.*.delegations` (per-credential
+// Hash28 -> (PoolId, Coin)) and the cardano decode as-is. See
+// docs/clusters/CE3D-GO-STAKE-DERIVATION-LOCALIZATION/.
+// ===========================================================================
+
+use ade_ledger::epoch::StakeSnapshot;
+
+/// Per-credential delegations as canonical bytes: Hash28 -> (PoolId bytes, coin). The go-snapshot key is
+/// Hash28 (discriminant-stripped) on both the accumulator and the cardano decode.
+fn deleg_canon(s: &StakeSnapshot) -> BTreeMap<[u8; 28], ([u8; 28], u64)> {
+    s.delegations.iter().map(|(h, (pid, c))| (h.0, ((pid.0).0, c.0))).collect()
+}
+
+/// pool_stakes as canonical bytes.
+fn pool_canon(s: &StakeSnapshot) -> BTreeMap<[u8; 28], u128> {
+    s.pool_stakes.iter().map(|(pid, c)| ((pid.0).0, c.0 as u128)).collect()
+}
+
+/// Fold per-credential delegations back into per-pool totals.
+fn fold_delegations(d: &BTreeMap<[u8; 28], ([u8; 28], u64)>) -> BTreeMap<[u8; 28], u128> {
+    let mut m: BTreeMap<[u8; 28], u128> = BTreeMap::new();
+    for (_, (pid, c)) in d {
+        *m.entry(*pid).or_insert(0) += *c as u128;
+    }
+    m
+}
+
+/// pool_stakes == fold(delegations), value-wise (absent == 0). A false here would be a folding defect.
+fn fold_ok(s: &StakeSnapshot) -> bool {
+    let declared = pool_canon(s);
+    let folded = fold_delegations(&deleg_canon(s));
+    let keys: std::collections::BTreeSet<&[u8; 28]> = declared.keys().chain(folded.keys()).collect();
+    keys.iter().all(|k| declared.get(*k).copied().unwrap_or(0) == folded.get(*k).copied().unwrap_or(0))
+}
+
+/// Closed-cause buckets for the per-credential go-phase differential: (count, summed delta).
+#[derive(Default)]
+struct GoBuckets {
+    only_ade: (u64, i128),
+    only_ref: (u64, i128),
+    target_mismatch: (u64, i128),
+    value_delta: (u64, i128),
+    matched: u64,
+}
+
+/// Classify every credential of the union into exactly one closed cause. The summed deltas conserve:
+/// Σ(only_ade + only_ref + target_mismatch + value_delta) == Σ_cred (ade_coin - ref_coin) == go residual.
+fn classify_go(
+    ade: &BTreeMap<[u8; 28], ([u8; 28], u64)>,
+    card: &BTreeMap<[u8; 28], ([u8; 28], u64)>,
+) -> GoBuckets {
+    let mut b = GoBuckets::default();
+    let keys: std::collections::BTreeSet<&[u8; 28]> = ade.keys().chain(card.keys()).collect();
+    for k in keys {
+        match (ade.get(k), card.get(k)) {
+            (Some((ap, ac)), Some((rp, rc))) => {
+                let d = *ac as i128 - *rc as i128;
+                if ap == rp && ac == rc {
+                    b.matched += 1;
+                } else if ap == rp {
+                    b.value_delta.0 += 1;
+                    b.value_delta.1 += d;
+                } else {
+                    b.target_mismatch.0 += 1;
+                    b.target_mismatch.1 += d;
+                }
+            }
+            (Some((_, ac)), None) => {
+                b.only_ade.0 += 1;
+                b.only_ade.1 += *ac as i128;
+            }
+            (None, Some((_, rc))) => {
+                b.only_ref.0 += 1;
+                b.only_ref.1 -= *rc as i128;
+            }
+            (None, None) => {}
+        }
+    }
+    b
+}
+
+/// Decode a cardano POST reference and return the three phases' per-credential delegations + fold-ok flags.
+fn ref_phase_delegations(
+    state_path: &Path,
+    slot: u64,
+    epoch: u64,
+) -> [(BTreeMap<[u8; 28], ([u8; 28], u64)>, bool, usize); 3] {
+    use ade_ledger::bootstrap_anchor::SeedPoint;
+    use ade_ledger::ledgerdb_state::decode_native_nonutxo_state;
+    let state = std::fs::read(state_path).expect("ref state");
+    let point = SeedPoint { slot: SlotNo(slot), block_hash: Hash32([0u8; 32]) };
+    let (s1a, _c) = decode_native_nonutxo_state(&state, point, epoch, 2).expect("decode ref");
+    [&s1a.snapshots.mark.0, &s1a.snapshots.set.0, &s1a.snapshots.go.0]
+        .map(|snap| (deleg_canon(snap), fold_ok(snap), snap.pool_stakes.len()))
+}
+
+/// I-GSD-5 base-zero gate: at POST-1340 the reduced checkpoint's per-credential base equals a fresh
+/// `reduce_txout` of cardano's reference UTxO byte-for-byte (0 mismatches) — the B3c.0 proof, re-asserted so
+/// this cluster is self-contained. Establishes the base-UTxO pipeline contributes zero error.
+#[test]
+#[ignore = "GSD base-zero: POST-1340 checkpoint == reduction (materializes tables; ~2min)"]
+fn gsd_base_zero_at_post1340() {
+    use ade_ledger::mithril_utxo_materialize::materialize_tables_to_utxo;
+    use ade_ledger::reduced_utxo::{reduce_txout, ReducedStakeRef};
+    let tables_path = env_path(
+        "CE3D_TABLES_1340",
+        "/home/ts/.cardano-ce3d-extract/db/ledger/115776011_db-analyser/tables",
+    );
+    let tables = std::fs::read(&tables_path).expect("read POST-1340 tables");
+    let utxo = materialize_tables_to_utxo(&tables, 6, None).expect("materialize");
+    let mut reduc: BTreeMap<StakeCredential, u64> = BTreeMap::new();
+    for out in utxo.utxos.values() {
+        if let (coin, ReducedStakeRef::Base(cred)) = reduce_txout(out) {
+            *reduc.entry(cred).or_insert(0) += coin.0;
+        }
+    }
+    let seed_cp =
+        env_path("CE3D_SEED_STORES", "/home/ts/.cardano-ce3d-rebootstrap").join("reduced-checkpoint.redb");
+    let iso = std::env::temp_dir().join(format!("gsd-base-cp-{}.redb", std::process::id()));
+    let _ = std::fs::remove_file(&iso);
+    std::fs::copy(&seed_cp, &iso).expect("copy checkpoint to isolated path");
+    let cp = ReducedUtxoCheckpoint::open(&iso).expect("open isolated checkpoint");
+    let chk = cp.sum_base_credential_stake().expect("sum_base_credential_stake");
+    let reduc_total: u128 = reduc.values().map(|v| *v as u128).sum();
+    let chk_total: u128 = chk.values().map(|c| c.0 as u128).sum();
+    let keys: std::collections::BTreeSet<&StakeCredential> = reduc.keys().chain(chk.keys()).collect();
+    let mismatches = keys
+        .iter()
+        .filter(|k| reduc.get(**k).copied().unwrap_or(0) != chk.get(**k).map(|x| x.0).unwrap_or(0))
+        .count();
+    drop(cp);
+    let _ = std::fs::remove_file(&iso);
+    eprintln!(
+        "GSD base-zero: reduction_total={reduc_total} checkpoint_total={chk_total} creds={} mismatches={mismatches}",
+        reduc.len()
+    );
+    assert_eq!(reduc_total, chk_total, "base-UTxO aggregate byte-exact");
+    assert_eq!(mismatches, 0, "base-UTxO zero: checkpoint == reduction for EVERY credential");
+}
+
+/// The credential-level go-phase localization (fast, DOUBLED deliverable). `go(1342)` is the seed's imported
+/// `mark` rotated forward twice (`rotate_snapshots` is a pure clone — proven byte-for-byte in
+/// `gsd_provenance_and_live_derivation`), so this reads the seed accumulator's mark directly and diffs it
+/// against cardano's decoded `go(1342)`, per credential, classifying every delta into the closed cause set.
+#[test]
+#[ignore = "GSD: per-credential go-phase differential + classification (fast; run twice byte-identical)"]
+fn gsd_go_phase_credential_differential() {
+    use ade_crypto::blake2b_256;
+    let hexs = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+
+    // Ade go(1342) == seed accumulator's mark (ISOLATED copy, open is read-write).
+    let seed = env_path("CE3D_SEED_STORES", "/home/ts/.cardano-ce3d-rebootstrap");
+    let acc_src = seed.join("epoch-accumulator.redb");
+    let acc_h = hexs(&blake2b_256(&std::fs::read(&acc_src).expect("read acc")).0);
+    let iso = std::env::temp_dir().join(format!("gsd-seed-acc-{}.redb", std::process::id()));
+    let _ = std::fs::remove_file(&iso);
+    std::fs::copy(&acc_src, &iso).expect("copy seed acc to isolated path");
+    let (ade_go, ade_fold_ok, ade_pools) = {
+        let store = EpochAccumulatorStore::open(&iso).expect("open isolated seed acc");
+        let (_slot, acc) = store.load_current().expect("load").expect("sealed accumulator");
+        let m = &acc.epoch_state.snapshots.mark.0;
+        (deleg_canon(m), fold_ok(m), m.pool_stakes.len())
+    };
+    let _ = std::fs::remove_file(&iso);
+
+    // cardano POST-1342 go snapshot.
+    let ref_1342 =
+        env_path("CE3D_REF_1342", "/home/ts/.cardano-ce3d-extract/db/ledger/115948834_db-analyser/state");
+    let ref_h = hexs(&blake2b_256(&std::fs::read(&ref_1342).expect("read ref")).0);
+    let [_, _, (card_go, card_fold_ok, card_pools)] =
+        ref_phase_delegations(&ref_1342, EPOCH_1342_FIRST_SLOT, 1342);
+
+    let b = classify_go(&ade_go, &card_go);
+    let ade_total: i128 = ade_go.values().map(|(_, c)| *c as i128).sum();
+    let card_total: i128 = card_go.values().map(|(_, c)| *c as i128).sum();
+    let residual = ade_total - card_total;
+    let classified = b.only_ade.1 + b.only_ref.1 + b.target_mismatch.1 + b.value_delta.1;
+
+    let report = format!(
+"CE3D-GO-STAKE-DERIVATION-LOCALIZATION-v1
+chain_point=slot:{}|epoch:1342
+ade_go_source=seed_mark(=go1342_by_rotation)
+input_seed_accumulator_blake2b={acc_h}
+reference_state_blake2b={ref_h}
+ade_go_creds={}|card_go_creds={}
+ade_go_pools={ade_pools}|card_go_pools={card_pools}
+ade_go_total={ade_total}|card_go_total={card_total}|go_residual={residual}
+only_ade_count={}|only_ade_sum={}
+only_ref_count={}|only_ref_sum={}
+target_mismatch_count={}|target_mismatch_sum={}
+value_delta_count={}|value_delta_sum={}
+matched={}
+classified_sum={classified}
+fold_ok_ade={ade_fold_ok}|fold_ok_card={card_fold_ok}
+",
+        EPOCH_1342_FIRST_SLOT,
+        ade_go.len(), card_go.len(),
+        b.only_ade.0, b.only_ade.1,
+        b.only_ref.0, b.only_ref.1,
+        b.target_mismatch.0, b.target_mismatch.1,
+        b.value_delta.0, b.value_delta.1,
+        b.matched,
+    );
+    let report_hash = hexs(&blake2b_256(report.as_bytes()).0);
+    eprintln!("\n{report}report_hash={report_hash}");
+
+    assert_eq!(residual, -343_260_172_883, "go(1342) residual reproduces exactly (seed mark vs cardano go)");
+    assert_eq!(classified, -343_260_172_883, "the closed-cause buckets sum to the residual exactly");
+    assert!(ade_fold_ok, "Ade go: pool_stakes == fold(delegations) (no folding defect)");
+    assert!(card_fold_ok, "cardano go: pool_stakes == fold(delegations)");
+    // Pinned localization (doubled byte-identical, independent processes): the ENTIRE residual is a
+    // per-credential stake-VALUE difference (same credential, same delegation target). Base UTxO is exonerated
+    // (gsd_base_zero_at_post1340), so the non-base component is the reward-account contribution. It is NOT
+    // delegation presence, NOT delegation target, NOT folding.
+    assert_eq!(b.only_ade.1, 0, "only-Ade credentials carry zero stake (phantom, e.g. the 32 phantom pools)");
+    assert_eq!(b.only_ref.0, 0, "cardano's go has no credential absent from Ade's go");
+    assert_eq!(b.target_mismatch.0, 0, "no delegation-target mismatch");
+    assert_eq!(b.value_delta.1, -343_260_172_883, "the entire residual is per-credential stake value (reward component)");
+    assert_eq!(
+        report_hash, "1e07cc50ee1bf14b3c5520fc3ba68694e969fdad7a366b5824f9f18c7492d385",
+        "canonical localization report hash (pinned; doubled byte-identical from independent processes)"
+    );
+}
+
+/// Provenance + live-derivation proof (SLOW: advances to POST-1342, ~60min). Proves `go(1342).delegations`
+/// equals the seed's imported `mark` byte-for-byte (so the fast test's seed-mark read IS go(1342), not a
+/// substitute), and emits the FRESH `mark(1342)`/`set(1342)` per-credential differential vs cardano — which
+/// localizes whether the live derivation shares the go residual or is clean.
+#[test]
+#[ignore = "GSD provenance: advance to POST-1342, prove go==seed mark + fresh mark/set differential (SLOW)"]
+fn gsd_provenance_and_live_derivation() {
+    use ade_crypto::blake2b_256;
+    let hexs = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    let dir = env_path("GSD_DIR", "/home/ts/.cardano-ce3d-goderiv-a");
+    let acc_path = dir.join("epoch-accumulator.redb");
+    let cp_path = dir.join("reduced-checkpoint.redb");
+    let acc_h = hexs(&blake2b_256(&std::fs::read(&acc_path).expect("read acc")).0);
+    let cp_h = hexs(&blake2b_256(&std::fs::read(&cp_path).expect("read cp")).0);
+
+    let store = EpochAccumulatorStore::open(&acc_path).expect("open acc");
+    let cp = ReducedUtxoCheckpoint::open(&cp_path).expect("open cp");
+    // Capture the seed's imported mark BEFORE advancing (same store, single open).
+    let seed_mark = {
+        let (_s0, acc0) = store.load_current().expect("load seed").expect("sealed");
+        deleg_canon(&acc0.epoch_state.snapshots.mark.0)
+    };
+
+    let sched = preview_schedule();
+    let corpus = env_path("CE3D_CORPUS", "/home/ts/.cardano-ce3d-extract/corpus_blocks");
+    let (db, n) = load_corpus(&corpus, EPOCH_1342_FIRST_SLOT);
+    eprintln!("GSD provenance: loaded {n} corpus blocks; advancing to POST-1342 UNINTERRUPTED...");
+    co_advance(&store, &cp, &db, &sched);
+
+    let (_s1, acc) = store.load_current().expect("load").expect("sealed accumulator");
+    let go_1342 = deleg_canon(&acc.epoch_state.snapshots.go.0);
+    let mark_1342 = deleg_canon(&acc.epoch_state.snapshots.mark.0);
+    let set_1342 = deleg_canon(&acc.epoch_state.snapshots.set.0);
+    assert_eq!(acc.epoch_state.epoch.0, 1342, "accumulator at epoch 1342");
+
+    // PROVE: go(1342) is the seed's imported mark rotated forward (rotate_snapshots is a pure clone).
+    let go_is_seed_mark = go_1342 == seed_mark;
+
+    // cardano POST-1342 mark/set/go.
+    let ref_1342 =
+        env_path("CE3D_REF_1342", "/home/ts/.cardano-ce3d-extract/db/ledger/115948834_db-analyser/state");
+    let ref_h = hexs(&blake2b_256(&std::fs::read(&ref_1342).expect("read ref")).0);
+    let [(card_mark, _, _), (card_set, _, _), (card_go, _, _)] =
+        ref_phase_delegations(&ref_1342, EPOCH_1342_FIRST_SLOT, 1342);
+
+    // Per-phase residual = Σ_cred (ade_coin - ref_coin) over the union.
+    let phase_residual = |ade: &BTreeMap<[u8; 28], ([u8; 28], u64)>, card: &BTreeMap<[u8; 28], ([u8; 28], u64)>| -> i128 {
+        let at: i128 = ade.values().map(|(_, c)| *c as i128).sum();
+        let ct: i128 = card.values().map(|(_, c)| *c as i128).sum();
+        at - ct
+    };
+    let bm = classify_go(&mark_1342, &card_mark);
+    let bs = classify_go(&set_1342, &card_set);
+    let bg = classify_go(&go_1342, &card_go);
+
+    let report = format!(
+"CE3D-GO-STAKE-DERIVATION-PROVENANCE-v1
+chain_point=slot:{}|epoch:1342
+input_accumulator_blake2b={acc_h}
+input_checkpoint_blake2b={cp_h}
+reference_state_blake2b={ref_h}
+go_equals_seed_mark={go_is_seed_mark}
+mark_residual={}|mark_only_ade={}|mark_only_ref={}|mark_target_mismatch={}|mark_value_delta={}
+set_residual={}|set_only_ade={}|set_only_ref={}|set_target_mismatch={}|set_value_delta={}
+go_residual={}|go_only_ade={}|go_only_ref={}|go_target_mismatch={}|go_value_delta={}
+",
+        EPOCH_1342_FIRST_SLOT,
+        phase_residual(&mark_1342, &card_mark), bm.only_ade.1, bm.only_ref.1, bm.target_mismatch.1, bm.value_delta.1,
+        phase_residual(&set_1342, &card_set), bs.only_ade.1, bs.only_ref.1, bs.target_mismatch.1, bs.value_delta.1,
+        phase_residual(&go_1342, &card_go), bg.only_ade.1, bg.only_ref.1, bg.target_mismatch.1, bg.value_delta.1,
+    );
+    let report_hash = hexs(&blake2b_256(report.as_bytes()).0);
+    eprintln!("\n{report}report_hash={report_hash}");
+
+    assert!(go_is_seed_mark, "go(1342).delegations == the seed's imported mark (pure-clone rotation)");
+    assert_eq!(
+        phase_residual(&go_1342, &card_go),
+        -343_260_172_883,
+        "the advanced go(1342) residual matches the pinned -343B"
+    );
+    // The FRESH live-derived phases ALSO diverge as pure value_delta (same cred, same pool) => the
+    // reward-contribution discrepancy is in the LIVE derivation, not confined to the seed's imported go.
+    // set(1342) is POST-1340-derived, whose base is exonerated (gsd_base_zero_at_post1340), so its value_delta
+    // is unambiguously the reward-account contribution.
+    assert_eq!(phase_residual(&mark_1342, &card_mark), -355_446_908_982, "fresh mark(1342) residual (POST-1341)");
+    assert_eq!(phase_residual(&set_1342, &card_set), -363_268_230_670, "fresh set(1342) residual (POST-1340)");
+    assert_eq!(bm.value_delta.1, -355_446_908_982, "mark(1342): the residual is pure per-credential value_delta");
+    assert_eq!(bs.value_delta.1, -363_268_230_670, "set(1342): the residual is pure per-credential value_delta");
+    assert_eq!(bm.only_ref.1 + bm.target_mismatch.1, 0, "mark(1342): not delegation presence/target");
+    assert_eq!(bs.only_ref.1 + bs.target_mismatch.1, 0, "set(1342): not delegation presence/target");
+    assert_eq!(
+        report_hash, "8b254305d5028ce23603ee2550d2f057c1ea4a042b324559ea0ed8b838a96b29",
+        "canonical provenance report hash (pinned; deterministic advance from the isolated seed copy)"
+    );
+}
