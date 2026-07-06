@@ -2862,6 +2862,41 @@ mod cert_state_dispatch {
         );
     }
 
+    /// REDUCED-VALIDATION-BOUNDARY-PLANE P3 (recovery/replay proof): a reduced follower's post-boundary state
+    /// persists and RECOVERS byte-identically as `ReducedUnavailable` — a warm restart / WAL replay can never
+    /// rehydrate it into a fabricated authoritative snapshot — and its fingerprint can never collide with a full
+    /// authoritative state at the same point.
+    #[test]
+    fn reduced_boundary_crossing_is_replay_safe_and_fingerprint_distinct() {
+        use super::apply_reduced_epoch_boundary;
+        use crate::snapshot::epoch_state::{decode_epoch_state, encode_epoch_state};
+        use crate::state::LedgerState;
+        use ade_types::EpochNo;
+
+        let mut state = LedgerState::new(CardanoEra::Conway);
+        state.epoch_state.epoch = EpochNo(1340);
+        let reduced = apply_reduced_epoch_boundary(&state, EpochNo(1341));
+        assert!(reduced.epoch_state.snapshots.is_reduced(), "crossed reduced (no mark)");
+
+        // Persist + recover: byte-identical, still ReducedUnavailable (never rehydrated as a fabricated snapshot).
+        let bytes = encode_epoch_state(&reduced.epoch_state);
+        let recovered = decode_epoch_state(&bytes).expect("decode reduced epoch_state");
+        assert!(
+            recovered.snapshots.is_reduced(),
+            "recovery keeps ReducedUnavailable — a reduced follower never warm-starts into fake authority",
+        );
+        assert_eq!(encode_epoch_state(&recovered), bytes, "reduced epoch_state replays byte-identically");
+
+        // Fingerprint distinct from a FULL authoritative epoch_state at the SAME point (only the snapshots differ).
+        let mut full_at_1341 = reduced.clone();
+        full_at_1341.epoch_state.snapshots = crate::epoch::EpochStakeSnapshots::new(); // Authoritative(empty)
+        assert_ne!(
+            crate::fingerprint::fingerprint(&reduced),
+            crate::fingerprint::fingerprint(&full_at_1341),
+            "the reduced (ReducedUnavailable) state fingerprints distinctly from full authority at the same point",
+        );
+    }
+
     #[test]
     fn era_dispatch_conway_accumulates_via_conway_path() {
         let bytes = cert_array(reg_cert(1));
