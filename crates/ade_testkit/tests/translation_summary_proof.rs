@@ -175,7 +175,7 @@ fn make_shelley_state_at_hfc() -> LedgerState {
         epoch_state: EpochState {
             epoch: EpochNo(236),
             slot: SlotNo(16_588_800),
-            snapshots: ade_ledger::epoch::SnapshotState::new(),
+            snapshots: ade_ledger::epoch::EpochStakeSnapshots::new(),
             reserves: Coin(13_112_607_632_000_000),
             treasury: Coin(217_021_606_000_000),
             block_production: std::collections::BTreeMap::new(),
@@ -208,9 +208,9 @@ fn make_shelley_state_at_hfc() -> LedgerState {
         },
         era: CardanoEra::Shelley,
         track_utxo: false,
-        cert_state: ade_ledger::delegation::CertState::new(),
+        cert_state: ade_ledger::state::CertStateProjection::Authoritative(ade_ledger::delegation::CertState::new()),
         max_lovelace_supply: 45_000_000_000_000_000,
-        gov_state: None,
+        gov_state: ade_ledger::state::GovStateProjection::Authoritative(None),
         conway_deposit_params: None,
     }
 }

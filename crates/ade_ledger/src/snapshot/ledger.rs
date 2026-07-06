@@ -60,11 +60,22 @@ pub fn encode_ledger_state(state: &LedgerState) -> Result<Vec<u8>, SnapshotEncod
     write_uint_canonical(&mut buf, state.era as u64);
     write_uint_canonical(&mut buf, state.max_lovelace_supply);
     write_bool(&mut buf, state.track_utxo);
+    // A reduced follower's cert/gov is `ReducedUnavailable` — NOT serializable as a normal full-authority
+    // snapshot (fail closed rather than fabricate a normal CertState/gov; RVBP). Authoritative bytes are
+    // byte-identical to the pre-capability format.
+    let cert = state
+        .cert_state
+        .as_authoritative()
+        .ok_or(crate::snapshot::error::SnapshotEncodeError::ReducedStateNotSerializable)?;
+    let gov = state
+        .gov_state
+        .as_authoritative()
+        .ok_or(crate::snapshot::error::SnapshotEncodeError::ReducedStateNotSerializable)?;
     write_bytes_canonical(&mut buf, &encode_utxo_state(&state.utxo_state));
-    write_bytes_canonical(&mut buf, &encode_cert_state(&state.cert_state));
+    write_bytes_canonical(&mut buf, &encode_cert_state(cert));
     write_bytes_canonical(&mut buf, &encode_epoch_state(&state.epoch_state));
     write_bytes_canonical(&mut buf, &encode_pparams(&state.protocol_params));
-    match &state.gov_state {
+    match gov {
         Some(g) => write_bytes_canonical(&mut buf, &encode_gov_state(g)),
         None => write_null(&mut buf),
     }
@@ -103,15 +114,17 @@ pub fn decode_ledger_state(bytes: &[u8]) -> Result<LedgerState, SnapshotDecodeEr
     };
     let gov_state = read_opt_bstr(bytes, &mut o, decode_gov_state)?;
     let conway_deposit_params = read_opt_bstr(bytes, &mut o, decode_conway_deposit_params)?;
+    // A persisted snapshot is always full authority (the encoder refuses to serialize a reduced follower),
+    // so the decoded cert/gov are restored as `Authoritative` (RVBP).
     Ok(LedgerState {
         utxo_state,
         epoch_state,
         protocol_params,
         era,
         track_utxo,
-        cert_state,
+        cert_state: crate::state::CertStateProjection::Authoritative(cert_state),
         max_lovelace_supply,
-        gov_state,
+        gov_state: crate::state::GovStateProjection::Authoritative(gov_state),
         conway_deposit_params,
     })
 }
@@ -215,13 +228,20 @@ mod tests {
             },
         );
         s.cert_state
+            .as_authoritative_mut()
+            .unwrap()
             .delegation
             .registrations
             .insert(StakeCredential::KeyHash(Hash28([0x33; 28])), Coin(2_000_000));
-        s.cert_state.delegation.delegations.insert(
-            StakeCredential::KeyHash(Hash28([0x33; 28])),
-            PoolId(Hash28([0x44; 28])),
-        );
+        s.cert_state
+            .as_authoritative_mut()
+            .unwrap()
+            .delegation
+            .delegations
+            .insert(
+                StakeCredential::KeyHash(Hash28([0x33; 28])),
+                PoolId(Hash28([0x44; 28])),
+            );
         s.epoch_state.epoch = EpochNo(580);
         s.epoch_state.slot = SlotNo(164_000_000);
         s.epoch_state.reserves = Coin(13_888_022_852_926_644);
@@ -232,13 +252,13 @@ mod tests {
             .delegations
             .insert(Hash28([0x33; 28]), (PoolId(Hash28([0x44; 28])), Coin(100)));
         mark_snap.pool_stakes.insert(PoolId(Hash28([0x44; 28])), Coin(100));
-        s.epoch_state.snapshots.mark = MarkSnapshot(mark_snap.clone());
-        s.epoch_state.snapshots.set = SetSnapshot(mark_snap.clone());
-        s.epoch_state.snapshots.go = GoSnapshot(mark_snap);
+        s.epoch_state.snapshots.as_authoritative_mut().unwrap().mark = MarkSnapshot(mark_snap.clone());
+        s.epoch_state.snapshots.as_authoritative_mut().unwrap().set = SetSnapshot(mark_snap.clone());
+        s.epoch_state.snapshots.as_authoritative_mut().unwrap().go = GoSnapshot(mark_snap);
         s.epoch_state
             .block_production
             .insert(PoolId(Hash28([0x44; 28])), 7);
-        s.gov_state = Some(ConwayGovState {
+        s.gov_state = crate::state::GovStateProjection::Authoritative(Some(ConwayGovState {
             prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
@@ -250,7 +270,7 @@ mod tests {
             drep_voting_thresholds: vec![(67, 100)],
             committee_hot_keys: BTreeMap::new(),
             num_dormant: crate::state::DormantEpochs::Unversioned,
-        });
+        }));
         s.conway_deposit_params = Some(ConwayOnlyDepositParams {
             drep_deposit: Coin(500_000_000),
             gov_action_deposit: Coin(100_000_000_000),

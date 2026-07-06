@@ -216,12 +216,20 @@ mod tests {
         let mut state = LedgerState::new(CardanoEra::Conway);
         state
             .cert_state
+            .as_authoritative_mut()
+            .expect("authoritative cert state in test")
             .delegation
             .delegations
             .insert(StakeCredential::KeyHash(Hash28([0xc; 28])), PoolId(Hash28([0x9; 28])));
         // register pool 0x9 so the delegated cred's stake is KEPT by the delegated ∩ registered
         // intersection, and its VRF is frozen into the candidate (leadership-complete).
-        state.cert_state.pool.pools.insert(
+        state
+            .cert_state
+            .as_authoritative_mut()
+            .expect("authoritative cert state in test")
+            .pool
+            .pools
+            .insert(
             PoolId(Hash28([0x9; 28])),
             PoolParams {
                 pool_id: PoolId(Hash28([0x9; 28])),
@@ -309,10 +317,18 @@ mod tests {
         let mut state = LedgerState::new(CardanoEra::Conway);
         state
             .cert_state
+            .as_authoritative_mut()
+            .expect("authoritative cert state in test")
             .delegation
             .delegations
             .insert(StakeCredential::KeyHash(Hash28([0xc; 28])), PoolId(Hash28([0x9; 28])));
-        state.cert_state.pool.pools.insert(
+        state
+            .cert_state
+            .as_authoritative_mut()
+            .expect("authoritative cert state in test")
+            .pool
+            .pools
+            .insert(
             PoolId(Hash28([0x9; 28])),
             PoolParams {
                 pool_id: PoolId(Hash28([0x9; 28])),

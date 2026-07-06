@@ -88,7 +88,8 @@ impl LoadedSnapshot {
             epoch_state: EpochState {
                 epoch: EpochNo(self.header.epoch),
                 slot: SlotNo(self.header.slot),
-                snapshots,
+                // Decoded from the certified snapshot -> authoritative.
+                snapshots: ade_ledger::epoch::EpochStakeSnapshots::Authoritative(snapshots),
                 reserves: ade_types::tx::Coin(self.header.reserves),
                 treasury: ade_types::tx::Coin(self.header.treasury),
                 block_production: {
@@ -106,9 +107,10 @@ impl LoadedSnapshot {
             protocol_params: self.load_protocol_params(era),
             era,
             track_utxo: true,
-            cert_state,
+            // A certified snapshot is full authority; type it `Authoritative` (RVBP).
+            cert_state: ade_ledger::state::CertStateProjection::Authoritative(cert_state),
             max_lovelace_supply: 45_000_000_000_000_000, // 45B ADA mainnet
-            gov_state: self.load_gov_state(era),
+            gov_state: ade_ledger::state::GovStateProjection::Authoritative(self.load_gov_state(era)),
             conway_deposit_params: self.load_conway_deposit_params(era),
         }
     }
@@ -3664,8 +3666,8 @@ mod tests {
 
         // Load into LedgerState
         let state = snap.to_ledger_state();
-        let stored_deleg_count = state.cert_state.delegation.delegations.len();
-        let stored_reg_count = state.cert_state.delegation.registrations.len();
+        let stored_deleg_count = state.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.delegations.len();
+        let stored_reg_count = state.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.registrations.len();
 
         eprintln!("Delegation count chain:");
         eprintln!("  raw CBOR:      {raw_deleg_count}");
@@ -3694,7 +3696,7 @@ mod tests {
         let snap = LoadedSnapshot::from_tarball(&tarball).unwrap();
         let (raw_pool_count, _, _) = parse_go_snapshot_counts(&snap.raw_cbor).unwrap();
         let state = snap.to_ledger_state();
-        let stored_pool_count = state.cert_state.pool.pools.len();
+        let stored_pool_count = state.cert_state.as_authoritative().expect("authoritative cert state in test").pool.pools.len();
 
         eprintln!("Pool count chain:");
         eprintln!("  raw CBOR:     {raw_pool_count}");
@@ -3706,7 +3708,7 @@ mod tests {
         );
 
         // Verify pool params have correct values
-        if let Some((_, params)) = state.cert_state.pool.pools.iter().next() {
+        if let Some((_, params)) = state.cert_state.as_authoritative().expect("authoritative cert state in test").pool.pools.iter().next() {
             eprintln!("  first pool: pledge={}, cost={}, margin={}/{}",
                 params.pledge.0 / 1_000_000,
                 params.cost.0 / 1_000_000,
@@ -3725,15 +3727,15 @@ mod tests {
         let snap = LoadedSnapshot::from_tarball(&tarball).unwrap();
         let state = snap.to_ledger_state();
 
-        let total_stake: u64 = state.epoch_state.snapshots.go.0.pool_stakes
+        let total_stake: u64 = state.epoch_state.snapshots.as_authoritative().unwrap().go.0.pool_stakes
             .values().map(|c| c.0).sum();
 
         // Oracle total stake (from Python): ~20.2T lovelace
         eprintln!("Go snapshot total stake: {} lovelace = {} ADA",
             total_stake, total_stake / 1_000_000);
 
-        let pool_count = state.epoch_state.snapshots.go.0.pool_stakes.len();
-        let deleg_count = state.epoch_state.snapshots.go.0.delegations.len();
+        let pool_count = state.epoch_state.snapshots.as_authoritative().unwrap().go.0.pool_stakes.len();
+        let deleg_count = state.epoch_state.snapshots.as_authoritative().unwrap().go.0.delegations.len();
 
         eprintln!("  pool_stakes entries: {}", pool_count);
         eprintln!("  delegation entries: {}", deleg_count);
@@ -4705,12 +4707,12 @@ mod tests {
         let snap = LoadedSnapshot::from_tarball(&tarball).unwrap();
         let state = snap.to_ledger_state();
 
-        let mark_d = state.epoch_state.snapshots.mark.0.delegations.len();
-        let mark_p = state.epoch_state.snapshots.mark.0.pool_stakes.len();
-        let set_d = state.epoch_state.snapshots.set.0.delegations.len();
-        let set_p = state.epoch_state.snapshots.set.0.pool_stakes.len();
-        let go_d = state.epoch_state.snapshots.go.0.delegations.len();
-        let go_p = state.epoch_state.snapshots.go.0.pool_stakes.len();
+        let mark_d = state.epoch_state.snapshots.as_authoritative().unwrap().mark.0.delegations.len();
+        let mark_p = state.epoch_state.snapshots.as_authoritative().unwrap().mark.0.pool_stakes.len();
+        let set_d = state.epoch_state.snapshots.as_authoritative().unwrap().set.0.delegations.len();
+        let set_p = state.epoch_state.snapshots.as_authoritative().unwrap().set.0.pool_stakes.len();
+        let go_d = state.epoch_state.snapshots.as_authoritative().unwrap().go.0.delegations.len();
+        let go_p = state.epoch_state.snapshots.as_authoritative().unwrap().go.0.pool_stakes.len();
 
         eprintln!("\n=== Snapshot Family (Allegra epoch 237) ===");
         eprintln!("  mark: {} delegations, {} pools", mark_d, mark_p);
@@ -4780,12 +4782,12 @@ mod tests {
             let raw_count = raw_stakes.len();
 
             // Our reconstructed pool_stakes sum
-            let pool_sum: u128 = state.epoch_state.snapshots.go.0.pool_stakes
+            let pool_sum: u128 = state.epoch_state.snapshots.as_authoritative().unwrap().go.0.pool_stakes
                 .values().map(|c| c.0 as u128).sum();
-            let pool_count = state.epoch_state.snapshots.go.0.pool_stakes.len();
+            let pool_count = state.epoch_state.snapshots.as_authoritative().unwrap().go.0.pool_stakes.len();
 
             // Delegation count
-            let deleg_count = state.epoch_state.snapshots.go.0.delegations.len();
+            let deleg_count = state.epoch_state.snapshots.as_authoritative().unwrap().go.0.delegations.len();
 
             // Raw delegations from go snapshot
             let raw_delegs = parse_snapshot_delegations(&snap.raw_cbor, 2).unwrap();

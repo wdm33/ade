@@ -192,6 +192,8 @@ fn ade_post_state(store: &EpochAccumulatorStore) -> PostState {
         reserves: es.reserves.0,
         go: es
             .snapshots
+            .as_authoritative()
+            .expect("authoritative")
             .go
             .0
             .pool_stakes
@@ -406,9 +408,9 @@ fn ce3d_inspect_seed_accumulator() {
         acc.cert_state.delegation.rewards.len(),
     );
     for (nm, snap) in [
-        ("mark", &es.snapshots.mark.0),
-        ("set", &es.snapshots.set.0),
-        ("go", &es.snapshots.go.0),
+        ("mark", &es.snapshots.as_authoritative().unwrap().mark.0),
+        ("set", &es.snapshots.as_authoritative().unwrap().set.0),
+        ("go", &es.snapshots.as_authoritative().unwrap().go.0),
     ] {
         eprintln!(
             "  snapshot {nm}: pool_stakes={} delegations={} stake_total={}",
@@ -744,7 +746,7 @@ fn gsd_go_phase_credential_differential() {
     let (ade_go, ade_fold_ok, ade_pools) = {
         let store = EpochAccumulatorStore::open(&iso).expect("open isolated seed acc");
         let (_slot, acc) = store.load_current().expect("load").expect("sealed accumulator");
-        let m = &acc.epoch_state.snapshots.mark.0;
+        let m = &acc.epoch_state.snapshots.as_authoritative().unwrap().mark.0;
         (deleg_canon(m), fold_ok(m), m.pool_stakes.len())
     };
     let _ = std::fs::remove_file(&iso);
@@ -828,7 +830,7 @@ fn gsd_provenance_and_live_derivation() {
     // Capture the seed's imported mark BEFORE advancing (same store, single open).
     let seed_mark = {
         let (_s0, acc0) = store.load_current().expect("load seed").expect("sealed");
-        deleg_canon(&acc0.epoch_state.snapshots.mark.0)
+        deleg_canon(&acc0.epoch_state.snapshots.as_authoritative().unwrap().mark.0)
     };
 
     let sched = preview_schedule();
@@ -838,9 +840,9 @@ fn gsd_provenance_and_live_derivation() {
     co_advance(&store, &cp, &db, &sched);
 
     let (_s1, acc) = store.load_current().expect("load").expect("sealed accumulator");
-    let go_1342 = deleg_canon(&acc.epoch_state.snapshots.go.0);
-    let mark_1342 = deleg_canon(&acc.epoch_state.snapshots.mark.0);
-    let set_1342 = deleg_canon(&acc.epoch_state.snapshots.set.0);
+    let go_1342 = deleg_canon(&acc.epoch_state.snapshots.as_authoritative().unwrap().go.0);
+    let mark_1342 = deleg_canon(&acc.epoch_state.snapshots.as_authoritative().unwrap().mark.0);
+    let set_1342 = deleg_canon(&acc.epoch_state.snapshots.as_authoritative().unwrap().set.0);
     assert_eq!(acc.epoch_state.epoch.0, 1342, "accumulator at epoch 1342");
 
     // PROVE: go(1342) is the seed's imported mark rotated forward (rotate_snapshots is a pure clone).

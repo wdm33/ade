@@ -113,9 +113,9 @@ fn drep_vote_discriminant_changes_fingerprint() {
     g_script.proposals = vec![proposal_with_drep_voter(script(7))];
 
     let mut s_key = LedgerState::new(CardanoEra::Conway);
-    s_key.gov_state = Some(g_key);
+    s_key.gov_state = ade_ledger::state::GovStateProjection::Authoritative(Some(g_key));
     let mut s_script = LedgerState::new(CardanoEra::Conway);
-    s_script.gov_state = Some(g_script);
+    s_script.gov_state = ade_ledger::state::GovStateProjection::Authoritative(Some(g_script));
     assert_ne!(
         ade_ledger::fingerprint::fingerprint(&s_key).governance,
         ade_ledger::fingerprint::fingerprint(&s_script).governance,
@@ -145,9 +145,9 @@ fn committee_discriminant_changes_fingerprint() {
     g_script.committee.insert(script(7), 100);
 
     let mut s_key = LedgerState::new(CardanoEra::Conway);
-    s_key.gov_state = Some(g_key);
+    s_key.gov_state = ade_ledger::state::GovStateProjection::Authoritative(Some(g_key));
     let mut s_script = LedgerState::new(CardanoEra::Conway);
-    s_script.gov_state = Some(g_script);
+    s_script.gov_state = ade_ledger::state::GovStateProjection::Authoritative(Some(g_script));
     assert_ne!(
         ade_ledger::fingerprint::fingerprint(&s_key).governance,
         ade_ledger::fingerprint::fingerprint(&s_script).governance,
@@ -165,9 +165,9 @@ fn discriminant_changes_fingerprint_corpus() {
     g_script.vote_delegations.insert(script(7), DRep::AlwaysAbstain);
 
     let mut s_key = LedgerState::new(CardanoEra::Conway);
-    s_key.gov_state = Some(g_key);
+    s_key.gov_state = ade_ledger::state::GovStateProjection::Authoritative(Some(g_key));
     let mut s_script = LedgerState::new(CardanoEra::Conway);
-    s_script.gov_state = Some(g_script);
+    s_script.gov_state = ade_ledger::state::GovStateProjection::Authoritative(Some(g_script));
 
     let f_key = ade_ledger::fingerprint::fingerprint(&s_key);
     let f_script = ade_ledger::fingerprint::fingerprint(&s_script);
@@ -201,9 +201,9 @@ fn credential_accumulation_replays_byte_identical() {
     assert!(!g1.drep_expiry.contains_key(&key(0xAA)), "no collapse to key-hash");
 
     let mut s1 = LedgerState::new(CardanoEra::Conway);
-    s1.gov_state = Some(g1);
+    s1.gov_state = ade_ledger::state::GovStateProjection::Authoritative(Some(g1));
     let mut s2 = LedgerState::new(CardanoEra::Conway);
-    s2.gov_state = Some(g2);
+    s2.gov_state = ade_ledger::state::GovStateProjection::Authoritative(Some(g2));
     assert_eq!(
         ade_ledger::fingerprint::fingerprint(&s1).combined,
         ade_ledger::fingerprint::fingerprint(&s2).combined,

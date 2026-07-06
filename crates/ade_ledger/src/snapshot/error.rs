@@ -16,6 +16,9 @@ use ade_types::{CardanoEra, Hash32};
 pub enum SnapshotEncodeError {
     /// Pre-Conway era encountered. PHASE4-N-J ships Conway-only.
     EraNotSupported { era: CardanoEra },
+    /// The `LedgerState`'s cert/gov is a reduced projection (`ReducedUnavailable`) — a reduced follower is not
+    /// serializable as a normal full-authority snapshot (RVBP; fail closed, never a fabricated normal cert/gov).
+    ReducedStateNotSerializable,
 }
 
 /// Closed snapshot-decode-error sum.
@@ -65,12 +68,16 @@ mod tests {
 
     #[test]
     fn snapshot_encode_error_round_trips_through_pattern_match() {
-        let errs = vec![SnapshotEncodeError::EraNotSupported {
-            era: CardanoEra::ByronEbb,
-        }];
+        let errs = vec![
+            SnapshotEncodeError::EraNotSupported {
+                era: CardanoEra::ByronEbb,
+            },
+            SnapshotEncodeError::ReducedStateNotSerializable,
+        ];
         for e in errs {
             match e {
                 SnapshotEncodeError::EraNotSupported { .. } => {}
+                SnapshotEncodeError::ReducedStateNotSerializable => {}
             }
         }
     }

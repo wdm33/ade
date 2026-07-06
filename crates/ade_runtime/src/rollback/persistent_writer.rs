@@ -112,11 +112,16 @@ mod tests {
         let mut l = LedgerState::new(CardanoEra::Conway);
         l.epoch_state.epoch = EpochNo(epoch);
         l.max_lovelace_supply = 45_000_000_000_000_000;
-        l.cert_state.delegation.registrations.insert(
-            StakeCredential::KeyHash(Hash28([epoch as u8; 28])),
-            Coin(2_000_000),
-        );
-        l.gov_state = Some(ConwayGovState {
+        l.cert_state
+            .as_authoritative_mut()
+            .expect("authoritative cert state in test")
+            .delegation
+            .registrations
+            .insert(
+                StakeCredential::KeyHash(Hash28([epoch as u8; 28])),
+                Coin(2_000_000),
+            );
+        l.gov_state = ade_ledger::state::GovStateProjection::Authoritative(Some(ConwayGovState {
             prev_pparam_action: ade_ledger::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
@@ -128,7 +133,7 @@ mod tests {
             drep_voting_thresholds: vec![(67, 100)],
             committee_hot_keys: BTreeMap::new(),
             num_dormant: ade_ledger::state::DormantEpochs::Unversioned,
-        });
+        }));
         l.conway_deposit_params = Some(ConwayOnlyDepositParams {
             drep_deposit: Coin(500_000_000),
             gov_action_deposit: Coin(100_000_000_000),

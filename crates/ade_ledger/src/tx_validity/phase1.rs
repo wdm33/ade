@@ -55,7 +55,7 @@ use ade_codec::cbor::{self, ContainerEncoding};
 use ade_types::conway::tx::ConwayTxBody;
 use ade_types::{CardanoEra, Hash32};
 
-use crate::error::LedgerError;
+use crate::error::{LedgerError, ValidationEnvironmentError};
 use crate::state::LedgerState;
 use crate::utxo::utxo_lookup;
 use crate::witness::WitnessInfo;
@@ -209,6 +209,15 @@ pub fn tx_phase_one(ledger: &LedgerState, decoded: &DecodedTx) -> Result<(), TxV
         let deposit_params = ledger
             .conway_deposit_view()
             .map_err(|e| TxValidityError::Phase1(LedgerError::ValidationEnvironment(e)))?;
+        // State-backed checks require authoritative cert state. A reduced follower
+        // never reaches here (track_utxo=false skips this whole block), but the
+        // authority is obtained through the fallible capability accessor rather
+        // than an empty-state substitute (RVBP).
+        let cert = ledger.cert_state.as_authoritative().ok_or_else(|| {
+            TxValidityError::Phase1(LedgerError::ValidationEnvironment(
+                ValidationEnvironmentError::ReducedCertStateNotValidatable,
+            ))
+        })?;
         crate::conway::validate_conway_state_backed(
             &decoded.body,
             &ledger.utxo_state.utxos,
@@ -218,7 +227,7 @@ pub fn tx_phase_one(ledger: &LedgerState, decoded: &DecodedTx) -> Result<(), TxV
             pp.protocol_major as u16,
             max_ex_units,
             &deposit_params,
-            &ledger.cert_state,
+            cert,
         )
         .map_err(TxValidityError::Phase1)?;
     }

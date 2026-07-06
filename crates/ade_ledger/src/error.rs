@@ -156,6 +156,11 @@ pub enum ValidationEnvironmentError {
     /// ill-formed environment). A deterministic halt, never a silent wrap to a
     /// wrong expiry (PHASE4-B5).
     DRepActivityOverflow,
+    /// A state-backed tx check was asked to run against a `LedgerState` whose
+    /// cert authority is a reduced projection (`CertStateProjection::ReducedUnavailable`).
+    /// A reduced follower never carries validatable cert authority; fail closed
+    /// rather than substitute an empty `CertState` (RVBP).
+    ReducedCertStateNotValidatable,
 }
 
 /// The min-UTxO check was reached with a Conway per-byte rule. Carries the
@@ -764,6 +769,9 @@ impl core::fmt::Display for LedgerError {
                 }
                 ValidationEnvironmentError::DRepActivityOverflow => {
                     write!(f, "validation environment: DRep expiry current_epoch + drep_activity overflowed u64")
+                }
+                ValidationEnvironmentError::ReducedCertStateNotValidatable => {
+                    write!(f, "validation environment: cert state is a reduced projection (no validatable cert authority)")
                 }
             },
             LedgerError::UnsupportedConwayMinUtxoRule(e) => {

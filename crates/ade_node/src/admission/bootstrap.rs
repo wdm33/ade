@@ -391,7 +391,11 @@ async fn run_admission_inner(
     // S3f-2-pre: the runner ledger carries the same manifest-bound bootstrap cert state
     // as the captured snapshot (a consistent bootstrap state). Empty (transition) when no
     // package is configured; track_utxo=false still skips live cert accumulation.
-    ledger.cert_state = bootstrap_cert_state;
+    // Read the bootstrap cert's delegation presence from the raw value BEFORE moving it into the
+    // capability-typed field (the check below drives the EVIEW reduced-checkpoint build). The bootstrap
+    // seed is full authority, so it is typed `Authoritative` (RVBP).
+    let has_bootstrap_delegations = !bootstrap_cert_state.delegation.delegations.is_empty();
+    ledger.cert_state = ade_ledger::state::CertStateProjection::Authoritative(bootstrap_cert_state);
     // MEM-OPT-UTXO-DISK S2b-2c.1b-A.2: compute the constant UTxO-component fingerprint
     // ONCE from the imported UTxO (its durable copy is the snapshot already written by
     // seed_to_snapshot), then DROP the 1.9M-entry in-memory map. The live
@@ -403,7 +407,7 @@ async fn run_admission_inner(
     // activation is configured), build the live reduced checkpoint from the seed UTxO
     // BEFORE it is dropped. Gated on the imported cert-state so non-EVIEW bootstrap is
     // BYTE-IDENTICAL (point 8). Fail-closed: a build failure aborts bootstrap.
-    if !ledger.cert_state.delegation.delegations.is_empty() {
+    if has_bootstrap_delegations {
         let reduced_checkpoint_fp =
             build_live_reduced_checkpoint(&snapshot_dir, &utxo, SlotNo(acli.seed_point_slot))
             .map_err(|e| AdmissionBootstrapError::ReducedCheckpoint(format!("{:?}", e)))?;

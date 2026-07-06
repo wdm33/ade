@@ -103,9 +103,9 @@ fn stateful_boundary_replay(
     }
 
     let final_utxo = state.utxo_state.len();
-    let delegations = state.cert_state.delegation.delegations.len();
-    let registrations = state.cert_state.delegation.registrations.len();
-    let pools = state.cert_state.pool.pools.len();
+    let delegations = state.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.delegations.len();
+    let registrations = state.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.registrations.len();
+    let pools = state.cert_state.as_authoritative().expect("authoritative cert state in test").pool.pools.len();
     if delegations > 0 || registrations > 0 || pools > 0 {
         eprintln!("    certs: {registrations} regs, {delegations} delegs, {pools} pools");
     }

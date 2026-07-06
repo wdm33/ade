@@ -95,7 +95,8 @@ pub fn build_seed_ledger(
     ledger.protocol_params = protocol_params;
     // S3f-2-pre: populate the bootstrap cert state (the manifest-bound delegation/reward
     // continuation state); `CertState::new()` from the caller = the pre-import behaviour.
-    ledger.cert_state = cert_state;
+    // The bootstrap seed is full authority, typed `Authoritative` (RVBP).
+    ledger.cert_state = ade_ledger::state::CertStateProjection::Authoritative(cert_state);
     ledger
 }
 

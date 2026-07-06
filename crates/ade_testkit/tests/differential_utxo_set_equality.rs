@@ -216,9 +216,9 @@ fn post_block_1_utxo_matches_oracle() {
         protocol_params: ade_ledger::pparams::ProtocolParameters::default(),
         era: ade_types::CardanoEra::ByronRegular,
         track_utxo: false,
-        cert_state: ade_ledger::delegation::CertState::new(),
+        cert_state: ade_ledger::state::CertStateProjection::Authoritative(ade_ledger::delegation::CertState::new()),
         max_lovelace_supply: 45_000_000_000_000_000,
-        gov_state: None,
+        gov_state: ade_ledger::state::GovStateProjection::Authoritative(None),
         conway_deposit_params: None,
     };
 

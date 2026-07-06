@@ -48,7 +48,7 @@ fn cre_s4_1b_live_v2_seed_is_source_bound_with_evidence() {
 
     // 4. The V2 governance fingerprint (evidence). Distinct from the V1 layout by construction.
     let mut view = LedgerState::new(CardanoEra::Conway);
-    view.gov_state = Some(gov.clone());
+    view.gov_state = ade_ledger::state::GovStateProjection::Authoritative(Some(gov.clone()));
     let gov_fp = fingerprint(&view).governance;
 
     eprintln!("=== CRE S4.1b LIVE V2 SEED EVIDENCE ===");

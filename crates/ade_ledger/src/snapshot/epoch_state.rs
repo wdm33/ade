@@ -100,23 +100,52 @@ pub fn decode_epoch_state(bytes: &[u8]) -> Result<EpochState, SnapshotDecodeErro
     })
 }
 
-fn write_snapshot_state(buf: &mut Vec<u8>, s: &SnapshotState) {
-    write_array_header(buf, ContainerEncoding::Definite(3, IntWidth::Inline));
-    write_stake_snapshot(buf, &s.mark.0);
-    write_stake_snapshot(buf, &s.set.0);
-    write_stake_snapshot(buf, &s.go.0);
+fn write_snapshot_state(buf: &mut Vec<u8>, s: &crate::epoch::EpochStakeSnapshots) {
+    match s {
+        // Authoritative: array(3) + mark/set/go — the EXISTING format, byte-identical (RVBP gate 7).
+        crate::epoch::EpochStakeSnapshots::Authoritative(a) => {
+            write_array_header(buf, ContainerEncoding::Definite(3, IntWidth::Inline));
+            write_stake_snapshot(buf, &a.mark.0);
+            write_stake_snapshot(buf, &a.set.0);
+            write_stake_snapshot(buf, &a.go.0);
+        }
+        // A reduced projection: array(0) — a DISTINCT, non-authoritative encoding. A reduced-plane ledger is
+        // never serialized as an authoritative accumulator snapshot, and decode restores it as
+        // `ReducedUnavailable`, never fabricated mark/set/go (RVBP gates 1/2/3).
+        crate::epoch::EpochStakeSnapshots::ReducedUnavailable => {
+            write_array_header(buf, ContainerEncoding::Definite(0, IntWidth::Inline));
+        }
+    }
 }
 
-fn read_snapshot_state(bytes: &[u8], o: &mut usize) -> Result<SnapshotState, SnapshotDecodeError> {
-    expect_array(bytes, o, 3)?;
-    let mark = read_stake_snapshot(bytes, o)?;
-    let set = read_stake_snapshot(bytes, o)?;
-    let go = read_stake_snapshot(bytes, o)?;
-    Ok(SnapshotState {
-        mark: MarkSnapshot(mark),
-        set: SetSnapshot(set),
-        go: GoSnapshot(go),
-    })
+fn read_snapshot_state(
+    bytes: &[u8],
+    o: &mut usize,
+) -> Result<crate::epoch::EpochStakeSnapshots, SnapshotDecodeError> {
+    let n = match read_array_header(bytes, o).map_err(SnapshotDecodeError::Cbor)? {
+        ContainerEncoding::Definite(n, _) => n,
+        _ => {
+            return Err(SnapshotDecodeError::Structural {
+                reason: StructuralReason::ArrayLengthMismatch,
+            })
+        }
+    };
+    match n {
+        3 => {
+            let mark = read_stake_snapshot(bytes, o)?;
+            let set = read_stake_snapshot(bytes, o)?;
+            let go = read_stake_snapshot(bytes, o)?;
+            Ok(crate::epoch::EpochStakeSnapshots::Authoritative(SnapshotState {
+                mark: MarkSnapshot(mark),
+                set: SetSnapshot(set),
+                go: GoSnapshot(go),
+            }))
+        }
+        0 => Ok(crate::epoch::EpochStakeSnapshots::ReducedUnavailable),
+        _ => Err(SnapshotDecodeError::Structural {
+            reason: StructuralReason::ArrayLengthMismatch,
+        }),
+    }
 }
 
 fn write_stake_snapshot(buf: &mut Vec<u8>, s: &StakeSnapshot) {
@@ -245,9 +274,10 @@ mod tests {
         e.reserves = Coin(13_888_022_852_926_644);
         e.treasury = Coin(1_434_657_232_801_879);
         e.epoch_fees = Coin(8_321_001_400);
-        e.snapshots.mark = MarkSnapshot(make_stake_snapshot(0x10));
-        e.snapshots.set = SetSnapshot(make_stake_snapshot(0x20));
-        e.snapshots.go = GoSnapshot(make_stake_snapshot(0x30));
+        let snaps = e.snapshots.as_authoritative_mut().expect("authoritative");
+        snaps.mark = MarkSnapshot(make_stake_snapshot(0x10));
+        snaps.set = SetSnapshot(make_stake_snapshot(0x20));
+        snaps.go = GoSnapshot(make_stake_snapshot(0x30));
         e.block_production.insert(pool(0x40), 100);
         e.block_production.insert(pool(0x41), 50);
         e
@@ -267,6 +297,31 @@ mod tests {
         let bytes = encode_epoch_state(&e);
         let decoded = decode_epoch_state(&bytes).expect("decode");
         assert_eq!(decoded, e);
+    }
+
+    #[test]
+    fn reduced_snapshots_encode_distinctly_and_round_trip() {
+        // A reduced projection encodes as CBOR array(0) and decodes back to ReducedUnavailable — never a
+        // fabricated mark/set/go (RVBP N-RVB-1, gate 2).
+        let mut rbuf = Vec::new();
+        write_snapshot_state(&mut rbuf, &crate::epoch::EpochStakeSnapshots::ReducedUnavailable);
+        assert_eq!(rbuf, vec![0x80], "reduced snapshots are exactly CBOR array(0)");
+        let mut o = 0usize;
+        let decoded = read_snapshot_state(&rbuf, &mut o).expect("decode reduced");
+        assert!(decoded.is_reduced(), "reduced round-trips to reduced, never authoritative");
+        assert_eq!(o, rbuf.len(), "all reduced bytes consumed");
+
+        // Authoritative encodes as the LEGACY array(3) + mark/set/go — byte-identical to the pre-enum format
+        // (no discriminant prefix), so existing snapshots decode unchanged (gate 7). Its bytes can never be
+        // confused with a reduced projection (gate 2).
+        let auth = make_state().snapshots.clone();
+        let mut abuf = Vec::new();
+        write_snapshot_state(&mut abuf, &auth);
+        assert_eq!(abuf[0], 0x83, "authoritative snapshots start with CBOR array(3) — the legacy header");
+        assert_ne!(abuf, rbuf, "authoritative and reduced snapshot encodings are structurally distinct");
+        let mut o2 = 0usize;
+        let rt = read_snapshot_state(&abuf, &mut o2).expect("decode authoritative");
+        assert_eq!(rt, auth, "authoritative snapshots round-trip byte-for-byte");
     }
 
     #[test]

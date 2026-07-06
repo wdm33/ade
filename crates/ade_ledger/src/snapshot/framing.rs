@@ -162,14 +162,21 @@ mod tests {
         s.epoch_state.slot = SlotNo(164_000_000);
         s.epoch_state.reserves = Coin(13_888_022_852_926_644);
         s.cert_state
+            .as_authoritative_mut()
+            .expect("authoritative cert state in test")
             .delegation
             .registrations
             .insert(StakeCredential::KeyHash(Hash28([0xAB; 28])), Coin(2_000_000));
-        s.cert_state.delegation.delegations.insert(
-            StakeCredential::KeyHash(Hash28([0xAB; 28])),
-            PoolId(Hash28([0xCD; 28])),
-        );
-        s.gov_state = Some(ConwayGovState {
+        s.cert_state
+            .as_authoritative_mut()
+            .expect("authoritative cert state in test")
+            .delegation
+            .delegations
+            .insert(
+                StakeCredential::KeyHash(Hash28([0xAB; 28])),
+                PoolId(Hash28([0xCD; 28])),
+            );
+        s.gov_state = crate::state::GovStateProjection::Authoritative(Some(ConwayGovState {
             prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
@@ -181,7 +188,7 @@ mod tests {
             drep_voting_thresholds: vec![(67, 100)],
             committee_hot_keys: BTreeMap::new(),
             num_dormant: crate::state::DormantEpochs::Unversioned,
-        });
+        }));
         s.conway_deposit_params = Some(ConwayOnlyDepositParams {
             drep_deposit: Coin(500_000_000),
             gov_action_deposit: Coin(100_000_000_000),

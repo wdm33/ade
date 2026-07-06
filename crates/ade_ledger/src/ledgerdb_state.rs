@@ -406,15 +406,16 @@ mod tip_tests {
         use crate::snapshot::epoch_state::{decode_epoch_state, encode_epoch_state};
         use crate::state::EpochState;
         let mut es = EpochState::new();
-        es.snapshots = SnapshotState {
+        es.snapshots = crate::epoch::EpochStakeSnapshots::Authoritative(SnapshotState {
             mark: MarkSnapshot(snap.clone()),
             set: SetSnapshot(snap.clone()),
             go: GoSnapshot(snap.clone()),
-        };
+        });
         let rt = decode_epoch_state(&encode_epoch_state(&es)).expect("round-trip");
-        assert_eq!(rt.snapshots.go.0, snap, "go survives encode/decode byte-identically");
-        assert_eq!(rt.snapshots.mark.0, snap);
-        assert_eq!(rt.snapshots.set.0, snap);
+        let rt_snaps = rt.snapshots.as_authoritative().expect("authoritative");
+        assert_eq!(rt_snaps.go.0, snap, "go survives encode/decode byte-identically");
+        assert_eq!(rt_snaps.mark.0, snap);
+        assert_eq!(rt_snaps.set.0, snap);
     }
 
     /// CE-3d fail-closed: a structurally short SnapShot is TERMINAL (never empty-substituted).

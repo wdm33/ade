@@ -8,7 +8,6 @@
 use ade_types::tx::Coin;
 use ade_types::{CardanoEra, EpochNo, SlotNo};
 use crate::delegation::CertState;
-use crate::epoch::SnapshotState;
 use crate::error::ValidationEnvironmentError;
 use crate::pparams::{ConwayDepositParams, ConwayOnlyDepositParams, ProtocolParameters};
 use crate::utxo::UTxOState;
@@ -19,8 +18,9 @@ use crate::utxo::UTxOState;
 pub struct EpochState {
     pub epoch: EpochNo,
     pub slot: SlotNo,
-    /// Stake distribution snapshots (mark/set/go pipeline).
-    pub snapshots: SnapshotState,
+    /// Stake distribution snapshots (mark/set/go pipeline), capability-typed: `Authoritative` on the full path,
+    /// `ReducedUnavailable` when a reduced follower crossed a boundary without stake authority (never fabricated).
+    pub snapshots: crate::epoch::EpochStakeSnapshots,
     /// Ada reserves (un-minted lovelace).
     pub reserves: Coin,
     /// Treasury (accumulated from monetary expansion).
@@ -38,7 +38,7 @@ impl EpochState {
         EpochState {
             epoch: EpochNo(0),
             slot: SlotNo(0),
-            snapshots: SnapshotState::new(),
+            snapshots: crate::epoch::EpochStakeSnapshots::new(),
             reserves: Coin(0),
             treasury: Coin(0),
             block_production: std::collections::BTreeMap::new(),
@@ -48,6 +48,102 @@ impl EpochState {
 }
 
 impl Default for EpochState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Capability-typed certificate state on a `LedgerState`. `Authoritative` carries the real `CertState` (the
+/// full-ledger / accumulator-seed / window-replay path); `ReducedUnavailable` is a reduced follower
+/// (`track_utxo=false`) that crossed a Conway boundary — it advanced NO certificate/pool lifecycle, so there is
+/// NO `CertState` at all (never a cleared/empty stand-in). "Reduced follower + a normal `CertState` present" is
+/// unrepresentable. A reader wanting cert authority is compiler-forced to go through `require_full` (fail-closed
+/// `FullBoundaryStateRequired`) or `as_authoritative` — never a normal field access
+/// (feedback_mechanical_not_review_enforced_authority).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CertStateProjection {
+    Authoritative(CertState),
+    ReducedUnavailable,
+}
+
+impl CertStateProjection {
+    /// A fresh authoritative (empty) cert state — the genuine "no certs yet" of a new/full ledger, NOT a reduced
+    /// projection.
+    pub fn new() -> Self {
+        CertStateProjection::Authoritative(CertState::new())
+    }
+    pub fn as_authoritative(&self) -> Option<&CertState> {
+        match self {
+            CertStateProjection::Authoritative(c) => Some(c),
+            CertStateProjection::ReducedUnavailable => None,
+        }
+    }
+    pub fn as_authoritative_mut(&mut self) -> Option<&mut CertState> {
+        match self {
+            CertStateProjection::Authoritative(c) => Some(c),
+            CertStateProjection::ReducedUnavailable => None,
+        }
+    }
+    /// Authoritative cert state, or fail closed with `FullBoundaryStateRequired` (never a fabricated/empty stand-in).
+    pub fn require_full(
+        &self,
+        boundary_point: SlotNo,
+    ) -> Result<&CertState, crate::governance::GovernanceTerminal> {
+        self.as_authoritative()
+            .ok_or(crate::governance::GovernanceTerminal::FullBoundaryStateRequired { boundary_point })
+    }
+    pub fn is_reduced(&self) -> bool {
+        matches!(self, CertStateProjection::ReducedUnavailable)
+    }
+}
+
+impl Default for CertStateProjection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Capability-typed Conway governance state on a `LedgerState`. `Authoritative(Option<ConwayGovState>)` is the
+/// full path (`Some` = live gov, `None` = pre-Conway / no gov); `ReducedUnavailable` is a reduced follower that
+/// crossed a Conway boundary — it ratified/enacted no governance and retains NO gov state (distinct from a full
+/// `None`). A reader is compiler-forced to `require_full` (fail-closed) or `as_authoritative`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GovStateProjection {
+    Authoritative(Option<ConwayGovState>),
+    ReducedUnavailable,
+}
+
+impl GovStateProjection {
+    /// A fresh authoritative (no-governance) state.
+    pub fn new() -> Self {
+        GovStateProjection::Authoritative(None)
+    }
+    pub fn as_authoritative(&self) -> Option<&Option<ConwayGovState>> {
+        match self {
+            GovStateProjection::Authoritative(g) => Some(g),
+            GovStateProjection::ReducedUnavailable => None,
+        }
+    }
+    pub fn as_authoritative_mut(&mut self) -> Option<&mut Option<ConwayGovState>> {
+        match self {
+            GovStateProjection::Authoritative(g) => Some(g),
+            GovStateProjection::ReducedUnavailable => None,
+        }
+    }
+    /// Authoritative gov state, or fail closed with `FullBoundaryStateRequired`.
+    pub fn require_full(
+        &self,
+        boundary_point: SlotNo,
+    ) -> Result<&Option<ConwayGovState>, crate::governance::GovernanceTerminal> {
+        self.as_authoritative()
+            .ok_or(crate::governance::GovernanceTerminal::FullBoundaryStateRequired { boundary_point })
+    }
+    pub fn is_reduced(&self) -> bool {
+        matches!(self, GovStateProjection::ReducedUnavailable)
+    }
+}
+
+impl Default for GovStateProjection {
     fn default() -> Self {
         Self::new()
     }
@@ -64,14 +160,15 @@ pub struct LedgerState {
     /// When false (default), state tracking is skipped for performance.
     /// Set to true when state is loaded from a snapshot for boundary replay.
     pub track_utxo: bool,
-    /// Accumulated certificate state (delegations, pools, retirements).
-    /// Populated during replay when track_utxo is true.
-    pub cert_state: CertState,
+    /// Accumulated certificate state (delegations, pools, retirements), capability-typed: `Authoritative` on the
+    /// full/replay path, `ReducedUnavailable` for a reduced follower that crossed a boundary (no lifecycle).
+    pub cert_state: CertStateProjection,
     /// Maximum lovelace supply (from Shelley genesis). Default: 45B ADA.
     /// Used for `circulation = maxLovelaceSupply - reserves` in reward formula.
     pub max_lovelace_supply: u64,
-    /// Conway governance state. None for pre-Conway eras.
-    pub gov_state: Option<ConwayGovState>,
+    /// Conway governance state, capability-typed. `Authoritative(None)` for pre-Conway eras;
+    /// `ReducedUnavailable` for a reduced follower that crossed a boundary.
+    pub gov_state: GovStateProjection,
     /// Conway-only deposit parameters (`drep_deposit`, `gov_action_deposit`).
     /// `Some` iff `era == Conway`; `None` (structurally absent, not defaulted)
     /// for every other era.
@@ -151,9 +248,9 @@ impl LedgerState {
             protocol_params: ProtocolParameters::default(),
             era,
             track_utxo: false,
-            cert_state: CertState::new(),
+            cert_state: CertStateProjection::new(),
             max_lovelace_supply: 45_000_000_000_000_000, // 45B ADA mainnet default
-            gov_state: None,
+            gov_state: GovStateProjection::new(),
             conway_deposit_params: None,
         }
     }

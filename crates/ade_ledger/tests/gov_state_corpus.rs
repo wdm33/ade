@@ -106,9 +106,9 @@ fn gov_state_accumulation_replays_byte_identical() {
     assert_eq!(g1, g2, "value identity");
 
     let mut s1 = LedgerState::new(CardanoEra::Conway);
-    s1.gov_state = Some(g1);
+    s1.gov_state = ade_ledger::state::GovStateProjection::Authoritative(Some(g1));
     let mut s2 = LedgerState::new(CardanoEra::Conway);
-    s2.gov_state = Some(g2);
+    s2.gov_state = ade_ledger::state::GovStateProjection::Authoritative(Some(g2));
     let f1 = ade_ledger::fingerprint::fingerprint(&s1);
     let f2 = ade_ledger::fingerprint::fingerprint(&s2);
     assert_eq!(f1.governance, f2.governance, "gov fingerprint byte-identical (T-DET-01)");

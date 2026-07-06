@@ -2218,7 +2218,7 @@ mod committee_fidelity_tests {
             let (committee, quorum) =
                 apply_committee_enactment(&base_committee(), (2, 3), &effects);
             let mut s = LedgerState::new(CardanoEra::Conway);
-            s.gov_state = Some(ConwayGovState {
+            s.gov_state = crate::state::GovStateProjection::Authoritative(Some(ConwayGovState {
                 prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
                 proposals: Vec::new(),
                 committee,
@@ -2230,7 +2230,7 @@ mod committee_fidelity_tests {
                 drep_voting_thresholds: Vec::new(),
                 committee_hot_keys: Default::default(),
                 num_dormant: crate::state::DormantEpochs::Unversioned,
-            });
+            }));
             crate::fingerprint::fingerprint(&s).governance
         };
 

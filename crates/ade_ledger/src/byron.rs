@@ -20,7 +20,6 @@ use crate::error::{
 };
 use crate::pparams::ProtocolParameters;
 use crate::state::LedgerState;
-use crate::delegation::CertState;
 use crate::utxo::{utxo_delete, utxo_insert, TxOut, UTxOState};
 
 /// Validate and apply a Byron regular block to ledger state.
@@ -53,9 +52,9 @@ pub fn validate_byron_block(
         protocol_params: state.protocol_params.clone(),
         era: state.era,
         track_utxo: state.track_utxo,
-        cert_state: CertState::new(),
+        cert_state: crate::state::CertStateProjection::new(),
         max_lovelace_supply: state.max_lovelace_supply,
-        gov_state: None,
+        gov_state: crate::state::GovStateProjection::new(),
         conway_deposit_params: state.conway_deposit_params.clone(),
     })
 }

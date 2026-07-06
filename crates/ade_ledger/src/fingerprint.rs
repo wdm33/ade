@@ -38,7 +38,7 @@ use ade_types::tx::{Coin, PoolId, TxIn};
 use ade_types::{CardanoEra, Hash28, Hash32};
 
 use crate::delegation::{CertState, PoolParams as CertPoolParams};
-use crate::epoch::{SnapshotState, StakeSnapshot};
+use crate::epoch::StakeSnapshot;
 use crate::pparams::{ConwayOnlyDepositParams, ProtocolParameters};
 use crate::rational::Rational;
 use crate::state::{ConwayGovState, DormantEpochs, EpochState, LedgerState};
@@ -91,11 +91,11 @@ impl LedgerFingerprint {
 pub fn fingerprint_v1(state: &LedgerState) -> LedgerFingerprint {
     let era = fingerprint_era(state.era, state.max_lovelace_supply);
     let utxo = fingerprint_utxo(&state.utxo_state);
-    let cert = fingerprint_cert(&state.cert_state);
+    let cert = fingerprint_cert_projection(&state.cert_state);
     let epoch = fingerprint_epoch(&state.epoch_state);
     let snapshots = fingerprint_snapshots(&state.epoch_state.snapshots);
     let pparams = fingerprint_pparams(&state.protocol_params, state.conway_deposit_params.as_ref());
-    let governance = fingerprint_governance(state.gov_state.as_ref());
+    let governance = fingerprint_gov_projection(&state.gov_state);
     let combined = rollup(&[
         &era,
         &utxo,
@@ -151,11 +151,11 @@ pub fn fingerprint_v2(state: &LedgerState) -> LedgerFingerprint {
 /// `utxo == fingerprint_utxo_v2(&state.utxo_state)`.
 pub fn fingerprint_v2_with_utxo(state: &LedgerState, utxo: Hash32) -> LedgerFingerprint {
     let era = fingerprint_era(state.era, state.max_lovelace_supply);
-    let cert = fingerprint_cert(&state.cert_state);
+    let cert = fingerprint_cert_projection(&state.cert_state);
     let epoch = fingerprint_epoch(&state.epoch_state);
     let snapshots = fingerprint_snapshots(&state.epoch_state.snapshots);
     let pparams = fingerprint_pparams(&state.protocol_params, state.conway_deposit_params.as_ref());
-    let governance = fingerprint_governance(state.gov_state.as_ref());
+    let governance = fingerprint_gov_projection(&state.gov_state);
     let combined = rollup(&[
         &era,
         &utxo,
@@ -359,6 +359,25 @@ impl IncrementalUtxoFp {
     }
 }
 
+/// Fingerprint the capability-typed cert state. `Authoritative` fingerprints BYTE-IDENTICALLY to the
+/// pre-capability path (no discriminant); `ReducedUnavailable` gets a distinct marker so a reduced follower's
+/// cert state can never collide with — or be fingerprinted as — a normal authoritative `CertState` (RVBP).
+fn fingerprint_cert_projection(cp: &crate::state::CertStateProjection) -> Hash32 {
+    match cp {
+        crate::state::CertStateProjection::Authoritative(c) => fingerprint_cert(c),
+        crate::state::CertStateProjection::ReducedUnavailable => blake2b_256(b"ade/fp/cert/reduced-unavailable"),
+    }
+}
+
+/// Fingerprint the capability-typed governance state — `Authoritative` byte-identical, `ReducedUnavailable`
+/// distinct (never fingerprinted as a normal `None`/`Some` gov state).
+fn fingerprint_gov_projection(gp: &crate::state::GovStateProjection) -> Hash32 {
+    match gp {
+        crate::state::GovStateProjection::Authoritative(opt) => fingerprint_governance(opt.as_ref()),
+        crate::state::GovStateProjection::ReducedUnavailable => blake2b_256(b"ade/fp/gov/reduced-unavailable"),
+    }
+}
+
 fn fingerprint_cert(cert: &CertState) -> Hash32 {
     let mut buf = Vec::new();
     write_component_header(&mut buf, b"ade/fp/cert");
@@ -429,13 +448,24 @@ fn fingerprint_epoch(epoch: &EpochState) -> Hash32 {
     blake2b_256(&buf)
 }
 
-fn fingerprint_snapshots(snapshots: &SnapshotState) -> Hash32 {
+fn fingerprint_snapshots(snapshots: &crate::epoch::EpochStakeSnapshots) -> Hash32 {
     let mut buf = Vec::new();
     write_component_header(&mut buf, b"ade/fp/snapshots");
-    write_array_canonical(&mut buf, 3);
-    write_stake_snapshot(&mut buf, &snapshots.mark.0);
-    write_stake_snapshot(&mut buf, &snapshots.set.0);
-    write_stake_snapshot(&mut buf, &snapshots.go.0);
+    match snapshots {
+        // Authoritative encodes EXACTLY as before (no discriminant byte) — the full-path fingerprint is
+        // byte-identical (RVBP gate 7).
+        crate::epoch::EpochStakeSnapshots::Authoritative(s) => {
+            write_array_canonical(&mut buf, 3);
+            write_stake_snapshot(&mut buf, &s.mark.0);
+            write_stake_snapshot(&mut buf, &s.set.0);
+            write_stake_snapshot(&mut buf, &s.go.0);
+        }
+        // A reduced projection has NO stake authority — a DISTINCT fingerprint that can never collide with any
+        // authoritative snapshot (RVBP gate 3), so WAL/recovery integrity distinguishes reduced from full.
+        crate::epoch::EpochStakeSnapshots::ReducedUnavailable => {
+            write_component_header(&mut buf, b"ade/fp/snapshots/reduced-unavailable");
+        }
+    }
     blake2b_256(&buf)
 }
 
@@ -1010,6 +1040,31 @@ mod tests {
         assert_ne!(f_unver, f_b1);
     }
 
+    /// GATE 3 (RVBP, no collision): a reduced projection's snapshot fingerprint can NEVER equal an authoritative
+    /// one — not the empty authoritative snapshot, not a populated one. A reduced follower's WAL/recovery state
+    /// is therefore always distinguishable from full epoch authority and can never be rehydrated as authority.
+    #[test]
+    fn rvbp_reduced_snapshot_fingerprint_never_collides_with_authoritative() {
+        use crate::epoch::{EpochStakeSnapshots, GoSnapshot, MarkSnapshot, SetSnapshot, SnapshotState};
+
+        let reduced = fingerprint_snapshots(&EpochStakeSnapshots::ReducedUnavailable);
+        let auth_empty = fingerprint_snapshots(&EpochStakeSnapshots::new());
+
+        let mut snap = StakeSnapshot::new();
+        snap.pool_stakes.insert(PoolId(Hash28([0x44; 28])), Coin(1_000));
+        snap.delegations
+            .insert(Hash28([0x33; 28]), (PoolId(Hash28([0x44; 28])), Coin(1_000)));
+        let auth_populated = fingerprint_snapshots(&EpochStakeSnapshots::Authoritative(SnapshotState {
+            mark: MarkSnapshot(snap.clone()),
+            set: SetSnapshot(snap.clone()),
+            go: GoSnapshot(snap),
+        }));
+
+        assert_ne!(reduced, auth_empty, "reduced must not fingerprint as the empty authoritative snapshot");
+        assert_ne!(reduced, auth_populated, "reduced must not fingerprint as a populated authoritative snapshot");
+        assert_ne!(auth_empty, auth_populated, "distinct authoritative snapshots fingerprint distinctly");
+    }
+
     /// GATE 3 (S4.3b, no collision): a `Bound { mem, steps }` block-ExUnits pparams fingerprint differs from the
     /// Unversioned one AND from a Bound with different mem OR different steps. A fabricated {0,0} would collide a
     /// V10 state with a real `{mem:0,steps:0}` — forbidden.
@@ -1426,7 +1481,7 @@ mod tests {
     fn governance_absent_vs_present_differs() {
         let s_absent = LedgerState::new(CardanoEra::Conway);
         let mut s_present = LedgerState::new(CardanoEra::Conway);
-        s_present.gov_state = Some(ConwayGovState {
+        s_present.gov_state = crate::state::GovStateProjection::Authoritative(Some(ConwayGovState {
             prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
@@ -1438,7 +1493,7 @@ mod tests {
             drep_voting_thresholds: Vec::new(),
             committee_hot_keys: BTreeMap::new(),
             num_dormant: crate::state::DormantEpochs::Unversioned,
-        });
+        }));
 
         let f_absent = fingerprint(&s_absent);
         let f_present = fingerprint(&s_present);
@@ -1461,7 +1516,7 @@ mod tests {
 
         let mk = |action: GovAction| {
             let mut s = LedgerState::new(CardanoEra::Conway);
-            s.gov_state = Some(ConwayGovState {
+            s.gov_state = crate::state::GovStateProjection::Authoritative(Some(ConwayGovState {
                 prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
                 proposals: vec![GovActionState {
                     action_id: GovActionId { tx_hash: Hash32([0x07; 32]), index: 0 },
@@ -1483,7 +1538,7 @@ mod tests {
                 drep_voting_thresholds: Vec::new(),
                 committee_hot_keys: BTreeMap::new(),
                 num_dormant: crate::state::DormantEpochs::Unversioned,
-            });
+            }));
             fingerprint(&s).governance
         };
 
@@ -1541,12 +1596,16 @@ mod tests {
         let mut s_key = LedgerState::new(CardanoEra::Conway);
         s_key
             .cert_state
+            .as_authoritative_mut()
+            .expect("authoritative cert state in test")
             .delegation
             .registrations
             .insert(StakeCredential::KeyHash(bytes.clone()), Coin(2_000_000));
         let mut s_script = LedgerState::new(CardanoEra::Conway);
         s_script
             .cert_state
+            .as_authoritative_mut()
+            .expect("authoritative cert state in test")
             .delegation
             .registrations
             .insert(StakeCredential::ScriptHash(bytes.clone()), Coin(2_000_000));
@@ -1564,7 +1623,7 @@ mod tests {
             let mut s = LedgerState::new(CardanoEra::Conway);
             let mut drep_expiry = BTreeMap::new();
             drep_expiry.insert(cred, 600u64);
-            s.gov_state = Some(ConwayGovState {
+            s.gov_state = crate::state::GovStateProjection::Authoritative(Some(ConwayGovState {
                 prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
                 proposals: Vec::new(),
                 committee: BTreeMap::new(),
@@ -1576,7 +1635,7 @@ mod tests {
                 drep_voting_thresholds: Vec::new(),
                 committee_hot_keys: BTreeMap::new(),
                 num_dormant: crate::state::DormantEpochs::Unversioned,
-            });
+            }));
             s
         };
         let g_key = fingerprint(&gov(StakeCredential::KeyHash(bytes.clone())));

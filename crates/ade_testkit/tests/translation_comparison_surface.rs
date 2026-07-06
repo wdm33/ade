@@ -20,7 +20,7 @@ fn make_state(era: CardanoEra, epoch: u64, treasury: u64, reserves: u64) -> Ledg
         epoch_state: EpochState {
             epoch: EpochNo(epoch),
             slot: SlotNo(0),
-            snapshots: ade_ledger::epoch::SnapshotState::new(),
+            snapshots: ade_ledger::epoch::EpochStakeSnapshots::new(),
             reserves: Coin(reserves),
             treasury: Coin(treasury),
             block_production: std::collections::BTreeMap::new(),
@@ -29,9 +29,9 @@ fn make_state(era: CardanoEra, epoch: u64, treasury: u64, reserves: u64) -> Ledg
         protocol_params: ProtocolParameters::default(),
         era,
         track_utxo: false,
-        cert_state: ade_ledger::delegation::CertState::new(),
+        cert_state: ade_ledger::state::CertStateProjection::Authoritative(ade_ledger::delegation::CertState::new()),
         max_lovelace_supply: 45_000_000_000_000_000,
-        gov_state: None,
+        gov_state: ade_ledger::state::GovStateProjection::Authoritative(None),
         conway_deposit_params: None,
     }
 }

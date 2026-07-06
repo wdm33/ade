@@ -8,7 +8,6 @@
 use ade_types::tx::Coin;
 use ade_types::CardanoEra;
 
-use crate::epoch::SnapshotState;
 use crate::error::{LedgerError, TranslationError, TranslationFailureReason};
 use crate::pparams::ProtocolParameters;
 use crate::state::{EpochState, LedgerState};
@@ -44,7 +43,7 @@ pub fn translate_byron_to_shelley(
     let epoch_state = EpochState {
         epoch: old_state.epoch_state.epoch,
         slot: old_state.epoch_state.slot,
-        snapshots: SnapshotState::new(),
+        snapshots: crate::epoch::EpochStakeSnapshots::new(),
         reserves: initial_shelley_reserves(&utxo_state),
         treasury: Coin(0),
         block_production: std::collections::BTreeMap::new(),
@@ -59,7 +58,7 @@ pub fn translate_byron_to_shelley(
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
         max_lovelace_supply: old_state.max_lovelace_supply,
-        gov_state: None,
+        gov_state: crate::state::GovStateProjection::new(),
         conway_deposit_params: None,
     })
 }
@@ -91,7 +90,7 @@ pub fn translate_shelley_to_allegra(
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
         max_lovelace_supply: old_state.max_lovelace_supply,
-        gov_state: None,
+        gov_state: crate::state::GovStateProjection::new(),
         conway_deposit_params: None,
     })
 }
@@ -122,7 +121,7 @@ pub fn translate_allegra_to_mary(
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
         max_lovelace_supply: old_state.max_lovelace_supply,
-        gov_state: None,
+        gov_state: crate::state::GovStateProjection::new(),
         conway_deposit_params: None,
     })
 }
@@ -158,7 +157,7 @@ pub fn translate_mary_to_alonzo(
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
         max_lovelace_supply: old_state.max_lovelace_supply,
-        gov_state: None,
+        gov_state: crate::state::GovStateProjection::new(),
         conway_deposit_params: None,
     })
 }
@@ -189,7 +188,7 @@ pub fn translate_alonzo_to_babbage(
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
         max_lovelace_supply: old_state.max_lovelace_supply,
-        gov_state: None,
+        gov_state: crate::state::GovStateProjection::new(),
         conway_deposit_params: None,
     })
 }
@@ -225,7 +224,7 @@ pub fn translate_babbage_to_conway(
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
         max_lovelace_supply: old_state.max_lovelace_supply,
-        gov_state: None,
+        gov_state: crate::state::GovStateProjection::new(),
         conway_deposit_params: None,
     })
 }
@@ -277,7 +276,6 @@ fn initial_shelley_reserves(utxo_state: &crate::utxo::UTxOState) -> Coin {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::delegation::CertState;
     use ade_types::address::Address;
     use ade_types::tx::TxIn;
     use ade_types::{EpochNo, Hash32, SlotNo};
@@ -289,7 +287,7 @@ mod tests {
             epoch_state: EpochState {
                 epoch: EpochNo(208),
                 slot: SlotNo(4_492_800),
-                snapshots: SnapshotState::new(),
+                snapshots: crate::epoch::EpochStakeSnapshots::new(),
                 reserves: Coin(0),
                 treasury: Coin(0),
                 block_production: std::collections::BTreeMap::new(),
@@ -298,9 +296,9 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::ByronRegular,
             track_utxo: false,
-            cert_state: CertState::new(),
+            cert_state: crate::state::CertStateProjection::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
-        gov_state: None,
+        gov_state: crate::state::GovStateProjection::new(),
         conway_deposit_params: None,
         }
     }
@@ -311,7 +309,7 @@ mod tests {
             epoch_state: EpochState {
                 epoch: EpochNo(208),
                 slot: SlotNo(4_492_800),
-                snapshots: SnapshotState::new(),
+                snapshots: crate::epoch::EpochStakeSnapshots::new(),
                 reserves: Coin(45_000_000_000_000_000),
                 treasury: Coin(0),
                 block_production: std::collections::BTreeMap::new(),
@@ -320,9 +318,9 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Shelley,
             track_utxo: false,
-            cert_state: CertState::new(),
+            cert_state: crate::state::CertStateProjection::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
-        gov_state: None,
+        gov_state: crate::state::GovStateProjection::new(),
         conway_deposit_params: None,
         }
     }
@@ -333,7 +331,7 @@ mod tests {
             epoch_state: EpochState {
                 epoch: EpochNo(236),
                 slot: SlotNo(16_588_800),
-                snapshots: SnapshotState::new(),
+                snapshots: crate::epoch::EpochStakeSnapshots::new(),
                 reserves: Coin(45_000_000_000_000_000),
                 treasury: Coin(0),
                 block_production: std::collections::BTreeMap::new(),
@@ -342,9 +340,9 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Allegra,
             track_utxo: false,
-            cert_state: CertState::new(),
+            cert_state: crate::state::CertStateProjection::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
-        gov_state: None,
+        gov_state: crate::state::GovStateProjection::new(),
         conway_deposit_params: None,
         }
     }
@@ -434,9 +432,9 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::ByronEbb,
             track_utxo: false,
-            cert_state: CertState::new(),
+            cert_state: crate::state::CertStateProjection::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
-        gov_state: None,
+        gov_state: crate::state::GovStateProjection::new(),
         conway_deposit_params: None,
         };
         let result = translate_byron_to_shelley(&state);
@@ -545,7 +543,7 @@ mod tests {
             epoch_state: EpochState {
                 epoch: EpochNo(251),
                 slot: SlotNo(23_068_800),
-                snapshots: SnapshotState::new(),
+                snapshots: crate::epoch::EpochStakeSnapshots::new(),
                 reserves: Coin(45_000_000_000_000_000),
                 treasury: Coin(0),
                 block_production: std::collections::BTreeMap::new(),
@@ -554,9 +552,9 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Mary,
             track_utxo: false,
-            cert_state: CertState::new(),
+            cert_state: crate::state::CertStateProjection::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
-        gov_state: None,
+        gov_state: crate::state::GovStateProjection::new(),
         conway_deposit_params: None,
         }
     }
@@ -567,7 +565,7 @@ mod tests {
             epoch_state: EpochState {
                 epoch: EpochNo(290),
                 slot: SlotNo(39_916_975),
-                snapshots: SnapshotState::new(),
+                snapshots: crate::epoch::EpochStakeSnapshots::new(),
                 reserves: Coin(45_000_000_000_000_000),
                 treasury: Coin(0),
                 block_production: std::collections::BTreeMap::new(),
@@ -576,9 +574,9 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Alonzo,
             track_utxo: false,
-            cert_state: CertState::new(),
+            cert_state: crate::state::CertStateProjection::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
-        gov_state: None,
+        gov_state: crate::state::GovStateProjection::new(),
         conway_deposit_params: None,
         }
     }
@@ -589,7 +587,7 @@ mod tests {
             epoch_state: EpochState {
                 epoch: EpochNo(365),
                 slot: SlotNo(72_316_896),
-                snapshots: SnapshotState::new(),
+                snapshots: crate::epoch::EpochStakeSnapshots::new(),
                 reserves: Coin(45_000_000_000_000_000),
                 treasury: Coin(0),
                 block_production: std::collections::BTreeMap::new(),
@@ -598,9 +596,9 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Babbage,
             track_utxo: false,
-            cert_state: CertState::new(),
+            cert_state: crate::state::CertStateProjection::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
-        gov_state: None,
+        gov_state: crate::state::GovStateProjection::new(),
         conway_deposit_params: None,
         }
     }

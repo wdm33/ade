@@ -498,7 +498,7 @@ fn allegra_circulation_totalstake_test() {
     state.epoch_state.block_production = post_state.epoch_state.block_production.clone();
     state.epoch_state.epoch_fees = ade_types::tx::Coin(post_snap.header.epoch_fees);
 
-    let go = &state.epoch_state.snapshots.go;
+    let go = &state.epoch_state.snapshots.as_authoritative().unwrap().go;
     let active_stake: u64 = go.0.pool_stakes.values().map(|c| c.0).sum();
     let circulation: u64 = state.max_lovelace_supply
         .saturating_sub(state.epoch_state.reserves.0);
@@ -541,7 +541,7 @@ fn allegra_circulation_totalstake_test() {
         let mut sum = 0u64;
         let mut count = 0usize;
         for (pool_id, pool_stake) in &go.0.pool_stakes {
-            let params = match state.cert_state.pool.pools.get(pool_id) {
+            let params = match state.cert_state.as_authoritative().expect("authoritative cert state in test").pool.pools.get(pool_id) {
                 Some(p) => p,
                 None => continue,
             };
@@ -855,7 +855,7 @@ fn conway_epoch_508_boundary_comparison() {
         // Go snapshot data verification
         eprintln!();
         eprintln!("  --- Go Snapshot Data ---");
-        let go = &pre_state.epoch_state.snapshots.go;
+        let go = &pre_state.epoch_state.snapshots.as_authoritative().unwrap().go;
         let total_stake: u64 = go.0.pool_stakes.values().map(|c| c.0).sum();
         let pool_stake_count = go.0.pool_stakes.len();
         let delegation_count = go.0.delegations.len();
@@ -880,7 +880,7 @@ fn conway_epoch_508_boundary_comparison() {
                 .get(pool_id).copied().unwrap_or(0);
             if blocks == 0 { continue; }
 
-            if let Some(params) = pre_state.cert_state.pool.pools.get(pool_id) {
+            if let Some(params) = pre_state.cert_state.as_authoritative().expect("authoritative cert state in test").pool.pools.get(pool_id) {
                 if params.pledge.0 > pool_stake.0 {
                     pledge_violations += 1;
                     let est = (pool_stake.0 as u128)
@@ -924,7 +924,7 @@ fn conway_epoch_508_boundary_comparison() {
             let mut independent_sum = 0u64;
             let mut pool_count = 0usize;
             for (pool_id, pool_stake) in &go.0.pool_stakes {
-                let params = match pre_state.cert_state.pool.pools.get(pool_id) {
+                let params = match pre_state.cert_state.as_authoritative().expect("authoritative cert state in test").pool.pools.get(pool_id) {
                     Some(p) => p,
                     None => continue,
                 };
@@ -1027,7 +1027,7 @@ fn conway_epoch_508_boundary_comparison() {
             let mut circ_sum = 0u64;
             let mut circ_pool_count = 0usize;
             for (pool_id, pool_stake) in &go.0.pool_stakes {
-                let params = match pre_state.cert_state.pool.pools.get(pool_id) {
+                let params = match pre_state.cert_state.as_authoritative().expect("authoritative cert state in test").pool.pools.get(pool_id) {
                     Some(p) => p,
                     None => continue,
                 };
@@ -1144,7 +1144,7 @@ fn conway_epoch_508_boundary_comparison() {
             let mut epoch506_sum = 0u64;
             let mut epoch506_pool_count = 0usize;
             for (pool_id, pool_stake) in &go.0.pool_stakes {
-                let params = match pre_state.cert_state.pool.pools.get(pool_id) {
+                let params = match pre_state.cert_state.as_authoritative().expect("authoritative cert state in test").pool.pools.get(pool_id) {
                     Some(p) => p,
                     None => continue,
                 };
@@ -1446,7 +1446,7 @@ fn ce71_root_cause_isolation() {
     eprintln!("\n--- Go Snapshot Stake Data Verification ---");
     {
         let pre_state = pre_snap.to_ledger_state();
-        let go = &pre_state.epoch_state.snapshots.go;
+        let go = &pre_state.epoch_state.snapshots.as_authoritative().unwrap().go;
 
         let total_stake: u64 = go.0.pool_stakes.values().map(|c| c.0).sum();
         let delegator_count = go.0.delegations.len();
@@ -1519,7 +1519,7 @@ fn ce71_root_cause_isolation() {
         let mut pool_bytes = [0u8; 28];
         pool_bytes.copy_from_slice(&pool_hash.0[..28]);
         let pool_id = ade_types::tx::PoolId(ade_types::Hash28(pool_bytes));
-        if let Some(params) = boundary_state.cert_state.pool.pools.get_mut(&pool_id) {
+        if let Some(params) = boundary_state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").pool.pools.get_mut(&pool_id) {
             params.pledge = ade_types::tx::Coin(*pledge);
             params.cost = ade_types::tx::Coin(*cost);
             params.margin = (*margin_num, *margin_den);
@@ -1627,7 +1627,7 @@ fn ce71_root_cause_isolation() {
     eprintln!("\n--- Per-Pool Formula Comparison (Haskell vs Ade) ---");
     {
         let pre_state = pre_snap.to_ledger_state();
-        let go = &pre_state.epoch_state.snapshots.go;
+        let go = &pre_state.epoch_state.snapshots.as_authoritative().unwrap().go;
         let total_stake: u64 = go.0.pool_stakes.values().map(|c| c.0).sum();
         let total_blocks: u64 = post_state.epoch_state.block_production.values().sum();
 
@@ -1665,7 +1665,7 @@ fn ce71_root_cause_isolation() {
         let mut pool_diffs: Vec<(i64, u64, u64)> = Vec::new(); // (diff, haskell, ade)
 
         for (pool_id, pool_stake) in &go.0.pool_stakes {
-            let params = match pre_state.cert_state.pool.pools.get(pool_id) {
+            let params = match pre_state.cert_state.as_authoritative().expect("authoritative cert state in test").pool.pools.get(pool_id) {
                 Some(p) => p,
                 None => continue,
             };
@@ -1877,7 +1877,7 @@ fn mary_per_pool_reward_intermediates() {
     state.epoch_state.block_production = post_state.epoch_state.block_production.clone();
     state.epoch_state.epoch_fees = ade_types::tx::Coin(post_snap.header.epoch_fees);
 
-    let go = &state.epoch_state.snapshots.go;
+    let go = &state.epoch_state.snapshots.as_authoritative().unwrap().go;
     let total_active_stake: u64 = go.0.pool_stakes.values().map(|c| c.0).sum();
     let total_blocks: u64 = state.epoch_state.block_production.values().sum();
     let circulation: u64 = state.max_lovelace_supply.saturating_sub(state.epoch_state.reserves.0);
@@ -2025,7 +2025,7 @@ fn mary_per_pool_reward_intermediates() {
     let mut our_sum = 0u64;
 
     for (pool_id, pool_stake) in &go.0.pool_stakes {
-        let params = match state.cert_state.pool.pools.get(pool_id) {
+        let params = match state.cert_state.as_authoritative().expect("authoritative cert state in test").pool.pools.get(pool_id) {
             Some(p) => p,
             None => continue,
         };
@@ -2415,7 +2415,7 @@ fn regular_epoch_boundary_comparison() {
         eprintln!("    oracle trs Δ: {} ({} ADA)", oracle_trs_incr, oracle_trs_incr / 1_000_000);
 
         for (vname, state) in &variants {
-            let go = &state.epoch_state.snapshots.go;
+            let go = &state.epoch_state.snapshots.as_authoritative().unwrap().go;
             let total_active: u64 = go.0.pool_stakes.values().map(|c| c.0).sum();
             let total_blocks: u64 = state.epoch_state.block_production.values().sum();
             let reserves = state.epoch_state.reserves.0;
@@ -2469,7 +2469,7 @@ fn regular_epoch_boundary_comparison() {
                 let mut pool_count = 0usize;
 
                 for (pool_id, pool_stake) in &go.0.pool_stakes {
-                    let params = match state.cert_state.pool.pools.get(pool_id) {
+                    let params = match state.cert_state.as_authoritative().expect("authoritative cert state in test").pool.pools.get(pool_id) {
                         Some(p) => p,
                         None => continue,
                     };
@@ -2648,7 +2648,7 @@ fn per_pool_scaling_diagnostic() {
             s
         };
 
-        let go = &state.epoch_state.snapshots.go;
+        let go = &state.epoch_state.snapshots.as_authoritative().unwrap().go;
         let total_active: u64 = go.0.pool_stakes.values().map(|c| c.0).sum();
         let total_blocks: u64 = state.epoch_state.block_production.values().sum();
         let reserves = state.epoch_state.reserves.0;
@@ -2678,7 +2678,7 @@ fn per_pool_scaling_diagnostic() {
         let mut details: Vec<(String, PoolDetail)> = Vec::new();
 
         for (pool_id, pool_stake) in &go.0.pool_stakes {
-            let params = match state.cert_state.pool.pools.get(pool_id) {
+            let params = match state.cert_state.as_authoritative().expect("authoritative cert state in test").pool.pools.get(pool_id) {
                 Some(p) => p, None => continue,
             };
             let blocks = state.epoch_state.block_production.get(pool_id).copied().unwrap_or(0);
@@ -2836,7 +2836,7 @@ fn binary_search_totalstake() {
             s
         };
 
-        let go = &state.epoch_state.snapshots.go;
+        let go = &state.epoch_state.snapshots.as_authoritative().unwrap().go;
         let total_blocks: u64 = state.epoch_state.block_production.values().sum();
         let reserves = state.epoch_state.reserves.0;
         let circ = state.max_lovelace_supply.saturating_sub(reserves);
@@ -2860,7 +2860,7 @@ fn binary_search_totalstake() {
         let compute_ratio = |total_stake: u64| -> f64 {
             let mut sum_rewards = 0u64;
             for (pool_id, pool_stake) in &go.0.pool_stakes {
-                let params = match state.cert_state.pool.pools.get(pool_id) { Some(p) => p, None => continue };
+                let params = match state.cert_state.as_authoritative().expect("authoritative cert state in test").pool.pools.get(pool_id) { Some(p) => p, None => continue };
                 let blocks = state.epoch_state.block_production.get(pool_id).copied().unwrap_or(0);
                 if blocks == 0 || pool_stake.0 == 0 { continue; }
 
@@ -2952,7 +2952,7 @@ fn pv_branching_circ_vs_circ_treasury() {
             s
         };
 
-        let go = &state.epoch_state.snapshots.go;
+        let go = &state.epoch_state.snapshots.as_authoritative().unwrap().go;
         let total_blocks: u64 = state.epoch_state.block_production.values().sum();
         let reserves = state.epoch_state.reserves.0;
         let circ = state.max_lovelace_supply.saturating_sub(reserves);
@@ -2976,7 +2976,7 @@ fn pv_branching_circ_vs_circ_treasury() {
         let compute = |total_stake: u64, perf_denom: u64, cap: bool| -> f64 {
             let mut sum_rewards = 0u64;
             for (pool_id, pool_stake) in &go.0.pool_stakes {
-                let params = match state.cert_state.pool.pools.get(pool_id) { Some(p) => p, None => continue };
+                let params = match state.cert_state.as_authoritative().expect("authoritative cert state in test").pool.pools.get(pool_id) { Some(p) => p, None => continue };
                 let blocks = state.epoch_state.block_production.get(pool_id).copied().unwrap_or(0);
                 if blocks == 0 || pool_stake.0 == 0 { continue; }
                 let sigma = ade_ledger::rational::Rational::new(pool_stake.0 as i128, total_stake as i128).unwrap();
@@ -3256,7 +3256,7 @@ fn conway_governance_ratification_test() {
     // Build pool stake map (from go snapshot pool_stakes)
     let pre_snap = LoadedSnapshot::from_tarball(&pre_path).unwrap();
     let pre_state = pre_snap.to_ledger_state();
-    let pool_stake = &pre_state.epoch_state.snapshots.go.0.pool_stakes;
+    let pool_stake = &pre_state.epoch_state.snapshots.as_authoritative().unwrap().go.0.pool_stakes;
 
     // Run ratification
     let result = evaluate_ratification(
@@ -3268,8 +3268,8 @@ fn conway_governance_ratification_test() {
         &gov_params.pool_voting_thresholds,
         &gov_params.drep_voting_thresholds,
         528,
-        &pre_state.gov_state.as_ref().map(|g| g.committee_hot_keys.clone()).unwrap_or_default(),
-        &pre_state.gov_state.as_ref().map(|g| g.drep_expiry.clone()).unwrap_or_default(),
+        &pre_state.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().map(|g| g.committee_hot_keys.clone()).unwrap_or_default(),
+        &pre_state.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().map(|g| g.drep_expiry.clone()).unwrap_or_default(),
         &ade_ledger::state::DormantEpochs::Unversioned,
     ).expect("ratify gate (test; empty drep_expiry)");
 
@@ -3323,8 +3323,8 @@ fn conway_governance_ratification_test() {
         let p_post_snap = LoadedSnapshot::from_tarball(&plomin_post).unwrap();
         let p_pre_state = p_pre_snap.to_ledger_state();
         let p_post_state = p_post_snap.to_ledger_state();
-        let p_pre_gov = p_pre_state.gov_state.as_ref().unwrap();
-        let p_post_gov = p_post_state.gov_state.as_ref();
+        let p_pre_gov = p_pre_state.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().unwrap();
+        let p_post_gov = p_post_state.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref();
 
         eprintln!("    PRE proposals: {}", p_pre_gov.proposals.len());
         eprintln!("    POST proposals: {}", p_post_gov.map(|g| g.proposals.len()).unwrap_or(0));
@@ -3343,7 +3343,7 @@ fn conway_governance_ratification_test() {
         // Run ratification
         let p_drep_stake: ade_ledger::governance::DRepStakeDistribution = {
             let mut ds = std::collections::BTreeMap::new();
-            let go = &p_pre_state.epoch_state.snapshots.go;
+            let go = &p_pre_state.epoch_state.snapshots.as_authoritative().unwrap().go;
             for (cred, drep) in &p_pre_gov.vote_delegations {
                 let stake = go.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
                 if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
@@ -3358,7 +3358,7 @@ fn conway_governance_ratification_test() {
         let p_result = ade_ledger::governance::evaluate_ratification(
             &p_pre_gov.proposals,
             &p_drep_stake,
-            &p_pre_state.epoch_state.snapshots.go.0.pool_stakes,
+            &p_pre_state.epoch_state.snapshots.as_authoritative().unwrap().go.0.pool_stakes,
             &p_pre_gov.committee,
             &p_quorum,
             &p_pre_gov.pool_voting_thresholds,
@@ -3397,8 +3397,8 @@ fn conway_governance_ratification_test() {
         let t_pre_state = t_pre_snap.to_ledger_state();
         let t_post_state = t_post_snap.to_ledger_state();
 
-        let t_pre_gov = t_pre_state.gov_state.as_ref().unwrap();
-        let t_post_gov = t_post_state.gov_state.as_ref().unwrap();
+        let t_pre_gov = t_pre_state.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().unwrap();
+        let t_post_gov = t_post_state.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().unwrap();
 
         eprintln!("    PRE proposals: {}", t_pre_gov.proposals.len());
         eprintln!("    POST proposals: {}", t_post_gov.proposals.len());
@@ -3438,7 +3438,7 @@ fn conway_governance_ratification_test() {
         // Test both go and mark snapshots for DRep stake
         let t_drep_stake_go: ade_ledger::governance::DRepStakeDistribution = {
             let mut ds = std::collections::BTreeMap::new();
-            let go = &t_pre_state.epoch_state.snapshots.go;
+            let go = &t_pre_state.epoch_state.snapshots.as_authoritative().unwrap().go;
             for (cred, drep) in &t_pre_gov.vote_delegations {
                 let stake = go.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
                 if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
@@ -3447,7 +3447,7 @@ fn conway_governance_ratification_test() {
         };
         let t_drep_stake_mark: ade_ledger::governance::DRepStakeDistribution = {
             let mut ds = std::collections::BTreeMap::new();
-            let mark = &t_pre_state.epoch_state.snapshots.mark;
+            let mark = &t_pre_state.epoch_state.snapshots.as_authoritative().unwrap().mark;
             for (cred, drep) in &t_pre_gov.vote_delegations {
                 let stake = mark.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
                 if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
@@ -3456,7 +3456,7 @@ fn conway_governance_ratification_test() {
         };
         let t_drep_stake_set: ade_ledger::governance::DRepStakeDistribution = {
             let mut ds = std::collections::BTreeMap::new();
-            let set = &t_pre_state.epoch_state.snapshots.set;
+            let set = &t_pre_state.epoch_state.snapshots.as_authoritative().unwrap().set;
             for (cred, drep) in &t_pre_gov.vote_delegations {
                 let stake = set.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
                 if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
@@ -3474,7 +3474,7 @@ fn conway_governance_ratification_test() {
         let t_pre_drep_regs = &t_pre_gov.drep_expiry; // credential → expiry
         let t_drep_stake_filtered: ade_ledger::governance::DRepStakeDistribution = {
             let mut ds = std::collections::BTreeMap::new();
-            let mark = &t_pre_state.epoch_state.snapshots.mark;
+            let mark = &t_pre_state.epoch_state.snapshots.as_authoritative().unwrap().mark;
             for (cred, drep) in &t_pre_gov.vote_delegations {
                 // Only include if the DRep is registered
                 let drep_registered = match drep {
@@ -3504,7 +3504,7 @@ fn conway_governance_ratification_test() {
             let snap_result = ade_ledger::governance::evaluate_ratification(
                 &t_pre_gov.proposals,
                 snap_stake,
-                &t_pre_state.epoch_state.snapshots.go.0.pool_stakes,
+                &t_pre_state.epoch_state.snapshots.as_authoritative().unwrap().go.0.pool_stakes,
                 &t_pre_gov.committee,
                 &snap_quorum,
                 &t_pre_gov.pool_voting_thresholds,
@@ -3565,7 +3565,7 @@ fn conway_governance_ratification_test() {
         let t_result = ade_ledger::governance::evaluate_ratification(
             &t_pre_gov.proposals,
             &t_drep_stake,
-            &t_pre_state.epoch_state.snapshots.go.0.pool_stakes,
+            &t_pre_state.epoch_state.snapshots.as_authoritative().unwrap().go.0.pool_stakes,
             &t_pre_gov.committee,
             &t_committee_quorum,
             &t_pre_gov.pool_voting_thresholds,
@@ -3683,7 +3683,7 @@ fn conway_governance_ratification_test() {
     let post_state = post_snap.to_ledger_state();
 
     // Compare proposal counts
-    let post_gov = post_state.gov_state.as_ref();
+    let post_gov = post_state.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref();
     let post_proposal_count = post_gov.map(|g| g.proposals.len()).unwrap_or(0);
     eprintln!("    PRE proposals:  {}", pre_proposals.len());
     eprintln!("    POST proposals: {post_proposal_count} (oracle)");
@@ -3706,7 +3706,7 @@ fn conway_governance_ratification_test() {
 
     // Committee comparison
     let post_committee_count = post_gov.map(|g| g.committee.len()).unwrap_or(0);
-    let pre_committee_count = pre_state.gov_state.as_ref().map(|g| g.committee.len()).unwrap_or(0);
+    let pre_committee_count = pre_state.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().map(|g| g.committee.len()).unwrap_or(0);
     eprintln!("    committee: PRE={pre_committee_count} POST={post_committee_count}");
 
     // Treasury comparison
@@ -3715,12 +3715,12 @@ fn conway_governance_ratification_test() {
 
     // DRep count comparison
     let post_drep_count = post_gov.map(|g| g.drep_expiry.len()).unwrap_or(0);
-    let pre_drep_count = pre_state.gov_state.as_ref().map(|g| g.drep_expiry.len()).unwrap_or(0);
+    let pre_drep_count = pre_state.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().map(|g| g.drep_expiry.len()).unwrap_or(0);
     eprintln!("    drep registrations: PRE={pre_drep_count} POST={post_drep_count}");
 
     // Vote delegation comparison
     let post_vd_count = post_gov.map(|g| g.vote_delegations.len()).unwrap_or(0);
-    let pre_vd_count = pre_state.gov_state.as_ref().map(|g| g.vote_delegations.len()).unwrap_or(0);
+    let pre_vd_count = pre_state.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().map(|g| g.vote_delegations.len()).unwrap_or(0);
     eprintln!("    vote delegations: PRE={pre_vd_count} POST={post_vd_count}");
 
     eprintln!("=============================================\n");
@@ -3747,7 +3747,7 @@ fn conway_epoch_boundary_end_to_end() {
         pre_state.epoch_state.treasury.0 / 1_000_000);
 
     eprintln!("  registrations: PRE={}",
-        pre_state.cert_state.delegation.registrations.len());
+        pre_state.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.registrations.len());
 
     // Test both: with PRE registrations and with "all registered" (delta_t2=0)
     let new_epoch = ade_types::EpochNo(577);
@@ -3755,11 +3755,11 @@ fn conway_epoch_boundary_end_to_end() {
     // "All registered" = every credential that exists in the DState
     // Use PRE registration set + all go delegation credentials
     let mut all_registered: std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, ()> =
-        pre_state.cert_state.delegation.registrations.keys()
+        pre_state.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.registrations.keys()
             .map(|k| (k.clone(), ()))
             .collect();
     // Also add all go delegation credentials (some operators may not be in registrations)
-    for k in pre_state.epoch_state.snapshots.go.0.delegations.keys() {
+    for k in pre_state.epoch_state.snapshots.as_authoritative().unwrap().go.0.delegations.keys() {
         all_registered.insert(ade_types::shelley::cert::StakeCredential::KeyHash(k.clone()), ());
     }
 
@@ -3775,7 +3775,7 @@ fn conway_epoch_boundary_end_to_end() {
         let trs_diff = (our_trs - oracle_trs) / 1_000_000;
         eprintln!("  [{label}] reserves={res_ratio:.4}%  treasury_diff={trs_diff} ADA  dt2={} ADA  proposals={}",
             ac.delta_t2 / 1_000_000,
-            rs.gov_state.as_ref().map(|g| g.proposals.len()).unwrap_or(0));
+            rs.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().map(|g| g.proposals.len()).unwrap_or(0));
     }
 
     // Extract the actual reward values (deltaR1, deltaT1, fees) from DRepPulsingState
@@ -3844,7 +3844,7 @@ fn conway_epoch_boundary_end_to_end() {
             std::collections::BTreeMap::new()
         };
     eprintln!("  registrations: delegation={} oracle_json={}",
-        pre_state.cert_state.delegation.registrations.len(),
+        pre_state.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.registrations.len(),
         oracle_regs.len());
     let adjusted_state = pre_state.clone();
 
@@ -3886,7 +3886,10 @@ fn conway_epoch_boundary_end_to_end() {
     eprintln!("    diff:   {} ADA", (our_treasury_change - oracle_treasury_change) / 1_000_000);
 
     // Governance state diff
-    if let (Some(our_gov), Some(post_gov)) = (&result_state.gov_state, &post_state.gov_state) {
+    if let (Some(our_gov), Some(post_gov)) = (
+        result_state.gov_state.as_authoritative().expect("authoritative gov state in test"),
+        post_state.gov_state.as_authoritative().expect("authoritative gov state in test"),
+    ) {
         eprintln!("\n  Governance state:");
         eprintln!("    proposals: ours={} oracle={}", our_gov.proposals.len(), post_gov.proposals.len());
         eprintln!("    committee: ours={} oracle={}", our_gov.committee.len(), post_gov.committee.len());
@@ -3988,16 +3991,16 @@ fn alonzo_epoch_boundary_end_to_end() {
         },
     };
     eprintln!("  registrations: PRE(delegation)={} POST(DState)={}",
-        pre_state.cert_state.delegation.registrations.len(),
+        pre_state.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.registrations.len(),
         post_registered.len());
 
     // Diagnostic: check overlap between go delegators and PRE registrations
-    let go_deleg_count = pre_state.epoch_state.snapshots.go.0.delegations.len();
-    let go_in_pre_regs = pre_state.epoch_state.snapshots.go.0.delegations.keys()
-        .filter(|k| pre_state.cert_state.delegation.registrations.contains_key(
+    let go_deleg_count = pre_state.epoch_state.snapshots.as_authoritative().unwrap().go.0.delegations.len();
+    let go_in_pre_regs = pre_state.epoch_state.snapshots.as_authoritative().unwrap().go.0.delegations.keys()
+        .filter(|k| pre_state.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.registrations.contains_key(
             &ade_types::shelley::cert::StakeCredential::KeyHash((*k).clone())))
         .count();
-    let go_in_post_regs = pre_state.epoch_state.snapshots.go.0.delegations.keys()
+    let go_in_post_regs = pre_state.epoch_state.snapshots.as_authoritative().unwrap().go.0.delegations.keys()
         .filter(|k| post_registered.contains_key(
             &ade_types::shelley::cert::StakeCredential::KeyHash((*k).clone())))
         .count();
@@ -4630,8 +4633,8 @@ fn committee_oracle_mainnet_575_576_noop_agreement() {
 
     let pre = LoadedSnapshot::from_tarball(&pre_path).unwrap().to_ledger_state();
     let post = LoadedSnapshot::from_tarball(&post_path).unwrap().to_ledger_state();
-    let g575 = pre.gov_state.as_ref().expect("epoch 575 gov state");
-    let g576 = post.gov_state.as_ref().expect("epoch 576 gov state");
+    let g575 = pre.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().expect("epoch 575 gov state");
+    let g576 = post.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().expect("epoch 576 gov state");
 
     // --- PARSE fidelity vs cardano-node (the public mainnet interim committee) ---
     fn h28(hex: &str) -> Hash28 {

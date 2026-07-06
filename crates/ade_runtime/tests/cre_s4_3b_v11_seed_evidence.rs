@@ -83,7 +83,7 @@ fn cre_s4_3b_v11_seed_is_source_bound_with_evidence() {
     // 5. Canonical V11 fingerprints (evidence). pparams fp binds the block ExUnits; governance fp binds the
     //    prev-action root. Recorded for the warm-restart equality proof.
     let mut view = LedgerState::new(CardanoEra::Conway);
-    view.gov_state = Some(gov.clone());
+    view.gov_state = ade_ledger::state::GovStateProjection::Authoritative(Some(gov.clone()));
     view.protocol_params = acc.protocol_params.clone();
     let fp = fingerprint(&view);
 

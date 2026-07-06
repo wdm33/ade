@@ -31,17 +31,27 @@ pub enum LedgerBoundaryVerdict { Full(FullEpochBoundaryResult), Reduced(ReducedB
 1. **Reduced boundary transition.** `reduced_boundary_projection(epoch_before, new_epoch, slot) -> ReducedBoundaryProjection`
    — advances epoch/slot + records `ReducedEpochProgress` (block-window rolled). Touches no rewards/pots/
    snapshots/gov/POOLREAP. Pure.
-2. **Remove the reward-only mark.** The `None`-branch reward-only stub in `apply_epoch_boundary_with_registrations`
-   is deleted. The full fn becomes base-required for producing a mark (a `None` mark input on a Conway boundary is
-   the S1 `BoundaryBaseStakeRequired` terminal for the FULL path). No path constructs a reward-only mark.
+2. **Fail-closed capability at the full boundary.** `apply_epoch_boundary_with_registrations` requires
+   `EpochStakeSnapshots::Authoritative` and returns `FullBoundaryStateRequired` if ever handed a reduced
+   projection — it can never silently read a fabricated snapshot.
+2b. **Reduced routing (the seal).** `apply_reduced_epoch_boundary` is the reduced-plane boundary transition
+   (`ReducedUnavailable` snapshots + cert/gov reset + window rollover), and `apply_block_with_accounting` routes
+   EVERY `track_utxo=false` Conway boundary to it. So a reduced boundary emits NO mark on the reduced path —
+   there is no reachable reward-only Conway mark in this commit. (The `Authoritative`/full path's pre-RUPD mark
+   is real authority, corrected to post-RUPD in the next commit; it was never a *reduced* fake snapshot.) This
+   routing was originally sequenced into P3; it is pulled into this first safety-bearing commit so the commit is
+   sealed — no fake snapshot reachable — rather than green-but-unsafe.
 3. **Persistence/fingerprint distinction.** The recovery-checkpoint encoder and the WAL fingerprint gain an
    explicit reduced-vs-full discriminant, so a reduced projection is never encoded in the authoritative
    accumulator-snapshot format and its fingerprint is distinguishable from full authority state.
 
-## P1 acceptance (independently safe)
+## P1 acceptance (sealed activation)
 
-- No code path constructs a reward-only / empty-base mark (grep + a test: a reduced Conway boundary yields no
-  mark bytes).
+- A `track_utxo=false` Conway boundary emits NO mark/set/go and no advanced cert/gov lifecycle
+  (`reduced_epoch_boundary_produces_no_mark_or_cert_lifecycle`); the block-apply path routes it to the reduced
+  transition, never the full boundary fn.
+- A reduced projection reaching the full boundary fn fails closed with `FullBoundaryStateRequired` (not an empty
+  mark).
 - `ReducedEpochProgress` cannot be converted to the full reward input (no `From`/`Into`; the type carries no
   reward fields).
 - Persistence + fingerprint encode a reduced projection distinguishably from full authority (a round-trip test).

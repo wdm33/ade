@@ -177,6 +177,9 @@ pub enum SeedError {
     /// The bootstrapped ledger's era is pre-Conway — the accumulator is Conway-scoped (`era_tag` is the
     /// `CardanoEra as u64`).
     EraNotSupported { era_tag: u64 },
+    /// The bootstrapped ledger's cert/gov state is a reduced projection (`ReducedUnavailable`), not authoritative
+    /// — the accumulator (the epoch authority) cannot seed from a reduced follower (RVBP; fail closed).
+    BootstrapLedgerNotAuthoritative,
 }
 
 impl EpochAccumulator {
@@ -257,9 +260,17 @@ impl EpochAccumulator {
             epoch_state,
             prev_block_production,
             prev_epoch_fees,
-            cert_state: ledger.cert_state.clone(),
+            cert_state: ledger
+                .cert_state
+                .as_authoritative()
+                .ok_or(SeedError::BootstrapLedgerNotAuthoritative)?
+                .clone(),
             protocol_params: ledger.protocol_params.clone(),
-            gov_state: ledger.gov_state.clone(),
+            gov_state: ledger
+                .gov_state
+                .as_authoritative()
+                .ok_or(SeedError::BootstrapLedgerNotAuthoritative)?
+                .clone(),
             conway_deposit_params: ledger.conway_deposit_params.clone(),
             max_lovelace_supply: ledger.max_lovelace_supply,
             era: ledger.era,
@@ -279,9 +290,9 @@ impl EpochAccumulator {
             protocol_params: self.protocol_params.clone(),
             era: self.era,
             track_utxo: false,
-            cert_state: self.cert_state.clone(),
+            cert_state: crate::state::CertStateProjection::Authoritative(self.cert_state.clone()),
             max_lovelace_supply: self.max_lovelace_supply,
-            gov_state: self.gov_state.clone(),
+            gov_state: crate::state::GovStateProjection::Authoritative(self.gov_state.clone()),
             conway_deposit_params: self.conway_deposit_params.clone(),
         }
     }
@@ -518,9 +529,20 @@ pub fn cross_epoch_boundary(
     // block_production/epoch_fees reset to empty/0 (the new epoch's fresh nesBcur). POOLREAP — future-pool
     // adoption, reap (== target), deposit refund, and delegation-clear — now runs INSIDE the boundary fn
     // as the single canonical order, so there is no trailing reap to compose here.
+    // The boundary result is authoritative (the full boundary fn requires it); extract fail-closed rather than
+    // unwrap — a reduced result here would be an invariant violation, never silently accepted.
+    let boundary_slot = new_view.epoch_state.slot;
+    acc.cert_state = new_view
+        .cert_state
+        .require_full(boundary_slot)
+        .map_err(LedgerTransitionError::GovernanceEpochTerminal)?
+        .clone();
+    acc.gov_state = new_view
+        .gov_state
+        .require_full(boundary_slot)
+        .map_err(LedgerTransitionError::GovernanceEpochTerminal)?
+        .clone();
     acc.epoch_state = new_view.epoch_state;
-    acc.cert_state = new_view.cert_state;
-    acc.gov_state = new_view.gov_state;
     // Rotate the block-production buffers: nesBprev := the just-finished nesBcur.
     acc.prev_block_production = finished_blocks;
     acc.prev_epoch_fees = finished_fees;
@@ -1709,11 +1731,11 @@ mod tests {
         snap.delegations
             .insert(Hash28([0x33; 28]), (pool(0x44), Coin(1_000)));
         snap.pool_stakes.insert(pool(0x44), Coin(1_000));
-        acc.epoch_state.snapshots = SnapshotState {
+        acc.epoch_state.snapshots = crate::epoch::EpochStakeSnapshots::Authoritative(SnapshotState {
             mark: MarkSnapshot(snap.clone()),
             set: SetSnapshot(snap.clone()),
             go: GoSnapshot(snap),
-        };
+        });
         acc.prev_block_production.insert(pool(0x44), 11);
         acc.prev_block_production.insert(pool(0x45), 2);
         acc.prev_epoch_fees = Coin(123_456);
@@ -1820,9 +1842,15 @@ mod tests {
         assert_eq!(seed.epoch_state.reserves, ledger.epoch_state.reserves);
         assert_eq!(seed.epoch_state.treasury, ledger.epoch_state.treasury);
         assert_eq!(seed.epoch_state.snapshots, ledger.epoch_state.snapshots);
-        assert_eq!(seed.cert_state, ledger.cert_state);
+        assert_eq!(
+            seed.cert_state,
+            *ledger.cert_state.as_authoritative().expect("authoritative cert state in test")
+        );
         assert_eq!(seed.protocol_params, ledger.protocol_params);
-        assert_eq!(seed.gov_state, ledger.gov_state);
+        assert_eq!(
+            seed.gov_state,
+            *ledger.gov_state.as_authoritative().expect("authoritative gov state in test")
+        );
         assert_eq!(seed.conway_deposit_params, ledger.conway_deposit_params);
         assert_eq!(seed.max_lovelace_supply, ledger.max_lovelace_supply);
         assert_eq!(seed.era, CardanoEra::Conway);
@@ -2053,7 +2081,7 @@ mod tests {
         snap.delegations
             .insert(Hash28([0xCC; 28]), (pool(0xAA), Coin(stake)));
         snap.pool_stakes.insert(pool(0xAA), Coin(stake));
-        acc.epoch_state.snapshots.go = GoSnapshot(snap);
+        acc.epoch_state.snapshots.as_authoritative_mut().unwrap().go = GoSnapshot(snap);
         // C is registered + delegated to pool AA; the operator account (0x0B) is a different cred.
         acc.cert_state
             .delegation
@@ -2178,7 +2206,7 @@ mod tests {
 
         // PER-CREDENTIAL `go` (the mark, two boundaries on): member + operator rewards are non-zero.
         let mut acc_pc = acc.clone();
-        acc_pc.epoch_state.snapshots.go = GoSnapshot(built.clone());
+        acc_pc.epoch_state.snapshots.as_authoritative_mut().unwrap().go = GoSnapshot(built.clone());
         let after_pc =
             cross_epoch_boundary(acc_pc, EpochNo(501), &ctx).expect("per-credential boundary");
         let member_reward = after_pc
@@ -2205,7 +2233,7 @@ mod tests {
         );
         // The cross also rotates in a per-credential mark (the wiring uses the builder).
         assert!(
-            !after_pc.epoch_state.snapshots.mark.0.delegations.is_empty(),
+            !after_pc.epoch_state.snapshots.as_authoritative().unwrap().mark.0.delegations.is_empty(),
             "the rotated-in mark is per-credential"
         );
 
@@ -2216,7 +2244,7 @@ mod tests {
             pool_stakes: built.pool_stakes.clone(),
         };
         let mut acc_pp = acc.clone();
-        acc_pp.epoch_state.snapshots.go = GoSnapshot(per_pool_go);
+        acc_pp.epoch_state.snapshots.as_authoritative_mut().unwrap().go = GoSnapshot(per_pool_go);
         let after_pp = cross_epoch_boundary(acc_pp, EpochNo(501), &ctx).expect("per-pool boundary");
         let member_pp = after_pp
             .cert_state
@@ -3303,7 +3331,7 @@ mod tests {
     ) -> Result<crate::governance::ConwayGovernanceEpochPlan, crate::governance::GovernanceTerminal> {
         let gov = acc.gov_state.as_ref().expect("gov");
         let drep_stake =
-            crate::governance::derive_drep_voting_stake(&gov.vote_delegations, &acc.epoch_state.snapshots.mark.0);
+            crate::governance::derive_drep_voting_stake(&gov.vote_delegations, &acc.epoch_state.snapshots.as_authoritative().unwrap().mark.0);
         let committee_quorum = crate::rational::Rational::new(
             gov.committee_quorum.0 as i128,
             gov.committee_quorum.1.max(1) as i128,
@@ -3312,7 +3340,7 @@ mod tests {
         let input = crate::governance::ConwayGovernanceEpochInput {
             proposals: &gov.proposals,
             drep_stake: &drep_stake,
-            pool_stake: &acc.epoch_state.snapshots.go.0.pool_stakes,
+            pool_stake: &acc.epoch_state.snapshots.as_authoritative().unwrap().go.0.pool_stakes,
             committee_members: &gov.committee,
             committee_quorum: &committee_quorum,
             pool_thresholds: &gov.pool_voting_thresholds,
@@ -3458,13 +3486,13 @@ mod tests {
         let e0 = StakeCredential::KeyHash(Hash28([0xe0; 28]));
         assert_eq!(replay.gov_state, accum.gov_state, "identical next governance state (fingerprint) on both paths");
         assert_eq!(
-            replay.cert_state.delegation.rewards.get(&e0),
-            accum.cert_state.delegation.rewards.get(&e0),
+            replay.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards.get(&e0),
+            accum.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards.get(&e0),
             "identical deposit-return credit on both paths",
         );
         assert_eq!(replay.epoch_state.treasury, accum.epoch_state.treasury, "identical treasury delta");
-        assert_eq!(replay.gov_state.as_ref().unwrap().proposals.len(), 1, "0x01 removed, 0x02 carried");
-        assert_eq!(replay.cert_state.delegation.rewards.get(&e0), Some(&Coin(100_000_000_000)));
+        assert_eq!(replay.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().unwrap().proposals.len(), 1, "0x01 removed, 0x02 carried");
+        assert_eq!(replay.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards.get(&e0), Some(&Coin(100_000_000_000)));
     }
 
     /// CRE S4.3c GATE — cross-path enactment identity. A supported exec-units `ParameterChange` ENACTS identically
@@ -3514,11 +3542,11 @@ mod tests {
             "maxBlock mem enacted, steps preserved",
         );
         assert_eq!(
-            replay.gov_state.as_ref().unwrap().prev_pparam_action,
+            replay.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().unwrap().prev_pparam_action,
             crate::state::PreviousPParamAction::Enacted(GovActionId { tx_hash: Hash32([0x69; 32]), index: 0 }),
             "the enacted PParamUpdate root advances to the winner",
         );
-        assert!(replay.gov_state.as_ref().unwrap().proposals.is_empty(), "winner enacted + sibling pruned");
+        assert!(replay.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().unwrap().proposals.is_empty(), "winner enacted + sibling pruned");
 
         // IDENTICAL on both paths: pparams, gov state (fingerprint), refunds, treasury.
         assert_eq!(replay.protocol_params, accum.protocol_params, "identical enacted pparams on both paths");
@@ -3526,17 +3554,17 @@ mod tests {
         let e0 = StakeCredential::KeyHash(Hash28([0xe0; 28]));
         let e1 = StakeCredential::KeyHash(Hash28([0xe1; 28]));
         assert_eq!(
-            replay.cert_state.delegation.rewards.get(&e0), accum.cert_state.delegation.rewards.get(&e0),
+            replay.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards.get(&e0), accum.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards.get(&e0),
             "identical winner deposit refund on both paths",
         );
         assert_eq!(
-            replay.cert_state.delegation.rewards.get(&e1), accum.cert_state.delegation.rewards.get(&e1),
+            replay.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards.get(&e1), accum.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards.get(&e1),
             "identical pruned-sibling deposit refund on both paths",
         );
         assert_eq!(replay.epoch_state.treasury, accum.epoch_state.treasury, "identical treasury delta");
         // Both deposits refund to their registered accounts (winner -> 0xe0, pruned sibling -> 0xe1).
-        assert_eq!(replay.cert_state.delegation.rewards.get(&e0), Some(&Coin(100_000_000_000)), "winner refund");
-        assert_eq!(replay.cert_state.delegation.rewards.get(&e1), Some(&Coin(100_000_000_000)), "sibling refund");
+        assert_eq!(replay.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards.get(&e0), Some(&Coin(100_000_000_000)), "winner refund");
+        assert_eq!(replay.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards.get(&e1), Some(&Coin(100_000_000_000)), "sibling refund");
     }
 
     /// GATE 2 — the 1340→1341 replay correction. Five expiring proposals crossed via the DIRECT-REPLAY path now
@@ -3555,16 +3583,16 @@ mod tests {
         let (after, _) =
             crate::rules::apply_epoch_boundary_full(&ledger, EpochNo(1341)).expect("replay refunds the expiries");
         assert!(
-            after.gov_state.as_ref().unwrap().proposals.is_empty(),
+            after.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().unwrap().proposals.is_empty(),
             "all five expired proposals leave the set on the replay path (no silent disappearance)",
         );
         assert_eq!(
-            after.cert_state.delegation.rewards.get(&StakeCredential::KeyHash(Hash28([0xe0; 28]))),
+            after.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards.get(&StakeCredential::KeyHash(Hash28([0xe0; 28]))),
             Some(&Coin(400_000_000_000)),
             "four deposits refund to 0xe0 (+400,000 ADA) — the replay path now returns them",
         );
         assert_eq!(
-            after.cert_state.delegation.rewards.get(&StakeCredential::KeyHash(Hash28([0xe1; 28]))),
+            after.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards.get(&StakeCredential::KeyHash(Hash28([0xe1; 28]))),
             Some(&Coin(100_000_000_000)),
             "one deposit refunds to 0xe1 (+100,000 ADA)",
         );

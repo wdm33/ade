@@ -83,6 +83,53 @@ impl Default for SnapshotState {
     }
 }
 
+/// The epoch-state's stake snapshots, capability-typed (REDUCED-VALIDATION-BOUNDARY-PLANE I-RVB-1). Either the
+/// AUTHORITATIVE mark/set/go (produced by the full boundary with base + post-RUPD rewards — the sole stake
+/// authority) OR a typed absence when a reduced-validation follower (`track_utxo=false`) crossed a boundary
+/// without the inputs to build them correctly. `ReducedUnavailable` is a NAMED absence, never a fabricated,
+/// stale, or empty mark: a reduced boundary emits no mark/set/go bytes (N-RVB-1). This is NOT `Option<Snapshot>`
+/// (whose `None` reads as "not computed yet") — it is an explicit authority discriminant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EpochStakeSnapshots {
+    /// Authoritative snapshots — eligible for reward computation, leader inputs, persistence as an epoch-authority
+    /// snapshot, and CE-3d comparison.
+    Authoritative(SnapshotState),
+    /// A reduced follower crossed this boundary with no stake authority. No snapshot exists; any authoritative
+    /// read fails closed with `GovernanceTerminal::FullBoundaryStateRequired`.
+    ReducedUnavailable,
+}
+
+impl EpochStakeSnapshots {
+    /// A fresh authoritative (empty) snapshot state — the genuine "no stake yet" of a new ledger, NOT a reduced
+    /// projection.
+    pub fn new() -> Self {
+        EpochStakeSnapshots::Authoritative(SnapshotState::new())
+    }
+    /// The authoritative snapshots, or `None` if this is a reduced projection. Callers that require authority
+    /// map `None` to `GovernanceTerminal::FullBoundaryStateRequired` (never a fabricated snapshot).
+    pub fn as_authoritative(&self) -> Option<&SnapshotState> {
+        match self {
+            EpochStakeSnapshots::Authoritative(s) => Some(s),
+            EpochStakeSnapshots::ReducedUnavailable => None,
+        }
+    }
+    pub fn as_authoritative_mut(&mut self) -> Option<&mut SnapshotState> {
+        match self {
+            EpochStakeSnapshots::Authoritative(s) => Some(s),
+            EpochStakeSnapshots::ReducedUnavailable => None,
+        }
+    }
+    pub fn is_reduced(&self) -> bool {
+        matches!(self, EpochStakeSnapshots::ReducedUnavailable)
+    }
+}
+
+impl Default for EpochStakeSnapshots {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Rotate snapshots at an epoch boundary.
 ///
 /// The rotation pipeline is:
@@ -373,8 +420,15 @@ pub fn apply_epoch_boundary(
     retirements: &[PoolRetirement],
     _pending_pp_updates: &BTreeMap<Hash28, ProtocolParameters>,
 ) -> Result<EpochBoundaryResult, LedgerError> {
-    // 1. Rotate snapshots
-    let snapshots = &state.epoch_state.snapshots;
+    // 1. Rotate snapshots. This is the full-ledger boundary; require authoritative snapshots (a reduced
+    // projection has no stake authority and never reaches here) — fail closed rather than fabricate.
+    let snapshots = state.epoch_state.snapshots.as_authoritative().ok_or(
+        crate::error::LedgerError::GovernanceBoundaryTerminal(
+            crate::governance::GovernanceTerminal::FullBoundaryStateRequired {
+                boundary_point: state.epoch_state.slot,
+            },
+        ),
+    )?;
     let rotated_snapshots = rotate_snapshots(snapshots, new_mark);
 
     // 2. Compute total active stake from go snapshot
@@ -781,7 +835,7 @@ mod tests {
         let epoch_state = EpochState {
             epoch: EpochNo(5),
             slot: ade_types::SlotNo(21600),
-            snapshots: SnapshotState::new(),
+            snapshots: EpochStakeSnapshots::new(),
             reserves: Coin(10_000_000_000),
             treasury: Coin(0),
             block_production: std::collections::BTreeMap::new(),
@@ -794,9 +848,9 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Shelley,
             track_utxo: false,
-            cert_state: CertState::new(),
+            cert_state: crate::state::CertStateProjection::Authoritative(CertState::new()),
             max_lovelace_supply: 45_000_000_000_000_000,
-        gov_state: None,
+        gov_state: crate::state::GovStateProjection::Authoritative(None),
         conway_deposit_params: None,
         };
 

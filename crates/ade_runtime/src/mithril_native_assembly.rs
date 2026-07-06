@@ -50,7 +50,7 @@ use ade_ledger::consensus_input_extract::PraosNonces;
 use ade_ledger::ledgerdb_state::NativeSnapshotNonUtxoState;
 use ade_ledger::pparams::ProtocolParameters;
 use ade_ledger::snapshot::gov_state::encode_pparams;
-use ade_ledger::state::{EpochState, LedgerState};
+use ade_ledger::state::{CertStateProjection, EpochState, GovStateProjection, LedgerState};
 use ade_ledger::utxo::UTxOState;
 use ade_types::{CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
 
@@ -340,7 +340,8 @@ pub fn assemble_native_mithril_seed(
         // the reward + leadership stake authority the EpochAccumulator seeds. NOT a cold-start empty
         // default: an empty `go` makes the accumulator compute zero member rewards for the first ~3
         // boundaries after bootstrap. Bound to the same certified point/network/era as the rest of S1a.
-        snapshots: s1a.snapshots.clone(),
+        // The certified-snapshot bootstrap import carries authoritative mark/set/go.
+        snapshots: ade_ledger::epoch::EpochStakeSnapshots::Authoritative(s1a.snapshots.clone()),
         reserves: s1a.reserves,
         treasury: s1a.treasury,
         block_production: pool_keyed_block_production(&s1a.block_production),
@@ -356,7 +357,10 @@ pub fn assemble_native_mithril_seed(
         protocol_params: s1a.protocol_params.clone(),
         era: CardanoEra::Conway,
         track_utxo: false,
-        cert_state: s1a.cert_state.clone(),
+        // The bootstrap seed carries FULL cert/gov authority from the certified snapshot — it is the
+        // accumulator's authoritative source, NOT a reduced follower. Typed `Authoritative` so
+        // `seed_from_bootstrap_ledger` accepts it (a `ReducedUnavailable` seed is rejected; RVBP).
+        cert_state: CertStateProjection::Authoritative(s1a.cert_state.clone()),
         max_lovelace_supply: genesis.max_lovelace_supply,
         // CONWAY-PROPOSAL-DEPOSIT-EXPIRY S1/S3: seed the accumulator's gov_state from the CERTIFIED
         // snapshot (NOT inferred, NOT defaulted). Identity-bound proposals (incl their canonical vote
@@ -374,7 +378,7 @@ pub fn assemble_native_mithril_seed(
         // a captured No could flip a near-boundary ratio into a false rejection AND drive a wrongful refund
         // under the current terminal. That activation is S4.3, WITH the PotentiallyRatifiable terminal
         // replaced by oracle-verified ratify-then-enact — so the SPO field stays empty (skipped) here.
-        gov_state: Some(ade_ledger::state::ConwayGovState {
+        gov_state: GovStateProjection::Authoritative(Some(ade_ledger::state::ConwayGovState {
             proposals: s1a.imported_gov.proposals.clone(),
             committee: s1a.imported_gov.committee.clone(),
             committee_quorum: s1a.imported_gov.committee_quorum.unwrap_or((1, 1)),
@@ -404,7 +408,7 @@ pub fn assemble_native_mithril_seed(
                 Some(id) => ade_ledger::state::PreviousPParamAction::Enacted(id.clone()),
                 None => ade_ledger::state::PreviousPParamAction::NoPreviousAction,
             },
-        }),
+        })),
         conway_deposit_params: None,
     };
 
@@ -906,7 +910,7 @@ mod tests {
         )
         .expect("assemble");
         assert_eq!(
-            seed.ledger.gov_state.as_ref().expect("gov").num_dormant,
+            seed.ledger.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().expect("gov").num_dormant,
             ade_ledger::state::DormantEpochs::Bound(5),
             "the V2 seed's dormancy is Bound to the decoded source field (non-zero, non-fabricated)",
         );
@@ -934,7 +938,7 @@ mod tests {
         )
         .expect("assemble");
         assert_eq!(
-            seed.ledger.gov_state.as_ref().expect("gov").prev_pparam_action,
+            seed.ledger.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().expect("gov").prev_pparam_action,
             ade_ledger::state::PreviousPParamAction::Enacted(root),
             "the V11 seed binds the enacted previous-pparam-action root from SJust(id)",
         );
@@ -961,7 +965,7 @@ mod tests {
         )
         .expect("assemble");
         assert_eq!(
-            seed.ledger.gov_state.as_ref().expect("gov").prev_pparam_action,
+            seed.ledger.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().expect("gov").prev_pparam_action,
             ade_ledger::state::PreviousPParamAction::NoPreviousAction,
             "a decoded SNothing binds NoPreviousAction",
         );
@@ -1010,6 +1014,8 @@ mod tests {
             let gov = seed
                 .ledger
                 .gov_state
+                .as_authoritative()
+                .expect("authoritative gov state in test")
                 .as_ref()
                 .expect("gov_state seeded from the imported proposals + committee");
             assert_eq!(gov.proposals.len(), 1, "imported proposal count preserved");
@@ -1066,7 +1072,10 @@ mod tests {
             "conway_deposit_params = None"
         );
         assert_eq!(seed.ledger.max_lovelace_supply, g.max_lovelace_supply);
-        assert_eq!(seed.ledger.cert_state, s1a.cert_state);
+        assert_eq!(
+            seed.ledger.cert_state,
+            CertStateProjection::Authoritative(s1a.cert_state.clone())
+        );
         assert_eq!(seed.ledger.protocol_params, s1a.protocol_params);
         // epoch_state sources.
         assert_eq!(seed.ledger.epoch_state.epoch, s1a.epoch);
@@ -1080,9 +1089,9 @@ mod tests {
         assert_eq!(seed.ledger.epoch_state.epoch_fees, Coin(0), "epoch_fees = 0");
         // CE-3d: the mark/set/go snapshots are threaded from S1a (the certified snapshot's
         // esSnapshots), NOT a cold-start empty default. This is what seeds the accumulator's `go`.
-        assert_eq!(seed.ledger.epoch_state.snapshots, s1a.snapshots);
+        assert_eq!(seed.ledger.epoch_state.snapshots.as_authoritative(), Some(&s1a.snapshots));
         assert!(
-            !seed.ledger.epoch_state.snapshots.go.0.pool_stakes.is_empty(),
+            !seed.ledger.epoch_state.snapshots.as_authoritative().unwrap().go.0.pool_stakes.is_empty(),
             "go snapshot must be non-empty (the reward/leadership stake authority)"
         );
         // UTxO <- Stage-2 (the single ada-only entry).

@@ -24,7 +24,7 @@ use ade_ledger::delegation::{apply_bootstrap_reward_deltas, apply_pool_reap, Poo
 use ade_ledger::error::LedgerError;
 use ade_ledger::reduced_advance::{advance_cert_state, reduced_block_delta};
 use ade_ledger::reduced_aggregate::{aggregate_pool_stake, AggregateError, StakeByPool};
-use ade_ledger::state::LedgerState;
+use ade_ledger::state::{CertStateProjection, GovStateProjection, LedgerState};
 use ade_types::shelley::block::ShelleyBlock;
 use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::{Coin, PoolId};
@@ -45,6 +45,11 @@ pub enum WindowDriverError {
     /// impossible, so the drive fails closed rather than silently collapsing every block to
     /// epoch 0 and never applying POOLREAP (which would yield a consensus-divergent candidate).
     InvalidEpochLength,
+    /// The bootstrap seed handed to the window driver carries a reduced cert/gov projection
+    /// (`CertStateProjection::ReducedUnavailable`). A window replay derives authoritative stake and
+    /// therefore requires a FULL-authority seed; a reduced follower's checkpoint is never a valid
+    /// window-replay seed. Fail closed rather than substitute empty cert authority (RVBP).
+    ReducedBootstrapState,
 }
 
 /// The window-end consensus inputs: the per-pool stake aggregate AND the active pool params
@@ -89,6 +94,12 @@ pub fn drive_window_consensus_inputs(
     if slots_per_epoch == 0 {
         return Err(WindowDriverError::InvalidEpochLength);
     }
+    // The window driver derives AUTHORITATIVE stake, so it requires a full-authority bootstrap seed.
+    // A reduced follower's checkpoint carries `ReducedUnavailable` cert/gov and is never a valid seed;
+    // fail closed up front rather than substitute empty cert authority downstream (RVBP).
+    if bootstrap_state.cert_state.is_reduced() || bootstrap_state.gov_state.is_reduced() {
+        return Err(WindowDriverError::ReducedBootstrapState);
+    }
     let mut state = bootstrap_state.clone();
     let mut prev_epoch: Option<u64> = None;
     for block in blocks {
@@ -98,7 +109,13 @@ pub fn drive_window_consensus_inputs(
         if let Some(pe) = prev_epoch {
             let mut e = pe.saturating_add(1);
             while e <= blk_epoch {
-                apply_pool_reap(&mut state.cert_state, EpochNo(e));
+                apply_pool_reap(
+                    state
+                        .cert_state
+                        .as_authoritative_mut()
+                        .ok_or(WindowDriverError::ReducedBootstrapState)?,
+                    EpochNo(e),
+                );
                 e = e.saturating_add(1);
             }
         }
@@ -111,8 +128,10 @@ pub fn drive_window_consensus_inputs(
         // Cert side: advance the delegation/reward (+ gov) state, exactly as the ledger does.
         let (cert_state, gov_state) =
             advance_cert_state(block, era, &state).map_err(WindowDriverError::Ledger)?;
-        state.cert_state = cert_state;
-        state.gov_state = gov_state;
+        // The advanced cert/gov are the new authoritative state for the next iteration; keep them
+        // typed as full authority so `advance_cert_state` (which reads via `require_full`) sees them.
+        state.cert_state = CertStateProjection::Authoritative(cert_state);
+        state.gov_state = GovStateProjection::Authoritative(gov_state);
     }
     // OPTION B (B3c): apply the snapshot-bound bootstrap reward update at the WINDOW-END -- AFTER the
     // replayed epoch's withdrawals (the loop above), immediately BEFORE the snapshot aggregate. This is
@@ -127,15 +146,26 @@ pub fn drive_window_consensus_inputs(
         // FC/IS: the reward-distribution transition is a pure BLUE ledger fn (checked_add, fail-closed
         // on overflow); the RED driver only SEQUENCES it on the window-replay clone -- it never mutates
         // core state inline.
-        apply_bootstrap_reward_deltas(&mut state.cert_state.delegation, delta)
-            .map_err(WindowDriverError::Aggregate)?;
+        apply_bootstrap_reward_deltas(
+            &mut state
+                .cert_state
+                .as_authoritative_mut()
+                .ok_or(WindowDriverError::ReducedBootstrapState)?
+                .delegation,
+            delta,
+        )
+        .map_err(WindowDriverError::Aggregate)?;
     }
     let cred_utxo_stake = checkpoint
         .sum_base_credential_stake()
         .map_err(WindowDriverError::Checkpoint)?;
-    let stake = aggregate_pool_stake(&cred_utxo_stake, &state.cert_state.delegation)
+    let cert = state
+        .cert_state
+        .as_authoritative()
+        .ok_or(WindowDriverError::ReducedBootstrapState)?;
+    let stake = aggregate_pool_stake(&cred_utxo_stake, &cert.delegation)
         .map_err(WindowDriverError::Aggregate)?;
-    Ok(WindowConsensusInputs { stake, pool_params: state.cert_state.pool.pools.clone() })
+    Ok(WindowConsensusInputs { stake, pool_params: cert.pool.pools.clone() })
 }
 
 /// Drive the reduced checkpoint + cert state over `blocks` and aggregate per-pool stake — a thin
@@ -291,8 +321,9 @@ mod tests {
 
         // bootstrap cert state: both creds delegate to the same pool (a pre-bootstrap fact).
         let mut state = LedgerState::new(CardanoEra::Conway);
-        state.cert_state.delegation.delegations.insert(cred(0xA), pool(0x1));
-        state.cert_state.delegation.delegations.insert(cred(0xB), pool(0x1));
+        let cert = state.cert_state.as_authoritative_mut().expect("authoritative cert state in test");
+        cert.delegation.delegations.insert(cred(0xA), pool(0x1));
+        cert.delegation.delegations.insert(cred(0xB), pool(0x1));
 
         let agg = drive_window_aggregate(&cp, &state, &[], CardanoEra::Conway).expect("drive");
         // pool 0x1 = 1000 + 2000; the NonContributing 9999 is excluded.
@@ -317,7 +348,13 @@ mod tests {
         let mut reduced: BTreeMap<TxIn, (Coin, ReducedStakeRef)> = BTreeMap::new();
         reduced.insert(txin(7), (Coin(5_000_000), ReducedStakeRef::Base(cred(0xC))));
         let mut state = LedgerState::new(era);
-        state.cert_state.delegation.delegations.insert(cred(0xC), pool(0x9));
+        state
+            .cert_state
+            .as_authoritative_mut()
+            .expect("authoritative cert state in test")
+            .delegation
+            .delegations
+            .insert(cred(0xC), pool(0x9));
 
         // (1) the driver.
         let (cp_drv, _d1) = temp_checkpoint();
@@ -386,18 +423,19 @@ mod tests {
         cp.build_from(&reduced).expect("build");
 
         let mut state = LedgerState::new(era);
+        let cert = state.cert_state.as_authoritative_mut().expect("authoritative cert state in test");
         // 0xAA active (old VRF 0x11) + a staged re-registration (new VRF 0x22); 0xEE delegates to it.
-        state.cert_state.pool.pools.insert(pool(0xAA), pp(0xAA, 0x11));
-        state.cert_state.pool.future_pools.insert(pool(0xAA), pp(0xAA, 0x22));
-        state.cert_state.delegation.registrations.insert(cred(0xEE), Coin(2_000_000));
-        state.cert_state.delegation.rewards.insert(cred(0xEE), Coin(0));
-        state.cert_state.delegation.delegations.insert(cred(0xEE), pool(0xAA));
+        cert.pool.pools.insert(pool(0xAA), pp(0xAA, 0x11));
+        cert.pool.future_pools.insert(pool(0xAA), pp(0xAA, 0x22));
+        cert.delegation.registrations.insert(cred(0xEE), Coin(2_000_000));
+        cert.delegation.rewards.insert(cred(0xEE), Coin(0));
+        cert.delegation.delegations.insert(cred(0xEE), pool(0xAA));
         // 0xBB active, scheduled to retire entering epoch 1; 0xDD delegates to it.
-        state.cert_state.pool.pools.insert(pool(0xBB), pp(0xBB, 0x33));
-        state.cert_state.pool.retiring.insert(pool(0xBB), EpochNo(1));
-        state.cert_state.delegation.registrations.insert(cred(0xDD), Coin(2_000_000));
-        state.cert_state.delegation.rewards.insert(cred(0xDD), Coin(0));
-        state.cert_state.delegation.delegations.insert(cred(0xDD), pool(0xBB));
+        cert.pool.pools.insert(pool(0xBB), pp(0xBB, 0x33));
+        cert.pool.retiring.insert(pool(0xBB), EpochNo(1));
+        cert.delegation.registrations.insert(cred(0xDD), Coin(2_000_000));
+        cert.delegation.rewards.insert(cred(0xDD), Coin(0));
+        cert.delegation.delegations.insert(cred(0xDD), pool(0xBB));
 
         let out =
             drive_window_consensus_inputs(&cp, &state, &[b0, b1], era, 100, None).expect("drive");
@@ -418,10 +456,11 @@ mod tests {
         let mut reduced: BTreeMap<TxIn, (Coin, ReducedStakeRef)> = BTreeMap::new();
         reduced.insert(txin(0xDD), (Coin(7_000_000), ReducedStakeRef::Base(cred(0xDD))));
         let mut state = LedgerState::new(era);
-        state.cert_state.pool.pools.insert(pool(0xAA), pp(0xAA, 0x11));
-        state.cert_state.delegation.registrations.insert(cred(0xDD), Coin(2_000_000));
-        state.cert_state.delegation.rewards.insert(cred(0xDD), Coin(0));
-        state.cert_state.delegation.delegations.insert(cred(0xDD), pool(0xAA));
+        let cert = state.cert_state.as_authoritative_mut().expect("authoritative cert state in test");
+        cert.pool.pools.insert(pool(0xAA), pp(0xAA, 0x11));
+        cert.delegation.registrations.insert(cred(0xDD), Coin(2_000_000));
+        cert.delegation.rewards.insert(cred(0xDD), Coin(0));
+        cert.delegation.delegations.insert(cred(0xDD), pool(0xAA));
 
         // No delta -> the pool stake is the UTxO only (7M).
         let (cp, _d0) = temp_checkpoint();
@@ -459,13 +498,14 @@ mod tests {
             reduced.insert(txin(0xDD), (Coin(7_000_000), ReducedStakeRef::Base(cred(0xDD))));
             cp.build_from(&reduced).unwrap();
             let mut state = LedgerState::new(era);
-            state.cert_state.pool.pools.insert(pool(0xAA), pp(0xAA, 0x11));
-            state.cert_state.pool.future_pools.insert(pool(0xAA), pp(0xAA, 0x22));
-            state.cert_state.pool.pools.insert(pool(0xBB), pp(0xBB, 0x33));
-            state.cert_state.pool.retiring.insert(pool(0xBB), EpochNo(1));
-            state.cert_state.delegation.registrations.insert(cred(0xDD), Coin(2_000_000));
-            state.cert_state.delegation.rewards.insert(cred(0xDD), Coin(0));
-            state.cert_state.delegation.delegations.insert(cred(0xDD), pool(0xBB));
+            let cert = state.cert_state.as_authoritative_mut().expect("authoritative cert state in test");
+            cert.pool.pools.insert(pool(0xAA), pp(0xAA, 0x11));
+            cert.pool.future_pools.insert(pool(0xAA), pp(0xAA, 0x22));
+            cert.pool.pools.insert(pool(0xBB), pp(0xBB, 0x33));
+            cert.pool.retiring.insert(pool(0xBB), EpochNo(1));
+            cert.delegation.registrations.insert(cred(0xDD), Coin(2_000_000));
+            cert.delegation.rewards.insert(cred(0xDD), Coin(0));
+            cert.delegation.delegations.insert(cred(0xDD), pool(0xBB));
             drive_window_consensus_inputs(&cp, &state, &blocks, era, 100, None).unwrap()
         };
         assert_eq!(run(), run(), "boundary-crossing drive is replay-deterministic");

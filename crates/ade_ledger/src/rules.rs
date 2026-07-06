@@ -115,13 +115,15 @@ pub fn apply_block_with_accounting(
         }
     };
 
-    // Check for epoch boundary, capture accounting if it fires
+    // Check for epoch boundary, capture accounting if it fires. Routes through THE dispatcher
+    // (RVBP B1): a track_utxo=false Conway follower crosses reduced (no accounting); everything
+    // else runs the full boundary. This is the same dispatch the two live crossers use.
     let mut accounting = None;
     let pre_boundary_state = if let Some(new_epoch) = crate::state::detect_epoch_transition(
         state.epoch_state.epoch, slot,
     ) {
-        let (new_state, acct) = apply_epoch_boundary_full(state, new_epoch)?;
-        accounting = Some(acct);
+        let (new_state, acct) = dispatch_epoch_boundary(state, new_epoch)?;
+        accounting = acct;
         new_state
     } else {
         state.clone()
@@ -130,6 +132,57 @@ pub fn apply_block_with_accounting(
     // Apply block normally on the (possibly post-boundary) state
     let (final_state, verdict) = apply_block_classified(&pre_boundary_state, era, block_cbor)?;
     Ok((final_state, verdict, accounting))
+}
+
+/// Cross a Conway epoch boundary in the REDUCED-VALIDATION plane (`track_utxo=false`). A reduced follower has no
+/// base-UTxO stake authority here, so it advances ONLY the audited structural facts — epoch progression and the
+/// block-production window rollover — and produces NO authority:
+///   - stake snapshots UNAVAILABLE (`EpochStakeSnapshots::ReducedUnavailable`): no mark/set/go bytes, so nothing
+///     can be persisted, fingerprinted, or rehydrated as authority (N-RVB-1, gate 1);
+///   - NO certificate/pool lifecycle (POOLREAP is unavailable in the reduced plane, N-RVB-3): the cert/gov state
+///     is reset to its empty structural absence rather than carried unchanged — a reduced boundary must not
+///     leave a full `CertState`/gov state that a future consumer could mistake for advanced (post-POOLREAP)
+///     lifecycle (deviation 2; the typed result is [`crate::reduced_boundary::ReducedBoundaryProjection`] with
+///     `ReducedCertProjection::Unavailable`). Safe: a `track_utxo=false` follower never applies certs
+///     (`apply_block_classified` carries cert/gov structurally and evolves neither) and reads leadership from the
+///     accumulator's `PoolDistrView`, never this `LedgerState`.
+/// No rewards, pots, or governance enactment — those are the FULL `EpochAccumulator`'s sole authority. Pure.
+pub fn apply_reduced_epoch_boundary(state: &LedgerState, new_epoch: ade_types::EpochNo) -> LedgerState {
+    let mut reduced = state.clone();
+    reduced.epoch_state.epoch = new_epoch;
+    // No fabricated snapshot — the reduced plane crossed WITHOUT stake authority (gate 1 / N-RVB-1).
+    reduced.epoch_state.snapshots = crate::epoch::EpochStakeSnapshots::ReducedUnavailable;
+    // No advanced certificate/pool or governance lifecycle — UNAVAILABLE BY TYPE, never a cleared/empty
+    // full-state field that could be mistaken for advanced authority (N-RVB-3, deviation 2). "Reduced follower +
+    // a normal CertState/gov present" is now unrepresentable; a full-truth reader fails closed.
+    reduced.cert_state = crate::state::CertStateProjection::ReducedUnavailable;
+    reduced.gov_state = crate::state::GovStateProjection::ReducedUnavailable;
+    // The block-production window rolled over: the new epoch starts with a fresh (empty) window and zero fees.
+    reduced.epoch_state.block_production = std::collections::BTreeMap::new();
+    reduced.epoch_state.epoch_fees = ade_types::tx::Coin(0);
+    reduced
+}
+
+/// THE epoch-boundary dispatcher — routes by validation plane BEFORE any full boundary execution
+/// (RVBP B1). A `track_utxo=false` Conway follower crosses via the REDUCED projection
+/// ([`apply_reduced_epoch_boundary`]: epoch/slot + block-window rollover only; snapshots/cert/gov =
+/// `ReducedUnavailable`, no accounting) and NEVER runs [`apply_epoch_boundary_full`] — the reward/pot/
+/// POOLREAP/governance authority belongs solely to the `EpochAccumulator`, so a reduced follower must
+/// not fabricate it. Every other state (full replay / oracle / `track_utxo=true`) runs the authoritative
+/// full boundary. Both live crossers (`apply_shelley_era_block_with_verdicts`,
+/// `apply_shelley_era_block_classified`) and the accounting entry point route through THIS function, so
+/// no production `track_utxo=false` Conway path can reach the full boundary. Returns the post-boundary
+/// state and the accounting (`None` on the reduced plane — there is no authoritative accounting to emit).
+fn dispatch_epoch_boundary(
+    state: &LedgerState,
+    new_epoch: ade_types::EpochNo,
+) -> Result<(LedgerState, Option<EpochBoundaryAccounting>), LedgerError> {
+    if state.era == CardanoEra::Conway && !state.track_utxo {
+        Ok((apply_reduced_epoch_boundary(state, new_epoch), None))
+    } else {
+        let (new_state, acct) = apply_epoch_boundary_full(state, new_epoch)?;
+        Ok((new_state, Some(acct)))
+    }
 }
 
 /// Same as `apply_block` but exposes the `BlockVerdict` so the harness
@@ -245,7 +298,10 @@ fn apply_shelley_era_block_with_verdicts(
         current_state.epoch_state.epoch,
         slot,
     ) {
-        let (new_state, _accounting) = apply_epoch_boundary_full(&current_state, new_epoch)?;
+        // RVBP B1: dispatch by validation plane BEFORE full boundary execution. A track_utxo=false Conway
+        // follower crosses via the reduced projection (cert/gov/snapshots = ReducedUnavailable) and never
+        // reaches the full reward/pot/POOLREAP/gov boundary — that authority is the accumulator's alone.
+        let (new_state, _accounting) = dispatch_epoch_boundary(&current_state, new_epoch)?;
         current_state = new_state;
     }
 
@@ -283,8 +339,14 @@ fn apply_shelley_era_block_with_verdicts(
     };
 
     let (cert_state, gov_state) = if current_state.track_utxo {
-        process_block_certificates(block, era, &current_state)?
+        let (cs, gs) = process_block_certificates(block, era, &current_state)?;
+        (
+            crate::state::CertStateProjection::Authoritative(cs),
+            crate::state::GovStateProjection::Authoritative(gs),
+        )
     } else {
+        // Reduced follower (track_utxo=false): carry the capability-typed cert/gov FORWARD unchanged — after a
+        // reduced boundary these are `ReducedUnavailable`, so no normal CertState/gov is ever exposed.
         (current_state.cert_state.clone(), current_state.gov_state.clone())
     };
 
@@ -329,7 +391,9 @@ fn apply_shelley_era_block_classified(
         current_state.epoch_state.epoch,
         slot,
     ) {
-        let (new_state, _accounting) = apply_epoch_boundary_full(&current_state, new_epoch)?;
+        // RVBP B1: dispatch by validation plane BEFORE full boundary execution — a track_utxo=false Conway
+        // follower crosses via the reduced projection and never reaches the full boundary (accumulator authority).
+        let (new_state, _accounting) = dispatch_epoch_boundary(&current_state, new_epoch)?;
         current_state = new_state;
     }
 
@@ -369,8 +433,14 @@ fn apply_shelley_era_block_classified(
     // Process certificates to accumulate delegation/pool state and (PHASE4-B5)
     // governance state.
     let (cert_state, gov_state) = if current_state.track_utxo {
-        process_block_certificates(block, era, &current_state)?
+        let (cs, gs) = process_block_certificates(block, era, &current_state)?;
+        (
+            crate::state::CertStateProjection::Authoritative(cs),
+            crate::state::GovStateProjection::Authoritative(gs),
+        )
     } else {
+        // Reduced follower (track_utxo=false): carry the capability-typed cert/gov FORWARD unchanged — after a
+        // reduced boundary these are `ReducedUnavailable`, so no normal CertState/gov is ever exposed.
         (current_state.cert_state.clone(), current_state.gov_state.clone())
     };
 
@@ -662,6 +732,20 @@ pub fn apply_epoch_boundary_with_registrations(
     let reserves = state.epoch_state.reserves;
     let treasury = state.epoch_state.treasury;
 
+    // The authoritative snapshots. This is the FULL (authoritative) boundary path; a reduced-validation
+    // projection has no stake authority and never reaches this fn, so require `Authoritative` and fail closed
+    // with `FullBoundaryStateRequired` rather than read a fabricated snapshot (REDUCED-VALIDATION-BOUNDARY-PLANE).
+    let snaps = state.epoch_state.snapshots.as_authoritative().ok_or(
+        crate::governance::GovernanceTerminal::FullBoundaryStateRequired {
+            boundary_point: state.epoch_state.slot,
+        },
+    )?;
+    // The authoritative cert + governance state. This is the FULL boundary path; a reduced projection carries no
+    // cert/gov lifecycle, so require `Authoritative` and fail closed (never a fabricated read) — cert/gov are
+    // unavailable by type on the reduced plane (RVBP).
+    let cert = state.cert_state.require_full(state.epoch_state.slot)?;
+    let gov = state.gov_state.require_full(state.epoch_state.slot)?;
+
     // 0. CRE S4.3 — plan the Conway governance epoch FIRST, from the immutable pre-boundary view, BEFORE any
     // reward/treasury/proposal mutation. A terminal (potentially-ratifiable / malformed / dormant-required)
     // returns HERE with zero resulting-state change. This is the SINGLE governance authority shared by the
@@ -669,10 +753,10 @@ pub fn apply_epoch_boundary_with_registrations(
     // routing independently. The plan is APPLIED once below, into the constructed next state.
     let gov_plan: Option<crate::governance::ConwayGovernanceEpochPlan> =
         if state.era == ade_types::CardanoEra::Conway {
-            if let Some(gov) = state.gov_state.as_ref() {
+            if let Some(gov) = gov.as_ref() {
                 let drep_stake = crate::governance::derive_drep_voting_stake(
                     &gov.vote_delegations,
-                    &state.epoch_state.snapshots.mark.0,
+                    &snaps.mark.0,
                 );
                 let committee_quorum = crate::rational::Rational::new(
                     gov.committee_quorum.0 as i128,
@@ -682,7 +766,7 @@ pub fn apply_epoch_boundary_with_registrations(
                 let input = crate::governance::ConwayGovernanceEpochInput {
                     proposals: &gov.proposals,
                     drep_stake: &drep_stake,
-                    pool_stake: &state.epoch_state.snapshots.go.0.pool_stakes,
+                    pool_stake: &snaps.go.0.pool_stakes,
                     committee_members: &gov.committee,
                     committee_quorum: &committee_quorum,
                     pool_thresholds: &gov.pool_voting_thresholds,
@@ -696,7 +780,7 @@ pub fn apply_epoch_boundary_with_registrations(
                 };
                 // Freeze the registration view used for deposit routing: the PRE-boundary registrations
                 // (no caller re-checks registration against a partially-updated state).
-                let registrations = &state.cert_state.delegation.registrations;
+                let registrations = &cert.delegation.registrations;
                 Some(crate::governance::plan_conway_governance_epoch(&input, |c| {
                     registrations.contains_key(c)
                 })?)
@@ -780,7 +864,7 @@ pub fn apply_epoch_boundary_with_registrations(
 
     // 2. Pool reward allocation from PRE-rotation go snapshot
     let pool_reward_pot = total_reward.0.saturating_sub(treasury_delta);
-    let go = &state.epoch_state.snapshots.go;
+    let go = &snaps.go;
 
     // Total active stake = sum of delegated pool stakes from go snapshot.
     let total_active_stake: u64 = go.0.pool_stakes.values()
@@ -827,11 +911,11 @@ pub fn apply_epoch_boundary_with_registrations(
 
     eprintln!("  [epoch_boundary] protocol_major={} total_stake={} active_stake={} pool_pot={} go_pools={} cert_pools={}",
         state.protocol_params.protocol_major, total_stake, total_active_stake, pool_reward_pot,
-        go.0.pool_stakes.len(), state.cert_state.pool.pools.len());
+        go.0.pool_stakes.len(), cert.pool.pools.len());
 
     if total_stake > 0 && total_active_stake > 0 && pool_reward_pot > 0 {
         for (pool_id, pool_stake) in &go.0.pool_stakes {
-            let params = match state.cert_state.pool.pools.get(pool_id) {
+            let params = match cert.pool.pools.get(pool_id) {
                 Some(p) => p,
                 None => continue,
             };
@@ -1019,7 +1103,7 @@ pub fn apply_epoch_boundary_with_registrations(
             let pv_prefilter = state.protocol_params.protocol_major <= 6;
             // For PV≤6 pre-filter, use registration_override if provided (closest
             // to the DState when the pulser actually ran), otherwise fall back to
-            // state.cert_state.delegation.registrations. The delta_t2 check in
+            // cert.delegation.registrations. The delta_t2 check in
             // applyRUpd uses the same registration source for consistency.
 
             // Registration check helper: uses override set if provided,
@@ -1032,7 +1116,7 @@ pub fn apply_epoch_boundary_with_registrations(
                 if let Some(override_regs) = registration_override {
                     override_regs.contains_key(&sc)
                 } else {
-                    state.cert_state.delegation.registrations.contains_key(&sc)
+                    cert.delegation.registrations.contains_key(&sc)
                 }
             };
 
@@ -1166,7 +1250,7 @@ pub fn apply_epoch_boundary_with_registrations(
     // hardforkBabbageForgoRewardPrefilter only affects leader reward COLLECTION,
     // not the final applyRUpd filtering.
     let mut delta_t2 = 0u64;
-    let mut delegation = state.cert_state.delegation.clone();
+    let mut delegation = cert.delegation.clone();
 
     for (cred, reward) in &reward_deltas {
         // The reward distribution keys by Hash28 (no key/script discriminant), but registrations carry
@@ -1215,9 +1299,9 @@ pub fn apply_epoch_boundary_with_registrations(
         // per-credential `delegations` survive into `go` (a per-pool mark would drop them).
         Some(mark) => mark.clone(),
         None => crate::epoch::StakeSnapshot {
-            delegations: state.cert_state.delegation.delegations.iter()
+            delegations: cert.delegation.delegations.iter()
                 .map(|(cred, pool)| {
-                    let stake = state.cert_state.delegation.rewards
+                    let stake = cert.delegation.rewards
                         .get(cred)
                         .copied()
                         .unwrap_or(ade_types::tx::Coin(0));
@@ -1226,7 +1310,7 @@ pub fn apply_epoch_boundary_with_registrations(
                 .collect(),
             pool_stakes: {
                 let mut ps = std::collections::BTreeMap::new();
-                for pool in state.cert_state.delegation.delegations.values() {
+                for pool in cert.delegation.delegations.values() {
                     ps.entry(pool.clone()).or_insert(ade_types::tx::Coin(0));
                 }
                 ps
@@ -1234,7 +1318,7 @@ pub fn apply_epoch_boundary_with_registrations(
         },
     };
     let rotated = crate::epoch::rotate_snapshots(
-        &state.epoch_state.snapshots,
+        snaps,
         new_mark,
     );
 
@@ -1247,7 +1331,7 @@ pub fn apply_epoch_boundary_with_registrations(
     //          key/script discriminant (registered → that reward account, unregistered → treasury),
     //      (d) clear the reaped pools' delegators, then
     //      (e) remove the reaped pools from the active set + the retiring schedule.
-    let mut pool_state = state.cert_state.pool.clone();
+    let mut pool_state = cert.pool.clone();
     let mut poolreap_to_treasury = 0u64;
     let pool_deposit = state.protocol_params.pool_deposit.0;
 
@@ -1311,7 +1395,7 @@ pub fn apply_epoch_boundary_with_registrations(
     // expired-deposit REFUND now runs on BOTH the accumulator and direct-replay boundaries; the replay path
     // previously dropped expired proposals with no refund (a path-dependent partial-finalization bug).
     let mut gov_deposit_to_treasury = 0u64;
-    let new_gov_state = match (state.gov_state.as_ref(), gov_plan.as_ref()) {
+    let new_gov_state = match (gov.as_ref(), gov_plan.as_ref()) {
         (Some(gov), Some(plan)) => {
             for ret in &plan.deposit_returns {
                 match ret {
@@ -1350,7 +1434,7 @@ pub fn apply_epoch_boundary_with_registrations(
                 },
             })
         }
-        _ => state.gov_state.clone(),
+        _ => gov.clone(),
     };
 
     // 5. Update reserves and treasury per Shelley spec:
@@ -1405,7 +1489,8 @@ pub fn apply_epoch_boundary_with_registrations(
         epoch_state: crate::state::EpochState {
             epoch: new_epoch,
             slot: state.epoch_state.slot,
-            snapshots: rotated,
+            // The FULL boundary produces authoritative snapshots (base + post-RUPD rewards).
+            snapshots: crate::epoch::EpochStakeSnapshots::Authoritative(rotated),
             reserves: new_reserves,
             treasury: new_treasury,
             block_production: std::collections::BTreeMap::new(),
@@ -1420,9 +1505,9 @@ pub fn apply_epoch_boundary_with_registrations(
         },
         era: state.era,
         track_utxo: state.track_utxo,
-        cert_state,
+        cert_state: crate::state::CertStateProjection::Authoritative(cert_state),
         max_lovelace_supply: state.max_lovelace_supply,
-        gov_state: new_gov_state,
+        gov_state: crate::state::GovStateProjection::Authoritative(new_gov_state),
         conway_deposit_params: state.conway_deposit_params.clone(),
     };
 
@@ -1519,16 +1604,21 @@ pub(crate) fn process_block_certificates(
     era: CardanoEra,
     state: &LedgerState,
 ) -> Result<(crate::delegation::CertState, Option<crate::state::ConwayGovState>), LedgerError> {
+    // This path runs only at track_utxo=true (full state present) — require the authoritative cert/gov and fail
+    // closed rather than accommodate a reduced projection (RVBP; cert/gov unavailable by type on the reduced plane).
     if block.tx_count == 0 {
-        return Ok((state.cert_state.clone(), state.gov_state.clone()));
+        return Ok((
+            state.cert_state.require_full(state.epoch_state.slot)?.clone(),
+            state.gov_state.require_full(state.epoch_state.slot)?.clone(),
+        ));
     }
 
-    let mut cert_state = state.cert_state.clone();
+    let mut cert_state = state.cert_state.require_full(state.epoch_state.slot)?.clone();
     // PHASE4-B5: governance state is threaded alongside cert-state. When present
     // (Conway, governance tracked) gov-affecting certs accumulate into it; when
     // absent (None) governance is not tracked and the gov half is skipped — the
     // same gating as track_utxo for cert-state.
-    let mut gov_state = state.gov_state.clone();
+    let mut gov_state = state.gov_state.require_full(state.epoch_state.slot)?.clone();
     // Lazy env: only DRep register/update (tags 16/18) consult it, so an absent
     // drep_activity fails fast exactly when an expiry must be computed, never for
     // env-free gov certs.
@@ -2136,7 +2226,7 @@ pub fn run_phase_one_composers_diagnostic(
                 crate::conway::validate_conway_state_backed(
                     &body, utxo, wi, collateral_percent, current_network,
                     pp.protocol_major as u16, max_ex_units, &deposit_params,
-                    &state.cert_state,
+                    state.cert_state.require_full(state.epoch_state.slot)?,
                 )
             }
             _ => Ok(()),
@@ -2288,7 +2378,7 @@ fn run_phase_one_composers(
             max_ex_units,
             pp.protocol_major as u16,
             conway_deposit_params.as_ref(),
-            &state.cert_state,
+            state.cert_state.require_full(state.epoch_state.slot)?,
         )?;
         let body_end = body_offset;
 
@@ -2676,6 +2766,60 @@ mod cert_state_dispatch {
     }
     const KD: Coin = Coin(2_000_000);
 
+    /// REDUCED-VALIDATION-BOUNDARY-PLANE (gate 1 / N-RVB-1 + deviation 2): a reduced follower (`track_utxo=false`)
+    /// crossing a Conway boundary advances epoch + rolls the block-production window but produces NO stake
+    /// snapshot at all (`ReducedUnavailable`) AND carries no advanced certificate/pool or governance lifecycle —
+    /// never a fabricated mark, never a full `CertState` that could be mistaken for post-POOLREAP state.
+    #[test]
+    fn reduced_epoch_boundary_produces_no_mark_or_cert_lifecycle() {
+        use super::apply_reduced_epoch_boundary;
+        use crate::state::LedgerState;
+        use ade_types::tx::PoolId;
+        use ade_types::{EpochNo, Hash28};
+
+        let mut state = LedgerState::new(CardanoEra::Conway); // track_utxo=false by default (the reduced plane)
+        state.epoch_state.epoch = EpochNo(500);
+        state
+            .epoch_state
+            .block_production
+            .insert(PoolId(Hash28([0x11; 28])), 42);
+        state.epoch_state.epoch_fees = Coin(9_999);
+        // Give it cert + gov content to prove the reduced boundary does NOT carry them across (deviation 2).
+        state
+            .cert_state
+            .as_authoritative_mut()
+            .expect("authoritative cert state in test")
+            .delegation
+            .registrations
+            .insert(ade_types::shelley::cert::StakeCredential::KeyHash(Hash28([0x22; 28])), Coin(2_000_000));
+
+        let reduced = apply_reduced_epoch_boundary(&state, EpochNo(501));
+        assert_eq!(reduced.epoch_state.epoch, EpochNo(501), "epoch advances to the new epoch");
+        assert!(
+            reduced.epoch_state.snapshots.is_reduced(),
+            "the reduced plane produces NO mark/set/go — ReducedUnavailable (gate 1 / N-RVB-1)",
+        );
+        assert!(
+            reduced.epoch_state.snapshots.as_authoritative().is_none(),
+            "stake authority is unavailable on the reduced plane (fails closed, never a fabricated snapshot)",
+        );
+        assert!(
+            reduced.epoch_state.block_production.is_empty(),
+            "the block-production window rolled over into a fresh (empty) new epoch",
+        );
+        assert_eq!(reduced.epoch_state.epoch_fees, Coin(0), "new-epoch fees reset");
+        // Deviation 2: cert/gov are unavailable BY TYPE across the reduced boundary — not an empty full
+        // CertState/gov, but `ReducedUnavailable` (a reduced follower ratified/enacted no cert or governance).
+        assert!(
+            reduced.cert_state.is_reduced(),
+            "no full CertState carried across the reduced boundary (CertStateProjection::ReducedUnavailable)",
+        );
+        assert!(
+            reduced.gov_state.is_reduced(),
+            "no governance lifecycle carried across the reduced boundary (GovStateProjection::ReducedUnavailable)",
+        );
+    }
+
     #[test]
     fn era_dispatch_conway_accumulates_via_conway_path() {
         let bytes = cert_array(reg_cert(1));
@@ -2807,11 +2951,11 @@ mod cert_state_dispatch {
         let (with_mark, _) =
             apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&mark), 21_600).unwrap();
         assert_eq!(
-            with_mark.epoch_state.snapshots.mark.0.pool_stakes, pool_stakes,
+            with_mark.epoch_state.snapshots.as_authoritative().unwrap().mark.0.pool_stakes, pool_stakes,
             "the precomputed mark becomes the new MARK (pool_stakes)"
         );
         assert_eq!(
-            with_mark.epoch_state.snapshots.mark.0.delegations, delegations,
+            with_mark.epoch_state.snapshots.as_authoritative().unwrap().mark.0.delegations, delegations,
             "the per-credential delegations survive into the new MARK (not dropped as a per-pool mark)"
         );
 
@@ -2820,11 +2964,11 @@ mod cert_state_dispatch {
         let (no_mark, _) =
             apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
         assert!(
-            no_mark.epoch_state.snapshots.mark.0.pool_stakes.is_empty(),
+            no_mark.epoch_state.snapshots.as_authoritative().unwrap().mark.0.pool_stakes.is_empty(),
             "None uses the stub (empty cert-state -> empty mark), not the precomputed mark"
         );
         assert_ne!(
-            no_mark.epoch_state.snapshots.mark.0.pool_stakes,
+            no_mark.epoch_state.snapshots.as_authoritative().unwrap().mark.0.pool_stakes,
             pool_stakes
         );
     }
@@ -2915,7 +3059,7 @@ mod cert_state_dispatch {
             proposed_in: EpochNo(499),
             expires_after: EpochNo(510),
         }];
-        state.gov_state = Some(gov);
+        state.gov_state = crate::state::GovStateProjection::Authoritative(Some(gov));
 
         // CRE S4.3a: a threshold-passing (potentially-ratifiable) action is TERMINAL at the boundary on BOTH the
         // replay and accumulator paths — S4.3a performs NO enactment. The boundary must NOT silently dissolve the
@@ -2984,18 +3128,18 @@ mod cert_state_dispatch {
         #[test]
         fn poolreap_reaps_exact_epoch_only() {
             let mut state = state_at(500);
-            let pools = &mut state.cert_state.pool.pools;
+            let pools = &mut state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").pool.pools;
             pools.insert(pid(0xA1), pool_with_account(0xA1, 0xE0, 0x01));
             pools.insert(pid(0xB2), pool_with_account(0xB2, 0xE0, 0x02));
             pools.insert(pid(0xC3), pool_with_account(0xC3, 0xE0, 0x03));
-            let retiring = &mut state.cert_state.pool.retiring;
+            let retiring = &mut state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").pool.retiring;
             retiring.insert(pid(0xA1), EpochNo(501)); // == e  → reaped
             retiring.insert(pid(0xB2), EpochNo(502)); // > e   → kept
             retiring.insert(pid(0xC3), EpochNo(499)); // < e (stale) → kept under `==`, reaped under `<=`
 
             let (out, _ac) =
                 apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
-            let pool = &out.cert_state.pool;
+            let pool = &out.cert_state.as_authoritative().expect("authoritative cert state in test").pool;
 
             assert!(
                 !pool.pools.contains_key(&pid(0xA1)),
@@ -3019,20 +3163,20 @@ mod cert_state_dispatch {
         fn poolreap_refund_registered_else_treasury() {
             let registered = StakeCredential::KeyHash(Hash28([0x11; 28]));
             let mut state = state_at(500);
-            let pools = &mut state.cert_state.pool.pools;
+            let pools = &mut state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").pool.pools;
             pools.insert(pid(0xA1), pool_with_account(0xA1, 0xE0, 0x11));
             pools.insert(pid(0xB2), pool_with_account(0xB2, 0xE0, 0x22));
-            let retiring = &mut state.cert_state.pool.retiring;
+            let retiring = &mut state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").pool.retiring;
             retiring.insert(pid(0xA1), EpochNo(501));
             retiring.insert(pid(0xB2), EpochNo(501));
-            let regs = &mut state.cert_state.delegation.registrations;
+            let regs = &mut state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").delegation.registrations;
             regs.insert(registered.clone(), Coin(2_000_000));
 
             let (out, _ac) =
                 apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
 
             assert_eq!(
-                out.cert_state.delegation.rewards.get(&registered),
+                out.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards.get(&registered),
                 Some(&Coin(POOL_DEPOSIT)),
                 "registered operator account is refunded the pool deposit",
             );
@@ -3049,21 +3193,21 @@ mod cert_state_dispatch {
             let c = StakeCredential::KeyHash(Hash28([0xCC; 28]));
             let e = StakeCredential::KeyHash(Hash28([0xEE; 28]));
             let mut state = state_at(500);
-            let pools = &mut state.cert_state.pool.pools;
+            let pools = &mut state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").pool.pools;
             pools.insert(pid(0xA1), pool_with_account(0xA1, 0xE0, 0x01));
             pools.insert(pid(0xB2), pool_with_account(0xB2, 0xE0, 0x02));
-            let retiring = &mut state.cert_state.pool.retiring;
+            let retiring = &mut state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").pool.retiring;
             retiring.insert(pid(0xA1), EpochNo(501));
-            let regs = &mut state.cert_state.delegation.registrations;
+            let regs = &mut state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").delegation.registrations;
             regs.insert(c.clone(), Coin(2_000_000));
             regs.insert(e.clone(), Coin(2_000_000));
-            let delegs = &mut state.cert_state.delegation.delegations;
+            let delegs = &mut state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").delegation.delegations;
             delegs.insert(c.clone(), pid(0xA1));
             delegs.insert(e.clone(), pid(0xB2));
 
             let (out, _ac) =
                 apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
-            let deleg = &out.cert_state.delegation;
+            let deleg = &out.cert_state.as_authoritative().expect("authoritative cert state in test").delegation;
 
             assert_eq!(
                 deleg.delegations.get(&c),
@@ -3087,16 +3231,16 @@ mod cert_state_dispatch {
             let script_cred = StakeCredential::ScriptHash(Hash28([0x33; 28]));
             let key_cred = StakeCredential::KeyHash(Hash28([0x33; 28]));
             let mut state = state_at(500);
-            let pools = &mut state.cert_state.pool.pools;
+            let pools = &mut state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").pool.pools;
             pools.insert(pid(0xA1), pool_with_account(0xA1, 0xF0, 0x33));
-            let retiring = &mut state.cert_state.pool.retiring;
+            let retiring = &mut state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").pool.retiring;
             retiring.insert(pid(0xA1), EpochNo(501));
-            let regs = &mut state.cert_state.delegation.registrations;
+            let regs = &mut state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").delegation.registrations;
             regs.insert(script_cred.clone(), Coin(2_000_000));
 
             let (out, _ac) =
                 apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
-            let rewards = &out.cert_state.delegation.rewards;
+            let rewards = &out.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards;
 
             assert_eq!(
                 rewards.get(&script_cred),
@@ -3123,15 +3267,15 @@ mod cert_state_dispatch {
             let mut staged = pool_with_account(0xA1, 0xE0, 0x01);
             staged.pledge = Coin(200);
             let mut state = state_at(500);
-            state.cert_state.pool.pools.insert(pid(0xA1), active);
-            let future = &mut state.cert_state.pool.future_pools;
+            state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").pool.pools.insert(pid(0xA1), active);
+            let future = &mut state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").pool.future_pools;
             future.insert(pid(0xA1), staged);
             // An orphan future (no matching active pool) must be dropped, not adopted.
             future.insert(pid(0xB2), pool_with_account(0xB2, 0xE0, 0x02));
 
             let (out, _ac) =
                 apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
-            let pool = &out.cert_state.pool;
+            let pool = &out.cert_state.as_authoritative().expect("authoritative cert state in test").pool;
 
             assert_eq!(
                 pool.pools.get(&pid(0xA1)).map(|p| p.pledge),

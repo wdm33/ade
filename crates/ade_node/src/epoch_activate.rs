@@ -265,6 +265,8 @@ mod tests {
         let mut state = LedgerState::new(CardanoEra::Conway);
         state
             .cert_state
+            .as_authoritative_mut()
+            .expect("authoritative cert state in test")
             .delegation
             .delegations
             .insert(StakeCredential::KeyHash(Hash28([0xc; 28])), PoolId(Hash28([0x9; 28])));
