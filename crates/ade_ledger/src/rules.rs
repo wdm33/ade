@@ -683,21 +683,47 @@ pub fn apply_epoch_boundary_full(
     state: &LedgerState,
     new_epoch: ade_types::EpochNo,
 ) -> Result<(LedgerState, EpochBoundaryAccounting), crate::governance::GovernanceTerminal> {
-    // The live path passes `None` for the precomputed mark -> the boundary uses the
-    // existing stub, UNCHANGED. Activation (S3f-4) calls _with_registrations with the
-    // real aggregate via a distinct entry point, never through _full.
-    //
     // The full-ledger path is mainnet/Shelley-schedule (epoch detection uses SHELLEY_EPOCH_LENGTH),
     // so its monetary-expansion expected-blocks denominator is the mainnet `432_000 × 1/20 = 21_600`.
     // The accumulator path (preview / multi-network) sources the REAL per-era epoch length from the
     // era schedule instead — see `SelectedBlockCtx::active_slots_per_epoch`.
+    // CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION S1: a Conway boundary REQUIRES the point-bound base UTxO for the
+    // mark (never a reward-only mark). The full-ledger path derives it from its OWN tracked UTxO at the boundary
+    // point; a Conway boundary WITHOUT a tracked UTxO fails closed inside the boundary fn
+    // (`BoundaryBaseStakeRequired`) rather than construct a reward-only mark. Pre-Conway eras keep the legacy stub.
+    let boundary_base_stake = derive_boundary_base_stake(state);
     apply_epoch_boundary_with_registrations(
         state,
         new_epoch,
         None,
-        None,
+        boundary_base_stake.as_ref(),
         crate::state::SHELLEY_EPOCH_LENGTH / 20,
     )
+}
+
+/// Derive the point-bound canonical per-credential base-UTxO stake for an epoch boundary from a FULL-ledger
+/// state's OWN tracked UTxO (CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION S1). Sums `Base(cred)` UTxO coin per
+/// credential at the pre-boundary slot — the exact input `build_boundary_mark_snapshot` needs. `Some` only for a
+/// Conway boundary WITH a tracked UTxO (`track_utxo=true`); `None` otherwise (pre-Conway keeps the legacy stub;
+/// a reduced `track_utxo=false` follower has no full UTxO to derive from and is non-authoritative here).
+pub fn derive_boundary_base_stake(
+    state: &LedgerState,
+) -> Option<crate::epoch_accumulator::BoundaryBaseStake> {
+    if state.era != ade_types::CardanoEra::Conway || !state.track_utxo {
+        return None;
+    }
+    let mut base: std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, ade_types::tx::Coin> =
+        std::collections::BTreeMap::new();
+    for out in state.utxo_state.utxos.values() {
+        if let (coin, crate::reduced_utxo::ReducedStakeRef::Base(cred)) = crate::reduced_utxo::reduce_txout(out) {
+            let e = base.entry(cred).or_insert(ade_types::tx::Coin(0));
+            e.0 = e.0.saturating_add(coin.0);
+        }
+    }
+    Some(crate::epoch_accumulator::BoundaryBaseStake {
+        boundary_point: state.epoch_state.slot,
+        canonical_credential_stake: base,
+    })
 }
 
 /// Apply epoch boundary with an optional override for the credential registration set.
@@ -710,14 +736,13 @@ pub fn apply_epoch_boundary_with_registrations(
     state: &LedgerState,
     new_epoch: ade_types::EpochNo,
     registration_override: Option<&std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, ()>>,
-    // The new MARK snapshot for the boundary. When `Some(mark)` (the accumulator path,
-    // LIVE-LEDGER-EPOCH-TRANSITION S3) it is a fully-built PER-CREDENTIAL snapshot
-    // (`cred -> (pool, base-UTxO + reward stake)`), used DIRECTLY as the new mark so its
-    // `delegations` survive into `go` and pay member rewards two boundaries later; when
-    // `None` (the full-ledger path) the existing per-credential cert-state stub is used
-    // UNCHANGED. (The EVIEW leadership path still forms a per-pool mark via
-    // `reduced_snapshot::form_mark_snapshot`, but consumes it elsewhere.)
-    precomputed_mark: Option<&crate::epoch::StakeSnapshot>,
+    // The point-bound canonical per-credential base-UTxO stake for the boundary
+    // (CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION S1). The mark is built INSIDE this fn, AFTER `applyRUpd`, from
+    // this base + the staged POST-RUPD reward accounts — never a caller-precomputed (pre-RUPD) mark. The
+    // accumulator caller supplies it from the reduced checkpoint; the direct/full-ledger caller derives it from
+    // its full UTxO at the same point. `None` on a CONWAY boundary is a structured `BoundaryBaseStakeRequired`
+    // terminal (never a reward-only mark); pre-Conway eras keep the legacy reward-only stub (now post-RUPD).
+    boundary_base_stake: Option<&crate::epoch_accumulator::BoundaryBaseStake>,
     // The network's expected block-producing slots per epoch = `epochLength × activeSlotCoeff`
     // (preview 86_400 × 1/20 = 4_320; mainnet/preprod 432_000 × 1/20 = 21_600). The monetary-
     // expansion performance factor is `eta = min(1, blocksMade / floor((1-d) × this))`. Passed in
@@ -1291,31 +1316,48 @@ pub fn apply_epoch_boundary_with_registrations(
 
     let _ = (rewarded_pool_count, total_pool_rewards, total_member_rewards, total_stake);
 
-    // 3. Snapshot rotation (AFTER reward computation). S3f-1: the new MARK is the real
-    //    S3c per-pool aggregate when one is provided (activation); otherwise the existing
-    //    stub (the unchanged live path).
-    let new_mark = match precomputed_mark {
-        // The accumulator path supplies a fully-built per-credential mark; use it directly so the
-        // per-credential `delegations` survive into `go` (a per-pool mark would drop them).
-        Some(mark) => mark.clone(),
-        None => crate::epoch::StakeSnapshot {
-            delegations: cert.delegation.delegations.iter()
-                .map(|(cred, pool)| {
-                    let stake = cert.delegation.rewards
-                        .get(cred)
-                        .copied()
-                        .unwrap_or(ade_types::tx::Coin(0));
-                    (cred.hash().clone(), (pool.clone(), stake))
-                })
-                .collect(),
-            pool_stakes: {
-                let mut ps = std::collections::BTreeMap::new();
-                for pool in cert.delegation.delegations.values() {
-                    ps.entry(pool.clone()).or_insert(ade_types::tx::Coin(0));
-                }
-                ps
-            },
-        },
+    // 3. Snapshot rotation (AFTER `applyRUpd`). The mark reads the STAGED POST-RUPD reward accounts
+    //    (`delegation`, already updated at the applyRUpd step above) + the point-bound EXACT base UTxO — never
+    //    the pre-RUPD view (the pre-RUPD mark was the CE-3d go-stake residual −343,260,172,883). Delegations are
+    //    read here PRE-POOLREAP (POOLREAP runs below), matching cardano's SNAP-before-POOLREAP order. A CONWAY
+    //    boundary WITHOUT the base input is a structured terminal (never a reward-only mark), zero mutation.
+    let new_mark = match boundary_base_stake {
+        Some(base) => crate::epoch_accumulator::build_boundary_mark_snapshot(
+            base,
+            crate::epoch_accumulator::PostRupdRewards::after_rupd(&delegation),
+        ),
+        None => {
+            // ANY Conway boundary that reaches this fn REQUIRES the base — fail closed rather than fabricate a
+            // reward-only mark (the pre-RUPD/base-less mark was the CE-3d go-stake residual). The reduced-validation
+            // path (`track_utxo=false`) never reaches here: `dispatch_epoch_boundary` routes every `track_utxo=false`
+            // Conway boundary to `apply_reduced_epoch_boundary` (which emits no mark at all), so the reward-only stub
+            // is UNREPRESENTABLE for Conway — the gate is on the era alone, not `&& track_utxo`, closing the
+            // footgun for any future direct caller rather than relying on the routing to keep it unreachable. Only
+            // pre-Conway eras (which have no base-stake authority) keep the legacy stub, reading POST-RUPD `delegation`.
+            if state.era == ade_types::CardanoEra::Conway {
+                return Err(crate::governance::GovernanceTerminal::BoundaryBaseStakeRequired {
+                    boundary_point: state.epoch_state.slot,
+                });
+            }
+            crate::epoch::StakeSnapshot {
+                delegations: delegation.delegations.iter()
+                    .map(|(cred, pool)| {
+                        let stake = delegation.rewards
+                            .get(cred)
+                            .copied()
+                            .unwrap_or(ade_types::tx::Coin(0));
+                        (cred.hash().clone(), (pool.clone(), stake))
+                    })
+                    .collect(),
+                pool_stakes: {
+                    let mut ps = std::collections::BTreeMap::new();
+                    for pool in delegation.delegations.values() {
+                        ps.entry(pool.clone()).or_insert(ade_types::tx::Coin(0));
+                    }
+                    ps
+                },
+            }
+        }
     };
     let rotated = crate::epoch::rotate_snapshots(
         snaps,
@@ -2918,58 +2960,62 @@ mod cert_state_dispatch {
         );
     }
 
-    /// LIVE-LEDGER-EPOCH-TRANSITION S3 (DC-EPOCH-21): the epoch boundary consumes a fully-built
-    /// PER-CREDENTIAL mark as the new MARK when one is provided (the accumulator path), used DIRECTLY
-    /// so its `delegations` survive (no per-pool `form_mark_snapshot`), and uses the existing
-    /// cert-state stub UNCHANGED when `None` (the full-ledger path).
+    /// CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION S1: the epoch boundary BUILDS the new MARK from the point-bound
+    /// base UTxO ([`BoundaryBaseStake`]) + the STAGED POST-RUPD reward accounts — `stake = base + reward` per
+    /// credential, retaining per-credential `delegations`. And the NO-FALLBACK gate: a CONWAY boundary WITHOUT
+    /// the base input is a structured `BoundaryBaseStakeRequired` terminal (never a reward-only mark).
     #[test]
-    fn epoch_boundary_consumes_precomputed_aggregate_mark() {
+    fn epoch_boundary_builds_mark_from_base_plus_postrupd_reward_and_requires_base_for_conway() {
         use super::apply_epoch_boundary_with_registrations;
-        use crate::epoch::StakeSnapshot;
         use crate::state::LedgerState;
+        use ade_types::shelley::cert::StakeCredential;
         use ade_types::tx::PoolId;
         use ade_types::{EpochNo, Hash28};
         use std::collections::BTreeMap;
 
         let mut state = LedgerState::new(CardanoEra::Conway);
         state.epoch_state.epoch = EpochNo(500);
+        // ANY Conway boundary reaching this fn REQUIRES the base — a `None` is the structured terminal (the
+        // reduced track_utxo=false path never reaches here; `dispatch_epoch_boundary` routes it to the reduced
+        // boundary, so the reward-only stub is unrepresentable for Conway). track_utxo=true is the full path.
+        state.track_utxo = true;
 
+        // A delegated credential with a POST-RUPD reward balance (no blocks → native RUPD is zero, so the held
+        // 700 is the post-RUPD balance); its base UTxO (300) is supplied via BoundaryBaseStake.
         let pool_a = PoolId(Hash28([0x11; 28]));
-        let pool_b = PoolId(Hash28([0x22; 28]));
-        let mut pool_stakes = BTreeMap::new();
-        pool_stakes.insert(pool_a.clone(), Coin(1000));
-        pool_stakes.insert(pool_b.clone(), Coin(2000));
-        let mut delegations = BTreeMap::new();
-        delegations.insert(Hash28([0xA1; 28]), (pool_a, Coin(1000)));
-        delegations.insert(Hash28([0xB2; 28]), (pool_b, Coin(2000)));
-        let mark = StakeSnapshot {
-            delegations: delegations.clone(),
-            pool_stakes: pool_stakes.clone(),
+        let cred_a = StakeCredential::KeyHash(Hash28([0xA1; 28]));
+        state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").delegation.delegations.insert(cred_a.clone(), pool_a.clone());
+        state.cert_state.as_authoritative_mut().expect("authoritative cert state in test").delegation.rewards.insert(cred_a.clone(), Coin(700));
+        let mut base = BTreeMap::new();
+        base.insert(cred_a.clone(), Coin(300));
+        let base_stake = crate::epoch_accumulator::BoundaryBaseStake {
+            boundary_point: ade_types::SlotNo(0),
+            canonical_credential_stake: base,
         };
 
-        // Some(mark) -> the new MARK is the per-credential snapshot, used directly.
-        let (with_mark, _) =
-            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&mark), 21_600).unwrap();
+        // Some(base) -> the mark is BUILT: stake = base (300) + post-RUPD reward (700) = 1000, delegations kept.
+        let (built, _) =
+            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&base_stake), 21_600)
+                .unwrap();
         assert_eq!(
-            with_mark.epoch_state.snapshots.as_authoritative().unwrap().mark.0.pool_stakes, pool_stakes,
-            "the precomputed mark becomes the new MARK (pool_stakes)"
+            built.epoch_state.snapshots.as_authoritative().unwrap().mark.0.delegations.get(&Hash28([0xA1; 28])).map(|(_, c)| c.0),
+            Some(1000),
+            "the mark stake is base (300) + post-RUPD reward (700)"
         );
         assert_eq!(
-            with_mark.epoch_state.snapshots.as_authoritative().unwrap().mark.0.delegations, delegations,
-            "the per-credential delegations survive into the new MARK (not dropped as a per-pool mark)"
+            built.epoch_state.snapshots.as_authoritative().unwrap().mark.0.pool_stakes.get(&pool_a).map(|c| c.0),
+            Some(1000),
+            "pool_stakes aggregates the per-credential base+reward"
         );
 
-        // None -> the existing stub (the full-ledger path UNCHANGED): the empty cert-state here
-        // yields an empty stub mark, NOT the precomputed mark.
-        let (no_mark, _) =
-            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
+        // None on a CONWAY boundary -> structured terminal, NEVER a reward-only mark (the no-fallback gate).
+        let terminal = apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600);
         assert!(
-            no_mark.epoch_state.snapshots.as_authoritative().unwrap().mark.0.pool_stakes.is_empty(),
-            "None uses the stub (empty cert-state -> empty mark), not the precomputed mark"
-        );
-        assert_ne!(
-            no_mark.epoch_state.snapshots.as_authoritative().unwrap().mark.0.pool_stakes,
-            pool_stakes
+            matches!(
+                terminal,
+                Err(crate::governance::GovernanceTerminal::BoundaryBaseStakeRequired { .. })
+            ),
+            "a Conway boundary without BoundaryBaseStake fails structurally, never a reward-only mark",
         );
     }
 
@@ -3002,11 +3048,21 @@ mod cert_state_dispatch {
             .insert(PoolId(Hash28([0x11; 28])), 100);
 
         // The go snapshot is empty -> no member rewards; the pool pot returns to reserves, so the
-        // treasury increase is exactly floor(deltaR1 * tau) -- a clean readout of the eta-scaled pot.
+        // treasury increase is exactly floor(deltaR1 * tau) -- a clean readout of the eta-scaled pot. The
+        // empty cert-state has no delegations, so an EMPTY base yields an empty mark (this test reads pots, not
+        // the mark) — Conway requires the base input, so pass an empty one rather than `None` (which terminals).
+        let empty_base = crate::epoch_accumulator::BoundaryBaseStake {
+            boundary_point: ade_types::SlotNo(0),
+            canonical_credential_stake: std::collections::BTreeMap::new(),
+        };
         let preview =
-            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 4_320).unwrap().0;
+            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&empty_base), 4_320)
+                .unwrap()
+                .0;
         let mainnet =
-            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap().0;
+            apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&empty_base), 21_600)
+                .unwrap()
+                .0;
 
         let t_preview = preview.epoch_state.treasury.0;
         let t_mainnet = mainnet.epoch_state.treasury.0;
@@ -3106,6 +3162,15 @@ mod cert_state_dispatch {
             PoolId(Hash28([b; 28]))
         }
 
+        /// An empty point-bound base. These tests exercise POOLREAP (reap/refund/delegation-clear), not the mark,
+        /// but a Conway boundary requires the base input (else it terminals) — so supply an empty one.
+        fn base0() -> crate::epoch_accumulator::BoundaryBaseStake {
+            crate::epoch_accumulator::BoundaryBaseStake {
+                boundary_point: ade_types::SlotNo(0),
+                canonical_credential_stake: std::collections::BTreeMap::new(),
+            }
+        }
+
         /// A pool whose reward account is `header ‖ [cred_byte;28]` — header 0xE0 = key-hash stake,
         /// 0xF0 = script-hash stake.
         fn pool_with_account(id: u8, header: u8, cred_byte: u8) -> PoolParams {
@@ -3138,7 +3203,8 @@ mod cert_state_dispatch {
             retiring.insert(pid(0xC3), EpochNo(499)); // < e (stale) → kept under `==`, reaped under `<=`
 
             let (out, _ac) =
-                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&base0()), 21_600)
+                    .unwrap();
             let pool = &out.cert_state.as_authoritative().expect("authoritative cert state in test").pool;
 
             assert!(
@@ -3173,7 +3239,8 @@ mod cert_state_dispatch {
             regs.insert(registered.clone(), Coin(2_000_000));
 
             let (out, _ac) =
-                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&base0()), 21_600)
+                    .unwrap();
 
             assert_eq!(
                 out.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards.get(&registered),
@@ -3206,7 +3273,8 @@ mod cert_state_dispatch {
             delegs.insert(e.clone(), pid(0xB2));
 
             let (out, _ac) =
-                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&base0()), 21_600)
+                    .unwrap();
             let deleg = &out.cert_state.as_authoritative().expect("authoritative cert state in test").delegation;
 
             assert_eq!(
@@ -3239,7 +3307,8 @@ mod cert_state_dispatch {
             regs.insert(script_cred.clone(), Coin(2_000_000));
 
             let (out, _ac) =
-                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&base0()), 21_600)
+                    .unwrap();
             let rewards = &out.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards;
 
             assert_eq!(
@@ -3274,7 +3343,8 @@ mod cert_state_dispatch {
             future.insert(pid(0xB2), pool_with_account(0xB2, 0xE0, 0x02));
 
             let (out, _ac) =
-                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, None, 21_600).unwrap();
+                apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&base0()), 21_600)
+                    .unwrap();
             let pool = &out.cert_state.as_authoritative().expect("authoritative cert state in test").pool;
 
             assert_eq!(

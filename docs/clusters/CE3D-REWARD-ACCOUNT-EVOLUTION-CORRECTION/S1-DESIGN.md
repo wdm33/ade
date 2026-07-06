@@ -193,6 +193,16 @@ next-state construction (same zero-mutation guarantee as the governance terminal
 eras keep the legacy stub only where they already run it; the Conway boundary — the CE-3d / continuous-operation
 path — is base-required on both callers.)
 
+**Scope refinement (implementation, reconciled with REDUCED-VALIDATION-BOUNDARY-PLANE).** The terminal is
+**FULL-authority-path only** — a Conway boundary with `track_utxo=true` (the accumulator, which always supplies
+the base; and the direct full-ledger `apply_epoch_boundary_full`, which derives it from its own UTxO via
+`derive_boundary_base_stake`). A **reduced follower** (`track_utxo=false`) reaches the same fn (via
+`apply_block_with_accounting` during live fork-choice) but is NOT authoritative there: it keeps a
+non-authoritative stub and never halts. Its proper treatment — a `ReducedBoundaryProjection` that emits **no**
+mark at all — is the REDUCED-VALIDATION-BOUNDARY-PLANE P3 routing slice, sequenced AFTER this correction.
+Terminaling the reduced path here would break the 10 live fork-choice tests, which this correction must leave
+green ("FULL path only"). Both stub paths (pre-Conway, reduced) now read the POST-RUPD `delegation`.
+
 ### Invariants carried (unchanged by the amendment)
 
 POOLREAP still observes post-RUPD rewards + pre-POOLREAP delegations; governance refunds still land after mark

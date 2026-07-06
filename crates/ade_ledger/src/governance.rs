@@ -589,6 +589,12 @@ pub enum GovernanceTerminal {
     /// promoted to full authority merely because it crossed without error. Fail-closed, structured — never a
     /// silent success (REDUCED-VALIDATION-BOUNDARY-PLANE I-RVB-3).
     FullBoundaryStateRequired { boundary_point: ade_types::SlotNo },
+    /// A Conway epoch boundary was reached WITHOUT the required canonical per-credential base-UTxO stake
+    /// ([`crate::epoch_accumulator::BoundaryBaseStake`]). The mark MUST NOT be built from a reward-only view —
+    /// that carries incorrect stake semantics into `go`/leader authority (the pre-RUPD/base-less mark was the
+    /// CE-3d go-stake residual −343,260,172,883). Fail-closed on BOTH the accumulator and direct/full-ledger
+    /// paths, zero mutation (CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION S1).
+    BoundaryBaseStakeRequired { boundary_point: ade_types::SlotNo },
 }
 
 /// Canonical inputs to [`plan_conway_governance_epoch`] — all borrows, pure (no I/O, no ledger/accumulator handle).

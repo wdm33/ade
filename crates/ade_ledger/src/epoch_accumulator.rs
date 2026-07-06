@@ -491,10 +491,35 @@ pub fn cross_epoch_boundary(
         }
     }
 
-    // Build the new PER-CREDENTIAL mark from the supplied base-UTxO stake + the held (post-seed)
-    // delegation state. The boundary fn consumes it DIRECTLY as the new mark, so its per-credential
-    // `delegations` survive into `go` and pay member rewards two boundaries later.
-    let new_mark = build_boundary_mark_snapshot(base_utxo, &acc.cert_state.delegation);
+    // ONE-SHOT BOOTSTRAP RUPD, staged BEFORE the mark (CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION S1). At the seed
+    // boundary the native reward is zero, so the bootstrap RUPD is the ONLY reward the seed-boundary mark must
+    // see. Verify the durable commitment, apply its reward-account delta to the held delegation HERE — before the
+    // boundary fn builds the POST-RUPD mark — and CONSUME it (`take` → None); its POT deltas are applied AFTER the
+    // native mechanics (below), as they do not affect the mark. Fail-closed on a tampered/corrupt record. (The fn
+    // itself no longer receives a precomputed mark; it builds one from the base + the staged post-RUPD rewards.)
+    let bootstrap_pots = if is_seed_boundary {
+        let rupd = acc
+            .pending_reward_update
+            .take()
+            .expect("is_seed_boundary implies pending_reward_update is Some");
+        let recomputed = bootstrap_rupd_commitment(
+            &rupd.manifest_commitment,
+            rupd.source_point_slot,
+            &rupd.source_point_hash,
+            rupd.target_epoch,
+            rupd.delta_treasury,
+            rupd.delta_reserves,
+            &rupd.reward_delta,
+        );
+        if recomputed != rupd.canonical_commitment {
+            return Err(LedgerTransitionError::BootstrapRupdCommitmentMismatch);
+        }
+        apply_bootstrap_reward_deltas(&mut acc.cert_state.delegation, &rupd.reward_delta)
+            .map_err(|_| LedgerTransitionError::ArithmeticOverflow)?;
+        Some((rupd.delta_reserves, rupd.delta_treasury))
+    } else {
+        None
+    };
 
     // Capture the just-finished epoch's nesBcur (it becomes nesBprev after this boundary).
     let finished_blocks = std::mem::take(&mut acc.epoch_state.block_production);
@@ -516,11 +541,17 @@ pub fn cross_epoch_boundary(
     // direct-replay path. The accumulator no longer runs a separate pre-pass, so neither entry path decides
     // proposal removal or deposit routing independently (no path-dependent governance). A structured
     // `GovernanceTerminal` propagates verbatim (action id + reason preserved, never a fabricated DormantRequired).
+    // Point-bound base stake: the boundary fn builds the mark INSIDE, from this base + the staged post-RUPD
+    // reward accounts (including the bootstrap RUPD staged above at the seed boundary) — never a pre-RUPD mark.
+    let base_stake = BoundaryBaseStake {
+        boundary_point: ctx.block_slot,
+        canonical_credential_stake: base_utxo.clone(),
+    };
     let (new_view, _accounting) = apply_epoch_boundary_with_registrations(
         &view,
         target,
         None,
-        Some(&new_mark),
+        Some(&base_stake),
         ctx.active_slots_per_epoch,
     )
     .map_err(LedgerTransitionError::GovernanceEpochTerminal)?;
@@ -547,57 +578,68 @@ pub fn cross_epoch_boundary(
     acc.prev_block_production = finished_blocks;
     acc.prev_epoch_fees = finished_fees;
 
-    // Apply the one-shot bootstrap RUPD exactly once at the seed boundary, AFTER the native mechanics +
-    // zero reward, then consume (None = the durable "consumed" record; the accumulator is persisted).
-    // Verify the durable commitment first — fail closed on a tampered/corrupt record.
-    if is_seed_boundary {
-        let rupd = acc
-            .pending_reward_update
-            .take()
-            .expect("is_seed_boundary implies pending_reward_update is Some");
-        let recomputed = bootstrap_rupd_commitment(
-            &rupd.manifest_commitment,
-            rupd.source_point_slot,
-            &rupd.source_point_hash,
-            rupd.target_epoch,
-            rupd.delta_treasury,
-            rupd.delta_reserves,
-            &rupd.reward_delta,
-        );
-        if recomputed != rupd.canonical_commitment {
-            return Err(LedgerTransitionError::BootstrapRupdCommitmentMismatch);
-        }
+    // Apply the one-shot bootstrap RUPD's POT deltas (reserves/treasury) AFTER the native mechanics. Its
+    // reward-account delta was already staged BEFORE the mark (above) and consumed; only the pots remain, and
+    // they do not affect the mark. Fail-closed on underflow/overflow.
+    if let Some((delta_reserves, delta_treasury)) = bootstrap_pots {
         acc.epoch_state.reserves.0 = acc
             .epoch_state
             .reserves
             .0
-            .checked_sub(rupd.delta_reserves.0)
+            .checked_sub(delta_reserves.0)
             .ok_or(LedgerTransitionError::BootstrapRupdReservesUnderflow)?;
         acc.epoch_state.treasury.0 = acc
             .epoch_state
             .treasury
             .0
-            .checked_add(rupd.delta_treasury.0)
+            .checked_add(delta_treasury.0)
             .ok_or(LedgerTransitionError::ArithmeticOverflow)?;
-        apply_bootstrap_reward_deltas(&mut acc.cert_state.delegation, &rupd.reward_delta)
-            .map_err(|_| LedgerTransitionError::ArithmeticOverflow)?;
     }
     Ok(acc)
 }
 
-/// Build the new PER-CREDENTIAL mark [`crate::epoch::StakeSnapshot`] for an epoch boundary from the
-/// canonical per-credential BASE UTxO stake (`ctx.boundary_mark`, what
-/// `reduced_utxo_checkpoint::sum_base_credential_stake` returns) and the held delegation state. For each
-/// registered+delegated credential its instant stake is its base-UTxO coin + its reward-account balance,
-/// grouped by its delegated pool — the same inputs `reduced_aggregate::aggregate_pool_stake` consumes,
-/// but RETAINING the per-credential `delegations` the reward computation reads (the operator's `op_stake`
-/// and each member's pro-rata share). A per-pool mark dropped `delegations`, leaving an empty `go` two
-/// boundaries later → zero member rewards. Pure, deterministic (`BTreeMap`), saturating on the supply-
-/// bounded stake sums.
-fn build_boundary_mark_snapshot(
-    base_utxo: &BTreeMap<StakeCredential, Coin>,
-    delegation: &crate::delegation::DelegationState,
+/// The canonical per-credential base-UTxO stake at a specific boundary point — the ONLY base input a boundary
+/// mark is built from (CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION S1). Point-bound so the accumulator caller
+/// (reduced checkpoint) and the direct/full-ledger caller (full UTxO) cannot silently supply a mismatched-point
+/// base for the same transition.
+#[derive(Debug, Clone)]
+pub struct BoundaryBaseStake {
+    /// The exact block whose settled UTxO the base stake is sampled at (the boundary's `s_prev`).
+    pub boundary_point: SlotNo,
+    /// `sum_base_credential_stake` at `boundary_point` — per-credential base UTxO (`Base(cred)` only).
+    pub canonical_credential_stake: BTreeMap<StakeCredential, Coin>,
+}
+
+/// A view of reward accounts AFTER the boundary reward-update (native RUPD and/or the one-shot bootstrap RUPD)
+/// has been applied — the ONLY reward view a boundary mark may read. Constructed inside the boundary transition
+/// after `applyRUpd`, so [`build_boundary_mark_snapshot`] cannot be handed a pre-RUPD reward map. The pre-RUPD
+/// mark was the CE-3d go-stake residual (−343,260,172,883); the type makes that wrong-phase input
+/// unrepresentable (see docs/clusters/CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION/S0-DIAGNOSIS.md).
+pub struct PostRupdRewards<'a> {
+    delegation: &'a crate::delegation::DelegationState,
+}
+
+impl<'a> PostRupdRewards<'a> {
+    /// Construct the post-RUPD view. CONTRACT: the caller has already applied the boundary reward-update (native
+    /// and any one-shot bootstrap) to `delegation` — the whole point of the type is that the mark reads post-RUPD
+    /// balances. Constructed only by the boundary transition (`pub(crate)`).
+    pub(crate) fn after_rupd(delegation: &'a crate::delegation::DelegationState) -> Self {
+        PostRupdRewards { delegation }
+    }
+}
+
+/// Build the new PER-CREDENTIAL mark [`crate::epoch::StakeSnapshot`] for an epoch boundary from the point-bound
+/// canonical per-credential BASE UTxO stake ([`BoundaryBaseStake`]) and the STAGED post-RUPD reward accounts
+/// ([`PostRupdRewards`]). For each registered+delegated credential its instant stake is its base-UTxO coin + its
+/// POST-RUPD reward-account balance, grouped by its delegated pool — RETAINING the per-credential `delegations`
+/// the reward computation reads (a per-pool mark dropped `delegations`, leaving an empty `go` two boundaries later
+/// → zero member rewards). Pure, deterministic (`BTreeMap`), saturating on the supply-bounded stake sums.
+pub(crate) fn build_boundary_mark_snapshot(
+    base: &BoundaryBaseStake,
+    rewards: PostRupdRewards<'_>,
 ) -> crate::epoch::StakeSnapshot {
+    let base_utxo = &base.canonical_credential_stake;
+    let delegation = rewards.delegation;
     let mut delegations = BTreeMap::new();
     let mut pool_stakes: BTreeMap<PoolId, Coin> = BTreeMap::new();
     for (cred, pool) in &delegation.delegations {
@@ -2181,8 +2223,14 @@ mod tests {
         base_utxo.insert(member.clone(), Coin(base));
         base_utxo.insert(op.clone(), Coin(base));
 
-        // The builder produces a PER-CREDENTIAL mark: delegations populated, pool_stakes summed.
-        let built = build_boundary_mark_snapshot(&base_utxo, &acc.cert_state.delegation);
+        // The builder produces a PER-CREDENTIAL mark from the point-bound base + the post-RUPD rewards:
+        // delegations populated, pool_stakes summed.
+        let base_stake = BoundaryBaseStake {
+            boundary_point: SlotNo(0),
+            canonical_credential_stake: base_utxo.clone(),
+        };
+        let built =
+            build_boundary_mark_snapshot(&base_stake, PostRupdRewards::after_rupd(&acc.cert_state.delegation));
         assert_eq!(
             built.delegations.get(member.hash()),
             Some(&(pool_aa.clone(), Coin(base))),
@@ -3478,11 +3526,13 @@ mod tests {
     #[test]
     fn cre_s4_3a_cross_path_gov_delta_is_identical() {
         let ledger = s43a_zero_reward_ledger();
+        // Both configs supply the point-bound base (Conway requires it); the governance delta is independent of
+        // it and of active-slots — that is exactly the cross-path invariant under test.
+        let base = BoundaryBaseStake { boundary_point: SlotNo(0), canonical_credential_stake: BTreeMap::new() };
         let (replay, _) =
-            apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, None, 21_600).expect("replay");
-        let mark = StakeSnapshot::new();
+            apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&base), 21_600).expect("replay");
         let (accum, _) =
-            apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&mark), 4_320).expect("accum");
+            apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&base), 4_320).expect("accum");
         let e0 = StakeCredential::KeyHash(Hash28([0xe0; 28]));
         assert_eq!(replay.gov_state, accum.gov_state, "identical next governance state (fingerprint) on both paths");
         assert_eq!(
@@ -3527,10 +3577,10 @@ mod tests {
             crate::state::PreviousPParamAction::Enacted(root.clone());
         let ledger = acc.as_ledger_view();
 
-        let (replay, _) = apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, None, 21_600)
+        let base = BoundaryBaseStake { boundary_point: SlotNo(0), canonical_credential_stake: BTreeMap::new() };
+        let (replay, _) = apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&base), 21_600)
             .expect("replay enacts");
-        let mark = StakeSnapshot::new();
-        let (accum, _) = apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&mark), 4_320)
+        let (accum, _) = apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&base), 4_320)
             .expect("accum enacts");
 
         // The enactment REALLY happened (not a trivial equality): the memory limits advanced, steps preserved.
@@ -3580,8 +3630,13 @@ mod tests {
             s4_gas(0x05, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe1),
         ])
         .as_ledger_view();
+        // The expired-deposit refund is the shared boundary authority (base-independent); supply an empty base
+        // (Conway requires the base input). `apply_epoch_boundary_full` would terminal here — this ledger is
+        // track_utxo=false, so the direct path has no UTxO to derive the base from (fail-closed, by design).
+        let base = BoundaryBaseStake { boundary_point: SlotNo(0), canonical_credential_stake: BTreeMap::new() };
         let (after, _) =
-            crate::rules::apply_epoch_boundary_full(&ledger, EpochNo(1341)).expect("replay refunds the expiries");
+            apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&base), 21_600)
+                .expect("replay refunds the expiries");
         assert!(
             after.gov_state.as_authoritative().expect("authoritative gov state in test").as_ref().unwrap().proposals.is_empty(),
             "all five expired proposals leave the set on the replay path (no silent disappearance)",
@@ -3615,10 +3670,13 @@ mod tests {
             0xe0,
         )])
         .as_ledger_view();
+        // The governance terminal fires BEFORE the base-stake check (gov plan is step 0, mark is step 4), so both
+        // paths return the governance terminal — the direct path via `apply_epoch_boundary_full` (base-less here),
+        // the accumulator path with an (irrelevant) empty base.
         let err_replay = crate::rules::apply_epoch_boundary_full(&ledger, EpochNo(1341)).unwrap_err();
-        let mark = StakeSnapshot::new();
+        let base = BoundaryBaseStake { boundary_point: SlotNo(0), canonical_credential_stake: BTreeMap::new() };
         let err_accum =
-            apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&mark), 4_320).unwrap_err();
+            apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&base), 4_320).unwrap_err();
         assert!(matches!(
             err_replay,
             crate::governance::GovernanceTerminal::UnsupportedRatifiedAction {
