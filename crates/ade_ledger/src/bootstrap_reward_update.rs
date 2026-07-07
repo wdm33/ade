@@ -45,13 +45,17 @@ use ade_types::{EpochNo, Hash28, Hash32, SlotNo};
 
 /// Pinned wire schema version. Decode rejects any other (fail-closed). v1 = the initial Option-B
 /// bootstrap reward-update sidecar (rs only); v2 = adds `delta_treasury` + `delta_reserves` so the
-/// seed-boundary apply sets the pots byte-exact (the pre-seed fees it cannot re-derive natively).
-pub const BOOTSTRAP_RUPD_SCHEMA_VERSION: u32 = 2;
+/// seed-boundary apply sets the pots byte-exact (the pre-seed fees it cannot re-derive natively); v3 =
+/// adds `delta_fees` (the RewardUpdate's `feeSS` magnitude) so the seed-boundary apply reduces the fee
+/// pot by `feeSS` EXACTLY as cardano does when it applies the reward update — before the SNAP freezes
+/// the fee pot for the next boundary. Without it the seed epoch's `feeSS` double-counts into the seed+2
+/// reward's fee input.
+pub const BOOTSTRAP_RUPD_SCHEMA_VERSION: u32 = 3;
 
 /// Domain separator for the canonical commitment (binds the bytes to THIS artifact + version).
-const RUPD_COMMITMENT_DOMAIN: &[u8] = b"ade.b3c.bootstrap-reward-update.v2";
+const RUPD_COMMITMENT_DOMAIN: &[u8] = b"ade.b3c.bootstrap-reward-update.v3";
 
-const FIELDS_OUTER: u64 = 9;
+const FIELDS_OUTER: u64 = 10;
 const CREDENTIAL_FIELDS: u64 = 2;
 
 /// The credential discriminants, matching the ledger snapshot encoding
@@ -83,6 +87,12 @@ pub struct BootstrapRewardUpdate {
     /// The snapshot `nesRu`'s `deltaR` MAGNITUDE — the reserves DECREASE this reward update applies
     /// (the net draw after the undistributed return). Subtracted from reserves at the seed boundary.
     pub delta_reserves: Coin,
+    /// The snapshot `nesRu`'s `deltaF` MAGNITUDE — the fee pot DECREASE (`feeSS`) this reward update
+    /// applies. Cardano reduces the fee pot by `feeSS` when it APPLIES the reward update (Shelley
+    /// `epoch.tex`: "The fee pot will be reduced by feeSS"), THEN the SNAP freezes the fee pot. The
+    /// seed-boundary apply subtracts this from `epoch_fees` before rotating it to `prev_epoch_fees`, so
+    /// the seed epoch's `feeSS` does not double-count into the seed+2 reward's fee input.
+    pub delta_fees: Coin,
     /// The per-credential reward delta (the snapshot's Complete `nesRu` `rs` map, aggregated per
     /// credential). Keys join the dstate reward map by the SAME `StakeCredential` representation.
     /// `BTreeMap` ordering is the sole acceptable map ordering on an authority path.
@@ -123,6 +133,7 @@ pub fn bootstrap_rupd_commitment(
     target_epoch: EpochNo,
     delta_treasury: Coin,
     delta_reserves: Coin,
+    delta_fees: Coin,
     reward_delta: &BTreeMap<StakeCredential, Coin>,
 ) -> Hash32 {
     let body = encode_rupd_body(
@@ -132,6 +143,7 @@ pub fn bootstrap_rupd_commitment(
         target_epoch,
         delta_treasury,
         delta_reserves,
+        delta_fees,
         reward_delta,
     );
     let mut domained = Vec::with_capacity(RUPD_COMMITMENT_DOMAIN.len() + body.len());
@@ -149,6 +161,7 @@ fn encode_rupd_body(
     target_epoch: EpochNo,
     delta_treasury: Coin,
     delta_reserves: Coin,
+    delta_fees: Coin,
     reward_delta: &BTreeMap<StakeCredential, Coin>,
 ) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -158,6 +171,7 @@ fn encode_rupd_body(
     write_uint_canonical(&mut buf, target_epoch.0);
     write_uint_canonical(&mut buf, delta_treasury.0);
     write_uint_canonical(&mut buf, delta_reserves.0);
+    write_uint_canonical(&mut buf, delta_fees.0);
     let count = reward_delta.len() as u64;
     write_map_header(&mut buf, ContainerEncoding::Definite(count, canonical_width(count)));
     // `BTreeMap` iteration is in canonical `StakeCredential` order — the credential CBOR encoding
@@ -171,16 +185,17 @@ fn encode_rupd_body(
 
 /// Canonical CBOR encode. Sole pub encoder.
 ///
-/// Wire shape (v1):
+/// Wire shape (v3):
 /// ```text
-/// array(7) [
-///   uint   BOOTSTRAP_RUPD_SCHEMA_VERSION (= 1),
+/// array(10) [
+///   uint   BOOTSTRAP_RUPD_SCHEMA_VERSION (= 3),
 ///   bytes(32) manifest_commitment,
 ///   uint   source_point_slot,
 ///   bytes(32) source_point_hash,
 ///   uint   target_epoch,
 ///   uint   delta_treasury,
 ///   uint   delta_reserves,
+///   uint   delta_fees,
 ///   map(N) { array(2)[uint cred_tag, bytes(28) cred_hash] => uint coin, ... },  // BTreeMap order
 ///   bytes(32) canonical_commitment,
 /// ]
@@ -199,6 +214,7 @@ pub fn encode_bootstrap_reward_update(rupd: &BootstrapRewardUpdate) -> Vec<u8> {
         rupd.target_epoch,
         rupd.delta_treasury,
         rupd.delta_reserves,
+        rupd.delta_fees,
         &rupd.reward_delta,
     );
     buf.extend_from_slice(&body);
@@ -229,6 +245,7 @@ pub fn decode_bootstrap_reward_update(
     let target_epoch = EpochNo(read_u64_field(bytes, &mut o)?);
     let delta_treasury = Coin(read_u64_field(bytes, &mut o)?);
     let delta_reserves = Coin(read_u64_field(bytes, &mut o)?);
+    let delta_fees = Coin(read_u64_field(bytes, &mut o)?);
     let reward_delta = decode_reward_delta(bytes, &mut o)?;
     let canonical_commitment = read_hash32(bytes, &mut o)?;
 
@@ -246,6 +263,7 @@ pub fn decode_bootstrap_reward_update(
         target_epoch,
         delta_treasury,
         delta_reserves,
+        delta_fees,
         &reward_delta,
     );
     if recomputed != canonical_commitment {
@@ -259,6 +277,7 @@ pub fn decode_bootstrap_reward_update(
         target_epoch,
         delta_treasury,
         delta_reserves,
+        delta_fees,
         reward_delta,
         canonical_commitment,
     };
@@ -422,6 +441,8 @@ mod tests {
         let target_epoch = EpochNo(1338);
         let delta_treasury = Coin(2_744_247_724_989);
         let delta_reserves = Coin(3_108_895_499_648);
+        // The confirmed feeSS magnitude of the 1338 judge-snapshot bootstrap RewardUpdate.
+        let delta_fees = Coin(1_157_103_223);
         let canonical_commitment = bootstrap_rupd_commitment(
             &manifest_commitment,
             source_point_slot,
@@ -429,6 +450,7 @@ mod tests {
             target_epoch,
             delta_treasury,
             delta_reserves,
+            delta_fees,
             &reward_delta,
         );
         BootstrapRewardUpdate {
@@ -438,6 +460,7 @@ mod tests {
             target_epoch,
             delta_treasury,
             delta_reserves,
+            delta_fees,
             reward_delta,
             canonical_commitment,
         }
@@ -475,7 +498,9 @@ mod tests {
     #[test]
     fn decode_rejects_unknown_version() {
         let fresh = encode_bootstrap_reward_update(&sample());
-        for bad in [0u64, 1, 99] {
+        // v2 is now a rejected pre-fix version (the fee-buffer fix requires delta_fees): a v2 version
+        // int on the v3 arity fails closed on the version gate.
+        for bad in [0u64, 1, 2, 99] {
             let mut buf = Vec::new();
             write_array_header(
                 &mut buf,
@@ -484,7 +509,7 @@ mod tests {
             write_uint_canonical(&mut buf, bad);
             buf.extend_from_slice(&fresh[2..]);
             match decode_bootstrap_reward_update(&buf) {
-                Err(BootstrapRupdError::UnknownVersion { expected: 2, found })
+                Err(BootstrapRupdError::UnknownVersion { expected: 3, found })
                     if found == bad as u32 => {}
                 other => panic!("expected UnknownVersion for v{bad}, got {other:?}"),
             }
@@ -525,6 +550,7 @@ mod tests {
         let target_epoch = EpochNo(7);
         let delta_treasury = Coin(0);
         let delta_reserves = Coin(0);
+        let delta_fees = Coin(0);
         let reward_delta = BTreeMap::new();
         let canonical_commitment = bootstrap_rupd_commitment(
             &manifest_commitment,
@@ -533,6 +559,7 @@ mod tests {
             target_epoch,
             delta_treasury,
             delta_reserves,
+            delta_fees,
             &reward_delta,
         );
         let s = BootstrapRewardUpdate {
@@ -542,6 +569,7 @@ mod tests {
             target_epoch,
             delta_treasury,
             delta_reserves,
+            delta_fees,
             reward_delta,
             canonical_commitment,
         };
@@ -563,8 +591,59 @@ mod tests {
             s.target_epoch,
             s.delta_treasury,
             s.delta_reserves,
+            s.delta_fees,
             &s.reward_delta,
         );
         s
+    }
+
+    #[test]
+    fn v3_round_trips_delta_fees() {
+        // The v3 codec carries the RewardUpdate feeSS magnitude byte-identically through encode/decode.
+        let s = sample();
+        assert_eq!(s.delta_fees, Coin(1_157_103_223));
+        let bytes = encode_bootstrap_reward_update(&s);
+        let decoded = decode_bootstrap_reward_update(&bytes).expect("decode");
+        assert_eq!(decoded.delta_fees, Coin(1_157_103_223), "delta_fees survives the round trip");
+        assert_eq!(decoded, s);
+    }
+
+    #[test]
+    fn v3_rejects_genuine_v2_blob() {
+        // A genuine v2 wire blob (array(9): the v2 field set, version 2, NO delta_fees) must fail closed
+        // under the v3 decoder — a pre-fix store is never silently reinterpreted; re-bootstrap is the only
+        // migration. The v2 arity (9) differs from v3 (10), so the outer shape gate trips first.
+        let s = sample();
+        let mut buf = Vec::new();
+        write_array_header(&mut buf, ContainerEncoding::Definite(9, canonical_width(9)));
+        write_uint_canonical(&mut buf, 2); // version 2
+        write_bytes_canonical(&mut buf, &s.manifest_commitment.0);
+        write_uint_canonical(&mut buf, s.source_point_slot.0);
+        write_bytes_canonical(&mut buf, &s.source_point_hash.0);
+        write_uint_canonical(&mut buf, s.target_epoch.0);
+        write_uint_canonical(&mut buf, s.delta_treasury.0);
+        write_uint_canonical(&mut buf, s.delta_reserves.0);
+        // v2 has NO delta_fees field here — straight to the reward-delta map.
+        write_map_header(&mut buf, ContainerEncoding::Definite(0, canonical_width(0)));
+        write_bytes_canonical(&mut buf, &s.canonical_commitment.0);
+        match decode_bootstrap_reward_update(&buf) {
+            Err(BootstrapRupdError::Structural { .. }) => {}
+            other => panic!("expected a fail-closed Structural error for a v2 blob, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tampered_delta_fees_breaks_the_commitment() {
+        // Flip delta_fees but keep the stored commitment -> CommitmentMismatch: the fee-buffer magnitude
+        // is bootstrap-authoritative and commitment-bound.
+        let mut s = sample();
+        let bytes_ok = encode_bootstrap_reward_update(&s);
+        s.delta_fees = Coin(s.delta_fees.0 + 1);
+        let bytes_bad = encode_bootstrap_reward_update(&s);
+        assert_ne!(bytes_ok, bytes_bad);
+        match decode_bootstrap_reward_update(&bytes_bad) {
+            Err(BootstrapRupdError::CommitmentMismatch) => {}
+            other => panic!("expected CommitmentMismatch, got {other:?}"),
+        }
     }
 }

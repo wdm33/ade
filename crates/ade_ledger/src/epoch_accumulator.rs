@@ -122,9 +122,10 @@ use crate::utxo::UTxOState;
 
 /// Pinned wire schema version. Decode rejects any other (fail-closed). v1 = the initial
 /// LIVE-LEDGER-EPOCH-TRANSITION accumulator. v2 = a Conway accumulator MUST carry
-/// `conway_deposit_params` (never `None`); a pre-fix v1 store fails closed on decode (`UnknownVersion`)
-/// — migration is an explicit re-bootstrap.
-pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = 2;
+/// `conway_deposit_params` (never `None`); v3 = the embedded bootstrap RUPD is v3 (carries `delta_fees`,
+/// the seed-boundary `feeSS` the apply reduces the fee pot by — CE-3d bootstrap fee-buffer). A pre-fix
+/// v1/v2 store fails closed on decode (`UnknownVersion`) — migration is an explicit re-bootstrap.
+pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = 3;
 
 /// The non-UTxO authority a self-sustaining ledger maintains beside the disk-backed reduced UTxO
 /// checkpoint. Closed record — all fields required at construction; no `Default`, no
@@ -377,6 +378,10 @@ pub enum LedgerTransitionError {
     BootstrapRupdCommitmentMismatch,
     /// Applying the bootstrap RUPD's reserves draw underflowed (delta_reserves > reserves). Fail closed.
     BootstrapRupdReservesUnderflow,
+    /// Applying the bootstrap RUPD's fee-pot reduction underflowed (delta_fees > epoch_fees) at the seed
+    /// boundary. Cardano reduces the fee pot by `feeSS` when it applies the reward update; a snapshot whose
+    /// `feeSS` exceeds the accumulated fee pot is inconsistent. Fail closed rather than saturate.
+    BootstrapRupdFeesUnderflow,
     /// CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3: a tx-body governance field (19 `voting_procedures` / 20
     /// `proposal_procedures`) failed to decode, or a field-20 procedure carried an unknown gov-action
     /// variant, on the within-epoch authority path. Terminal for the governance authority — never a silent
@@ -511,6 +516,7 @@ pub fn cross_epoch_boundary(
             rupd.target_epoch,
             rupd.delta_treasury,
             rupd.delta_reserves,
+            rupd.delta_fees,
             &rupd.reward_delta,
         );
         if recomputed != rupd.canonical_commitment {
@@ -518,6 +524,17 @@ pub fn cross_epoch_boundary(
         }
         apply_bootstrap_reward_deltas(&mut acc.cert_state.delegation, &rupd.reward_delta)
             .map_err(|_| LedgerTransitionError::ArithmeticOverflow)?;
+        // Reduce the fee pot by feeSS EXACTLY as cardano does when it APPLIES the reward update: the fee
+        // pot is reduced by feeSS, THEN the SNAP freezes it (Shelley epoch.tex: "The fee pot will be
+        // reduced by feeSS"). This runs BEFORE the pot is captured as `finished_fees` and rotated to
+        // `prev_epoch_fees` (the seed+2 reward's fee input) below, so the seed epoch's feeSS does not
+        // double-count into the seed+2 reward. Fail closed on underflow rather than saturate a wrong pot.
+        acc.epoch_state.epoch_fees.0 = acc
+            .epoch_state
+            .epoch_fees
+            .0
+            .checked_sub(rupd.delta_fees.0)
+            .ok_or(LedgerTransitionError::BootstrapRupdFeesUnderflow)?;
         Some((rupd.delta_reserves, rupd.delta_treasury))
     } else {
         None
@@ -1473,10 +1490,10 @@ const FIELDS_OUTER: u64 = 11;
 /// Canonical CBOR encode. Sole pub encoder. Composes the existing `snapshot/` sub-codecs + the
 /// `nesBprev` buffer + the optional bootstrap reward update.
 ///
-/// Wire shape (v2):
+/// Wire shape (v3):
 /// ```text
 /// array(11) [
-///   uint        EPOCH_ACCUMULATOR_SCHEMA_VERSION (= 2),
+///   uint        EPOCH_ACCUMULATOR_SCHEMA_VERSION (= 3),
 ///   uint        era,                              // 7 = Conway (pre-Conway rejected on decode)
 ///   uint        max_lovelace_supply,
 ///   bytes       epoch_state_encoded,              // encode_epoch_state (nesBcur + pots + snapshots)
@@ -1838,6 +1855,7 @@ mod tests {
             EpochNo(1339),
             Coin(2_744_247_724_989),
             Coin(3_108_895_499_648),
+            Coin(0),
             &delta,
         );
         acc.pending_reward_update = Some(BootstrapRewardUpdate {
@@ -1847,6 +1865,7 @@ mod tests {
             target_epoch: EpochNo(1339),
             delta_treasury: Coin(2_744_247_724_989),
             delta_reserves: Coin(3_108_895_499_648),
+            delta_fees: Coin(0),
             reward_delta: delta,
             canonical_commitment: commitment,
         });
@@ -2037,17 +2056,18 @@ mod tests {
 
     #[test]
     fn codec_rejects_unknown_version() {
-        // A pre-fix v1 store (version byte 0x01) fails closed on decode — migration to v2 is an EXPLICIT
-        // re-bootstrap, never a silent reinterpretation of a store that lacks the deposit params.
+        // A pre-fix store (an earlier version byte) fails closed on decode — migration to the current
+        // schema is an EXPLICIT re-bootstrap, never a silent reinterpretation of a store that lacks the
+        // deposit params or the bootstrap-RUPD feeSS (delta_fees).
         let acc = populated();
         let bytes = encode_epoch_accumulator(&acc);
-        // outer array header is one byte; the version uint follows. v2 (=0x02) → patch down to a v1 store (0x01).
+        // outer array header is one byte; the version uint follows. v3 (=0x03) → patch down to a v1 store (0x01).
         let mut buf = bytes.clone();
-        assert_eq!(buf[1], 0x02);
+        assert_eq!(buf[1], 0x03);
         buf[1] = 0x01;
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::UnknownVersion {
-                expected: 2,
+                expected: 3,
                 found: 1,
             }) => {}
             other => panic!("expected UnknownVersion, got {other:?}"),
@@ -2080,16 +2100,16 @@ mod tests {
 
     #[test]
     fn codec_rejects_non_canonical_via_reencode_backstop() {
-        // Re-encode the version uint non-minimally: 0x02 (minimal) → 0x18 0x02 (1-byte-argument uint,
-        // same value 2). The value decodes correctly but re-encodes minimally, so the byte-canonical
+        // Re-encode the version uint non-minimally: 0x03 (minimal) → 0x18 0x03 (1-byte-argument uint,
+        // same value 3). The value decodes correctly but re-encodes minimally, so the byte-canonical
         // backstop (re-encode != input) rejects it fail-closed — the discipline that a valid value MUST
         // have exactly one accepted encoding.
         let bytes = encode_epoch_accumulator(&populated());
-        assert_eq!(bytes[1], 0x02, "version is encoded minimally");
+        assert_eq!(bytes[1], 0x03, "version is encoded minimally");
         let mut buf = Vec::with_capacity(bytes.len() + 1);
         buf.push(bytes[0]); // outer array header
         buf.push(0x18); // uint, 1-byte argument follows
-        buf.push(0x02); // = 2 (non-minimal)
+        buf.push(0x03); // = 3 (non-minimal)
         buf.extend_from_slice(&bytes[2..]);
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::MalformedCbor) => {}
@@ -2346,6 +2366,7 @@ mod tests {
             EpochNo(1339),
             delta_treasury,
             delta_reserves,
+            Coin(0),
             &delta,
         );
         acc.pending_reward_update = Some(BootstrapRewardUpdate {
@@ -2355,6 +2376,7 @@ mod tests {
             target_epoch: EpochNo(1339),
             delta_treasury,
             delta_reserves,
+            delta_fees: Coin(0),
             reward_delta: delta,
             canonical_commitment: commitment,
         });
@@ -2419,6 +2441,7 @@ mod tests {
             EpochNo(1339),
             delta_treasury,
             delta_reserves,
+            Coin(0),
             &delta,
         );
         acc.pending_reward_update = Some(BootstrapRewardUpdate {
@@ -2428,6 +2451,7 @@ mod tests {
             target_epoch: EpochNo(1339),
             delta_treasury,
             delta_reserves,
+            delta_fees: Coin(0),
             reward_delta: delta,
             canonical_commitment: commitment,
         });
@@ -2464,6 +2488,125 @@ mod tests {
         assert_eq!(after.epoch_state.epoch_fees.0, 0, "new-epoch fee accumulator is fresh");
     }
 
+    /// FROZEN TIMELINE (CE-3d bootstrap fee-buffer). The seed-boundary apply reduces the accumulated fee
+    /// pot by the bootstrap RUPD's `delta_fees` (feeSS) EXACTLY ONCE, before rotating it to
+    /// `prev_epoch_fees` (the seed+2 reward's fee input). Uses the confirmed 1338/1339 magnitudes: the
+    /// seed epoch's full fees (imported 2_296_344_810 + followed tail 308_031_321 = 2_604_376_131) minus
+    /// the snapshot RUPD's feeSS (1_157_103_223) = 1_447_272_908. Without the reduction the feeSS
+    /// double-counts into the seed+2 reward.
+    #[test]
+    fn seed_boundary_reduces_fee_pot_by_delta_fees() {
+        const SEED_EPOCH_FEES: u64 = 2_604_376_131; // imported 2_296_344_810 + followed tail 308_031_321
+        const DELTA_FEES: u64 = 1_157_103_223; // the snapshot RewardUpdate's feeSS
+        const EXPECTED_PREV_FEES: u64 = 1_447_272_908; // SEED_EPOCH_FEES - DELTA_FEES
+        let mut acc = reward_fixture();
+        acc.epoch_state.epoch = EpochNo(1339);
+        acc.epoch_state.epoch_fees = Coin(SEED_EPOCH_FEES);
+        let mut delta = BTreeMap::new();
+        delta.insert(key_cred(0xCC), Coin(4_242));
+        let commitment = bootstrap_rupd_commitment(
+            &Hash32([0x01; 32]),
+            SlotNo(1),
+            &Hash32([0x02; 32]),
+            EpochNo(1339),
+            Coin(1_000),
+            Coin(2_000),
+            Coin(DELTA_FEES),
+            &delta,
+        );
+        acc.pending_reward_update = Some(BootstrapRewardUpdate {
+            manifest_commitment: Hash32([0x01; 32]),
+            source_point_slot: SlotNo(1),
+            source_point_hash: Hash32([0x02; 32]),
+            target_epoch: EpochNo(1339),
+            delta_treasury: Coin(1_000),
+            delta_reserves: Coin(2_000),
+            delta_fees: Coin(DELTA_FEES),
+            reward_delta: delta,
+            canonical_commitment: commitment,
+        });
+        let ctx = SelectedBlockCtx {
+            era: CardanoEra::Conway,
+            block_epoch: EpochNo(1340),
+            block_slot: SlotNo(0),
+            issuer_pool: pool(0xAA),
+            boundary_mark: Some(sample_mark(0xAA, 1_000_000_000_000)),
+            active_slots_per_epoch: 21_600,
+        };
+        let after = cross_epoch_boundary(acc, EpochNo(1340), &ctx).expect("seed boundary");
+        assert_eq!(
+            after.prev_epoch_fees.0, EXPECTED_PREV_FEES,
+            "the seed-boundary apply reduces the rotated fee pot by feeSS EXACTLY once",
+        );
+        assert_eq!(after.epoch_state.epoch_fees.0, 0, "new-epoch fee accumulator is fresh");
+        assert!(after.pending_reward_update.is_none(), "the one-shot RUPD is consumed once");
+    }
+
+    #[test]
+    fn seed_boundary_fee_reduction_underflow_fails_closed() {
+        // delta_fees > epoch_fees: the fee-pot reduction underflows -> BootstrapRupdFeesUnderflow, fail-closed.
+        let mut acc = reward_fixture();
+        acc.epoch_state.epoch = EpochNo(1339);
+        acc.epoch_state.epoch_fees = Coin(1_000); // less than delta_fees below
+        let delta = BTreeMap::new();
+        let commitment = bootstrap_rupd_commitment(
+            &Hash32([0x01; 32]),
+            SlotNo(1),
+            &Hash32([0x02; 32]),
+            EpochNo(1339),
+            Coin(0),
+            Coin(0),
+            Coin(2_000), // delta_fees > epoch_fees (1_000)
+            &delta,
+        );
+        acc.pending_reward_update = Some(BootstrapRewardUpdate {
+            manifest_commitment: Hash32([0x01; 32]),
+            source_point_slot: SlotNo(1),
+            source_point_hash: Hash32([0x02; 32]),
+            target_epoch: EpochNo(1339),
+            delta_treasury: Coin(0),
+            delta_reserves: Coin(0),
+            delta_fees: Coin(2_000),
+            reward_delta: delta,
+            canonical_commitment: commitment,
+        });
+        let ctx = SelectedBlockCtx {
+            era: CardanoEra::Conway,
+            block_epoch: EpochNo(1340),
+            block_slot: SlotNo(0),
+            issuer_pool: pool(0xAA),
+            boundary_mark: Some(sample_mark(0xAA, 1_000_000_000_000)),
+            active_slots_per_epoch: 21_600,
+        };
+        match cross_epoch_boundary(acc, EpochNo(1340), &ctx) {
+            Err(LedgerTransitionError::BootstrapRupdFeesUnderflow) => {}
+            other => panic!("expected BootstrapRupdFeesUnderflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_seed_boundary_never_reduces_fee_pot() {
+        // A native (non-seed) boundary carries NO pending RUPD, so the fee-pot reduction NEVER runs: the
+        // finished epoch's fees rotate to prev_epoch_fees intact (the reduction is seed-boundary-only).
+        const NATIVE_FEES: u64 = 5_000_000;
+        let mut acc = reward_fixture(); // epoch 500, no pending_reward_update
+        acc.epoch_state.epoch_fees = Coin(NATIVE_FEES);
+        assert!(acc.pending_reward_update.is_none(), "precondition: native-only boundary");
+        let ctx = SelectedBlockCtx {
+            era: CardanoEra::Conway,
+            block_epoch: EpochNo(501),
+            block_slot: SlotNo(0),
+            issuer_pool: pool(0xAA),
+            boundary_mark: Some(sample_mark(0xAA, 1_000_000_000_000)),
+            active_slots_per_epoch: 21_600,
+        };
+        let after = cross_epoch_boundary(acc, EpochNo(501), &ctx).expect("native boundary");
+        assert_eq!(
+            after.prev_epoch_fees.0, NATIVE_FEES,
+            "a non-seed boundary rotates the finished fee pot intact (no feeSS reduction)",
+        );
+    }
+
     #[test]
     fn pending_reward_update_rejected_at_non_target_boundary() {
         let mut acc = reward_fixture();
@@ -2476,6 +2619,7 @@ mod tests {
             EpochNo(1337), // target+1 = 1338, NOT this boundary (1340)
             Coin(0),
             Coin(0),
+            Coin(0),
             &delta,
         );
         acc.pending_reward_update = Some(BootstrapRewardUpdate {
@@ -2485,6 +2629,7 @@ mod tests {
             target_epoch: EpochNo(1337),
             delta_treasury: Coin(0),
             delta_reserves: Coin(0),
+            delta_fees: Coin(0),
             reward_delta: delta,
             canonical_commitment: commitment,
         });
@@ -3839,6 +3984,7 @@ mod tests {
             EpochNo(1339),
             delta_treasury,
             delta_reserves,
+            Coin(0),
             &rd,
         );
         acc.pending_reward_update = Some(BootstrapRewardUpdate {
@@ -3848,6 +3994,7 @@ mod tests {
             target_epoch: EpochNo(1339),
             delta_treasury,
             delta_reserves,
+            delta_fees: Coin(0),
             reward_delta: rd,
             canonical_commitment: commitment,
         });

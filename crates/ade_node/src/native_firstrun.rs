@@ -593,6 +593,7 @@ where
         let reward_delta = s1a.reward_deltas.clone();
         let delta_treasury = s1a.rupd_delta_treasury;
         let delta_reserves = s1a.rupd_delta_reserves;
+        let delta_fees = s1a.rupd_delta_fees;
         let canonical_commitment = bru::bootstrap_rupd_commitment(
             &manifest_commitment,
             source_point_slot,
@@ -600,6 +601,7 @@ where
             target_epoch,
             delta_treasury,
             delta_reserves,
+            delta_fees,
             &reward_delta,
         );
         let rupd = bru::BootstrapRewardUpdate {
@@ -609,6 +611,7 @@ where
             target_epoch,
             delta_treasury,
             delta_reserves,
+            delta_fees,
             reward_delta,
             canonical_commitment,
         };

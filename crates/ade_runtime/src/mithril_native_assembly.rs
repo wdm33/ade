@@ -767,6 +767,7 @@ mod tests {
             reward_deltas: std::collections::BTreeMap::new(),
             rupd_delta_treasury: Coin(0),
             rupd_delta_reserves: Coin(0),
+            rupd_delta_fees: Coin(0),
             epoch_fees: Coin(0),
             imported_gov: sample_imported_gov(),
             reward_nibble_observation: RewardNibbleObservation::Mixed,

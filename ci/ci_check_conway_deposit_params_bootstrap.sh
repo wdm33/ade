@@ -58,10 +58,13 @@ done
 grep -q 'nn_read_u64(d, o, "pp.dRepActivity")' "$DECODER" \
     || print_fail "(3) decoder does not READ dRepActivity (idx 29) with nn_read_u64 (fail-closed on wrong type)"
 
-# (4) The accumulator schema version is bumped to 2, and the structured fail-closed error variant exists so a
-#     v2 Conway store with a missing deposit param is rejected (never loaded as a defaulted set).
-grep -Eq 'EPOCH_ACCUMULATOR_SCHEMA_VERSION:[[:space:]]*u32[[:space:]]*=[[:space:]]*2' "$ACC" \
-    || print_fail "(4) EPOCH_ACCUMULATOR_SCHEMA_VERSION is not 2 (the v1->v2 bump that rejects prior stores)"
+# (4) The accumulator schema version is a versioned gate (>= 2), and the structured fail-closed error variant
+#     exists so a Conway store with a missing deposit param is rejected (never loaded as a defaulted set). The
+#     exact version advances with later bumps (v3 added the bootstrap-RUPD feeSS, DC-EPOCH-23); the gate here
+#     only requires it stay past the pre-deposit-param v1 -- the MissingConwayDepositParams check below is the
+#     deposit-param-specific fail-close.
+grep -Eq 'EPOCH_ACCUMULATOR_SCHEMA_VERSION:[[:space:]]*u32[[:space:]]*=[[:space:]]*([2-9]|[1-9][0-9]+)' "$ACC" \
+    || print_fail "(4) EPOCH_ACCUMULATOR_SCHEMA_VERSION is not a versioned gate >= 2 (the bump that rejects prior stores)"
 grep -q 'MissingConwayDepositParams' "$ACC" \
     || print_fail "(4) the structured EpochAccumulatorCodecError::MissingConwayDepositParams variant is missing"
 grep -q 'conway_deposit_params.is_none()' "$ACC" \

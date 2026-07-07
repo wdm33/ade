@@ -553,6 +553,7 @@ mod tip_tests {
             reward_deltas: BTreeMap::new(),
             rupd_delta_treasury: Coin(0),
             rupd_delta_reserves: Coin(0),
+            rupd_delta_fees: Coin(0),
             epoch_fees: Coin(0),
             imported_gov: gov,
             reward_nibble_observation: RewardNibbleObservation::None,
@@ -733,6 +734,57 @@ mod tip_tests {
         let (de, chk, nd) = read_vstate(&b, &mut o).expect("well-formed VState decodes");
         assert_eq!((de.len(), chk.len(), nd), (1, 1, 5));
         assert_eq!(o, b.len(), "read_vstate consumes exactly the VState bytes");
+    }
+
+    /// FROZEN TIMELINE FIXTURE (CE-3d bootstrap fee-buffer). A synthetic Complete `nesRu` carrying the
+    /// confirmed 1338 judge-snapshot magnitudes: the decoder now READS `deltaF` (the RewardUpdate feeSS)
+    /// instead of skipping it, returning it as the 4th tuple element. deltaT/deltaR are read via the same
+    /// sign-agnostic magnitude mechanism (deltaR/deltaF are negative `DeltaCoin`s on the wire).
+    #[test]
+    fn read_reward_update_deltas_returns_delta_fees() {
+        // array(1) SJust · array(2) PulsingRewUpdate · tag 1 (Complete) · array(5) RewardUpdate.
+        let mut b = vec![0x81u8, 0x82, 0x01, 0x85];
+        // deltaT (treasury increase, positive major-0, 8-byte arg).
+        b.push(0x1b);
+        b.extend_from_slice(&2_744_247_724_989u64.to_be_bytes());
+        // deltaR (reserves decrease, negative major-1, magnitude in the 8-byte arg).
+        b.push(0x3b);
+        b.extend_from_slice(&3_108_895_499_648u64.to_be_bytes());
+        // rs = map(0) (empty reward set).
+        b.push(0xa0);
+        // deltaF (fee decrease, negative major-1, magnitude = the confirmed feeSS).
+        b.push(0x3b);
+        b.extend_from_slice(&1_157_103_223u64.to_be_bytes());
+        // nonMyopic (skipped): int 0.
+        b.push(0x00);
+
+        let mut o = 0usize;
+        let (rs, dt, dr, df) = read_reward_update_deltas(&b, &mut o).expect("Complete nesRu decodes");
+        assert!(rs.is_empty());
+        assert_eq!(dt, Coin(2_744_247_724_989), "deltaT magnitude");
+        assert_eq!(dr, Coin(3_108_895_499_648), "deltaR magnitude");
+        assert_eq!(df, Coin(1_157_103_223), "deltaF (feeSS) magnitude is READ, not skipped");
+        assert_eq!(o, b.len(), "the decoder consumes exactly the RewardUpdate bytes");
+    }
+
+    #[test]
+    fn read_reward_update_deltas_rejects_malformed_delta_fees() {
+        // Same framing, but deltaF is a non-integer (an array) -> read_any_int fails -> malformed, fail-closed.
+        let mut b = vec![0x81u8, 0x82, 0x01, 0x85];
+        b.push(0x1b);
+        b.extend_from_slice(&2_744_247_724_989u64.to_be_bytes());
+        b.push(0x3b);
+        b.extend_from_slice(&3_108_895_499_648u64.to_be_bytes());
+        b.push(0xa0); // rs = map(0)
+        b.push(0x80); // deltaF = array(0) — NOT an integer
+        b.push(0x00); // nonMyopic
+        let mut o = 0usize;
+        match read_reward_update_deltas(&b, &mut o) {
+            Err(LedgerDbStateError::MalformedCbor(msg)) => {
+                assert!(msg.contains("deltaF"), "the malformed-field error names deltaF: {msg}");
+            }
+            other => panic!("expected a fail-closed MalformedCbor on a non-integer deltaF, got {other:?}"),
+        }
     }
 }
 
@@ -1310,6 +1362,15 @@ pub struct NativeSnapshotNonUtxoState {
     /// `nesRu` Complete reward update's `deltaR` MAGNITUDE — the reserves DECREASE the seed-boundary
     /// RUPD applies (subtracted from reserves). Zero when the nesRu is SNothing.
     pub rupd_delta_reserves: Coin,
+    /// `nesRu` Complete reward update's `deltaF` MAGNITUDE — the fee pot DECREASE (`feeSS`) the
+    /// seed-boundary RUPD applies. Cardano reduces the fee pot by `feeSS` when it APPLIES the reward
+    /// update (Shelley `epoch.tex`); without it the seed epoch's fees double-count into the seed+2 reward.
+    /// Threaded into the persisted `BootstrapRewardUpdate`, whose v3 commitment binds it and is verified at
+    /// decode AND the seed-boundary apply (and is manifest-chained). Like `reward_deltas` (the `rs` map), its
+    /// tamper-evidence is anchored by that RUPD-sidecar commitment, NOT by `commit_native_nonutxo_state` —
+    /// only the sibling pots `deltaT`/`deltaR` are additionally bound there (a legacy double-binding); the
+    /// `rs`/`deltaF` fields are anchored solely by the RUPD commitment. Zero when the nesRu is SNothing.
+    pub rupd_delta_fees: Coin,
     /// The certified epoch fee pot (UTxOState index 2) at the snapshot point — epoch (seed)'s fees
     /// accumulated so far. Seeds `epoch_state.epoch_fees` so the first bootstrap-adjacent native boundary
     /// (seed+1 -> seed+2, paying epoch (seed)'s reward) consumes the FULL epoch fees (this pre-seed
@@ -1458,12 +1519,15 @@ fn read_reward_set_amount_sum(d: &[u8], o: &mut usize) -> R<u64> {
 /// the cardano-computed pots for the seed→seed+1 boundary (they fold in epoch (seed-1)'s fees, which
 /// the native accumulator cannot reconstruct from post-bootstrap blocks). The seed-boundary apply
 /// adds deltaT to treasury and subtracts delta_reserves from reserves so the pots are byte-exact.
-fn read_reward_update_deltas(d: &[u8], o: &mut usize) -> R<(BTreeMap<StakeCredential, Coin>, Coin, Coin)> {
+fn read_reward_update_deltas(
+    d: &[u8],
+    o: &mut usize,
+) -> R<(BTreeMap<StakeCredential, Coin>, Coin, Coin, Coin)> {
     let mut deltas: BTreeMap<StakeCredential, Coin> = BTreeMap::new();
     // StrictMaybe: array(0) = SNothing, array(1) = SJust PulsingRewUpdate.
     let sm = array_len(d, o, "nesRu.strictMaybe")?;
     if sm == 0 {
-        return Ok((deltas, Coin(0), Coin(0)));
+        return Ok((deltas, Coin(0), Coin(0), Coin(0)));
     }
     // SJust PulsingRewUpdate = array[tag, ...]: tag 0 = Pulsing(+RewardSnapShot+Pulser), 1 = Complete(+RewardUpdate).
     let _pru = array_len(d, o, "nesRu.pulsing")?;
@@ -1495,9 +1559,15 @@ fn read_reward_update_deltas(d: &[u8], o: &mut usize) -> R<(BTreeMap<StakeCreden
         }
         Ok(())
     })?;
-    skip_item(d, o).map_err(|e| malformed(format!("RewardUpdate.deltaF: {e:?}")))?;
+    // deltaF: the fee-pot decrease MAGNITUDE (feeSS). Stored as a negative DeltaCoin (`-deltaF`); we
+    // take the read magnitude via the SAME mechanism as deltaT/deltaR. Cardano reduces the fee pot by
+    // this feeSS when it APPLIES the reward update at the boundary; the bootstrap RUPD carries it so the
+    // seed-boundary apply performs the same reduction (Shelley epoch.tex: "The fee pot will be reduced by
+    // feeSS"). A malformed (non-integer) deltaF fails closed.
+    let (delta_fees, _, _) =
+        read_any_int(d, o).map_err(|e| malformed(format!("RewardUpdate.deltaF: {e:?}")))?;
     skip_item(d, o).map_err(|e| malformed(format!("RewardUpdate.nonMyopic: {e:?}")))?;
-    Ok((deltas, Coin(delta_treasury), Coin(delta_reserves)))
+    Ok((deltas, Coin(delta_treasury), Coin(delta_reserves), Coin(delta_fees)))
 }
 
 pub fn decode_native_nonutxo_state(
@@ -1587,8 +1657,9 @@ pub fn decode_native_nonutxo_state(
     skip_item(d, o)?; // EpochState.nonMyopic
     // nes.rewardUpdate (nesRu): decode the Complete RUPD's per-credential reward deltas — the
     // seed-window-end reward distribution that authority(N+2)'s stake needs. R-error -> Rn.
-    let (reward_deltas, rupd_delta_treasury, rupd_delta_reserves) = read_reward_update_deltas(d, o)
-        .map_err(|e| nn_malformed(format!("nesRu rewardUpdate: {e:?}")))?;
+    let (reward_deltas, rupd_delta_treasury, rupd_delta_reserves, rupd_delta_fees) =
+        read_reward_update_deltas(d, o)
+            .map_err(|e| nn_malformed(format!("nesRu rewardUpdate: {e:?}")))?;
     // nes[5] = [PoolDistr, totalActiveStake]
     let pd_n = nn_array_len(d, o, "nes.poolDistrWrapper")?;
     let pool_distr = read_pool_distr_nn(d, o)?;
@@ -1674,6 +1745,7 @@ pub fn decode_native_nonutxo_state(
         reward_deltas,
         rupd_delta_treasury,
         rupd_delta_reserves,
+        rupd_delta_fees,
         epoch_fees,
         imported_gov,
         reward_nibble_observation,
