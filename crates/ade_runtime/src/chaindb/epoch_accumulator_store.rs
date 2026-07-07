@@ -460,13 +460,27 @@ mod tests {
 
     /// A bootstrap accumulator and a clearly-distinct advanced one (different epoch + reserves), so the
     /// round-trip / reset assertions are exact (EpochAccumulator derives PartialEq).
+    // v2: a persisted Conway accumulator carries the deposit params (production seeds them from the
+    // certified snapshot); the codec fails closed on None, so a round-tripped fixture must set Some.
+    // gov_state stays None here so `governance_import_gate_rejects_absent_but_allows_empty` still isolates
+    // the gov-import readiness check.
+    fn conway_deposits() -> ade_ledger::pparams::ConwayOnlyDepositParams {
+        ade_ledger::pparams::ConwayOnlyDepositParams {
+            drep_deposit: Coin(500_000_000),
+            gov_action_deposit: Coin(100_000_000_000),
+            drep_activity: 20,
+        }
+    }
     fn acc_bootstrap() -> EpochAccumulator {
-        EpochAccumulator::new(CardanoEra::Conway)
+        let mut a = EpochAccumulator::new(CardanoEra::Conway);
+        a.conway_deposit_params = Some(conway_deposits());
+        a
     }
     fn acc_advanced() -> EpochAccumulator {
         let mut a = EpochAccumulator::new(CardanoEra::Conway);
         a.epoch_state.epoch = EpochNo(9);
         a.epoch_state.reserves = Coin(12_345);
+        a.conway_deposit_params = Some(conway_deposits());
         a
     }
 

@@ -197,11 +197,11 @@ impl Default for ProtocolParameters {
 /// is never representable (let alone defaulted) in a non-Conway state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConwayOnlyDepositParams {
-    /// DRep registration deposit (Conway `dRepDeposit`, PParams field 30).
+    /// DRep registration deposit (Conway `dRepDeposit`, curPParams array index 28).
     pub drep_deposit: Coin,
-    /// Governance-action deposit (Conway `govActionDeposit`, PParams field 29).
+    /// Governance-action deposit (Conway `govActionDeposit`, curPParams array index 27).
     pub gov_action_deposit: Coin,
-    /// DRep activity period in epochs (Conway `dRepActivity`, PParams field 31).
+    /// DRep activity period in epochs (Conway `dRepActivity`, curPParams array index 29).
     /// A registered or updated DRep's `drep_expiry` is set to
     /// `current_epoch + drep_activity`. Carried here because it is a Conway-only
     /// parameter absent from the shared `ProtocolParameters`; the `Option`-gating

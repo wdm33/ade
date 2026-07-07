@@ -121,8 +121,10 @@ use crate::state::{ConwayGovState, EpochState, LedgerState};
 use crate::utxo::UTxOState;
 
 /// Pinned wire schema version. Decode rejects any other (fail-closed). v1 = the initial
-/// LIVE-LEDGER-EPOCH-TRANSITION accumulator.
-pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = 1;
+/// LIVE-LEDGER-EPOCH-TRANSITION accumulator. v2 = a Conway accumulator MUST carry
+/// `conway_deposit_params` (never `None`); a pre-fix v1 store fails closed on decode (`UnknownVersion`)
+/// — migration is an explicit re-bootstrap.
+pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = 2;
 
 /// The non-UTxO authority a self-sustaining ledger maintains beside the disk-backed reduced UTxO
 /// checkpoint. Closed record — all fields required at construction; no `Default`, no
@@ -1443,6 +1445,11 @@ pub enum EpochAccumulatorCodecError {
     BootstrapReward(BootstrapRupdError),
     /// Trailing bytes after the record.
     TrailingBytes { extra: usize },
+    /// A v2 Conway accumulator decoded with `conway_deposit_params == None`. The Conway-only deposit params
+    /// (`drep_deposit`/`gov_action_deposit`/`drep_activity`) are REQUIRED — decoded from the certified
+    /// snapshot into bootstrap authority, never defaulted; a store lacking them predates the import and must
+    /// be re-bootstrapped (fail closed, never silently loaded as a defaulted set).
+    MissingConwayDepositParams,
 }
 
 impl From<ade_codec::CodecError> for EpochAccumulatorCodecError {
@@ -1466,10 +1473,10 @@ const FIELDS_OUTER: u64 = 11;
 /// Canonical CBOR encode. Sole pub encoder. Composes the existing `snapshot/` sub-codecs + the
 /// `nesBprev` buffer + the optional bootstrap reward update.
 ///
-/// Wire shape (v1):
+/// Wire shape (v2):
 /// ```text
 /// array(11) [
-///   uint        EPOCH_ACCUMULATOR_SCHEMA_VERSION (= 1),
+///   uint        EPOCH_ACCUMULATOR_SCHEMA_VERSION (= 2),
 ///   uint        era,                              // 7 = Conway (pre-Conway rejected on decode)
 ///   uint        max_lovelace_supply,
 ///   bytes       epoch_state_encoded,              // encode_epoch_state (nesBcur + pots + snapshots)
@@ -1549,6 +1556,12 @@ pub fn decode_epoch_accumulator(
     let conway_deposit_params = read_opt_bstr(bytes, &mut o, |b| {
         decode_conway_deposit_params(b).map_err(Into::into)
     })?;
+    // v2 fail-closed: a Conway accumulator MUST carry the deposit params. The era is already Conway+ (the
+    // check above rejects pre-Conway), so `None` here is a pre-fix store that predates the import — reject
+    // it rather than load a defaulted set. Migration is an explicit re-bootstrap.
+    if (era as u8) >= (CardanoEra::Conway as u8) && conway_deposit_params.is_none() {
+        return Err(EpochAccumulatorCodecError::MissingConwayDepositParams);
+    }
     let prev_block_production = read_pool_u64_map(bytes, &mut o)?;
     let prev_epoch_fees = Coin(read_u64_field(bytes, &mut o)?);
     let pending_reward_update = read_opt_bstr(bytes, &mut o, |b| {
@@ -1946,11 +1959,18 @@ mod tests {
     }
 
     #[test]
-    fn codec_round_trips_empty_conway() {
+    fn codec_v2_conway_without_deposit_params_fails_closed() {
+        // A Conway accumulator with conway_deposit_params = None is NOT a legal v2 persisted state: the
+        // deposit params are REQUIRED (decoded from the certified snapshot, never defaulted). The encoder
+        // writes null; decode fails closed with the structured MissingConwayDepositParams — a store lacking
+        // the params predates the import and must re-bootstrap, never load as a defaulted set.
         let acc = EpochAccumulator::new(CardanoEra::Conway);
+        assert_eq!(acc.conway_deposit_params, None);
         let bytes = encode_epoch_accumulator(&acc);
-        let decoded = decode_epoch_accumulator(&bytes).expect("decode");
-        assert_eq!(decoded, acc);
+        match decode_epoch_accumulator(&bytes) {
+            Err(EpochAccumulatorCodecError::MissingConwayDepositParams) => {}
+            other => panic!("expected MissingConwayDepositParams, got {other:?}"),
+        }
     }
 
     #[test]
@@ -2017,16 +2037,18 @@ mod tests {
 
     #[test]
     fn codec_rejects_unknown_version() {
+        // A pre-fix v1 store (version byte 0x01) fails closed on decode — migration to v2 is an EXPLICIT
+        // re-bootstrap, never a silent reinterpretation of a store that lacks the deposit params.
         let acc = populated();
         let bytes = encode_epoch_accumulator(&acc);
-        // outer array header is one byte; the version uint follows. v1 (=0x01) → patch to 0x02.
+        // outer array header is one byte; the version uint follows. v2 (=0x02) → patch down to a v1 store (0x01).
         let mut buf = bytes.clone();
-        assert_eq!(buf[1], 0x01);
-        buf[1] = 0x02;
+        assert_eq!(buf[1], 0x02);
+        buf[1] = 0x01;
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::UnknownVersion {
-                expected: 1,
-                found: 2,
+                expected: 2,
+                found: 1,
             }) => {}
             other => panic!("expected UnknownVersion, got {other:?}"),
         }
@@ -2058,16 +2080,16 @@ mod tests {
 
     #[test]
     fn codec_rejects_non_canonical_via_reencode_backstop() {
-        // Re-encode the version uint non-minimally: 0x01 (minimal) → 0x18 0x01 (1-byte-argument uint,
-        // same value 1). The value decodes correctly but re-encodes minimally, so the byte-canonical
+        // Re-encode the version uint non-minimally: 0x02 (minimal) → 0x18 0x02 (1-byte-argument uint,
+        // same value 2). The value decodes correctly but re-encodes minimally, so the byte-canonical
         // backstop (re-encode != input) rejects it fail-closed — the discipline that a valid value MUST
         // have exactly one accepted encoding.
         let bytes = encode_epoch_accumulator(&populated());
-        assert_eq!(bytes[1], 0x01, "version is encoded minimally");
+        assert_eq!(bytes[1], 0x02, "version is encoded minimally");
         let mut buf = Vec::with_capacity(bytes.len() + 1);
         buf.push(bytes[0]); // outer array header
         buf.push(0x18); // uint, 1-byte argument follows
-        buf.push(0x01); // = 1 (non-minimal)
+        buf.push(0x02); // = 2 (non-minimal)
         buf.extend_from_slice(&bytes[2..]);
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::MalformedCbor) => {}
@@ -2483,6 +2505,92 @@ mod tests {
         }
     }
 
+    /// BOUNDARY REGRESSION (the blocker fix). Before this slice the native-bootstrap accumulator carried
+    /// `conway_deposit_params = None`, so the first governance-active epoch boundary fail-closed
+    /// `CertApply(ValidationEnvironment(MissingDRepActivityParam))` — a DRep-registration cert (the exact
+    /// consumer, `gov_cert::apply_conway_gov_cert`) could not reach a `drep_activity` because
+    /// `LedgerState::gov_cert_env` (state.rs) had no deposit params. With the imported params threaded into
+    /// the accumulator, (1) `gov_cert_env` yields the imported `drep_activity` UNCHANGED, (2) the DRep cert
+    /// applies (expiry = epoch + activity), and (3) the accumulator crosses the boundary carrying the params
+    /// — while a `None` accumulator still fails closed (the negative control: the fix is the imported Some,
+    /// never a fallback).
+    #[test]
+    fn imported_deposit_params_cross_governance_boundary_and_reach_gov_cert_env() {
+        use crate::error::ValidationEnvironmentError;
+        use crate::gov_cert::apply_conway_gov_cert;
+        use ade_types::conway::cert::ConwayCert;
+
+        const DREP_ACTIVITY: u64 = 33; // a distinctive imported value (not the 20 test fixture)
+        let mut acc = reward_fixture(); // epoch 500, Conway
+        acc.conway_deposit_params = Some(ConwayOnlyDepositParams {
+            drep_deposit: Coin(500_000_000),
+            gov_action_deposit: Coin(100_000_000_000),
+            drep_activity: DREP_ACTIVITY,
+        });
+
+        // (1) the imported drep_activity reaches GovCertValidationEnv UNCHANGED (state.rs gov_cert_env).
+        let view = acc.as_ledger_view();
+        let env = view
+            .gov_cert_env()
+            .expect("Some deposit params → the gov-cert env is available (no MissingDRepActivityParam)");
+        assert_eq!(env.current_epoch, 500);
+        assert_eq!(env.drep_activity, DREP_ACTIVITY, "the imported drep_activity reaches the env unchanged");
+
+        // (2) the DRep-registration cert — the EXACT consumer that raised MissingDRepActivityParam — now
+        //     succeeds and sets drep_expiry = current_epoch + drep_activity.
+        let drep = key_cred(0xAA);
+        let gov = ConwayGovState {
+            prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
+            proposals: Vec::new(),
+            committee: BTreeMap::new(),
+            committee_quorum: (1, 1),
+            drep_expiry: BTreeMap::new(),
+            gov_action_lifetime: 6,
+            vote_delegations: BTreeMap::new(),
+            pool_voting_thresholds: Vec::new(),
+            drep_voting_thresholds: Vec::new(),
+            committee_hot_keys: BTreeMap::new(),
+            num_dormant: crate::state::DormantEpochs::Unversioned,
+        };
+        let after_cert = apply_conway_gov_cert(
+            &gov,
+            &ConwayCert::DRepRegistration { drep_credential: drep.clone(), deposit: Coin(500_000_000) },
+            Some(&env),
+        )
+        .expect("DRep registration no longer fails closed on MissingDRepActivityParam");
+        assert_eq!(after_cert.drep_expiry.get(&drep), Some(&(500 + DREP_ACTIVITY)));
+
+        // (3) the accumulator crosses the governance boundary carrying the params (they survive the cross,
+        //     so post-boundary blocks can still register DReps).
+        let ctx = SelectedBlockCtx {
+            era: CardanoEra::Conway,
+            block_epoch: EpochNo(501),
+            block_slot: SlotNo(0),
+            issuer_pool: pool(0xAA),
+            boundary_mark: Some(sample_mark(0xAA, 1_000_000_000_000)),
+            active_slots_per_epoch: 21_600,
+        };
+        let after = cross_epoch_boundary(acc, EpochNo(501), &ctx).expect("crosses the governance boundary");
+        assert_eq!(
+            after.conway_deposit_params.as_ref().map(|c| c.drep_activity),
+            Some(DREP_ACTIVITY),
+            "the imported deposit params survive the boundary crossing",
+        );
+        assert_eq!(
+            after.as_ledger_view().gov_cert_env().map(|e| e.drep_activity),
+            Ok(DREP_ACTIVITY),
+        );
+
+        // Negative control: a None accumulator (the pre-fix live state) still fails closed exactly as the
+        // blocker did — the boundary fix is the imported Some, never a defaulted activity period.
+        let mut acc_none = reward_fixture();
+        acc_none.conway_deposit_params = None;
+        assert_eq!(
+            acc_none.as_ledger_view().gov_cert_env(),
+            Err(ValidationEnvironmentError::MissingDRepActivityParam),
+        );
+    }
+
     // ----- Fail-closed boundaries -----
 
     #[test]
@@ -2595,6 +2703,13 @@ mod tests {
         acc.epoch_state.epoch = EpochNo(500);
         acc.protocol_params = conway_params();
         acc.epoch_state.reserves = Coin(1_000_000_000_000_000);
+        // v2: a persisted Conway accumulator carries the deposit params (production seeds them from the
+        // certified snapshot); a codec round-trip therefore requires Some.
+        acc.conway_deposit_params = Some(ConwayOnlyDepositParams {
+            drep_deposit: Coin(500_000_000),
+            gov_action_deposit: Coin(100_000_000_000),
+            drep_activity: 20,
+        });
         acc
     }
 

@@ -2835,11 +2835,12 @@ pub fn parse_conway_gov_params(
         return Err(HarnessError::ParseError(format!("PParams has {pp_len} fields, need 31")));
     }
 
-    // Read all 31 fields, extracting the ones we need.
-    // PP[0..23] = standard Shelley+ params (skip)
-    // PP[24] = poolVotingThresholds, PP[25] = dRepVotingThresholds
-    // PP[26] = committeeMinSize, PP[27] = committeeMaxTermLength
-    // PP[28] = govActionLifetime, PP[29] = govActionDeposit, PP[30] = dRepDeposit
+    // Read all 31 fields, extracting the ones we need. Positions are the ledger-state curPParams
+    // ARRAY indices (verified below + in ade_ledger read_conway_pparams), NOT the CDDL map keys:
+    // PP[0..21] = standard Shelley+ params (skip)
+    // PP[22] = poolVotingThresholds, PP[23] = dRepVotingThresholds
+    // PP[24] = committeeMinSize, PP[25] = committeeMaxTermLength
+    // PP[26] = govActionLifetime, PP[27] = govActionDeposit, PP[28] = dRepDeposit, PP[29] = dRepActivity
     let mut offsets = Vec::new();
     let mut off = pp_body;
     for i in 0..pp_len.min(31) {

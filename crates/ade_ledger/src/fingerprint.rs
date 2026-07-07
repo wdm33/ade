@@ -1806,6 +1806,65 @@ mod tests {
         assert_ne!(f_dep.pparams, f_mut.pparams);
     }
 
+    /// Forged-snapshot binding: a tampered `drep_activity` (the governance-activity authority the imported
+    /// bootstrap deposit params carry) flips the pparams component AND the combined fingerprint. Because the
+    /// native bootstrap seed_hash derives from `fingerprint(&ledger).combined`, a substituted drep_activity
+    /// in the certified snapshot is caught at bootstrap — it can never be silently defaulted.
+    #[test]
+    fn tampered_drep_activity_flips_pparams_fingerprint() {
+        let mut base = LedgerState::new(CardanoEra::Conway);
+        base.conway_deposit_params = Some(crate::pparams::ConwayOnlyDepositParams {
+            drep_deposit: Coin(500_000_000),
+            gov_action_deposit: Coin(100_000_000_000),
+            drep_activity: 20,
+        });
+        let mut tampered = base.clone();
+        tampered.conway_deposit_params.as_mut().unwrap().drep_activity = 21;
+
+        let f_base = fingerprint(&base);
+        let f_tampered = fingerprint(&tampered);
+        assert_ne!(f_base.pparams, f_tampered.pparams, "drep_activity is bound into the pparams component");
+        assert_ne!(f_base.combined, f_tampered.combined, "and into the combined (bootstrap-seed) fingerprint");
+    }
+
+    /// All three snapshot-bound Conway deposit params are tamper-evident (not just `drep_activity`):
+    /// a mutated `gov_action_deposit` flips the pparams + combined fingerprint, so the bootstrap
+    /// commitment catches a forged/mismatched snapshot binding.
+    #[test]
+    fn tampered_gov_action_deposit_flips_pparams_fingerprint() {
+        let mut base = LedgerState::new(CardanoEra::Conway);
+        base.conway_deposit_params = Some(crate::pparams::ConwayOnlyDepositParams {
+            drep_deposit: Coin(500_000_000),
+            gov_action_deposit: Coin(100_000_000_000),
+            drep_activity: 20,
+        });
+        let mut tampered = base.clone();
+        tampered.conway_deposit_params.as_mut().unwrap().gov_action_deposit = Coin(100_000_000_001);
+
+        let f_base = fingerprint(&base);
+        let f_tampered = fingerprint(&tampered);
+        assert_ne!(f_base.pparams, f_tampered.pparams, "gov_action_deposit is bound into the pparams component");
+        assert_ne!(f_base.combined, f_tampered.combined, "and into the combined (bootstrap-seed) fingerprint");
+    }
+
+    /// `drep_deposit` is likewise tamper-evident.
+    #[test]
+    fn tampered_drep_deposit_flips_pparams_fingerprint() {
+        let mut base = LedgerState::new(CardanoEra::Conway);
+        base.conway_deposit_params = Some(crate::pparams::ConwayOnlyDepositParams {
+            drep_deposit: Coin(500_000_000),
+            gov_action_deposit: Coin(100_000_000_000),
+            drep_activity: 20,
+        });
+        let mut tampered = base.clone();
+        tampered.conway_deposit_params.as_mut().unwrap().drep_deposit = Coin(500_000_001);
+
+        let f_base = fingerprint(&base);
+        let f_tampered = fingerprint(&tampered);
+        assert_ne!(f_base.pparams, f_tampered.pparams, "drep_deposit is bound into the pparams component");
+        assert_ne!(f_base.combined, f_tampered.combined, "and into the combined (bootstrap-seed) fingerprint");
+    }
+
     #[test]
     fn component_hashes_are_distinct_for_empty_state() {
         // Domain-separated component headers should produce distinct

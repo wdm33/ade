@@ -363,6 +363,12 @@ mod tests {
         let mut acc = EpochAccumulator::new(CardanoEra::Conway);
         acc.epoch_state.epoch = EpochNo(500);
         acc.epoch_state.reserves = Coin(1_000_000_000_000_000);
+        // v2: a persisted Conway accumulator carries the deposit params (the codec fails closed on None).
+        acc.conway_deposit_params = Some(ade_ledger::pparams::ConwayOnlyDepositParams {
+            drep_deposit: Coin(500_000_000),
+            gov_action_deposit: Coin(100_000_000_000),
+            drep_activity: 20,
+        });
         let s = store(tmp);
         s.seal_bootstrap(&acc, seed_slot).unwrap();
         s

@@ -54,6 +54,12 @@ fn bytes(b: &[u8]) -> Vec<u8> {
 fn tag(t: u64) -> Vec<u8> {
     hdr(6, t)
 }
+/// A `text` (major-3) CBOR string — used to inject a wrong-typed field where a uint is required.
+fn text(s: &str) -> Vec<u8> {
+    let mut v = hdr(3, s.len() as u64);
+    v.extend_from_slice(s.as_bytes());
+    v
+}
 const NULL: u8 = 0xf6;
 
 fn concat(parts: &[Vec<u8>]) -> Vec<u8> {
@@ -137,6 +143,30 @@ fn conway_pparams_with_min_fee_a(min_fee_a: u64) -> Vec<u8> {
         uint(500_000_000),// 28 dRepDeposit
         uint(20),         // 29 dRepActivity
         rational(15, 1),  // 30 minFeeRefScriptCostPerByte
+    ])
+}
+
+/// A full Conway curPParams array(31) identical to [`conway_pparams`] EXCEPT index 29 (`dRepActivity`)
+/// carries a TEXT string where a uint is required — so the decoder's `nn_read_u64` at that position fails
+/// closed (the deposit param is READ, never skipped, so a wrong-typed value is never silently defaulted).
+fn conway_pparams_bad_drep_activity() -> Vec<u8> {
+    concat(&[
+        arr(31),
+        uint(44), uint(155_381), uint(90_112), uint(16_384), uint(1_100),
+        uint(2_000_000), uint(500_000_000), uint(18), uint(500),
+        rational(3, 10), rational(3, 1000), rational(1, 5),
+        concat(&[arr(2), uint(11), uint(0)]),
+        uint(170_000_000), uint(4_310),
+        concat(&[map(0)]),
+        concat(&[arr(2), rational(577, 10_000), rational(721, 10_000_000)]),
+        concat(&[arr(2), uint(16_500_000), uint(10_000_000_000)]),
+        concat(&[arr(2), uint(72_000_000), uint(20_000_000_000)]),
+        uint(5_000), uint(150), uint(3),
+        arr(0), arr(0), uint(3), uint(146), uint(6),
+        uint(1_000_000_000), // 27 govActionDeposit
+        uint(500_000_000),   // 28 dRepDeposit
+        text("nope"),        // 29 dRepActivity — WRONG TYPE (text where uint required)
+        rational(15, 1),     // 30 minFeeRefScriptCostPerByte
     ])
 }
 
@@ -371,6 +401,17 @@ fn happy_minimal_state_decodes_all_fields() {
         s.imported_gov.gov_action_lifetime, 6,
         "govActionLifetime imported from curPParams idx 26"
     );
+    // The Conway-only deposit params (curPParams 27/28/29) are decoded into bootstrap authority — never
+    // defaulted. The fixture's curPParams sets govActionDeposit=1e9, dRepDeposit=5e8, dRepActivity=20.
+    assert_eq!(
+        s.conway_deposit_params,
+        ade_ledger::pparams::ConwayOnlyDepositParams {
+            gov_action_deposit: Coin(1_000_000_000),
+            drep_deposit: Coin(500_000_000),
+            drep_activity: 20,
+        },
+        "conway deposit params decoded from curPParams idx 27 (govActionDeposit) / 28 (dRepDeposit) / 29 (dRepActivity)"
+    );
     // pots.
     assert_eq!(s.treasury, Coin(1_890_267_427_632_547));
     assert_eq!(s.reserves, Coin(13_051_749_596_873_397));
@@ -578,6 +619,19 @@ fn malformed_pparams_arity_is_terminal() {
     assert!(matches!(
         decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC),
         Err(NativeNonUtxoError::ProtocolParamsMissing(_))
+    ));
+}
+
+#[test]
+fn malformed_drep_activity_type_is_terminal() {
+    // A wrong CBOR type (text string) at curPParams index 29 (dRepActivity) fails closed: the decoder READS
+    // the deposit params with nn_read_u64 (it no longer skips 27/28/29), so a malformed deposit param is a
+    // structured terminal, never a silent default.
+    let mut k = Knobs::default();
+    k.pparams_override = Some(conway_pparams_bad_drep_activity());
+    assert!(matches!(
+        decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC),
+        Err(NativeNonUtxoError::MalformedCbor(_))
     ));
 }
 

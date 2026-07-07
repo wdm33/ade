@@ -561,6 +561,11 @@ mod tip_tests {
             prev_max_tx_ex_units_mem: 0,
             prev_max_block_ex_units_mem: 0,
             enacted_pparam_update: None,
+            conway_deposit_params: crate::pparams::ConwayOnlyDepositParams {
+                drep_deposit: Coin(500_000_000),
+                gov_action_deposit: Coin(100_000_000_000),
+                drep_activity: 20,
+            },
         };
         let empty = ImportedGovState {
             proposals: Vec::new(),
@@ -667,9 +672,19 @@ mod tip_tests {
             StakeCredential::KeyHash(Hash28([0x99; 28])),
         );
         assert_ne!(
-            commit_native_nonutxo_state(&mk(one)),
+            commit_native_nonutxo_state(&mk(one.clone())),
             commit_native_nonutxo_state(&mk(diff_hot)),
             "v10 binds the imported committee_hot_keys",
+        );
+        // v12 binds the Conway-only deposit params: a tampered drep_activity flips the commitment, so the
+        // imported governance-activity authority cannot be silently substituted (the boundary-crossing fix).
+        let base_state = mk(one.clone());
+        let mut tampered_state = mk(one);
+        tampered_state.conway_deposit_params.drep_activity += 1;
+        assert_ne!(
+            commit_native_nonutxo_state(&base_state),
+            commit_native_nonutxo_state(&tampered_state),
+            "v12 binds the imported conway_deposit_params.drep_activity",
         );
     }
 
@@ -1133,6 +1148,15 @@ const CONWAY_PP_GOV_ACTION_LIFETIME_INDEX: u64 = 26;
 const CONWAY_PP_POOL_VOTING_THRESHOLDS_INDEX: u64 = 22;
 /// curPParams index of `drepVotingThresholds` (per-action DRep thresholds) — CRE S1.
 const CONWAY_PP_DREP_VOTING_THRESHOLDS_INDEX: u64 = 23;
+/// curPParams index of `govActionDeposit` (Coin) — the Conway governance-action deposit. Decoded into
+/// bootstrap authority as part of [`crate::pparams::ConwayOnlyDepositParams`] (never defaulted).
+const CONWAY_PP_GOV_ACTION_DEPOSIT_INDEX: u64 = 27;
+/// curPParams index of `dRepDeposit` (Coin) — the Conway DRep-registration deposit.
+const CONWAY_PP_DREP_DEPOSIT_INDEX: u64 = 28;
+/// curPParams index of `dRepActivity` (uint, epochs) — the Conway DRep activity period. The value the
+/// governance-cert accumulation (`GovCertEnv.drep_activity`) needs to cross a governance-active boundary
+/// without fail-closing on `MissingDRepActivityParam`.
+const CONWAY_PP_DREP_ACTIVITY_INDEX: u64 = 29;
 /// `ConwayGovState` (cardano-ledger 1.22) is a 7-field array; `curPParams` is field 3.
 const CONWAY_GOV_STATE_FIELDS: u64 = 7;
 const CONWAY_GOV_STATE_CURPPARAMS_INDEX: usize = 3;
@@ -1317,6 +1341,13 @@ pub struct NativeSnapshotNonUtxoState {
     /// pointer becomes that action's id, so the fixture PROVES the enacted params were caused by the target
     /// action (not merely coincident with its observables). Never a live-gate input.
     pub enacted_pparam_update: Option<GovActionId>,
+    /// The Conway-only deposit parameters (`govActionDeposit`[27], `dRepDeposit`[28], `dRepActivity`[29]),
+    /// decoded from the certified `curPParams`. REQUIRED (non-`Option`): `decode_native_nonutxo_state`
+    /// requires the Conway era, so these are always present for a valid decode. The bootstrap assembly
+    /// threads `drep_activity` into the accumulator's `conway_deposit_params` so a governance-active epoch
+    /// boundary does not fail-close on `MissingDRepActivityParam`. Bound into the v12 commitment (a tampered
+    /// deposit param flips it) and into the assembled-ledger fingerprint.
+    pub conway_deposit_params: crate::pparams::ConwayOnlyDepositParams,
 }
 
 /// Decode a cardano `SnapShot = array(2)[ssStake: map(StakeCredential -> [Coin, PoolId]),
@@ -1526,6 +1557,7 @@ pub fn decode_native_nonutxo_state(
         prev_max_tx_ex_units_mem,
         prev_max_block_ex_units_mem,
         enacted_pparam_update,
+        conway_deposit_params,
     ) = read_conway_pparams_from_utxo_state(d, o, network_id)?;
     // Thread the CertState bootstrap governance import (CRE S1 part 2): the DState-UMap DRep vote
     // delegations (2a) + the VState DRep-expiry and committee-hot-key maps (2b). They live ONLY in
@@ -1650,6 +1682,7 @@ pub fn decode_native_nonutxo_state(
         prev_max_tx_ex_units_mem,
         prev_max_block_ex_units_mem,
         enacted_pparam_update,
+        conway_deposit_params,
     };
     let commitment = commit_native_nonutxo_state(&state);
     Ok((state, commitment))
@@ -1718,7 +1751,17 @@ fn read_conway_pparams_from_utxo_state(
     d: &[u8],
     o: &mut usize,
     network_id: u8,
-) -> Rn<(ProtocolParameters, Coin, ImportedGovState, Coin, u64, u64, u64, Option<GovActionId>)> {
+) -> Rn<(
+    ProtocolParameters,
+    Coin,
+    ImportedGovState,
+    Coin,
+    u64,
+    u64,
+    u64,
+    Option<GovActionId>,
+    crate::pparams::ConwayOnlyDepositParams,
+)> {
     // UTxOState = array(6)[utxo, deposited, fees, govState, incrStake, donation]; descend to [3] = govState.
     if peek_major(d, *o).map_err(NativeNonUtxoError::from)? != 4 {
         return Err(NativeNonUtxoError::ProtocolParamsMissing(
@@ -1746,11 +1789,17 @@ fn read_conway_pparams_from_utxo_state(
     let (proposals, enacted_pparam_update) = nn_read_proposals(d, o)?; // [0] (+ the enacted PParamUpdate root)
     let (committee, committee_quorum) = nn_read_committee(d, o)?; // [1]
     skip_item(d, o)?; // [2] constitution
-    let (pp, gov_action_lifetime, pool_voting_thresholds, drep_voting_thresholds, max_block_ex_units_mem) =
-        read_conway_pparams(d, o, network_id)?; // [3] curPParams
+    let (
+        pp,
+        gov_action_lifetime,
+        pool_voting_thresholds,
+        drep_voting_thresholds,
+        max_block_ex_units_mem,
+        conway_deposit_params,
+    ) = read_conway_pparams(d, o, network_id)?; // [3] curPParams
     // [4] prevPParams — the PREVIOUS-epoch params. At an enactment boundary `prev` still holds the OLD value
     // while `cur` holds the NEW, proving the flip lands exactly at THIS boundary (CRE enactment census).
-    let (prev_pp, _, _, _, prev_max_block_ex_units_mem) = read_conway_pparams(d, o, network_id)?;
+    let (prev_pp, _, _, _, prev_max_block_ex_units_mem, _) = read_conway_pparams(d, o, network_id)?;
     let prev_max_tx_ex_units_mem = prev_pp.max_tx_ex_units_mem;
     // skip the remaining govState fields (futurePParams [5], drepPulser [6]).
     for _ in (CONWAY_GOV_STATE_CURPPARAMS_INDEX + 2)..(gn as usize) {
@@ -1783,6 +1832,7 @@ fn read_conway_pparams_from_utxo_state(
         prev_max_tx_ex_units_mem,
         prev_max_block_ex_units_mem,
         enacted_pparam_update,
+        conway_deposit_params,
     ))
 }
 
@@ -1867,7 +1917,14 @@ pub struct ImportedGovState {
 /// array and carries its Conway constant (`d = 0`, fully decentralized). `network_id` is
 /// NOT a Conway protocol parameter either; it is supplied by the caller, derived from the
 /// manifest network magic (the authority), and bound onto the shared `ProtocolParameters`.
-type ConwayPParamsGov = (ProtocolParameters, u64, Vec<(u64, u64)>, Vec<(u64, u64)>, u64);
+type ConwayPParamsGov = (
+    ProtocolParameters,
+    u64,
+    Vec<(u64, u64)>,
+    Vec<(u64, u64)>,
+    u64,
+    crate::pparams::ConwayOnlyDepositParams,
+);
 
 fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<ConwayPParamsGov> {
     if peek_major(d, *o).map_err(NativeNonUtxoError::from)? != 4 {
@@ -1914,6 +1971,12 @@ fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<ConwayPPar
     let mut gov_action_lifetime: u64 = 0;
     let mut pool_voting_thresholds: Vec<(u64, u64)> = Vec::new();
     let mut drep_voting_thresholds: Vec<(u64, u64)> = Vec::new();
+    // The three Conway-only deposit params (govActionDeposit[27]/dRepDeposit[28]/dRepActivity[29]) — REQUIRED,
+    // decoded from the certified curPParams into bootstrap authority, never defaulted. READ (not skipped) with
+    // `nn_read_u64`, which fails closed on a wrong CBOR type at the field's position.
+    let mut gov_action_deposit: u64 = 0;
+    let mut drep_deposit: u64 = 0;
+    let mut drep_activity: u64 = 0;
     for idx in 21..CONWAY_PPARAMS_FIELDS {
         if idx == CONWAY_PP_POOL_VOTING_THRESHOLDS_INDEX {
             pool_voting_thresholds = nn_read_voting_thresholds(d, o, "pp.poolVotingThresholds")?;
@@ -1921,6 +1984,12 @@ fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<ConwayPPar
             drep_voting_thresholds = nn_read_voting_thresholds(d, o, "pp.drepVotingThresholds")?;
         } else if idx == CONWAY_PP_GOV_ACTION_LIFETIME_INDEX {
             gov_action_lifetime = nn_read_u64(d, o, "pp.govActionLifetime")?;
+        } else if idx == CONWAY_PP_GOV_ACTION_DEPOSIT_INDEX {
+            gov_action_deposit = nn_read_u64(d, o, "pp.govActionDeposit")?;
+        } else if idx == CONWAY_PP_DREP_DEPOSIT_INDEX {
+            drep_deposit = nn_read_u64(d, o, "pp.dRepDeposit")?;
+        } else if idx == CONWAY_PP_DREP_ACTIVITY_INDEX {
+            drep_activity = nn_read_u64(d, o, "pp.dRepActivity")?;
         } else {
             skip_item(d, o)?;
         }
@@ -1957,7 +2026,12 @@ fn read_conway_pparams(d: &[u8], o: &mut usize, network_id: u8) -> Rn<ConwayPPar
             mem: max_block_ex_units_mem,
             steps: max_block_ex_units_steps,
         },
-    }, gov_action_lifetime, pool_voting_thresholds, drep_voting_thresholds, max_block_ex_units_mem))
+    }, gov_action_lifetime, pool_voting_thresholds, drep_voting_thresholds, max_block_ex_units_mem,
+    crate::pparams::ConwayOnlyDepositParams {
+        drep_deposit: Coin(drep_deposit),
+        gov_action_deposit: Coin(gov_action_deposit),
+        drep_activity,
+    }))
 }
 
 /// Read a `[* UnitInterval]` voting-threshold vector (a per-action ratification-threshold list). Each
@@ -2055,7 +2129,9 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
     // v11 (CRE S4.3b): additionally binds the enacted previous-pparam-action root (below) and the block
     // ExUnits (via the versioned `encode_pparams` arity) — both promoted from census-observables to live
     // ratify/enact inputs, so both are now commitment-bound (the §5 seam).
-    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v11");
+    // v12: additionally binds the Conway-only deposit params (govActionDeposit/dRepDeposit/dRepActivity),
+    // decoded from the certified curPParams into bootstrap authority — a tampered deposit param flips it.
+    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v12");
     v.push(s.era.as_u8());
     // The manifest-derived network id (a network identity perturbation flips the commitment).
     v.push(s.network_id);
@@ -2096,6 +2172,11 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
         crate::pparams::MinUtxoRule::PerByte(_) => 1,
     };
     v.push(min_utxo_rule_kind);
+    // v12: the Conway-only deposit params, decoded from the certified curPParams into bootstrap authority.
+    // A tampered govActionDeposit/dRepDeposit/dRepActivity flips the commitment, caught at bootstrap.
+    v.extend_from_slice(&s.conway_deposit_params.gov_action_deposit.0.to_be_bytes());
+    v.extend_from_slice(&s.conway_deposit_params.drep_deposit.0.to_be_bytes());
+    v.extend_from_slice(&s.conway_deposit_params.drep_activity.to_be_bytes());
     // CRE S4.3b (v11): bind the enacted previous-pparam-action root — promoted from a census-observable to a
     // live ratify-lineage input, so it MUST be commitment-bound. SNothing vs SJust(id) commit distinctly.
     match &s.enacted_pparam_update {

@@ -276,7 +276,8 @@ const NATIVE_SOURCE_MARKER: &str = "native-mithril-snapshot";
 /// - `ledger.protocol_params` <- S1a (incl. the `MinUtxoRule::PerByte`);
 /// - `ledger.era` = Conway; `ledger.max_lovelace_supply` <- genesis;
 ///   `gov_state` <- the certified snapshot's imported Proposals + Committee (CONWAY-PROPOSAL-DEPOSIT-
-///   EXPIRY S1); `conway_deposit_params = None`; `track_utxo = false`;
+///   EXPIRY S1); `conway_deposit_params` <- S1a (the certified curPParams deposit params, threaded into
+///   bootstrap authority so a governance-active boundary does not fail-close); `track_utxo = false`;
 /// - `chain_dep` five nonces <- S1a; op-cert counters empty; `last_* = None`;
 /// - `consensus_inputs` (native) <- manifest magic/genesis/point + S1a
 ///   epoch/eta0/pool_distr/params + genesis ASC + derived epoch window.
@@ -409,7 +410,11 @@ pub fn assemble_native_mithril_seed(
                 None => ade_ledger::state::PreviousPParamAction::NoPreviousAction,
             },
         })),
-        conway_deposit_params: None,
+        // The Conway-only deposit params (drep_deposit/gov_action_deposit/drep_activity) decoded from the
+        // certified snapshot's curPParams — threaded into bootstrap authority so `seed_from_bootstrap_ledger`
+        // carries them into the accumulator and a governance-active epoch boundary does not fail-close on
+        // `MissingDRepActivityParam`. Never `None`/defaulted on the native Conway path.
+        conway_deposit_params: Some(s1a.conway_deposit_params.clone()),
     };
 
     // --- Assemble the PraosChainDepState (cold start). ---
@@ -770,6 +775,13 @@ mod tests {
             prev_max_tx_ex_units_mem: 0,
             prev_max_block_ex_units_mem: 0,
             enacted_pparam_update: None,
+            // Distinctive deposit params (drep_activity 33, not a 20/None default) so the assembly test
+            // proves the DECODED value flows into the assembled ledger, not a coincidental fallback.
+            conway_deposit_params: ade_ledger::pparams::ConwayOnlyDepositParams {
+                drep_deposit: Coin(500_000_000),
+                gov_action_deposit: Coin(100_000_000_000),
+                drep_activity: 33,
+            },
         }
     }
 
@@ -1067,9 +1079,13 @@ mod tests {
                 "action kind bound",
             );
         }
-        assert!(
-            seed.ledger.conway_deposit_params.is_none(),
-            "conway_deposit_params = None"
+        // The Conway deposit params are threaded from the certified snapshot (s1a) into the assembled
+        // ledger — present (never None on the native Conway path) and byte-equal to the decoded source, so
+        // the accumulator seed carries the drep_activity a governance-active boundary needs.
+        assert_eq!(
+            seed.ledger.conway_deposit_params,
+            Some(s1a.conway_deposit_params.clone()),
+            "conway_deposit_params imported from the certified snapshot (drep_deposit/gov_action_deposit/drep_activity)"
         );
         assert_eq!(seed.ledger.max_lovelace_supply, g.max_lovelace_supply);
         assert_eq!(
