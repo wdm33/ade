@@ -35,7 +35,7 @@ use std::path::Path;
 use ade_ledger::epoch_accumulator::{
     decode_epoch_accumulator, encode_epoch_accumulator, EpochAccumulator,
 };
-use ade_types::{CardanoEra, Hash32, SlotNo};
+use ade_types::{BlockNo, CardanoEra, Hash32, SlotNo};
 use redb::{Database, ReadableTable, TableDefinition};
 
 const META_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("epoch_acc_meta");
@@ -57,6 +57,15 @@ const COMPLETE_KEY: &str = "complete";
 /// that removes/replaces the boundary point yields a different `boundary_hash`, invalidating the binding.
 const PENDING_BOUNDARY_MARK_KEY: &str = "pending_boundary_mark";
 
+/// LIVE-LEDGER-EPOCH-TRANSITION S5: the accumulator LINEAGE ANCHOR — the canonical selected point the
+/// persisted accumulator last represented. 48 bytes: `slot` (8 BE) ++ `block_no` (8 BE) ++ `header_hash`
+/// (32). Written ATOMICALLY with each advance (same redb commit as the blob + `LAST_SLOT`), so a certified
+/// store binds its accumulator to a specific selected-chain point, not just a height. PRESENCE = lineage-
+/// certified; ABSENCE = uncertified (a legacy pre-anchor store, or the transitional state after
+/// `reset_to_bootstrap`) — recovery must reset + re-fold from canonical blocks, never trust height alone.
+/// A present-but-malformed anchor fails closed (`CorruptLastAdvancedPoint`).
+const LAST_ADVANCED_POINT_KEY: &str = "last_advanced_point";
+
 /// Closed store-failure surface.
 #[derive(Debug)]
 pub enum EpochAccumulatorStoreError {
@@ -73,6 +82,49 @@ pub enum EpochAccumulatorStoreError {
     /// A non-forward `advance` (slot ≤ the last advanced slot). The accumulator only moves forward; a
     /// reorg uses `reset_to_bootstrap` + replay, never a backward `advance`.
     NonMonotonicAdvance { slot: u64, last: u64 },
+    /// The persisted `LastAdvancedPoint` lineage anchor is malformed — wrong length, or its slot disagrees
+    /// with `LAST_SLOT` (they are written in one commit, so a mismatch is corruption). Fail closed: recovery
+    /// must not read a corrupt anchor as authority.
+    CorruptLastAdvancedPoint,
+}
+
+/// LIVE-LEDGER-EPOCH-TRANSITION S5: the canonical selected point the persisted accumulator last represented
+/// — the lineage anchor recovery admission checks against (S5 `admit_rollback`). `header_hash` is the
+/// already-authoritative stored header hash (NOT a re-derived convenience hash); `block_no` is the decoded
+/// canonical header's block number (the height cardano's `SecurityParam` k bounds).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastAdvancedPoint {
+    pub slot: SlotNo,
+    pub block_no: BlockNo,
+    pub header_hash: Hash32,
+}
+
+impl LastAdvancedPoint {
+    /// Fixed-width canonical bytes: `slot` (8 BE) ++ `block_no` (8 BE) ++ `header_hash` (32) = 48.
+    fn encode(&self) -> [u8; 48] {
+        let mut b = [0u8; 48];
+        b[0..8].copy_from_slice(&self.slot.0.to_be_bytes());
+        b[8..16].copy_from_slice(&self.block_no.0.to_be_bytes());
+        b[16..48].copy_from_slice(&self.header_hash.0);
+        b
+    }
+    /// Decode the fixed-width bytes. Wrong length is `CorruptLastAdvancedPoint`.
+    fn decode(bytes: &[u8]) -> Result<Self, EpochAccumulatorStoreError> {
+        if bytes.len() != 48 {
+            return Err(EpochAccumulatorStoreError::CorruptLastAdvancedPoint);
+        }
+        let mut slot = [0u8; 8];
+        slot.copy_from_slice(&bytes[0..8]);
+        let mut block = [0u8; 8];
+        block.copy_from_slice(&bytes[8..16]);
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(&bytes[16..48]);
+        Ok(LastAdvancedPoint {
+            slot: SlotNo(u64::from_be_bytes(slot)),
+            block_no: BlockNo(u64::from_be_bytes(block)),
+            header_hash: Hash32(hash),
+        })
+    }
 }
 
 /// Why the accumulator is NOT ready to be read as authority at a required slot (DC-EPOCH-20). Mirrors the
@@ -178,12 +230,17 @@ impl EpochAccumulatorStore {
         Ok(())
     }
 
-    /// Advance the current accumulator to `slot`. The blob + `LAST_SLOT` are written in ONE redb commit, so
-    /// the stored blob always matches its stored slot. Fail-closed if unsealed or non-forward.
+    /// Advance the current accumulator to the canonical selected point `(slot, block_no, header_hash)`. The
+    /// blob + `LAST_SLOT` + the `LastAdvancedPoint` lineage anchor are written in ONE redb commit, so a
+    /// certified store always binds its accumulator to the exact point it last represented (not just a
+    /// height). `header_hash` MUST be the authoritative stored header hash and `block_no` the decoded
+    /// canonical header block number. Fail-closed if unsealed or non-forward.
     pub fn advance(
         &self,
         acc: &EpochAccumulator,
         slot: SlotNo,
+        block_no: BlockNo,
+        header_hash: Hash32,
     ) -> Result<(), EpochAccumulatorStoreError> {
         let last = self
             .last_advanced_slot()?
@@ -199,6 +256,12 @@ impl EpochAccumulatorStore {
         }
         let blob = encode_epoch_accumulator(acc);
         let slot_bytes = slot.0.to_be_bytes();
+        let anchor = LastAdvancedPoint {
+            slot,
+            block_no,
+            header_hash,
+        }
+        .encode();
         let txn = self.db.begin_write().map_err(rerr)?;
         {
             let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
@@ -206,9 +269,38 @@ impl EpochAccumulatorStore {
                 .map_err(rerr)?;
             meta.insert(LAST_SLOT_KEY, slot_bytes.as_slice())
                 .map_err(rerr)?;
+            // S5: the lineage anchor rides the SAME atomic commit as the blob + LAST_SLOT.
+            meta.insert(LAST_ADVANCED_POINT_KEY, anchor.as_slice())
+                .map_err(rerr)?;
         }
         txn.commit().map_err(rerr)?;
         Ok(())
+    }
+
+    /// The lineage anchor the persisted accumulator is certified to, or `None` if the store is NOT
+    /// lineage-certified — a legacy pre-anchor store, or the transitional state after `reset_to_bootstrap`.
+    /// Recovery treats `None` as uncertified (reset + re-fold from canonical blocks), NEVER as trusted height
+    /// authority. A present anchor whose slot disagrees with `LAST_SLOT`, or whose bytes are the wrong length,
+    /// is corruption (`CorruptLastAdvancedPoint`) — fail closed.
+    pub fn last_advanced_point(
+        &self,
+    ) -> Result<Option<LastAdvancedPoint>, EpochAccumulatorStoreError> {
+        let txn = self.db.begin_read().map_err(rerr)?;
+        let meta = txn.open_table(META_TABLE).map_err(rerr)?;
+        let raw = match meta.get(LAST_ADVANCED_POINT_KEY).map_err(rerr)? {
+            None => return Ok(None),
+            Some(v) => v.value().to_vec(),
+        };
+        let point = LastAdvancedPoint::decode(&raw)?;
+        // Integrity: the anchor is written in the same commit as LAST_SLOT, so its slot MUST match.
+        let last = match meta.get(LAST_SLOT_KEY).map_err(rerr)? {
+            Some(s) => parse_slot(s.value())?,
+            None => return Err(EpochAccumulatorStoreError::CorruptLastAdvancedPoint),
+        };
+        if point.slot != last {
+            return Err(EpochAccumulatorStoreError::CorruptLastAdvancedPoint);
+        }
+        Ok(Some(point))
     }
 
     /// Load the current accumulator + the slot it is applied through. `None` if unsealed.
@@ -258,6 +350,10 @@ impl EpochAccumulatorStore {
             // DC-EPOCH-22: a reorg reset invalidates any pending boundary-mark binding (its lineage no longer
             // holds) — drop it so the rematerialized chain re-binds at its OWN boundary point.
             let _ = meta.remove(PENDING_BOUNDARY_MARK_KEY).map_err(rerr)?;
+            // S5: a reset leaves the accumulator at the seed baseline but NOT lineage-certified — clear the
+            // anchor. Recovery treats the cleared store as uncertified until a successful canonical re-fold
+            // re-writes a fresh LastAdvancedPoint; it never trusts a reset store as lineage authority.
+            let _ = meta.remove(LAST_ADVANCED_POINT_KEY).map_err(rerr)?;
         }
         txn.commit().map_err(rerr)?;
         Ok(())
@@ -492,7 +588,7 @@ mod tests {
         assert!(s.load_current().unwrap().is_none());
         assert!(s.last_advanced_slot().unwrap().is_none());
         assert!(s.seed_slot().unwrap().is_none());
-        let err = s.advance(&acc_advanced(), SlotNo(10)).unwrap_err();
+        let err = s.advance(&acc_advanced(), SlotNo(10), BlockNo(1), Hash32([0x0A; 32])).unwrap_err();
         assert!(matches!(err, EpochAccumulatorStoreError::NotSealed));
         assert_eq!(
             s.verify_advanced_through(SlotNo(10), SlotNo(0)),
@@ -559,7 +655,7 @@ mod tests {
         assert_eq!(s.seed_slot().unwrap(), Some(SlotNo(100)));
         assert_eq!(s.load_current().unwrap(), Some((SlotNo(100), boot.clone())));
 
-        s.advance(&adv, SlotNo(200)).unwrap();
+        s.advance(&adv, SlotNo(200), BlockNo(20), Hash32([0xC8; 32])).unwrap();
         assert_eq!(s.last_advanced_slot().unwrap(), Some(SlotNo(200)));
         assert_eq!(s.load_current().unwrap(), Some((SlotNo(200), adv.clone())));
 
@@ -571,15 +667,76 @@ mod tests {
         assert_eq!(s.seed_slot().unwrap(), Some(SlotNo(100)));
     }
 
+    // ----- S5: the LastAdvancedPoint lineage anchor -----
+
+    #[test]
+    fn lineage_anchor_absent_until_advance_then_round_trips() {
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+        // A freshly sealed (not-yet-advanced) store is NOT lineage-certified — the anchor is absent.
+        assert_eq!(s.last_advanced_point().unwrap(), None);
+        // advance writes the anchor atomically with the blob + LAST_SLOT.
+        s.advance(&acc_advanced(), SlotNo(200), BlockNo(20), Hash32([0xC8; 32]))
+            .unwrap();
+        assert_eq!(
+            s.last_advanced_point().unwrap(),
+            Some(LastAdvancedPoint {
+                slot: SlotNo(200),
+                block_no: BlockNo(20),
+                header_hash: Hash32([0xC8; 32]),
+            })
+        );
+    }
+
+    #[test]
+    fn reset_to_bootstrap_clears_the_lineage_anchor() {
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+        s.advance(&acc_advanced(), SlotNo(200), BlockNo(20), Hash32([0xC8; 32]))
+            .unwrap();
+        assert!(s.last_advanced_point().unwrap().is_some());
+        // A reset leaves the accumulator UNCERTIFIED — the anchor is cleared until a canonical re-fold
+        // re-writes it; recovery must never read a reset store as lineage authority.
+        s.reset_to_bootstrap().unwrap();
+        assert_eq!(s.last_advanced_point().unwrap(), None);
+        // The next advance re-certifies at its own point.
+        s.advance(&acc_advanced(), SlotNo(150), BlockNo(15), Hash32([0x96; 32]))
+            .unwrap();
+        assert_eq!(
+            s.last_advanced_point().unwrap().map(|p| p.block_no),
+            Some(BlockNo(15))
+        );
+    }
+
+    #[test]
+    fn malformed_lineage_anchor_bytes_fail_closed() {
+        // The fixed-width decoder rejects a wrong-length anchor (corruption) -> typed failure.
+        for bad in [vec![0u8; 47], vec![0u8; 49], Vec::new()] {
+            assert!(matches!(
+                LastAdvancedPoint::decode(&bad),
+                Err(EpochAccumulatorStoreError::CorruptLastAdvancedPoint)
+            ));
+        }
+        // A well-formed 48-byte anchor round-trips exactly (slot ++ block_no ++ header_hash).
+        let p = LastAdvancedPoint {
+            slot: SlotNo(7),
+            block_no: BlockNo(3),
+            header_hash: Hash32([0x11; 32]),
+        };
+        assert_eq!(LastAdvancedPoint::decode(&p.encode()).unwrap(), p);
+    }
+
     #[test]
     fn advance_is_strictly_forward() {
         let tmp = TempDir::new().unwrap();
         let s = store(&tmp);
         s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
-        s.advance(&acc_advanced(), SlotNo(150)).unwrap();
+        s.advance(&acc_advanced(), SlotNo(150), BlockNo(15), Hash32([0x96; 32])).unwrap();
         // Backward / equal advance is fail-closed (a reorg must reset, not advance backward).
         for slot in [SlotNo(150), SlotNo(149), SlotNo(100)] {
-            let err = s.advance(&acc_advanced(), slot).unwrap_err();
+            let err = s.advance(&acc_advanced(), slot, BlockNo(1), Hash32([0x01; 32])).unwrap_err();
             assert!(
                 matches!(
                     err,
@@ -595,7 +752,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let s = store(&tmp);
         s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
-        s.advance(&acc_advanced(), SlotNo(200)).unwrap();
+        s.advance(&acc_advanced(), SlotNo(200), BlockNo(20), Hash32([0xC8; 32])).unwrap();
 
         // Correct lineage, at-or-beyond.
         assert!(s.verify_advanced_through(SlotNo(200), SlotNo(100)).is_ok());
@@ -635,7 +792,7 @@ mod tests {
         {
             let s = store(&tmp);
             s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
-            s.advance(&adv, SlotNo(200)).unwrap();
+            s.advance(&adv, SlotNo(200), BlockNo(20), Hash32([0xC8; 32])).unwrap();
         }
         // A fresh handle on the same path recovers the durable current state (restart).
         let s2 = EpochAccumulatorStore::open(&tmp.path().join("acc.redb")).unwrap();
@@ -688,7 +845,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let s = store(&tmp);
         s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
-        s.advance(&acc_advanced(), SlotNo(200)).unwrap();
+        s.advance(&acc_advanced(), SlotNo(200), BlockNo(20), Hash32([0xC8; 32])).unwrap();
         s.bind_boundary_mark(SlotNo(199), &Hash32([0xEE; 32]))
             .unwrap();
         assert!(s.boundary_mark_binding().unwrap().is_some());

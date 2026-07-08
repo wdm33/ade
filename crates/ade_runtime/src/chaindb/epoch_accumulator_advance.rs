@@ -33,7 +33,7 @@ use ade_core::consensus::era_schedule::EraSchedule;
 use ade_ledger::epoch_accumulator::{apply_selected_block, SelectedBlockCtx};
 use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::Coin;
-use ade_types::{CardanoEra, EpochNo, PoolId, SlotNo};
+use ade_types::{BlockNo, CardanoEra, EpochNo, Hash32, PoolId, SlotNo};
 
 use super::epoch_accumulator_store::{EpochAccumulatorStore, EpochAccumulatorStoreError};
 use super::error::ChainDbError;
@@ -55,6 +55,11 @@ pub struct WithinEpochCtx {
     pub block_slot: SlotNo,
     /// The block's VERIFIED issuer pool (`blake2b_224(header.issuer_vkey)`), for `block_production[issuer]`.
     pub issuer_pool: PoolId,
+    /// The block's number (decoded canonical header block_no) — the height the S5 lineage anchor records +
+    /// cardano's `SecurityParam` k bounds.
+    pub block_no: BlockNo,
+    /// The block's authoritative stored header hash — the S5 lineage-anchor hash (NOT re-derived here).
+    pub header_hash: Hash32,
 }
 
 /// The outcome of advancing the accumulator over one block. `Advanced` / `AlreadyApplied` / `Stalled` are
@@ -121,7 +126,7 @@ pub fn advance_accumulator_over_block(
     match apply_selected_block(&acc, block_bytes, &selected_ctx) {
         Ok(next) => {
             store
-                .advance(&next, ctx.block_slot)
+                .advance(&next, ctx.block_slot, ctx.block_no, ctx.header_hash.clone())
                 .map_err(AdvanceError::Store)?;
             Ok(AdvanceOutcome::Advanced {
                 slot: ctx.block_slot,
@@ -209,6 +214,8 @@ pub fn advance_accumulator_over_chaindb(
             block_epoch,
             block_slot: stored.slot,
             issuer_pool: PoolId(decoded.header_input.issuer_pool.clone()),
+            block_no: decoded.header_input.block_no,
+            header_hash: stored.hash.clone(),
         };
         match advance_accumulator_over_block(store, &stored.bytes, &ctx)
             .map_err(AccumulatorChaindbError::Advance)?
@@ -322,7 +329,12 @@ pub fn cross_accumulator_over_boundary_block(
     match apply_selected_block(&acc, &stored.bytes, &ctx) {
         Ok(next) => {
             store
-                .advance(&next, boundary_block_slot)
+                .advance(
+                    &next,
+                    boundary_block_slot,
+                    decoded.header_input.block_no,
+                    stored.hash.clone(),
+                )
                 .map_err(|e| AccumulatorChaindbError::Advance(AdvanceError::Store(e)))?;
             Ok(AccumulatorBoundaryOutcome::Crossed {
                 from_epoch,
@@ -383,6 +395,8 @@ mod tests {
             block_epoch: EpochNo(500), // same epoch — within-epoch, no boundary
             block_slot: SlotNo(43_000_000),
             issuer_pool: pool(0x77),
+            block_no: BlockNo(1),
+            header_hash: Hash32([0x77; 32]),
         };
         let outcome = advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx).unwrap();
         assert_eq!(
@@ -408,6 +422,8 @@ mod tests {
             block_epoch: EpochNo(501), // a boundary crossing — S2 withholds the mark
             block_slot: SlotNo(43_000_000),
             issuer_pool: pool(0x77),
+            block_no: BlockNo(1),
+            header_hash: Hash32([0x77; 32]),
         };
         let outcome = advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx).unwrap();
         match outcome {
@@ -434,6 +450,8 @@ mod tests {
             block_epoch: EpochNo(500),
             block_slot: SlotNo(43_000_000),
             issuer_pool: pool(0x77),
+            block_no: BlockNo(1),
+            header_hash: Hash32([0x77; 32]),
         };
         let outcome = advance_accumulator_over_block(&s, b"not even a block", &ctx).unwrap();
         assert_eq!(
@@ -454,6 +472,8 @@ mod tests {
             block_epoch: EpochNo(500),
             block_slot: SlotNo(43_000_000),
             issuer_pool: pool(0x77),
+            block_no: BlockNo(1),
+            header_hash: Hash32([0x77; 32]),
         };
         let err = advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx).unwrap_err();
         assert!(matches!(err, AdvanceError::Unsealed));
