@@ -50,5 +50,15 @@ grep -q 'fn build_boundary_mark_snapshot_omits_zero_stake_credential' "$ACC" \
 # (6) DC-EPOCH-24 is in the registry.
 grep -q 'DC-EPOCH-24' "$REG" || fail "(6) DC-EPOCH-24 is not in the invariant registry"
 
+# (7) PERSISTED-SIDE (schema-reject compatibility slice): the accumulator schema version is bumped to 4,
+#     so a pre-C v3 store -- whose mark/set/go were built under the prior numDelegators>0 rule (phantom
+#     0-stake pools) -- fails closed (UnknownVersion) on decode. A warm-start never RELOADS a stale
+#     snapshot-inclusion semantics; persisted authority has one replay meaning; re-bootstrap is the only
+#     migration. This is the persisted-side enforcement of DC-EPOCH-24.
+grep -q 'pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = 4' "$ACC" \
+  || fail "(7) EPOCH_ACCUMULATOR_SCHEMA_VERSION is not 4 -- a pre-C v3 store must fail closed"
+grep -q 'fn codec_rejects_pre_c_v3_store_rebootstrap_required' "$ACC" \
+  || fail "(7) the pre-C v3 fail-closed (re-bootstrap required) test is missing"
+
 [[ $FAILED -eq 0 ]] || exit 1
-echo "DC-EPOCH-24 OK: zero-stake credentials omitted at construction in both the boundary mark and the reduced projection; wrong-rule test reversed; ssActiveStake membership decision table frozen"
+echo "DC-EPOCH-24 OK: zero-stake credentials omitted at construction in both the boundary mark and the reduced projection; wrong-rule test reversed; ssActiveStake membership decision table frozen; accumulator schema v4 rejects a pre-C store (re-bootstrap required)"

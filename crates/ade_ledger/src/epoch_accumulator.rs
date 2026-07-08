@@ -123,9 +123,16 @@ use crate::utxo::UTxOState;
 /// Pinned wire schema version. Decode rejects any other (fail-closed). v1 = the initial
 /// LIVE-LEDGER-EPOCH-TRANSITION accumulator. v2 = a Conway accumulator MUST carry
 /// `conway_deposit_params` (never `None`); v3 = the embedded bootstrap RUPD is v3 (carries `delta_fees`,
-/// the seed-boundary `feeSS` the apply reduces the fee pot by — CE-3d bootstrap fee-buffer). A pre-fix
-/// v1/v2 store fails closed on decode (`UnknownVersion`) — migration is an explicit re-bootstrap.
-pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = 3;
+/// the seed-boundary `feeSS` the apply reduces the fee pot by — CE-3d bootstrap fee-buffer); v4 = the
+/// per-epoch stake snapshots (mark/set/go) carry the cardano `ssActiveStake` NonZero membership (a
+/// zero-combined-stake credential is OMITTED; DC-EPOCH-24). A v3 store's marks were built under the
+/// prior `numDelegators>0` rule and carry phantom 0-stake pools — an authoritative SERIALIZED state with
+/// a STALE snapshot-inclusion semantics that a warm-start must NOT reload (it would remain
+/// non-reference-equivalent until the mark rotates out two boundaries later). A pre-fix v1/v2/v3 (or
+/// unversioned) store therefore fails closed on decode (`UnknownVersion`) — persisted authority has ONE
+/// unambiguous replay meaning, recovery never carries a stale interpretation forward, and the only
+/// migration is an explicit fresh re-bootstrap.
+pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = 4;
 
 /// The non-UTxO authority a self-sustaining ledger maintains beside the disk-backed reduced UTxO
 /// checkpoint. Closed record — all fields required at construction; no `Default`, no
@@ -1503,10 +1510,10 @@ const FIELDS_OUTER: u64 = 11;
 /// Canonical CBOR encode. Sole pub encoder. Composes the existing `snapshot/` sub-codecs + the
 /// `nesBprev` buffer + the optional bootstrap reward update.
 ///
-/// Wire shape (v3):
+/// Wire shape (v4):
 /// ```text
 /// array(11) [
-///   uint        EPOCH_ACCUMULATOR_SCHEMA_VERSION (= 3),
+///   uint        EPOCH_ACCUMULATOR_SCHEMA_VERSION (= 4),
 ///   uint        era,                              // 7 = Conway (pre-Conway rejected on decode)
 ///   uint        max_lovelace_supply,
 ///   bytes       epoch_state_encoded,              // encode_epoch_state (nesBcur + pots + snapshots)
@@ -2074,16 +2081,36 @@ mod tests {
         // deposit params or the bootstrap-RUPD feeSS (delta_fees).
         let acc = populated();
         let bytes = encode_epoch_accumulator(&acc);
-        // outer array header is one byte; the version uint follows. v3 (=0x03) → patch down to a v1 store (0x01).
+        // outer array header is one byte; the version uint follows. v4 (=0x04) → patch down to a v1 store (0x01).
         let mut buf = bytes.clone();
-        assert_eq!(buf[1], 0x03);
+        assert_eq!(buf[1], 0x04);
         buf[1] = 0x01;
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::UnknownVersion {
-                expected: 3,
+                expected: 4,
                 found: 1,
             }) => {}
             other => panic!("expected UnknownVersion, got {other:?}"),
+        }
+    }
+
+    // Schema-reject (snapshot-inclusion compatibility slice): a PRE-C v3 store -- fee-pot-correct but whose
+    // mark/set/go were built under the prior `numDelegators>0` rule (phantom 0-stake pools) -- fails closed
+    // on decode. A warm-start MUST NOT reload it (the persisted snapshot has a stale inclusion semantics);
+    // re-bootstrap under v4 is the only migration. This is the persisted-side enforcement of DC-EPOCH-24.
+    #[test]
+    fn codec_rejects_pre_c_v3_store_rebootstrap_required() {
+        let acc = populated();
+        let bytes = encode_epoch_accumulator(&acc);
+        let mut buf = bytes.clone();
+        assert_eq!(buf[1], 0x04, "current version is v4");
+        buf[1] = 0x03; // a fee-pot-era store, pre snapshot-inclusion fix
+        match decode_epoch_accumulator(&buf) {
+            Err(EpochAccumulatorCodecError::UnknownVersion {
+                expected: 4,
+                found: 3,
+            }) => {}
+            other => panic!("a pre-C v3 store must fail closed (re-bootstrap required), got {other:?}"),
         }
     }
 
@@ -2113,16 +2140,16 @@ mod tests {
 
     #[test]
     fn codec_rejects_non_canonical_via_reencode_backstop() {
-        // Re-encode the version uint non-minimally: 0x03 (minimal) → 0x18 0x03 (1-byte-argument uint,
-        // same value 3). The value decodes correctly but re-encodes minimally, so the byte-canonical
+        // Re-encode the version uint non-minimally: 0x04 (minimal) → 0x18 0x04 (1-byte-argument uint,
+        // same value 4). The value decodes correctly but re-encodes minimally, so the byte-canonical
         // backstop (re-encode != input) rejects it fail-closed — the discipline that a valid value MUST
         // have exactly one accepted encoding.
         let bytes = encode_epoch_accumulator(&populated());
-        assert_eq!(bytes[1], 0x03, "version is encoded minimally");
+        assert_eq!(bytes[1], 0x04, "version is encoded minimally");
         let mut buf = Vec::with_capacity(bytes.len() + 1);
         buf.push(bytes[0]); // outer array header
         buf.push(0x18); // uint, 1-byte argument follows
-        buf.push(0x03); // = 3 (non-minimal)
+        buf.push(0x04); // = 4 (non-minimal)
         buf.extend_from_slice(&bytes[2..]);
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::MalformedCbor) => {}

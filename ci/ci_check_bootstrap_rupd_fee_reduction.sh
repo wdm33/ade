@@ -49,12 +49,13 @@ grep -q 'checked_sub(rupd.delta_fees.0)' "$ACC" \
 grep -q 'BootstrapRupdFeesUnderflow' "$ACC" \
   || fail "(3) the fee-pot reduction is not fail-closed on underflow (BootstrapRupdFeesUnderflow)"
 
-# (4) SCHEMA v3: both the bootstrap RUPD codec and the accumulator are at v3, so a pre-fix v1/v2 store
-#     fails closed (UnknownVersion) -- a fresh judge-snapshot re-bootstrap is the ONLY migration.
+# (4) SCHEMA: the bootstrap RUPD codec is at v3 and the accumulator is at v3-OR-LATER (later slices bump
+#     the shared accumulator version monotonically; the fee-pot semantics are the v3 floor), so a pre-fix
+#     store fails closed (UnknownVersion) -- a fresh judge-snapshot re-bootstrap is the ONLY migration.
 grep -q 'pub const BOOTSTRAP_RUPD_SCHEMA_VERSION: u32 = 3' "$RUPD" \
   || fail "(4) BOOTSTRAP_RUPD_SCHEMA_VERSION is not 3"
-grep -q 'pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = 3' "$ACC" \
-  || fail "(4) EPOCH_ACCUMULATOR_SCHEMA_VERSION is not 3"
+grep -Eq 'pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = ([3-9]|[1-9][0-9]+)' "$ACC" \
+  || fail "(4) EPOCH_ACCUMULATOR_SCHEMA_VERSION is not >= 3 (the fee-pot floor)"
 
 # (5) NO CORRECTIVE CONSTANT: the reduction is the decoded feeSS, never the magnitude literal. The
 #     confirmed value is 1157103223; test fixtures assert it only with digit separators (1_157_103_223),
