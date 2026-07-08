@@ -9517,3 +9517,40 @@ introduced_in = "CE3D-BOOTSTRAP-FEE-BUFFER-S1"
 strengthened_in = []
 open_obligation = "Mechanical enforcement is COMPLETE + hermetically green (10 tests + the CI gate; ade_ledger + ade_runtime + ade_node pass). The flip declared->enforced awaits the LIVE venue byte-exact differential: a native-Mithril node re-bootstrapped from the 1338 judge snapshot WITH this fix crosses seed+1->seed+2 and matches the cardano-node POST-1340 pots to the lovelace (rewards / treasury / reserves residual closed). The pre-fix CE-3d seed predates this slice, so the differential needs a fresh re-bootstrap. Human review + that venue run precede commit."
 attack_rationale = "The tempting shortcut is a compensating constant -- subtract the observed 1,157,103,223 to make the pots match -- which would silently mis-account any OTHER snapshot's feeSS (the value is snapshot-specific). This rule forbids that: the reduction MUST be the decoded deltaF (checked by the CI gate's no-literal scan + the checked_sub(rupd.delta_fees.0) assertion), and deltaF is commitment-bound so a tampered snapshot feeSS fails closed. A second shortcut is to fudge the reward formula / tau / the nesRu deltaT-deltaR apply to mask the residual; the fix touches none of those -- it performs cardano's own applyRUpd fee-pot reduction. The schema v3 bump + UnknownVersion fail-close prevent a pre-fix store from being warm-started under the corrected semantics (which would apply the reduction to a pot that already lacks feeSS, or skip it): re-bootstrap is the only migration."
+
+[[rules]]
+id = "DC-EPOCH-24"
+tier = "derived"
+statement = """
+Snapshot pool-set inclusion = cardano's ssActiveStake NonZero membership (CE-3d). The per-epoch stake
+snapshot (mark/set/go) INCLUDES a registered+delegated stake credential IFF its combined active stake
+(base-address UTxO coin + reward-account balance) is NON-ZERO, and OMITS it otherwise -- so a pool whose
+ONLY delegators are all zero-stake is structurally ABSENT from the snapshot (no `delegations` entry, no
+`pool_stakes` entry). This is cardano-ledger's `resolveActiveInstantStakeCredentials` (`Stake.hs`):
+`ssActiveStake` is a `NonZero`-typed VMap -- `getNonZeroActiveStakeWithDelegation` drops a delegated
+credential whose account balance is zero when it has no UTxO, and a credential WITH a UTxO is >= minUTxO
+(always non-zero). It is the SERIALIZED go/set/mark SnapShot representation, DISTINCT from the DERIVED
+`PoolDistr` whose explicit `numDelegators>0` count keeps a 0-stake pool that has a delegator.
+(a) DECIDED AT CONSTRUCTION, NOT A POST-FILTER: the membership guard lives INSIDE
+`build_boundary_mark_snapshot` (the authoritative boundary mark that rotates into set then go) and
+`aggregate_pool_stake` (the reduced-checkpoint projection, DC-EVIEW-05) -- a credential with zero combined
+stake is never inserted, so no finished map is filtered after the fact. (b) BYTE-EQUAL TO THE DECODED
+REFERENCE: Ade's own decoder `read_stake_snapshot_full` reads cardano's serialized ssStake
+(`map(cred -> [coin, pool])`, always non-zero) and aggregates it, so the self-derived snapshot's pool SET,
+per-pool values, per-credential `delegations`, and the canonical snapshot fingerprint
+(`write_stake_snapshot` over delegations + pool_stakes) all equal the cardano reference. (c) REWARD /
+LEADERSHIP NEUTRAL: a zero-stake credential earns zero member reward
+(`floor((f-c)*(1-m)*0/sigma)=0`, gated by `if member_reward > 0`) and a zero-stake pool has zero leader
+probability, so the omission changes NO reward and NO leader schedule and leaves the go TOTAL unchanged --
+only the canonical map cardinality, the serialized snapshot bytes, and the hash.
+"""
+source = "CE-3d go pool-set inclusion slice (residual C). The differential exposed 32 phantom pools present ONLY in Ade's self-derived go (each a registered pool with a registered, zero-stake delegator), absent from the cardano reference decoded by Ade's own read_stake_snapshot_full. Root cause: build_boundary_mark_snapshot + aggregate_pool_stake inserted Coin(0) for every delegation -- a deliberately-encoded but WRONG numDelegators>0 rule that conflated the derived PoolDistr with the serialized ssActiveStake. cardano-ledger libs/cardano-ledger-core Stake.hs resolveActiveInstantStakeCredentials / getNonZeroActiveStakeWithDelegation; SnapShots.hs snapShotFromInstantStake."
+cross_ref = ["DC-EPOCH-18", "DC-EPOCH-19", "DC-EPOCH-23", "DC-EVIEW-05"]
+code_locus = "crates/ade_ledger/src/epoch_accumulator.rs (build_boundary_mark_snapshot: `if stake == 0 { continue }` before inserting into delegations/pool_stakes -- the authoritative boundary mark). crates/ade_ledger/src/reduced_aggregate.rs (aggregate_pool_stake: `if cred_total.0 == 0 { continue }` before or_insert -- the reduced-checkpoint projection). Reference decoder crates/ade_ledger/src/ledgerdb_state.rs read_stake_snapshot_full (reads cardano's non-zero serialized ssStake). Fingerprint crates/ade_ledger/src/fingerprint.rs write_stake_snapshot. ci/ci_check_snapshot_pool_set_inclusion.sh."
+tests = ["ade_ledger::epoch_accumulator::tests::build_boundary_mark_snapshot_omits_zero_stake_credential", "ade_ledger::reduced_aggregate::tests::delegated_zero_stake_pool_is_omitted", "ade_ledger::reduced_aggregate::tests::ssactivestake_membership_decision_table", "ade_ledger::epoch_accumulator::tests::cross_epoch_boundary_per_credential_mark_pays_member_rewards"]
+ci_scripts = ["ci/ci_check_snapshot_pool_set_inclusion.sh"]
+status = "declared"
+introduced_in = "CE3D-GO-POOLSET-INCLUSION-C"
+strengthened_in = []
+open_obligation = "Mechanical enforcement is COMPLETE + hermetically green (3 new/reversed tests + the CI gate; ade_ledger lib green, the boundary/replay/fingerprint contracts byte-identical). VENUE PROOF PASSED: the CE-3d go pool-set differential on a fresh v4 seed (re-bootstrapped from the 1338 judge snapshot WITH this fix, so mark(1339)/mark(1340) are C-built) shows only_ade=0 AND only_cardano=0 at POST-1341 (go 626/626, d0) AND POST-1342 (go 626/626, d0), all pool values exact, treasury/reserves/rewards d0 -- the 32 phantom pools removed. The declared->enforced flip is bundled into the CE-3d final green declaration (jointly with DC-EPOCH-23). Residual (dev-only, reward/leadership-neutral): a mark PERSISTED by a pre-fix Ade run and warm-start-RELOADED (not rebuilt) carries phantoms until rotation (2 boundaries); a node bootstrapped under this fix is phantom-free and no production store predates it."
+attack_rationale = "The tempting shortcut is a COSMETIC POST-FILTER -- strip 0-stake pools off the finished map before comparison -- which leaves the authoritative construction still emitting them (so the persisted snapshot, its fingerprint, and any downstream consumer disagree with the compared view) and silently diverges the moment the filter and the builder drift. This rule forbids that: the membership decision is MADE in the builder, so the persisted bytes, the fingerprint, and the compared map are one artifact. A second shortcut is to keep the WRONG numDelegators>0 rule (include a 0-stake pool because it has a delegator) -- correct for the derived PoolDistr, WRONG for the serialized ssActiveStake Ade decodes byte-for-byte; the frozen decision-table test pins the four (UTxO, reward) -> present/absent cases against the cardano source so a future edit cannot reintroduce it. The rule is reward/leadership neutral by construction (a 0-stake credential/pool contributes 0 to every reward and 0 leader probability), so it cannot be used to smuggle a stake or reward change."

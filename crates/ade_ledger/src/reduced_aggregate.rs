@@ -55,9 +55,13 @@ pub enum AggregateError {
 /// cannot delegate an unregistered credential), summing each credential's UTxO coin +
 /// reward balance into its delegated pool. A credential with UTxO but no delegation
 /// contributes nothing (not iterated); a delegated credential with a reward balance but
-/// no UTxO still contributes its reward (Conway). A pool with >=1 delegator is INCLUDED even at 0
-/// stake (cardano `numDelegators > 0`, count-not-amount) so the pool SET matches cardano's PoolDistr.
-/// Pure, total, deterministic, fail-closed on overflow.
+/// no UTxO still contributes its reward (Conway). A registered+delegated credential whose
+/// combined stake is ZERO is OMITTED, so a pool whose only delegators are all zero-stake
+/// is absent: cardano's serialized `ssActiveStake` is a `NonZero`-typed VMap
+/// (`resolveActiveInstantStakeCredentials` / `getNonZeroActiveStakeWithDelegation`,
+/// cardano-ledger `Stake.hs`). This is the serialized go/set/mark SnapShot representation —
+/// distinct from the DERIVED `PoolDistr`, which keeps 0-stake pools via its `numDelegators>0`
+/// count. Pure, total, deterministic, fail-closed on overflow.
 pub fn aggregate_pool_stake(
     cred_utxo_stake: &BTreeMap<StakeCredential, Coin>,
     delegation: &DelegationState,
@@ -67,10 +71,13 @@ pub fn aggregate_pool_stake(
         let utxo = cred_utxo_stake.get(cred).copied().unwrap_or(Coin(0));
         let reward = delegation.rewards.get(cred).copied().unwrap_or(Coin(0));
         let cred_total = utxo.checked_add(reward).ok_or(AggregateError::StakeOverflow)?;
-        // cardano includes a pool with >=1 delegator regardless of stake amount (numDelegators > 0,
-        // count-not-amount): ensure the pool has an entry even when this delegator contributes 0, so
-        // the pool SET matches cardano's PoolDistr (a 0-stake pool can never win, but the DERIVED
-        // state must be Cardano-compatible for snapshot/oracle/hash equality).
+        // ssActiveStake NonZero rule (Stake.hs `getNonZeroActiveStakeWithDelegation`): a
+        // registered+delegated credential with zero combined stake is dropped, so a pool whose
+        // delegators are all zero-stake never appears. Decide membership here (at construction,
+        // not a post-filter) so the pool SET equals cardano's decoded go/set/mark SnapShot.
+        if cred_total.0 == 0 {
+            continue;
+        }
         let entry = pool_stakes.entry(pool.clone()).or_insert(Coin(0));
         *entry = entry
             .checked_add(cred_total)
@@ -153,19 +160,58 @@ mod tests {
         assert_eq!(agg.total_active_stake, Coin(0));
     }
 
-    // cardano numDelegators>0 (count-not-amount): a pool with a delegator is INCLUDED even at 0 stake.
+    // cardano's serialized ssActiveStake is a NonZero VMap: a registered+delegated credential with zero
+    // combined stake is DROPPED (Stake.hs `getNonZeroActiveStakeWithDelegation`), so a pool whose only
+    // delegators are all zero-stake is OMITTED from the snapshot. (It is the DERIVED PoolDistr — not this
+    // serialized SnapShot — that keeps 0-stake pools via its `numDelegators>0` count.)
     #[test]
-    fn delegated_zero_stake_pool_is_included_with_zero() {
+    fn delegated_zero_stake_pool_is_omitted() {
         let c = key_cred(0x33);
         let cred_utxo: BTreeMap<StakeCredential, Coin> = BTreeMap::new();
         let d = deleg(&[(c.clone(), pool(9))], &[]);
         let agg = aggregate_pool_stake(&cred_utxo, &d).unwrap();
         assert_eq!(
             agg.pool_stakes.get(&pool(9)),
-            Some(&Coin(0)),
-            "a pool with a delegator is included even at 0 stake (numDelegators>0)"
+            None,
+            "a registered+delegated credential with zero combined stake is dropped from ssActiveStake, \
+             so its pool is absent from the serialized SnapShot"
         );
         assert_eq!(agg.total_active_stake, Coin(0));
+    }
+
+    // FROZEN cardano-derived decision table — the `ssActiveStake` membership rule
+    // (`resolveActiveInstantStakeCredentials`, cardano-ledger `Stake.hs`): for a registered+delegated
+    // credential, it is included IFF (base UTxO + reward balance) > 0, with stake = that sum; a
+    // zero-combined-stake credential is dropped (the `NonZero` VMap). This is the exact rule governing
+    // which pools appear in the serialized go/set/mark SnapShot Ade decodes byte-for-byte in CE-3d.
+    // Frozen so a future edit cannot silently reintroduce zero-stake pools.
+    #[test]
+    fn ssactivestake_membership_decision_table() {
+        // (base_utxo, reward) -> Some(pool stake) if the pool is present, None if omitted.
+        let cases: &[(u64, u64, Option<u64>)] = &[
+            (100, 0, Some(100)),  // has UTxO, no reward -> included (UTxO >= minUTxO is nonzero)
+            (0, 42, Some(42)),    // no UTxO, has reward  -> included (reward balance)
+            (100, 42, Some(142)), // has both            -> included (sum)
+            (0, 0, None),         // zero combined stake  -> OMITTED (NonZero drop)
+        ];
+        for (i, (base, reward, expect)) in cases.iter().enumerate() {
+            let c = key_cred(0x40 + i as u8);
+            let p = pool(0x40 + i as u8);
+            let cred_utxo: BTreeMap<StakeCredential, Coin> = if *base > 0 {
+                [(c.clone(), Coin(*base))].into_iter().collect()
+            } else {
+                BTreeMap::new()
+            };
+            let rewards: Vec<(StakeCredential, Coin)> =
+                if *reward > 0 { vec![(c.clone(), Coin(*reward))] } else { vec![] };
+            let d = deleg(&[(c.clone(), p.clone())], &rewards);
+            let agg = aggregate_pool_stake(&cred_utxo, &d).unwrap();
+            assert_eq!(
+                agg.pool_stakes.get(&p).map(|c| c.0),
+                *expect,
+                "base={base} reward={reward}: ssActiveStake membership mismatch"
+            );
+        }
     }
 
     // Multiple pools aggregate independently; the total is the sum.

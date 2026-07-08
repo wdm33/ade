@@ -652,7 +652,16 @@ impl<'a> PostRupdRewards<'a> {
 /// ([`PostRupdRewards`]). For each registered+delegated credential its instant stake is its base-UTxO coin + its
 /// POST-RUPD reward-account balance, grouped by its delegated pool — RETAINING the per-credential `delegations`
 /// the reward computation reads (a per-pool mark dropped `delegations`, leaving an empty `go` two boundaries later
-/// → zero member rewards). Pure, deterministic (`BTreeMap`), saturating on the supply-bounded stake sums.
+/// → zero member rewards).
+///
+/// A credential whose combined stake (base + reward) is ZERO is OMITTED — from both `delegations` and
+/// `pool_stakes`. cardano's serialized `ssActiveStake` (the go/set/mark SnapShot Ade decodes byte-for-byte in
+/// CE-3d) is a `NonZero`-typed VMap: `resolveActiveInstantStakeCredentials` / `getNonZeroActiveStakeWithDelegation`
+/// (cardano-ledger `Stake.hs`) drop any registered+delegated credential whose (base UTxO + reward balance) is
+/// zero, so a pool whose only delegators are all zero-stake is structurally absent from the snapshot. This is the
+/// serialized SnapShot rule, distinct from the derived `PoolDistr` (`numDelegators>0`) count that keeps such pools.
+/// Deciding membership here — at construction, not as a post-filter — makes `delegations`, `pool_stakes`, and the
+/// canonical fingerprint equal cardano's. Pure, deterministic (`BTreeMap`), saturating on the supply-bounded sums.
 pub(crate) fn build_boundary_mark_snapshot(
     base: &BoundaryBaseStake,
     rewards: PostRupdRewards<'_>,
@@ -665,6 +674,10 @@ pub(crate) fn build_boundary_mark_snapshot(
         let base = base_utxo.get(cred).copied().unwrap_or(Coin(0)).0;
         let reward = delegation.rewards.get(cred).copied().unwrap_or(Coin(0)).0;
         let stake = base.saturating_add(reward);
+        // ssActiveStake NonZero rule (Stake.hs): a zero-combined-stake credential is not in the snapshot.
+        if stake == 0 {
+            continue;
+        }
         delegations.insert(cred.hash().clone(), (pool.clone(), Coin(stake)));
         let entry = pool_stakes.entry(pool.clone()).or_insert(Coin(0));
         entry.0 = entry.0.saturating_add(stake);
@@ -2346,6 +2359,57 @@ mod tests {
         assert_eq!(
             member_pp.0, 0,
             "a per-pool mark (empty delegations) pays ZERO member rewards"
+        );
+    }
+
+    // ssActiveStake NonZero rule on the AUTHORITATIVE go path: `build_boundary_mark_snapshot` OMITS a
+    // registered+delegated credential whose combined (base UTxO + reward) stake is zero — from BOTH
+    // `delegations` and `pool_stakes` — so a pool whose only delegators are all zero-stake is absent,
+    // matching cardano's serialized go/set/mark SnapShot (`resolveActiveInstantStakeCredentials`,
+    // cardano-ledger `Stake.hs`). This is the byte-level rule the CE-3d differential's 32 phantom pools
+    // exposed; a positive-stake (UTxO and/or reward) credential is still carried in full.
+    #[test]
+    fn build_boundary_mark_snapshot_omits_zero_stake_credential() {
+        let pool_live = pool(0x11);
+        let pool_phantom = pool(0x22);
+        let staker = key_cred(0xA1); // positive base UTxO -> included
+        let reward_only = key_cred(0xA2); // no UTxO, positive reward -> included
+        let zero_on_live = key_cred(0xA3); // zero stake, delegated to the live pool -> omitted
+        let zero_on_phantom = key_cred(0xA4); // zero stake, sole delegator of pool_phantom -> pool absent
+
+        let mut delegation = crate::delegation::DelegationState::default();
+        for (c, p) in [
+            (staker.clone(), pool_live.clone()),
+            (reward_only.clone(), pool_live.clone()),
+            (zero_on_live.clone(), pool_live.clone()),
+            (zero_on_phantom.clone(), pool_phantom.clone()),
+        ] {
+            delegation.delegations.insert(c, p);
+        }
+        delegation.rewards.insert(reward_only.clone(), Coin(7));
+
+        // Only `staker` has a base-UTxO entry; the other three have none.
+        let mut base_utxo: BTreeMap<StakeCredential, Coin> = BTreeMap::new();
+        base_utxo.insert(staker.clone(), Coin(500));
+
+        let base_stake = BoundaryBaseStake {
+            boundary_point: SlotNo(0),
+            canonical_credential_stake: base_utxo,
+        };
+        let mark = build_boundary_mark_snapshot(&base_stake, PostRupdRewards::after_rupd(&delegation));
+
+        // Positive-stake credentials are carried in full.
+        assert_eq!(mark.delegations.get(staker.hash()), Some(&(pool_live.clone(), Coin(500))));
+        assert_eq!(mark.delegations.get(reward_only.hash()), Some(&(pool_live.clone(), Coin(7))));
+        // Zero-stake credentials are OMITTED from delegations.
+        assert_eq!(mark.delegations.get(zero_on_live.hash()), None, "zero-stake delegator dropped");
+        assert_eq!(mark.delegations.get(zero_on_phantom.hash()), None, "zero-stake delegator dropped");
+        // The live pool holds only its positive-stake delegators; the phantom pool is ABSENT.
+        assert_eq!(mark.pool_stakes.get(&pool_live), Some(&Coin(507)));
+        assert_eq!(
+            mark.pool_stakes.get(&pool_phantom),
+            None,
+            "a pool whose only delegator is zero-stake is absent (NonZero ssActiveStake)"
         );
     }
 
