@@ -118,6 +118,77 @@ where
     }
 }
 
+/// What recovery must do to reconcile the persisted accumulator to the durable canonical chain — the BLUE
+/// decision the shell executes (S5 step 2b). NEVER "the slot is close enough": either the accumulator is
+/// certified to the exact canonical point (forward-fold), or it is reset + re-materialized from canonical
+/// blocks, or recovery fails closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryAction {
+    /// The accumulator is lineage-certified AND at/behind the durable tip on the SAME lineage — fold forward
+    /// only; no reset.
+    ForwardFold,
+    /// Reset to bootstrap + re-fold the canonical prefix — either an uncertified accumulator (no anchor), or
+    /// a certified accumulator that over-advanced past an admissibly-shortened durable chain. The shell then
+    /// re-folds from canonical blocks (fail-closed on a missing / non-contiguous span) and re-writes a fresh
+    /// `LastAdvancedPoint` on success.
+    ResetAndRefold,
+}
+
+/// BLUE, pure, total. Decide how recovery reconciles the persisted accumulator to the durable canonical
+/// chain, given its lineage anchor (`None` = uncertified), the canonical point actually at the anchor's slot
+/// (`durable_at_anchor`, resolved from the ChainDB by the shell), the durable `tip`, the bootstrap `anchor`
+/// (seed), and `SecurityParam` `k`. Replaces the height-only reset:
+/// - no anchor -> `ResetAndRefold` (uncertified; re-materialize from canonical);
+/// - anchor present but the durable chain no longer carries it at that slot (absent / different hash) ->
+///   fail closed (`LineageMismatch` / `TargetNotOnCanonicalChain`): a certified store contradicted by the
+///   canonical chain is NOT silently reset;
+/// - anchor present + still canonical + tip at/ahead -> `ForwardFold`;
+/// - anchor present + still canonical + tip BEHIND (durable chain shortened) -> `admit_rollback` the bounded
+///   rollback to the tip; admitted -> `ResetAndRefold`, else fail closed (`ExceededRollback` /
+///   `BeforeBootstrapAnchor`).
+pub fn reconcile_recovery<F>(
+    anchor: Option<&RollbackPoint>,
+    durable_at_anchor: Option<&RollbackPoint>,
+    tip: &RollbackPoint,
+    seed: &RollbackPoint,
+    k: u64,
+    canonical_hash_at: F,
+) -> Result<RecoveryAction, RollbackAdmissionError>
+where
+    F: Fn(SlotNo) -> Option<Hash32>,
+{
+    let Some(anchor) = anchor else {
+        // Uncertified (legacy pre-anchor store, or the transitional state after reset_to_bootstrap): recovery
+        // does NOT trust height — reset + re-fold from canonical blocks.
+        return Ok(RecoveryAction::ResetAndRefold);
+    };
+    // The accumulator's committed point MUST still be the canonical block at that slot.
+    match durable_at_anchor {
+        Some(dp)
+            if dp.slot == anchor.slot
+                && dp.block_no == anchor.block_no
+                && dp.hash == anchor.hash =>
+        {
+            if tip.block_no.0 >= anchor.block_no.0 {
+                // Certified, on-lineage, at/behind the tip -> fold forward (no rollback).
+                Ok(RecoveryAction::ForwardFold)
+            } else {
+                // The durable chain shortened below the accumulator -> admit the bounded rollback to the tip.
+                admit_rollback(anchor, tip, seed, k, canonical_hash_at)?;
+                Ok(RecoveryAction::ResetAndRefold)
+            }
+        }
+        // Present but contradicted by the canonical chain -> fail closed (never a silent reset of a
+        // committed store).
+        Some(dp) => Err(RollbackAdmissionError::LineageMismatch {
+            slot: anchor.slot,
+            canonical: dp.hash.clone(),
+            target: anchor.hash.clone(),
+        }),
+        None => Err(RollbackAdmissionError::TargetNotOnCanonicalChain { slot: anchor.slot }),
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -234,5 +305,74 @@ mod tests {
         // target == tip (depth 0) on-lineage -> Ok (recovery to the current tip is a no-op rollback).
         let tip = pt(80, 8, 0x08);
         assert_eq!(admit_rollback(&tip, &tip.clone(), &anchor(), K, canonical), Ok(()));
+    }
+
+    // ----- reconcile_recovery: the recovery decision (S5 2b) -----
+
+    #[test]
+    fn reconcile_absent_anchor_resets_and_refolds() {
+        // Uncertified -> reset + re-fold from canonical (never trust height).
+        let tip = pt(80, 8, 0x08);
+        assert_eq!(
+            reconcile_recovery(None, None, &tip, &anchor(), K, canonical),
+            Ok(RecoveryAction::ResetAndRefold)
+        );
+    }
+
+    #[test]
+    fn reconcile_certified_on_lineage_tip_ahead_forward_folds() {
+        // anchor block 4; durable-at-anchor matches; tip block 8 (ahead) -> forward-fold, no reset.
+        let anc = pt(40, 4, 0x04);
+        let tip = pt(80, 8, 0x08);
+        assert_eq!(
+            reconcile_recovery(Some(&anc), Some(&anc), &tip, &anchor(), K, canonical),
+            Ok(RecoveryAction::ForwardFold)
+        );
+    }
+
+    #[test]
+    fn reconcile_certified_tip_behind_within_k_resets_and_refolds() {
+        // anchor block 8; tip block 4 (behind by 4 <= k=5), on-lineage -> admissible bounded rollback.
+        let anc = pt(80, 8, 0x08);
+        let dtip = pt(40, 4, 0x04);
+        assert_eq!(
+            reconcile_recovery(Some(&anc), Some(&anc), &dtip, &anchor(), K, canonical),
+            Ok(RecoveryAction::ResetAndRefold)
+        );
+    }
+
+    #[test]
+    fn reconcile_certified_tip_behind_beyond_k_fails_closed() {
+        // anchor block 8; tip block 2 (behind by 6 > k=5) -> ExceededRollback.
+        let anc = pt(80, 8, 0x08);
+        let dtip = pt(20, 2, 0x02);
+        assert!(matches!(
+            reconcile_recovery(Some(&anc), Some(&anc), &dtip, &anchor(), K, canonical),
+            Err(RollbackAdmissionError::ExceededRollback { .. })
+        ));
+    }
+
+    #[test]
+    fn reconcile_anchor_contradicted_by_canonical_fails_closed() {
+        // The committed anchor (block 4 @ slot 40 hash 0x04) is NOT the durable block at slot 40 (hash 0xEE)
+        // -> LineageMismatch (a certified store contradicted by canonical is never silently reset).
+        let anc = pt(40, 4, 0x04);
+        let durable = pt(40, 4, 0xEE);
+        let tip = pt(80, 8, 0x08);
+        assert!(matches!(
+            reconcile_recovery(Some(&anc), Some(&durable), &tip, &anchor(), K, canonical),
+            Err(RollbackAdmissionError::LineageMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn reconcile_anchor_absent_from_canonical_chain_fails_closed() {
+        // The anchor's slot no longer carries any durable block -> TargetNotOnCanonicalChain.
+        let anc = pt(40, 4, 0x04);
+        let tip = pt(80, 8, 0x08);
+        assert!(matches!(
+            reconcile_recovery(Some(&anc), None, &tip, &anchor(), K, canonical),
+            Err(RollbackAdmissionError::TargetNotOnCanonicalChain { .. })
+        ));
     }
 }
