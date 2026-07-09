@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 
 use ade_core::consensus::ledger_view::LedgerView;
 use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
-use ade_types::{EpochNo, Hash28, Hash32};
+use ade_types::{EpochNo, Hash28, Hash32, PoolId};
 
 /// One pool's slice of the leadership projection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +96,63 @@ impl PoolDistrView {
             pools: record.pool_distribution.clone(),
         }
     }
+
+    /// LIVE-LEDGER-EPOCH-TRANSITION S4 (DC-EPOCH-19): the accumulator-derived leadership authority — the SOLE
+    /// consensus view after native bootstrap, retiring `from_seed_epoch_consensus_inputs` on the authority
+    /// path. Per-pool `active_stake` ← the go-snapshot pool stakes (byte-exact vs cardano, CE-3d); per-pool
+    /// `vrf_keyhash` ← the ACTIVE pool params (`cert_state.pool.pools`, the map header-validation/leadership
+    /// reads, VRF frozen pre-adoption); `asc` ← the bound consensus profile (never an unbound param read).
+    /// `epoch` = the accumulator's current epoch. FAIL-CLOSED `NotLeadershipComplete` if a staked go pool has
+    /// no registered params — never a zero-hash fallback, never a seed-window fallback.
+    pub fn from_accumulator(
+        acc: &crate::epoch_accumulator::EpochAccumulator,
+        asc: ActiveSlotsCoeff,
+    ) -> Result<Self, AccumulatorAuthorityError> {
+        let snaps = acc
+            .epoch_state
+            .snapshots
+            .as_authoritative()
+            .ok_or(AccumulatorAuthorityError::SnapshotsNotAuthoritative)?;
+        let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
+        let mut total_active_stake: u64 = 0;
+        for (pool_id, coin) in &snaps.go.0.pool_stakes {
+            let params = acc
+                .cert_state
+                .pool
+                .pools
+                .get(pool_id)
+                .ok_or_else(|| AccumulatorAuthorityError::NotLeadershipComplete(pool_id.clone()))?;
+            total_active_stake = total_active_stake
+                .checked_add(coin.0)
+                .ok_or(AccumulatorAuthorityError::StakeOverflow)?;
+            pools.insert(
+                pool_id.0.clone(),
+                PoolEntry {
+                    active_stake: coin.0,
+                    vrf_keyhash: params.vrf_hash.clone(),
+                },
+            );
+        }
+        Ok(Self {
+            epoch: acc.epoch_state.epoch,
+            total_active_stake,
+            asc,
+            pools,
+        })
+    }
+}
+
+/// LIVE-LEDGER-EPOCH-TRANSITION S4: why the accumulator cannot answer as the leadership authority for a
+/// prefix. Every variant is a fail-closed terminal — NEVER a silent seed-window fallback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccumulatorAuthorityError {
+    /// The accumulator's snapshots are not in the authoritative (post-seed) phase.
+    SnapshotsNotAuthoritative,
+    /// A staked go-snapshot pool has no registered params (VRF) in the active pool set — the view is not
+    /// leadership-complete, so it cannot be promoted to authority.
+    NotLeadershipComplete(PoolId),
+    /// The summed active stake overflowed u64 (unreachable under the max-supply bound).
+    StakeOverflow,
 }
 
 impl LedgerView for PoolDistrView {
@@ -129,6 +186,55 @@ mod tests {
 
     fn pool_a() -> Hash28 {
         Hash28([0x01; 28])
+    }
+
+    /// S4 (DC-EPOCH-19): `from_accumulator` joins the go-snapshot stake with the active pool params' VRF into
+    /// the leadership view, and FAILS CLOSED (never a zero-hash / seed fallback) on a staked pool with no
+    /// registered params. Byte-identity vs the seed view is the flip's own acceptance gate (real fixture).
+    #[test]
+    fn from_accumulator_joins_go_stake_with_active_pool_vrf_or_fails_closed() {
+        use crate::delegation::PoolParams;
+        use crate::epoch::{GoSnapshot, StakeSnapshot};
+        use crate::epoch_accumulator::EpochAccumulator;
+        use ade_types::{CardanoEra, Coin};
+
+        let pid = |b: u8| PoolId(Hash28([b; 28]));
+        let pp = |b: u8, vrf: u8| PoolParams {
+            pool_id: pid(b),
+            vrf_hash: Hash32([vrf; 32]),
+            pledge: Coin(0),
+            cost: Coin(0),
+            margin: (0, 1),
+            reward_account: Vec::new(),
+            owners: Vec::new(),
+        };
+
+        let mut acc = EpochAccumulator::new(CardanoEra::Conway);
+        acc.epoch_state.epoch = EpochNo(1341);
+        let mut snap = StakeSnapshot::new();
+        snap.pool_stakes.insert(pid(0x11), Coin(1_000));
+        snap.pool_stakes.insert(pid(0x22), Coin(2_000));
+        acc.epoch_state.snapshots.as_authoritative_mut().unwrap().go = GoSnapshot(snap);
+        acc.cert_state.pool.pools.insert(pid(0x11), pp(0x11, 0xA1));
+        acc.cert_state.pool.pools.insert(pid(0x22), pp(0x22, 0xB2));
+
+        let asc = ActiveSlotsCoeff { numer: 1, denom: 20 };
+        let v = PoolDistrView::from_accumulator(&acc, asc).unwrap();
+        assert_eq!(v.epoch(), EpochNo(1341));
+        assert_eq!(v.total_active_stake(EpochNo(1341)), Some(3_000));
+        assert_eq!(v.pool_active_stake(EpochNo(1341), &pid(0x11).0), Some(1_000));
+        assert_eq!(v.pool_vrf_keyhash(EpochNo(1341), &pid(0x11).0), Some(Hash32([0xA1; 32])));
+        assert_eq!(v.pool_vrf_keyhash(EpochNo(1341), &pid(0x22).0), Some(Hash32([0xB2; 32])));
+        assert_eq!(v.active_slots_coeff(EpochNo(1341)), Some(asc));
+        // A different epoch never silently answers (single-epoch guard).
+        assert_eq!(v.pool_active_stake(EpochNo(1342), &pid(0x11).0), None);
+
+        // FAIL-CLOSED: a staked go pool with no active params -> NotLeadershipComplete.
+        acc.cert_state.pool.pools.remove(&pid(0x22));
+        assert_eq!(
+            PoolDistrView::from_accumulator(&acc, asc),
+            Err(AccumulatorAuthorityError::NotLeadershipComplete(pid(0x22)))
+        );
     }
 
     fn view() -> PoolDistrView {
