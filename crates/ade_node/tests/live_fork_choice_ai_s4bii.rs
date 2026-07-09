@@ -157,6 +157,7 @@ async fn participant_rollback_applies_durably() {
         None,
         &mut None,
         None,
+        None,
     )
     .await
     .expect("rollback applies");
@@ -197,6 +198,7 @@ async fn participant_rollback_to_unknown_point_fails_closed() {
         None,
         &mut None,
         None,
+        None,
     )
     .await
     .expect_err("unknown rollback point must fail closed");
@@ -234,6 +236,7 @@ async fn participant_rollback_beyond_k_fails_closed_clears_pending() {
         &BTreeMap::new(),
         None,
         &mut None,
+        None,
         None,
     )
     .await
@@ -275,6 +278,7 @@ async fn rollback_slot_hash_mismatch_fails_before_mutation() {
         &BTreeMap::new(),
         None,
         &mut None,
+        None,
         None,
     )
     .await
@@ -524,6 +528,7 @@ async fn participant_bare_competing_block_fails_closed() {
         None,
         &mut None,
         None,
+        None,
     )
     .await;
     // PHASE4-N-AO S7 (DC-NODE-38): a bare competing block whose branch cannot reach a
@@ -582,6 +587,7 @@ async fn post_switch_missing_bridge_emits_structured_and_holds_fence() {
         None,
         &mut None,
         Some(&mut ev),
+        None,
     )
     .await;
     // NOT a node-halting error -- a structured fail-closed HOLD (the drain completes).
@@ -654,6 +660,7 @@ async fn missing_bridge_wrong_parent_maps_closed_code() {
         None,
         &mut None,
         Some(&mut ev),
+        None,
     )
     .await
     .expect("structured hold, not a halt");
@@ -756,6 +763,7 @@ async fn late_bridge_clears_hold_on_progress() {
         None,
         &mut None,
         None,
+        None,
     )
     .await
     .expect("Z holds");
@@ -786,6 +794,7 @@ async fn late_bridge_clears_hold_on_progress() {
         &BTreeMap::new(),
         None,
         &mut None,
+        None,
         None,
     )
     .await
@@ -841,6 +850,7 @@ async fn participant_block_with_no_durable_tip_pumps() {
         &BTreeMap::new(),
         None,
         &mut None,
+        None,
         None,
     )
     .await
@@ -930,6 +940,7 @@ async fn participant_cold_start_admit_emits_received_admitted_agreed() {
         None,
         &mut None,
         Some(&mut ev),
+        None,
     )
     .await
     .expect("cold-start admit");
@@ -974,6 +985,7 @@ async fn participant_block_received_does_not_imply_admission() {
         None,
         &mut None,
         Some(&mut ev),
+        None,
     )
     .await;
     let out = buf.text();
@@ -1048,6 +1060,7 @@ async fn participant_convergence_evidence_replay_byte_identical() {
             None,
             &mut None,
             Some(&mut ev),
+            None,
         )
         .await
         .expect("admit");
@@ -1098,6 +1111,7 @@ async fn participant_rollback_to_recovered_anchor_is_noop() {
         None,
         &mut None,
         None,
+        None,
     )
     .await
     .expect("rollback-to-recovered-anchor is an idempotent no-op");
@@ -1143,6 +1157,7 @@ async fn participant_rollback_origin_fails_closed() {
         None,
         &mut None,
         None,
+        None,
     )
     .await
     .expect_err("Origin rollback must fail closed even with a recovered anchor");
@@ -1183,6 +1198,7 @@ async fn participant_rollback_non_anchor_fails_closed() {
             &BTreeMap::new(),
             None,
             &mut None,
+            None,
             None,
         )
         .await
@@ -1234,6 +1250,7 @@ async fn participant_first_forward_after_anchor_noop_admits_via_pump_block() {
         None,
         &mut None,
         None,
+        None,
     )
     .await
     .expect("anchor no-op, then the forward block admits via pump_block");
@@ -1273,6 +1290,7 @@ async fn participant_stored_block_rollback_still_applies() {
         &BTreeMap::new(),
         None,
         &mut None,
+        None,
         None,
     )
     .await
@@ -1399,6 +1417,7 @@ async fn participant_competing_durable_anchor_loses_no_mutation() {
         None,
         &mut None,
         None,
+        None,
     )
     .await
     .expect("a losing competing candidate is a no-op (NOT UnexpectedRollback)");
@@ -1442,6 +1461,7 @@ async fn participant_competing_durable_anchor_win_sets_pending_no_mutation() {
         &BTreeMap::new(),
         None,
         &mut None,
+        None,
         None,
     )
     .await
@@ -1501,6 +1521,7 @@ async fn participant_competing_unknown_anchor_fails_closed() {
         None,
         &mut None,
         None,
+        None,
     )
     .await;
     // PHASE4-N-AO S7 (DC-NODE-38): an un-anchorable competing block (its parent is
@@ -1550,6 +1571,7 @@ async fn participant_competing_fork_anchor_older_than_k_no_mutation() {
         &BTreeMap::new(),
         None,
         &mut None,
+        None,
         None,
     )
     .await
@@ -1736,6 +1758,7 @@ async fn fork_switch_win_adopts_via_rolledback_then_chainselected() {
         &view,
         SecurityParam(2160),
         &mut BTreeMap::new(),
+        None,
     )
     .expect("apply returns");
     match outcome {
@@ -1804,6 +1827,7 @@ fn apply_fork_switch_populates_rollback_retention() {
         &view,
         SecurityParam(2160),
         &mut retention,
+        None,
     )
     .expect("apply returns");
     assert!(matches!(outcome, ForkSwitchOutcome::Adopted { .. }), "the competing branch adopts");
@@ -1957,6 +1981,7 @@ async fn missing_bridge_triggers_range_refetch() {
         Some(&psf),
         &mut prr,
         None,
+        None,
     )
     .await
     .expect("missing bridge is a structured hold, not a halt");
@@ -2004,6 +2029,7 @@ async fn missing_bridge_triggers_range_refetch() {
         &BTreeMap::new(),
         Some(&psf_other),
         &mut prr2,
+        None,
         None,
     )
     .await
@@ -2062,6 +2088,7 @@ async fn selected_peer_missing_body_leaves_chain_unchanged_fence_held() {
     let outcome = apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
         &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
+        None,
     )
     .expect("apply returns");
     assert!(
@@ -2107,6 +2134,7 @@ async fn body_hash_mismatch_leaves_chain_unchanged() {
     let outcome = apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
         &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
+        None,
     )
     .expect("apply returns");
     assert!(
@@ -2147,6 +2175,7 @@ async fn broken_parent_link_leaves_chain_unchanged() {
     let outcome = apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
         &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
+        None,
     )
     .expect("apply returns");
     assert!(
@@ -2184,6 +2213,7 @@ async fn invalid_body_rejected_before_commit_no_half_switch() {
     let outcome = apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
         &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
+        None,
     )
     .expect("apply returns");
     assert!(
@@ -2231,6 +2261,7 @@ async fn too_deep_rollback_fails_closed_unchanged() {
     let outcome = apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
         &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
+        None,
     )
     .expect("apply returns");
     assert!(
@@ -2268,6 +2299,7 @@ async fn selector_equals_durable_post_forkchoicewin() {
     apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
         &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
+        None,
     )
     .expect("adopt");
     let durable = db.tip().unwrap().unwrap();
@@ -2298,6 +2330,7 @@ async fn proof_failure_holds_fence_then_resolves_when_caught_up() {
     apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
         &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
+        None,
     )
     .expect("apply returns");
     assert!(pending.is_none(), "decision retired as failed");
@@ -2352,6 +2385,7 @@ async fn live_fetch_lying_body_rejected_before_commit() {
     let outcome = apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
         &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
+        None,
     )
     .expect("apply returns");
     assert!(
@@ -2396,6 +2430,7 @@ async fn live_fetch_short_range_rejected_before_commit() {
     let outcome = apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
         &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
+        None,
     )
     .expect("apply returns");
     assert!(
@@ -2648,6 +2683,7 @@ async fn bridge_gap_injection_emits_missing_bridge() {
         None,
         &mut None,
         Some(&mut ev),
+        None,
     )
     .await;
 
@@ -2732,6 +2768,7 @@ async fn late_bridge_recovers_on_progress() {
         None,
         &mut None,
         None,
+        None,
     )
     .await
     .expect("drain 1 holds");
@@ -2765,6 +2802,7 @@ async fn late_bridge_recovers_on_progress() {
         &BTreeMap::new(),
         None,
         &mut None,
+        None,
         None,
     )
     .await

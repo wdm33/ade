@@ -91,8 +91,9 @@ use ade_runtime::producer::coordinator::{
 use ade_runtime::producer::producer_shell::ProducerShell;
 use ade_runtime::rollback::{ChainDbBlockSource, PersistentSnapshotCache, SnapshotCadence};
 use ade_ledger::rollback::{
-    commit_rollback, materialize_rolled_back_state, CommitRollbackError, MaterializeError,
-    TargetPoint,
+    admit_rollback, commit_rollback, materialize_rolled_back_state, reconcile_recovery,
+    CommitRollbackError, MaterializeError, RecoveryAction, RollbackAdmissionError,
+    RollbackPoint as CanonicalPoint, TargetPoint,
 };
 use ade_core::consensus::events::{BlockDistance, ChainEvent, Point, SecurityParam};
 use ade_core::consensus::candidate::{CandidateFragment, ChainSelectorState};
@@ -349,6 +350,68 @@ pub enum NodeLifecycleError {
     /// TERMINAL before the WAL commit-point (authority visibility); NO bootable
     /// partial state, NO fallback to the cardano-cli / JSON seed.
     NativeFirstRun(String),
+    /// LIVE-LEDGER-EPOCH-TRANSITION S5 (step 2b): a TERMINAL recovery-admission fault. The persisted
+    /// accumulator cannot be proven to describe ONE canonical selected-chain prefix, so recovery FAILS
+    /// CLOSED — the store is terminal until re-bootstrap or an explicit admissible recovery. This is the
+    /// recovery-INTEGRITY exception to the S3 observe-only contract: an ordinary follow-time observe fault
+    /// still does NOT halt (the accumulator is simply not promoted), but a durable-state contradiction does.
+    RecoveryAdmission(RecoveryAdmissionFault),
+}
+
+/// LIVE-LEDGER-EPOCH-TRANSITION S5 (step 2b): the typed reason a recovery ADMISSION failed closed, and the
+/// operator action it implies. Every variant is TERMINAL — the durable accumulator/checkpoint state cannot
+/// be proven replay-equivalent to one canonical selected-chain prefix, so it is not admissible as recovered
+/// authority until re-bootstrap (or an explicit admissible recovery). NOT a leadership statement (that is S4)
+/// — purely "can this persisted accumulator be trusted, or rematerialized from canonical blocks?".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecoveryAdmissionFault {
+    /// Lineage contradiction: the committed anchor is NOT the canonical block at its slot. Re-bootstrap.
+    LineageMismatch { slot: u64 },
+    /// Rollback exceeds SecurityParam k: the durable tip is more than k blocks behind the accumulator.
+    /// Re-bootstrap (or explicit admissible recovery).
+    ExceededRollback { depth: u64, k: u64 },
+    /// Store repair not admissible: the rollback target is below the sealed bootstrap anchor. Re-bootstrap.
+    BeforeBootstrapAnchor {
+        target_block_no: u64,
+        anchor_block_no: u64,
+    },
+    /// Lineage contradiction: the committed anchor's slot carries no canonical block. Re-bootstrap.
+    TargetNotOnCanonicalChain { slot: u64 },
+    /// Schema / corruption fault: the persisted lineage anchor is malformed. Re-bootstrap.
+    CorruptLastAdvancedPoint,
+    /// Canonical span missing: a block required to reconstruct the accumulator is absent from the durable
+    /// ChainDB. Re-bootstrap (or repair the span).
+    MissingCanonicalSpan { slot: u64 },
+    /// Canonical span not admissible: a block in the span does not decode / does not chain (a prev-hash
+    /// break). Re-bootstrap.
+    NonContiguousCanonicalSpan { slot: u64 },
+    /// Schema / corruption fault: the rematerialized ledger fingerprint disagrees with the recovered WAL-tail
+    /// commitment (T-REC-05). Re-bootstrap.
+    FingerprintMismatch { expected: Hash32, recovered: Hash32 },
+}
+
+impl RecoveryAdmissionFault {
+    /// Map the BLUE `reconcile_recovery` / `admit_rollback` rejection into the terminal recovery fault.
+    fn from_admission(e: RollbackAdmissionError) -> Self {
+        match e {
+            RollbackAdmissionError::LineageMismatch { slot, .. } => {
+                RecoveryAdmissionFault::LineageMismatch { slot: slot.0 }
+            }
+            RollbackAdmissionError::ExceededRollback { depth, k, .. } => {
+                RecoveryAdmissionFault::ExceededRollback { depth, k }
+            }
+            RollbackAdmissionError::BeforeBootstrapAnchor {
+                target_block_no,
+                anchor_block_no,
+            } => RecoveryAdmissionFault::BeforeBootstrapAnchor {
+                target_block_no: target_block_no.0,
+                anchor_block_no: anchor_block_no.0,
+            },
+            RollbackAdmissionError::TargetNotOnCanonicalChain { slot } => {
+                RecoveryAdmissionFault::TargetNotOnCanonicalChain { slot: slot.0 }
+            }
+        }
+    }
 }
 
 /// Pure first-run-vs-warm-start classifier. A function of on-disk state
@@ -413,9 +476,8 @@ fn exit_code_for(e: &NodeLifecycleError) -> i32 {
         | NodeLifecycleError::RestartGenesisGeometryMismatch { .. }
         | NodeLifecycleError::WarmStartBootstrap(_)
         | NodeLifecycleError::ConsensusInputsSchemaUnsupported { .. }
-        | NodeLifecycleError::AccumulatorPredatesGovernanceImport { .. } => {
-            EXIT_NODE_WARM_START_RECOVERY_FAILED
-        }
+        | NodeLifecycleError::AccumulatorPredatesGovernanceImport { .. }
+        | NodeLifecycleError::RecoveryAdmission(_) => EXIT_NODE_WARM_START_RECOVERY_FAILED,
         NodeLifecycleError::RelaySync(_)
         | NodeLifecycleError::FeedMissingRecoveredConsensusInputs => EXIT_NODE_RELAY_SYNC_FAILED,
         NodeLifecycleError::ForgeKeyIngress(_) => EXIT_NODE_FORGE_KEY_INGRESS_FAILED,
@@ -714,6 +776,7 @@ async fn run_node_lifecycle_inner(
                 reduced_checkpoint.as_ref(),
                 eview_inputs.as_ref(), // ECA-5: cross-epoch EVIEW activation wired into the relay-only path
                 epoch_accumulator.as_ref(),
+                RecoveryAdmissionPolicy::cardano(),
             )
             .await?;
             eprintln!(
@@ -1046,6 +1109,7 @@ async fn run_node_lifecycle_inner(
                 reduced_checkpoint.as_ref(),
                 eview_activation,
                 epoch_accumulator.as_ref(),
+                RecoveryAdmissionPolicy::cardano(),
             )
             .await?;
             // MEM-MEASURE-A2 (OP-MEM-01): final sustained sample + run-level memory
@@ -1611,7 +1675,7 @@ pub async fn run_relay_loop(
 ) -> Result<(), NodeLifecycleError> {
     run_relay_loop_with_sched(
         state, source, chaindb, wal, era_schedule, seed_view, shutdown, forge, None, None, None,
-        None, None,
+        None, None, RecoveryAdmissionPolicy::cardano(),
     )
     .await
 }
@@ -1701,37 +1765,215 @@ fn reduced_checkpoint_reset_if_ahead(
     Ok(())
 }
 
-/// LIVE-LEDGER-EPOCH-TRANSITION S2/S3 (DC-EPOCH-20 / PO-4): reorg reset for the durable EpochAccumulator,
-/// OBSERVE-ONLY. If the accumulator advanced PAST the durable tip -> a rollback shortened the chain;
-/// rematerialize to the sealed seed baseline (the within-epoch delta is not invertible), and the forward
-/// fold replays from seed+1. A reset fault is swallowed (the accumulator is non-authoritative in S3) -- a
-/// still-ahead accumulator simply folds nothing on the forward walk. Skipped if unsealed (a present-but-
-/// unsealed store is malformed; the fold's skip-if-unsealed handles it too). Hoisted to the co-advancer's
-/// top so the segmented walk is purely forward.
-///
-/// S4 OBLIGATION (S2 IDD review, MEDIUM-2): this HEIGHT check (advanced > tip) suffices ONLY because the
-/// sole driver is the fail-closed, forward-only run_node_sync path (every non-anchor rollback fail-closes
-/// before this is reached). A later reorging fork-choice / participant driver MUST replace it with a
-/// LINEAGE check (the durable hash at last_advanced) -- a longer chain diverging BELOW last_advanced is
-/// height-invisible and would fold a new suffix onto a stale prefix (a split-lineage accumulator).
-fn accumulator_reset_if_ahead(
+/// LIVE-LEDGER-EPOCH-TRANSITION S5 (step 2b): the recovery-admission POLICY — the single Cardano-derived
+/// bound the recovery layer is allowed to hold. Constructed ONCE at the lifecycle entry from the validated
+/// network/genesis settings and threaded explicitly downward (NEVER reached sideways from ambient config),
+/// so the recovery decision has exactly the authority it needs — rollback depth (`SecurityParam` k) — and no
+/// more. A recovery bound, not S4 leadership behaviour.
+#[derive(Debug, Clone, Copy)]
+pub struct RecoveryAdmissionPolicy {
+    pub security_param: SecurityParam,
+}
+
+impl RecoveryAdmissionPolicy {
+    /// The recovery bound for the node's supported Cardano networks (preprod / preview / mainnet): the
+    /// SecurityParam k = 2160 the follow path already pins (see the `security_param: SecurityParam(2160)`
+    /// producer default). A single source of truth for the recovery-depth bound, threaded explicitly — the
+    /// two-producer venue override touches leadership eligibility, never this recovery bound.
+    pub const fn cardano() -> Self {
+        RecoveryAdmissionPolicy {
+            security_param: SecurityParam(2160),
+        }
+    }
+}
+
+/// LIVE-LEDGER-EPOCH-TRANSITION S2/S3 → S5 (DC-EPOCH-20 / PO-4): the durable EpochAccumulator reorg reset,
+/// evolved into the lineage-certified, k-bounded RECOVERY ADMISSION that replaces the former height-only
+/// reset (the S4/MEDIUM-2 obligation, discharged HERE — no longer S4's). Given the persisted lineage anchor
+/// (2a `LastAdvancedPoint`) + the durable canonical ChainDB, the BLUE `reconcile_recovery` decides: trust the
+/// accumulator (forward-fold), rematerialize it (reset + re-fold from canonical blocks), or — if the durable
+/// state cannot be proven to describe ONE canonical selected-chain prefix — FAIL CLOSED (`RecoveryAdmission`,
+/// terminal until re-bootstrap). This is the recovery-INTEGRITY exception to the S3 observe-only contract: an
+/// ordinary follow-time observe fault still does NOT halt (the accumulator is simply not promoted), but a
+/// durable-state contradiction does. It does NOT promote the accumulator to leadership (that is S4).
+fn accumulator_recover_admit(
     epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
+    chaindb: &dyn ChainDb,
     tip: &ChainTip,
-) {
+    policy: &RecoveryAdmissionPolicy,
+) -> Result<(), NodeLifecycleError> {
     let Some(store) = epoch_accumulator else {
-        return;
+        return Ok(());
+    };
+    // Unsealed store -> skip (the fold's skip-if-unsealed handles it); NOT a recovery fault.
+    let Ok(Some(seed_slot)) = store.seed_slot() else {
+        return Ok(());
+    };
+
+    // The persisted lineage anchor (2a). A corrupt anchor is terminal.
+    let anchor = store.last_advanced_point().map_err(|_| {
+        NodeLifecycleError::RecoveryAdmission(RecoveryAdmissionFault::CorruptLastAdvancedPoint)
+    })?;
+
+    // The bootstrap seed floor. `reconcile_recovery` reads it ONLY as the `admit_rollback` floor
+    // (BeforeBootstrapAnchor) in the rollback branches; the forward / no-anchor paths never touch it. So
+    // an absent seed block (e.g. a synthetic seed baseline below the durable blocks) is NOT fatal here --
+    // it degrades to a genesis floor (BlockNo 0, the weakest floor), leaving the k-bound as the binding
+    // rollback rail. A seed block that is PRESENT but undecodable is still terminal (NonContiguousCanonicalSpan).
+    let seed_pt = resolve_canonical_point(chaindb, seed_slot)?.unwrap_or(CanonicalPoint {
+        slot: seed_slot,
+        block_no: BlockNo(0),
+        hash: Hash32([0u8; 32]),
+    });
+    // The durable tip MUST be a present canonical block (it is the ChainDB's own tip).
+    let tip_pt = resolve_canonical_point(chaindb, tip.slot)?.ok_or(
+        NodeLifecycleError::RecoveryAdmission(RecoveryAdmissionFault::MissingCanonicalSpan {
+            slot: tip.slot.0,
+        }),
+    )?;
+    // The canonical block at the anchor's slot (None if the durable chain no longer carries it).
+    let durable_at_anchor = match &anchor {
+        Some(a) => resolve_canonical_point(chaindb, a.slot)?,
+        None => None,
+    };
+    let anchor_pt = anchor.as_ref().map(|a| CanonicalPoint {
+        slot: a.slot,
+        block_no: a.block_no,
+        hash: a.header_hash.clone(),
+    });
+
+    let action = reconcile_recovery(
+        anchor_pt.as_ref(),
+        durable_at_anchor.as_ref(),
+        &tip_pt,
+        &seed_pt,
+        policy.security_param.0,
+        |slot| {
+            resolve_canonical_point(chaindb, slot)
+                .ok()
+                .flatten()
+                .map(|p| p.hash)
+        },
+    )
+    .map_err(|e| {
+        NodeLifecycleError::RecoveryAdmission(RecoveryAdmissionFault::from_admission(e))
+    })?;
+
+    match action {
+        RecoveryAction::ForwardFold => Ok(()),
+        RecoveryAction::ResetAndRefold => {
+            // Reset to the sealed seed; the co-advancer re-folds from the canonical prefix and re-writes a
+            // fresh 2a lineage anchor on each advance. A reset fault here is a store failure, not observe-only.
+            store.reset_to_bootstrap().map_err(|e| {
+                NodeLifecycleError::RelaySync(format!("accumulator recovery reset: {e:?}"))
+            })?;
+            Ok(())
+        }
+    }
+}
+
+/// Resolve the canonical point `(slot, block_no, header_hash)` of the durable block at `slot`, or `None` if
+/// no block sits at that slot. A block that does not decode is a non-admissible span (a corruption / a
+/// prev-hash break in the canonical prefix) -> terminal `NonContiguousCanonicalSpan`. Fail-closed on a
+/// ChainDB read error.
+fn resolve_canonical_point(
+    chaindb: &dyn ChainDb,
+    slot: SlotNo,
+) -> Result<Option<CanonicalPoint>, NodeLifecycleError> {
+    let stored = chaindb.get_block_by_slot(slot).map_err(|e| {
+        NodeLifecycleError::RelaySync(format!("recovery point read {}: {e:?}", slot.0))
+    })?;
+    match stored {
+        None => Ok(None),
+        Some(sb) => {
+            let decoded = decode_block(&sb.bytes).map_err(|_| {
+                NodeLifecycleError::RecoveryAdmission(
+                    RecoveryAdmissionFault::NonContiguousCanonicalSpan { slot: slot.0 },
+                )
+            })?;
+            Ok(Some(CanonicalPoint {
+                slot,
+                block_no: decoded.header_input.block_no,
+                hash: sb.hash,
+            }))
+        }
+    }
+}
+
+/// LIVE-LEDGER-EPOCH-TRANSITION S5 (step 2b, EVENT-QUALIFIED live rollback): bring the durable
+/// EpochAccumulator into lockstep with a chain-selection-ADMITTED `ChainEvent::RolledBack`, BEFORE the
+/// caller's `commit_rollback` trims the ChainDB. PROVENANCE is the discriminator that lets `reconcile_recovery`
+/// stay strict: this pre-clear runs ONLY for a live rollback event (a selected-chain transition), never for
+/// an unexplained persisted contradiction (which stays terminal at warm-start in `accumulator_recover_admit`).
+/// If the accumulator carries a certified lineage anchor, the rollback of that anchor to `target` must be
+/// ADMISSIBLE against the PRE-rollback canonical chain (`admit_rollback`: target >= bootstrap seed, depth <= k,
+/// target on-canonical); then the anchor is durably CLEARED here so NO crash window ever leaves a certified
+/// anchor over the abandoned prefix -- the next advance sees anchor-absent and refolds from the post-rollback
+/// canonical chain. Inadmissible -> terminal typed fault (NEVER a silent reset of a certified store). Anchor
+/// absent (already uncertified) / store unsealed / no accumulator -> nothing to admit or clear.
+fn accumulator_admit_and_clear_for_rollback(
+    epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
+    chaindb: &dyn ChainDb,
+    target: &Point,
+    policy: &RecoveryAdmissionPolicy,
+) -> Result<(), NodeLifecycleError> {
+    let Some(store) = epoch_accumulator else {
+        return Ok(());
     };
     let Ok(Some(seed_slot)) = store.seed_slot() else {
-        return;
+        return Ok(());
     };
-    let advanced = store
-        .last_advanced_slot()
-        .ok()
-        .flatten()
-        .unwrap_or(seed_slot);
-    if advanced.0 > tip.slot.0 {
-        let _ = store.reset_to_bootstrap();
-    }
+    // Only a CERTIFIED accumulator holds authority to bring into lockstep. An absent anchor is already
+    // uncertified -> the advance/recovery pass refolds it from canonical regardless; nothing to admit.
+    let Some(anchor) = store.last_advanced_point().map_err(|_| {
+        NodeLifecycleError::RecoveryAdmission(RecoveryAdmissionFault::CorruptLastAdvancedPoint)
+    })?
+    else {
+        return Ok(());
+    };
+    // The seed floor (non-fatal genesis fallback, as in `accumulator_recover_admit`).
+    let seed_pt = resolve_canonical_point(chaindb, seed_slot)?.unwrap_or(CanonicalPoint {
+        slot: seed_slot,
+        block_no: BlockNo(0),
+        hash: Hash32([0u8; 32]),
+    });
+    // The target's height from the PRE-rollback canonical chain (absent -> not a selected point at all).
+    let target_at = resolve_canonical_point(chaindb, target.slot)?.ok_or(
+        NodeLifecycleError::RecoveryAdmission(RecoveryAdmissionFault::TargetNotOnCanonicalChain {
+            slot: target.slot.0,
+        }),
+    )?;
+    let anchor_pt = CanonicalPoint {
+        slot: anchor.slot,
+        block_no: anchor.block_no,
+        hash: anchor.header_hash.clone(),
+    };
+    // The rollback target carries the EVENT's claimed hash; `admit_rollback`'s lineage check binds it to the
+    // pre-rollback canonical block at that slot (a divergent target -> LineageMismatch).
+    let target_pt = CanonicalPoint {
+        slot: target.slot,
+        block_no: target_at.block_no,
+        hash: target.hash.clone(),
+    };
+    admit_rollback(
+        &anchor_pt,
+        &target_pt,
+        &seed_pt,
+        policy.security_param.0,
+        |slot| {
+            resolve_canonical_point(chaindb, slot)
+                .ok()
+                .flatten()
+                .map(|p| p.hash)
+        },
+    )
+    .map_err(|e| NodeLifecycleError::RecoveryAdmission(RecoveryAdmissionFault::from_admission(e)))?;
+    // Admissible: durably CLEAR the lineage anchor BEFORE the caller commits the ChainDB rollback, so a crash
+    // in the window leaves an anchor-absent (uncertified) store that the next advance refolds from canonical.
+    store.reset_to_bootstrap().map_err(|e| {
+        NodeLifecycleError::RelaySync(format!("accumulator rollback pre-clear: {e:?}"))
+    })?;
+    Ok(())
 }
 
 /// LIVE-LEDGER-EPOCH-TRANSITION S3 (DC-EPOCH-22, BOUNDARY-ALIGNED-MARK-CAPTURE): the co-advancer called
@@ -1758,6 +2000,7 @@ fn advance_ledger_state_to_durable_tip(
     epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
     chaindb: &dyn ChainDb,
     era_schedule: &EraSchedule,
+    policy: &RecoveryAdmissionPolicy,
 ) -> Result<(), NodeLifecycleError> {
     use ade_runtime::chaindb::{
         advance_accumulator_over_chaindb, cross_accumulator_over_boundary_block,
@@ -1773,7 +2016,7 @@ fn advance_ledger_state_to_durable_tip(
 
     // Hoist the reorg reset for BOTH stores so the segmented walk below is purely forward.
     reduced_checkpoint_reset_if_ahead(reduced_checkpoint, &tip)?;
-    accumulator_reset_if_ahead(epoch_accumulator, &tip);
+    accumulator_recover_admit(epoch_accumulator, chaindb, &tip, policy)?;
 
     // The boundary-segmented accumulator cross loop (observe-only). Skipped when no accumulator is
     // configured -> the EVIEW-only advance below is byte-identical to the pre-S3 path.
@@ -2020,11 +2263,19 @@ pub async fn run_relay_loop_with_sched(
     // durable state) after each admit. `None` on non-EVIEW / wrapper / test callers -> inert
     // (byte-identical).
     eview_activation: Option<&crate::epoch_wire::EviewActivationInputs>,
-    // LIVE-LEDGER-EPOCH-TRANSITION S2 (DC-EPOCH-20): the durable non-UTxO accumulator, `Some` when a
-    // native bootstrap sealed it (or a warm start reopened it). After each durable admit the loop
-    // advances it OBSERVE-ONLY (the accumulator is not yet authoritative; S4 flips it), so a stall /
-    // fault never affects the follow. `None` on non-native / wrapper / test callers -> inert.
+    // LIVE-LEDGER-EPOCH-TRANSITION S2 (DC-EPOCH-20) + S5 (step 2b): the durable non-UTxO accumulator,
+    // `Some` when a native bootstrap sealed it (or a warm start reopened it). Two DISTINCT contracts:
+    // ordinary FOLLOW-TIME advance after each admit stays OBSERVE-ONLY (the accumulator is not yet
+    // authoritative; S4 flips it), so a within-epoch stall / compute fault never affects the follow;
+    // but RECOVERY admission (the warm-start / durable-tip reconcile gated by `recovery_policy` below)
+    // is the integrity EXCEPTION -- an uncertified or lineage-contradicted durable accumulator fails
+    // CLOSED. `None` on non-native / wrapper / test callers -> inert.
     epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
+    // LIVE-LEDGER-EPOCH-TRANSITION S5 (step 2b): the recovery-admission policy (Cardano-derived rollback
+    // bound). Threaded explicitly from the lifecycle entry; the recovery reconcile after each admit uses it
+    // to fail closed on an uncertified / inadmissible durable accumulator (the recovery-integrity exception
+    // to the observe-only contract).
+    recovery_policy: RecoveryAdmissionPolicy,
 ) -> Result<(), NodeLifecycleError> {
     // ECA-3 (DC-EPOCH-14): the ONE owned epoch-authority the loop holds — the SOLE view source for
     // BOTH header validation and leadership. Resolved FRESH at each authoritative decision via
@@ -2203,9 +2454,15 @@ pub async fn run_relay_loop_with_sched(
                         act.post_switch_follow.as_ref(),
                         &mut act.pending_range_refetch,
                         convergence.as_deref_mut(),
+                        epoch_accumulator,
                     )
                     .await
-                    .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                    .map_err(|e| match e {
+                        NodeSyncError::RecoveryAdmission(f) => {
+                            NodeLifecycleError::RecoveryAdmission(f)
+                        }
+                        other => NodeLifecycleError::RelaySync(format!("{other:?}")),
+                    })?;
                     // PHASE4-N-AO S4+S6 (DC-NODE-37 / CE-AO-6): consume the provisional
                     // decision S3 may have set. When a network magic is configured,
                     // LIVE-BlockFetch the winning branch from the winning peer
@@ -2265,8 +2522,14 @@ pub async fn run_relay_loop_with_sched(
                             authority.ledger_view(),
                             act.security_param,
                             &mut act.rollback_retention,
+                            epoch_accumulator,
                         )
-                        .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                        .map_err(|e| match e {
+                            NodeSyncError::RecoveryAdmission(f) => {
+                                NodeLifecycleError::RecoveryAdmission(f)
+                            }
+                            other => NodeLifecycleError::RelaySync(format!("{other:?}")),
+                        })?;
                         // PHASE4-N-AO S9 (DC-EVIDENCE-04): EXACTLY ONE terminal event for
                         // this fork_switch_id -- applied (proven adoption) OR failed
                         // (structured closed code). Observe-only; never feeds back. On a
@@ -2492,6 +2755,7 @@ pub async fn run_relay_loop_with_sched(
                         epoch_accumulator,
                         chaindb,
                         &era_schedule,
+                        &recovery_policy,
                     )?;
                     // EPOCH-CONTINUITY-ACTIVATION ECA-1 (DC-EPOCH-13): the AUTOMATIC first-boundary
                     // activation (no arming flag). A strict no-op (byte-identical) until EVIEW is
@@ -3216,9 +3480,15 @@ pub(crate) fn warm_start_recovery(
     if admit_count > 0 {
         let recovered_fp = fingerprint(&recovered.ledger).combined;
         if recovered_fp != wal_tail_fp {
-            return Err(NodeLifecycleError::WarmStartBootstrap(format!(
-                "wal-tail fingerprint mismatch: expected {wal_tail_fp:?}, recovered {recovered_fp:?}"
-            )));
+            // T-REC-05 promoted (S5 2b): a WAL-tail fingerprint disagreement is a durable-state
+            // contradiction -- the recovered ledger is NOT replay-equivalent to the admitted chain --
+            // so it fails closed as a typed recovery-admission fault, not a generic warm-start string.
+            return Err(NodeLifecycleError::RecoveryAdmission(
+                RecoveryAdmissionFault::FingerprintMismatch {
+                    expected: wal_tail_fp,
+                    recovered: recovered_fp,
+                },
+            ));
         }
     }
 
@@ -3796,6 +4066,14 @@ fn blake2b_256_of_file(path: &Path) -> Option<Hash32> {
 
 fn report(e: &NodeLifecycleError) {
     match e {
+        NodeLifecycleError::RecoveryAdmission(f) => {
+            eprintln!(
+                "ade_node --mode node: TERMINAL recovery-admission fault ({f:?}) -- the persisted \
+                 accumulator cannot be proven to describe ONE canonical selected-chain prefix; the store is \
+                 terminal until re-bootstrap (or an explicit admissible recovery). Recovery does not \
+                 continue with an uncertified or inadmissible durable accumulator."
+            );
+        }
         NodeLifecycleError::MissingFlag(flag) => {
             eprintln!("ade_node --mode node: {flag} is required");
         }
@@ -4641,6 +4919,10 @@ pub async fn run_participant_sync<D>(
     // PHASE4-N-AJ AJ-S2 (DC-NODE-30): emit-only convergence evidence. `None` =>
     // no emission. Evidence observes authority; it never becomes authority.
     mut evidence: Option<&mut ConvergenceEvidence>,
+    // LIVE-LEDGER-EPOCH-TRANSITION S5 (2b): the durable EpochAccumulator, so a chain-selection-admitted
+    // rollback pre-clears its certified lineage anchor BEFORE commit_rollback (event-qualified lockstep).
+    // `None` on non-native / wrapper callers -> inert.
+    epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
 ) -> Result<(), NodeSyncError>
 where
     D: ChainDb + SnapshotStore,
@@ -4800,11 +5082,28 @@ where
                         hash,
                     });
                 }
+                let target = Point {
+                    slot: stored.slot,
+                    hash,
+                };
+                // LIVE-LEDGER-EPOCH-TRANSITION S5 (2b): a chain-selection-admitted rollback -- bring the
+                // durable accumulator into lockstep by pre-clearing its certified anchor (after admitting
+                // the rollback) BEFORE commit_rollback trims the ChainDB. A typed RecoveryAdmission fault is
+                // terminal; an incidental store/read fault -> Pump.
+                accumulator_admit_and_clear_for_rollback(
+                    epoch_accumulator,
+                    chaindb,
+                    &target,
+                    &RecoveryAdmissionPolicy { security_param },
+                )
+                .map_err(|e| match e {
+                    NodeLifecycleError::RecoveryAdmission(f) => NodeSyncError::RecoveryAdmission(f),
+                    other => {
+                        NodeSyncError::Pump(format!("accumulator rollback pre-clear: {other:?}"))
+                    }
+                })?;
                 let event = ChainEvent::RolledBack {
-                    to_point: Point {
-                        slot: stored.slot,
-                        hash,
-                    },
+                    to_point: target,
                     depth: BlockDistance(0),
                 };
                 // DC-NODE-28: set pending BEFORE apply; clear ONLY after apply
@@ -4933,6 +5232,10 @@ pub fn apply_fork_switch<D>(
     // the rollback removes them, so a later competing branch descending through them
     // stays evaluable. NEVER durable / anchor / rollback-target / S2-S4 bypass.
     rollback_retention: &mut BTreeMap<Hash32, CachedHeader>,
+    // LIVE-LEDGER-EPOCH-TRANSITION S5 (2b): the durable EpochAccumulator, so a proven fork-switch (a
+    // chain-selection-admitted rollback to the LCA) pre-clears its certified lineage anchor BEFORE
+    // commit_rollback (event-qualified lockstep). `None` on non-native / wrapper callers -> inert.
+    epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
 ) -> Result<ForkSwitchOutcome, NodeSyncError>
 where
     D: ChainDb + SnapshotStore,
@@ -5028,6 +5331,23 @@ where
         }
     }
 
+    // LIVE-LEDGER-EPOCH-TRANSITION S5 (2b): a proven fork-switch is a chain-selection-admitted rollback to
+    // the LCA -- bring the durable accumulator into lockstep by pre-clearing its certified anchor (after
+    // admitting the rollback to `fork_anchor`) BEFORE the commit_rollback below trims the ChainDB. Terminal
+    // on an inadmissible rollback.
+    accumulator_admit_and_clear_for_rollback(
+        epoch_accumulator,
+        chaindb,
+        &Point {
+            slot: switch.fork_anchor.slot,
+            hash: switch.fork_anchor.hash.clone(),
+        },
+        &RecoveryAdmissionPolicy { security_param },
+    )
+    .map_err(|e| match e {
+        NodeLifecycleError::RecoveryAdmission(f) => NodeSyncError::RecoveryAdmission(f),
+        other => NodeSyncError::Pump(format!("fork-switch accumulator pre-clear: {other:?}")),
+    })?;
     // ONLY NOW adopt via the existing apply authorities (DC-NODE-25). The
     // prevalidation guarantees each pump_block below succeeds (except crash -> WAL
     // replay). commit_rollback (irreversible) happens HERE, after proof.
@@ -5387,7 +5707,14 @@ mod tests {
             put_raw(&db, 43_086_000); // epoch 501, the boundary block -> s_bb
             let sched = schedule_86k();
 
-            advance_ledger_state_to_durable_tip(Some(&cp), Some(&store), &db, &sched).unwrap();
+            advance_ledger_state_to_durable_tip(
+                Some(&cp),
+                Some(&store),
+                &db,
+                &sched,
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .unwrap();
 
             // The accumulator CROSSED into epoch 501 at the boundary slot.
             let (slot, acc) = store.load_current().unwrap().unwrap();
@@ -5414,7 +5741,14 @@ mod tests {
             put_raw(&db, 43_086_000);
             let sched = schedule_86k();
 
-            advance_ledger_state_to_durable_tip(Some(&cp), None, &db, &sched).unwrap();
+            advance_ledger_state_to_durable_tip(
+                Some(&cp),
+                None,
+                &db,
+                &sched,
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .unwrap();
 
             assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(43_086_000)));
         }
@@ -5432,7 +5766,14 @@ mod tests {
             put_raw(&db, 43_172_000); // epoch 502, boundary #2
             let sched = schedule_86k();
 
-            advance_ledger_state_to_durable_tip(Some(&cp), Some(&store), &db, &sched).unwrap();
+            advance_ledger_state_to_durable_tip(
+                Some(&cp),
+                Some(&store),
+                &db,
+                &sched,
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .unwrap();
 
             let (slot, acc) = store.load_current().unwrap().unwrap();
             assert_eq!(
@@ -5456,7 +5797,14 @@ mod tests {
             put_raw(&db, 43_086_000); // epoch 501, boundary
             let sched = schedule_86k();
 
-            advance_ledger_state_to_durable_tip(None, Some(&store), &db, &sched).unwrap();
+            advance_ledger_state_to_durable_tip(
+                None,
+                Some(&store),
+                &db,
+                &sched,
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .unwrap();
 
             let (slot, acc) = store.load_current().unwrap().unwrap();
             assert_eq!(acc.epoch_state.epoch, EpochNo(500), "no mark source -> no cross");
@@ -5465,6 +5813,195 @@ mod tests {
                 SlotNo(43_000_000),
                 "folded within-epoch up to s_prev, then stalled observe-only"
             );
+        }
+
+        // ===== LIVE-LEDGER-EPOCH-TRANSITION S5 (2b): event-qualified rollback admission + crash-safety =====
+        //
+        // These prove the WIRED recovery-admission path, distinct from the BLUE decision (proven by
+        // ade_ledger::rollback::admission's 14 unit tests). The discriminator is PROVENANCE: a
+        // chain-selection-admitted live rollback pre-clears the accumulator (after admitting the bounded
+        // rollback) BEFORE the ChainDB rollback commits; a warm-start contradiction with a present anchor and
+        // no rollback context stays terminal.
+        //
+        // NOTE on BeforeBootstrapAnchor: a wired trigger needs target.block_no < seed.block_no, i.e. TWO
+        // distinct decoded block_nos; the single `RAW_CONWAY_BLOCK` fixture decodes every `put_raw` block to
+        // ONE block_no, so it cannot be expressed at this seam. Its floor logic is covered by the BLUE
+        // `rollback_before_bootstrap_anchor_is_typed` (admit_rollback) unit test, and it is defensively
+        // unreachable on the live path (a chain-selection-admitted rollback target is always >= the immutable
+        // bootstrap seed). The other tests exercise the seed floor's threading into the helper.
+
+        /// Seal a store, then advance it to a certified lineage anchor at `(slot, block_no, hash)`.
+        fn advanced_store(
+            tmp: &TempDir,
+            seed_slot: SlotNo,
+            anchor_slot: SlotNo,
+            anchor_block_no: u64,
+            anchor_hash: Hash32,
+        ) -> EpochAccumulatorStore {
+            let store = sealed_store_at_epoch_500(tmp, seed_slot);
+            let (_, acc) = store.load_current().unwrap().unwrap();
+            store
+                .advance(&acc, anchor_slot, BlockNo(anchor_block_no), anchor_hash)
+                .unwrap();
+            store
+        }
+
+        /// The `put_raw` canonical hash at a slot (fixture: `hash = low byte of slot`).
+        fn canon_hash(slot: u64) -> Hash32 {
+            Hash32([(slot & 0xff) as u8; 32])
+        }
+
+        /// T1 (within-k live rollback): the certified anchor is pre-CLEARED (after admitting the bounded
+        /// rollback) so no crash window leaves it over the abandoned prefix; the store is left at the seed
+        /// baseline, uncertified, ready to refold from canonical.
+        #[test]
+        fn s5_within_k_live_rollback_pre_clears_the_certified_anchor() {
+            let tmp = TempDir::new().unwrap();
+            let seed_slot = SlotNo(42_000_000);
+            let db = InMemoryChainDb::new();
+            put_raw(&db, 43_000_000); // the rollback target
+            put_raw(&db, 43_086_000); // the pre-rollback tip
+            let b0 = resolve_canonical_point(&db, SlotNo(43_000_000))
+                .unwrap()
+                .unwrap()
+                .block_no
+                .0;
+            // A certified anchor 3 blocks above the target: a real, within-k rollback.
+            let store = advanced_store(&tmp, seed_slot, SlotNo(43_086_000), b0 + 3, Hash32([0xAB; 32]));
+            assert!(store.last_advanced_point().unwrap().is_some(), "certified before rollback");
+
+            let target = Point {
+                slot: SlotNo(43_000_000),
+                hash: canon_hash(43_000_000),
+            };
+            accumulator_admit_and_clear_for_rollback(
+                Some(&store),
+                &db,
+                &target,
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .unwrap();
+
+            // Pre-cleared: the anchor is gone and the accumulator is back at the seed baseline.
+            assert_eq!(store.last_advanced_point().unwrap(), None, "anchor pre-cleared");
+            let (slot, acc) = store.load_current().unwrap().unwrap();
+            assert_eq!(slot, seed_slot, "reset to the seed baseline");
+            assert_eq!(acc.epoch_state.epoch, EpochNo(500));
+        }
+
+        /// T2 (crash AFTER the accumulator clear, BEFORE the ChainDB rollback commits): the durable ChainDB is
+        /// still the pre-rollback chain; recovery sees an ABSENT anchor and refolds it -> Ok, never terminal,
+        /// never stale-height trust.
+        #[test]
+        fn s5_crash_after_clear_before_rollback_refolds() {
+            let tmp = TempDir::new().unwrap();
+            let seed_slot = SlotNo(42_000_000);
+            let db = InMemoryChainDb::new();
+            put_raw(&db, 43_000_000);
+            put_raw(&db, 43_086_000); // pre-rollback tip still present (rollback not committed)
+            let b0 = resolve_canonical_point(&db, SlotNo(43_000_000)).unwrap().unwrap().block_no.0;
+            let store = advanced_store(&tmp, seed_slot, SlotNo(43_086_000), b0 + 3, Hash32([0xAB; 32]));
+            let target = Point { slot: SlotNo(43_000_000), hash: canon_hash(43_000_000) };
+            accumulator_admit_and_clear_for_rollback(Some(&store), &db, &target, &RecoveryAdmissionPolicy::cardano())
+                .unwrap();
+            assert_eq!(store.last_advanced_point().unwrap(), None, "anchor absent after clear");
+
+            // Restart over the (still pre-rollback) durable tip. Absent anchor -> reset+refold, never terminal.
+            let tip = ChainTip { slot: SlotNo(43_086_000), hash: canon_hash(43_086_000) };
+            accumulator_recover_admit(Some(&store), &db, &tip, &RecoveryAdmissionPolicy::cardano())
+                .expect("absent anchor refolds, never terminal");
+        }
+
+        /// T3 (crash AFTER the ChainDB rollback, BEFORE the refold): the durable ChainDB is now the
+        /// post-rollback chain; recovery sees an ABSENT anchor and refolds the post-rollback chain -> Ok.
+        #[test]
+        fn s5_crash_after_rollback_before_refold_refolds() {
+            let tmp = TempDir::new().unwrap();
+            let seed_slot = SlotNo(42_000_000);
+            let db_pre = InMemoryChainDb::new();
+            put_raw(&db_pre, 43_000_000);
+            put_raw(&db_pre, 43_086_000);
+            let b0 = resolve_canonical_point(&db_pre, SlotNo(43_000_000)).unwrap().unwrap().block_no.0;
+            let store = advanced_store(&tmp, seed_slot, SlotNo(43_086_000), b0 + 3, Hash32([0xAB; 32]));
+            let target = Point { slot: SlotNo(43_000_000), hash: canon_hash(43_000_000) };
+            accumulator_admit_and_clear_for_rollback(Some(&store), &db_pre, &target, &RecoveryAdmissionPolicy::cardano())
+                .unwrap();
+
+            // The ChainDB rollback committed: the abandoned block (43_086_000) is gone; the tip is 43_000_000.
+            let db_post = InMemoryChainDb::new();
+            put_raw(&db_post, 43_000_000);
+            let tip = ChainTip { slot: SlotNo(43_000_000), hash: canon_hash(43_000_000) };
+            accumulator_recover_admit(Some(&store), &db_post, &tip, &RecoveryAdmissionPolicy::cardano())
+                .expect("absent anchor refolds the post-rollback chain, never terminal");
+        }
+
+        /// T4 (warm-start contradiction, NOT a rollback event): a PRESENT anchor whose hash disagrees with the
+        /// canonical block at its slot is a durable-state contradiction with no rollback provenance -> TERMINAL
+        /// LineageMismatch (never a silent reset of a certified store). The strict contract the event-qualified
+        /// live path deliberately does NOT relax.
+        #[test]
+        fn s5_warm_start_contradiction_present_anchor_wrong_hash_is_terminal() {
+            let tmp = TempDir::new().unwrap();
+            let seed_slot = SlotNo(42_000_000);
+            let db = InMemoryChainDb::new();
+            put_raw(&db, 43_000_000);
+            let bn = resolve_canonical_point(&db, SlotNo(43_000_000)).unwrap().unwrap().block_no.0;
+            // A certified anchor at 43_000_000 with the WRONG hash (canonical there is low-byte, not 0xEE).
+            let store = advanced_store(&tmp, seed_slot, SlotNo(43_000_000), bn, Hash32([0xEE; 32]));
+            let tip = ChainTip { slot: SlotNo(43_000_000), hash: canon_hash(43_000_000) };
+            let err = accumulator_recover_admit(Some(&store), &db, &tip, &RecoveryAdmissionPolicy::cardano())
+                .expect_err("a contradicted certified anchor is terminal");
+            assert!(
+                matches!(&err, NodeLifecycleError::RecoveryAdmission(RecoveryAdmissionFault::LineageMismatch { slot }) if *slot == 43_000_000),
+                "got {err:?}"
+            );
+            assert!(store.last_advanced_point().unwrap().is_some(), "certified store is NOT reset on contradiction");
+        }
+
+        /// T5 (rollback beyond k): a certified anchor more than k blocks above the target -> TERMINAL
+        /// ExceededRollback; the certified store is NOT cleared (recovery never rematerializes from a
+        /// deeper-than-immutable prefix).
+        #[test]
+        fn s5_live_rollback_beyond_k_is_terminal_exceeded() {
+            let tmp = TempDir::new().unwrap();
+            let seed_slot = SlotNo(42_000_000);
+            let db = InMemoryChainDb::new();
+            put_raw(&db, 43_000_000); // the rollback target
+            let target_bn = resolve_canonical_point(&db, SlotNo(43_000_000)).unwrap().unwrap().block_no.0;
+            let k = 5u64;
+            let policy = RecoveryAdmissionPolicy { security_param: SecurityParam(k) };
+            // A certified anchor k+1 blocks above the target -> rolling it back exceeds k.
+            let store = advanced_store(&tmp, seed_slot, SlotNo(43_050_000), target_bn + k + 1, Hash32([0xAB; 32]));
+
+            let target = Point { slot: SlotNo(43_000_000), hash: canon_hash(43_000_000) };
+            let err = accumulator_admit_and_clear_for_rollback(Some(&store), &db, &target, &policy)
+                .expect_err("a beyond-k rollback is terminal");
+            assert!(
+                matches!(&err, NodeLifecycleError::RecoveryAdmission(RecoveryAdmissionFault::ExceededRollback { depth, k: kk }) if *depth == k + 1 && *kk == k),
+                "got {err:?}"
+            );
+            assert!(store.last_advanced_point().unwrap().is_some(), "certified store is NOT reset on inadmissible rollback");
+        }
+
+        /// T6 (rollback target not on the canonical chain): a target slot with no durable block -> TERMINAL
+        /// TargetNotOnCanonicalChain; the store is NOT cleared.
+        #[test]
+        fn s5_live_rollback_target_absent_from_chain_is_terminal() {
+            let tmp = TempDir::new().unwrap();
+            let seed_slot = SlotNo(42_000_000);
+            let db = InMemoryChainDb::new();
+            put_raw(&db, 43_086_000); // only the tip; the target slot below has no block
+            let b0 = resolve_canonical_point(&db, SlotNo(43_086_000)).unwrap().unwrap().block_no.0;
+            let store = advanced_store(&tmp, seed_slot, SlotNo(43_086_000), b0 + 1, Hash32([0xAB; 32]));
+
+            let target = Point { slot: SlotNo(43_000_000), hash: Hash32([0x99; 32]) };
+            let err = accumulator_admit_and_clear_for_rollback(Some(&store), &db, &target, &RecoveryAdmissionPolicy::cardano())
+                .expect_err("a target off the canonical chain is terminal");
+            assert!(
+                matches!(&err, NodeLifecycleError::RecoveryAdmission(RecoveryAdmissionFault::TargetNotOnCanonicalChain { slot }) if *slot == 43_000_000),
+                "got {err:?}"
+            );
+            assert!(store.last_advanced_point().unwrap().is_some(), "store not cleared on a bad target");
         }
     }
 

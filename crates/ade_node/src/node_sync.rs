@@ -47,6 +47,7 @@ use ade_types::shelley::block::{PrevHash, ProtocolVersion};
 use ade_types::{BlockNo, EpochNo, Hash28, Hash32, SlotNo};
 use tokio::sync::mpsc;
 
+use crate::node_lifecycle::RecoveryAdmissionFault;
 use crate::produce_mode::{run_real_forge, ForgeRequestContext};
 use crate::run_loop_planner::VenuePolicy;
 use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;
@@ -443,6 +444,12 @@ pub enum NodeSyncError {
         stored_slot: SlotNo,
         hash: Hash32,
     },
+    /// LIVE-LEDGER-EPOCH-TRANSITION S5 (2b): an event-qualified live rollback could not bring the durable
+    /// EpochAccumulator into lockstep -- rolling its certified lineage anchor back to the target was
+    /// INADMISSIBLE (beyond k / below the bootstrap seed / off the pre-rollback canonical chain). Terminal:
+    /// recovery never rematerializes authority from an inadmissible prefix. Maps to a terminal
+    /// `NodeLifecycleError::RecoveryAdmission`.
+    RecoveryAdmission(RecoveryAdmissionFault),
 }
 
 /// L4b — the durable validated-apply driver: the FIRST production caller of
@@ -2599,6 +2606,7 @@ mod tests {
 
     use crate::node_lifecycle::{
         run_relay_loop, run_relay_loop_with_sched, ForgeActivation, NodeLifecycleError,
+        RecoveryAdmissionPolicy,
     };
     use tokio::sync::watch;
 
@@ -2685,6 +2693,7 @@ mod tests {
             None,
             None,
             None,
+            RecoveryAdmissionPolicy::cardano(),
         )
         .await
         .expect("relay loop halts cleanly on a drained feed");
@@ -7597,6 +7606,7 @@ mod tests {
             None,
             None,
             None,
+            crate::node_lifecycle::RecoveryAdmissionPolicy::cardano(),
         );
         let driver = async {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
