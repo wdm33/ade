@@ -1366,3 +1366,223 @@ mismatch_creds={mm}|only_ade={only_ade}|only_ref={only_ref}
         "canonical advanced-base report hash (pinned)"
     );
 }
+
+// ===========================================================================
+// LIVE-LEDGER-EPOCH-TRANSITION S5 step 2c — the POSITIVE replay-equivalence
+// evidence bundle. A within-k, SAME-LINEAGE rollback that is admitted, then
+// event-qualified CLEARED (reset), then re-folded from the canonical ChainDB
+// prefix, re-advances to a byte-IDENTICAL post-boundary state vs. the
+// uninterrupted run — across the exact fingerprints S4 leadership will read.
+// Proves S5's core claim: recovery admission + rematerialization is
+// replay-equivalent for restart and controlled rollback. It does NOT activate
+// accumulator-derived leadership authority (that is S4).
+//
+// Negative evidence lives elsewhere (a layered proof):
+//   LineageMismatch / ExceededRollback / TargetNotOnCanonicalChain — wired
+//     integration (ade_node node_lifecycle `s5_*` tests);
+//   CorruptLastAdvancedPoint — wired/store (epoch_accumulator_store);
+//   MissingCanonicalSpan / NonContiguousCanonicalSpan — wired/refold
+//     (accumulator_recover_admit resolve path);
+//   FingerprintMismatch — typed T-REC-05 (warm_start_recovery gate);
+//   BeforeBootstrapAnchor — BLUE admission guard
+//     (rollback::admission::rollback_before_bootstrap_anchor_is_typed); the
+//     live rollback seam is structurally unreachable (a selected rollback
+//     target is never below the immutable bootstrap floor), so there is no
+//     wired fixture without fabricating a lower-block second fixture;
+//   SchemaMismatch — the schema-v4 rejection path (epoch_accumulator
+//     UnknownVersion / codec_rejects_pre_c_v3_store_rebootstrap_required).
+// ===========================================================================
+
+/// Copy the seed's two redb stores into an isolated work dir and open them (open is read-WRITE, so the
+/// seed is never mutated). Returns the stores + the work dir (for the warm-start reopen).
+fn s5_open_isolated(
+    seed_dir: &Path,
+    work: &Path,
+    tag: &str,
+) -> (EpochAccumulatorStore, ReducedUtxoCheckpoint, PathBuf) {
+    let dst = work.join(tag);
+    let _ = std::fs::remove_dir_all(&dst);
+    std::fs::create_dir_all(&dst).expect("mkdir work");
+    let acc_dst = dst.join("epoch-accumulator.redb");
+    let cp_dst = dst.join("reduced-checkpoint.redb");
+    std::fs::copy(seed_dir.join("epoch-accumulator.redb"), &acc_dst).expect("copy acc");
+    std::fs::copy(seed_dir.join("reduced-checkpoint.redb"), &cp_dst).expect("copy cp");
+    let store = EpochAccumulatorStore::open(&acc_dst).expect("open acc");
+    let cp = ReducedUtxoCheckpoint::open(&cp_dst).expect("open cp");
+    (store, cp, dst)
+}
+
+/// #1 the accumulator canonical hash = blake2b_256 of its canonical encoding (byte-covers the ENTIRE
+/// non-UTxO ledger: pots, snapshots/go, cert/reward state, prev buffers, pending RUPD).
+fn s5_acc_hash(store: &EpochAccumulatorStore) -> Hash32 {
+    let (_slot, acc) = store.load_current().expect("load").expect("sealed");
+    ade_crypto::blake2b_256(&ade_ledger::epoch_accumulator::encode_epoch_accumulator(&acc))
+}
+
+/// #6 the accumulator-derived AUTHORITY stake view: the `stake_by_pool` distribution `to_pool_distr_view`
+/// consumes (the go-snapshot pool stakes + total), committed via the runtime's canonical stake-hash
+/// formula (`EpochConsensusView::stake_view_canonical_hash`). The VRF/param bindings the full projection
+/// also needs are supplied by S4, not the accumulator; the STAKE is what recovery must preserve.
+fn s5_authority_stake_view_hash(store: &EpochAccumulatorStore) -> Hash32 {
+    let (_slot, acc) = store.load_current().expect("load").expect("sealed");
+    let go = &acc.epoch_state.snapshots.as_authoritative().expect("authoritative").go.0;
+    let total: u128 = go.pool_stakes.values().map(|c| c.0 as u128).sum();
+    let mut buf = Vec::with_capacity(24 + go.pool_stakes.len() * 36);
+    buf.extend_from_slice(&total.to_be_bytes());
+    buf.extend_from_slice(&(go.pool_stakes.len() as u64).to_be_bytes());
+    for (pool, coin) in &go.pool_stakes {
+        buf.extend_from_slice(&(pool.0).0); // PoolId(Hash28) -> 28 bytes
+        buf.extend_from_slice(&coin.0.to_be_bytes());
+    }
+    ade_crypto::blake2b_256(&buf)
+}
+
+/// #2 the reduced-checkpoint state commitment: blake2b over the per-base-credential stake sums (the
+/// checkpoint's authoritative reduced content). The build-marker `fingerprint()` is `Incomplete` after an
+/// ADVANCE (it is written only by a fresh `build_from`), so recovery equivalence is proven over the CONTENT
+/// the accumulator boundary-mark consumes.
+fn s5_checkpoint_state_hash(cp: &ReducedUtxoCheckpoint) -> Hash32 {
+    let sums = cp.sum_base_credential_stake().expect("reduced base-credential stake");
+    let mut buf = Vec::with_capacity(8 + sums.len() * 37);
+    buf.extend_from_slice(&(sums.len() as u64).to_be_bytes());
+    for (cred, coin) in &sums {
+        buf.extend_from_slice(&cred_key(cred));
+        buf.extend_from_slice(&coin.0.to_be_bytes());
+    }
+    ade_crypto::blake2b_256(&buf)
+}
+
+/// #7 the warm-start replay hash: reopen the DURABLE stores from disk (the node's kill->warm-start
+/// sequence) + advance-to-tip (idempotent at tip), then hash — proves the PERSISTED state, not just the
+/// in-memory state, is byte-identical after recovery. Reuses the already-loaded corpus db.
+fn s5_warm_start_hash(dst: &Path, db: &dyn ChainDb, sched: &EraSchedule) -> Hash32 {
+    let store = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb")).expect("reopen acc");
+    let cp = ReducedUtxoCheckpoint::open(&dst.join("reduced-checkpoint.redb")).expect("reopen cp");
+    co_advance(&store, &cp, db, sched);
+    s5_acc_hash(&store)
+}
+
+/// The canonical selected point (slot, block_no, hash) of the last corpus block at-or-below `target_slot`.
+fn s5_corpus_point(corpus: &Path, target_slot: u64) -> (SlotNo, u64, Hash32) {
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(corpus.join("manifest.json")).expect("manifest"))
+            .expect("manifest json");
+    let mut best: Option<(u64, String, String)> = None;
+    for b in manifest["blocks"].as_array().expect("blocks") {
+        let s = b["slot"].as_u64().expect("slot");
+        if s <= target_slot && best.as_ref().map_or(true, |(bs, _, _)| s > *bs) {
+            best = Some((
+                s,
+                b["file"].as_str().expect("file").to_string(),
+                b["hash"].as_str().expect("hash").to_string(),
+            ));
+        }
+    }
+    let (s, file, hash) = best.expect("a corpus block <= target");
+    let bytes = std::fs::read(corpus.join(&file)).expect("block cbor");
+    let decoded =
+        ade_ledger::block_validity::header_input::decode_block(&bytes).expect("decode block");
+    (SlotNo(s), decoded.header_input.block_no.0, parse_hash32(&hash))
+}
+
+/// Open an isolated copy of the v5 seed and RE-SEAL its CURRENT (epoch-1340) state as the bootstrap
+/// baseline. The v5 seed's true bootstrap is epoch 1338, but the CE-3d corpus begins at late-1339, so a
+/// `reset_to_bootstrap` -> 1338 cannot refold; re-sealing at the current advanced point gives a
+/// corpus-refoldable recovery baseline (the exact state b3c0 folds from). Returns the baseline slot.
+fn s5_open_resealed(
+    seed_dir: &Path,
+    work: &Path,
+    tag: &str,
+) -> (EpochAccumulatorStore, ReducedUtxoCheckpoint, PathBuf, SlotNo) {
+    let (store, cp, dst) = s5_open_isolated(seed_dir, work, tag);
+    let (slot, acc) = store.load_current().expect("load").expect("sealed");
+    store.seal_bootstrap(&acc, slot).expect("re-seal accumulator at current");
+    cp.seal_bootstrap(slot).expect("re-seal checkpoint at current");
+    (store, cp, dst, slot)
+}
+
+#[test]
+#[ignore = "S5 2c: recovery replay-equivalence — uninterrupted vs advance+within-k-rollback+reset+refold, byte-identical (env S5_SEED_STORES / CE3D_CORPUS / CE3D_WORK); crosses 1340 -> 1341; SLOW ~100min (folds ~2461 real Conway blocks per pass)"]
+fn s5_recovery_replay_equivalence_within_k_rollback() {
+    use ade_ledger::rollback::{admit_rollback, RollbackPoint};
+    use ade_types::BlockNo;
+
+    let seed_dir = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
+    let corpus = env_path("CE3D_CORPUS", "/home/ts/.cardano-ce3d-extract/corpus_blocks");
+    let work = env_path("CE3D_WORK", "/home/ts/.cardano-ce3d-extract/harness-work-s5");
+    let sched = preview_schedule();
+    // Post-boundary tip = the first block of epoch 1341 (crosses the 1340->1341 self-derived boundary).
+    let final_slot = EPOCH_1341_FIRST_SLOT;
+
+    // ONE corpus load, reused for both runs + both warm-starts (the file reads dominate the wall clock).
+    let (db, n) = load_corpus(&corpus, final_slot);
+    eprintln!("S5-2c: {n} corpus blocks <= {final_slot}");
+
+    // ===== A: the UNINTERRUPTED reference — advance the re-sealed baseline -> post-boundary tip 1341 =====
+    let (store_a, cp_a, dst_a, base_slot) = s5_open_resealed(&seed_dir, &work, "a");
+    eprintln!("S5-2c: re-sealed recovery baseline at slot {} (corpus-refoldable)", base_slot.0);
+    co_advance(&store_a, &cp_a, &db, &sched);
+    let post_a = ade_post_state(&store_a);
+    let acc_a = s5_acc_hash(&store_a);
+    let cpst_a = s5_checkpoint_state_hash(&cp_a);
+    let auth_a = s5_authority_stake_view_hash(&store_a);
+    drop(store_a);
+    drop(cp_a);
+    let warm_a = s5_warm_start_hash(&dst_a, &db, &sched);
+
+    // The within-k, SAME-LINEAGE rollback target R: a real canonical block ~5_000 slots below the tip
+    // (a few hundred blocks — well inside k=2160), above the re-sealed baseline.
+    let (r_slot, r_bno, r_hash) = s5_corpus_point(&corpus, final_slot - 5_000);
+
+    // ===== B: advance -> admit within-k rollback -> event-qualified CLEAR (reset) -> refold =====
+    let (store_b, cp_b, dst_b, _) = s5_open_resealed(&seed_dir, &work, "b");
+    co_advance(&store_b, &cp_b, &db, &sched);
+    let b_tip = store_b.last_advanced_point().expect("lap").expect("certified tip");
+    // Admit the rollback of B's certified tip back to R against the pre-rollback canonical chain — the exact
+    // `admit_rollback` the runtime pre-clear `accumulator_admit_and_clear_for_rollback` calls.
+    let depth = b_tip.block_no.0 - r_bno;
+    eprintln!("S5-2c: admitting rollback tip(block {}) -> R(block {r_bno}), depth {depth} (k=2160)", b_tip.block_no.0);
+    admit_rollback(
+        &RollbackPoint { slot: b_tip.slot, block_no: b_tip.block_no, hash: b_tip.header_hash.clone() },
+        &RollbackPoint { slot: r_slot, block_no: BlockNo(r_bno), hash: r_hash },
+        &RollbackPoint { slot: base_slot, block_no: BlockNo(0), hash: Hash32([0u8; 32]) },
+        2160,
+        |s| db.get_block_by_slot(s).ok().flatten().map(|blk| blk.hash),
+    )
+    .expect("a within-k same-lineage rollback is admitted");
+    // Event-qualified CLEAR: reset BOTH derived stores to the re-sealed baseline (anchor-absent, uncertified),
+    // discarding the advanced state, then refold from the canonical ChainDB prefix — the re-materialization.
+    store_b.reset_to_bootstrap().expect("clear accumulator anchor");
+    cp_b.reset_to_bootstrap().expect("reset reduced checkpoint");
+    assert_eq!(store_b.last_advanced_point().expect("lap"), None, "post-clear: uncertified");
+    co_advance(&store_b, &cp_b, &db, &sched);
+    let post_b = ade_post_state(&store_b);
+    let acc_b = s5_acc_hash(&store_b);
+    let cpst_b = s5_checkpoint_state_hash(&cp_b);
+    let auth_b = s5_authority_stake_view_hash(&store_b);
+    drop(store_b);
+    drop(cp_b);
+    let warm_b = s5_warm_start_hash(&dst_b, &db, &sched);
+
+    // ===== byte-identity across the S4-authority-relevant fingerprints =====
+    let hx = |h: &Hash32| h.0.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    eprintln!("S5-2c fingerprints (uninterrupted A vs rollback-recovery B):");
+    eprintln!("  epoch                 {} / {}", post_a.epoch, post_b.epoch);
+    eprintln!("  #1 accumulator hash   {}", hx(&acc_a));
+    eprintln!("  #2 checkpoint state   {}", hx(&cpst_a));
+    eprintln!("  #6 authority stake    {}", hx(&auth_a));
+    eprintln!("  #7 warm-start replay  {}", hx(&warm_a));
+
+    assert_eq!(post_a.epoch, 1341, "both cross into epoch 1341");
+    assert_eq!(acc_a, acc_b, "#1 accumulator canonical hash byte-identical");
+    assert_eq!(cpst_a, cpst_b, "#2 checkpoint / reduced-state content byte-identical");
+    assert_eq!(post_a.treasury, post_b.treasury, "#3 treasury byte-identical");
+    assert_eq!(post_a.reserves, post_b.reserves, "#3 reserves byte-identical");
+    assert_eq!(post_a.rewards, post_b.rewards, "#4 reward map byte-identical");
+    assert_eq!(post_a.go, post_b.go, "#5 go pool-set + values byte-identical");
+    assert_eq!(auth_a, auth_b, "#6 accumulator-derived authority stake view byte-identical");
+    assert_eq!(warm_a, warm_b, "#7 warm-start replay hash byte-identical");
+    // Warm-start reopen re-materializes the SAME state as the in-memory run (durable round-trip).
+    assert_eq!(warm_a, acc_a, "warm-start reopen == in-memory accumulator (A)");
+    assert_eq!(warm_b, acc_b, "warm-start reopen == in-memory accumulator (B)");
+}

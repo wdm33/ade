@@ -66,20 +66,49 @@ oracle, never as the rematerialized authority.
   independently of the restart proof.
 - **No logs as authority.** Logs may WITNESS evidence; equality is over canonical fingerprints.
 
-## 6. Acceptance — the committed evidence bundle
+## 6. Acceptance — the committed evidence bundle (GREEN)
 
-**Positive** (v5 same-lineage rollback target WITHIN k):
-- reset + re-fold produces byte-identical **accumulator / checkpoint / go / rewards / pots / authority-view**
-  fingerprints vs. the uninterrupted run; re-advance reaches the same post-boundary fingerprints.
+**Positive — PROVEN** by `ade_testkit/tests/ce3d_boundary_differential.rs::s5_recovery_replay_equivalence_within_k_rollback`
+(`#[ignore]`; env `S5_SEED_STORES` / `CE3D_CORPUS` / `CE3D_WORK`; crosses the 1340→1341 self-derived boundary).
+The UNINTERRUPTED advance (A) vs. advance → admit within-k same-lineage rollback (`admit_rollback`, depth 150 ≤
+k=2160) → event-qualified CLEAR (`reset_to_bootstrap` on BOTH derived stores) → refold from the canonical
+ChainDB prefix (B) reach BYTE-IDENTICAL fingerprints:
 
-**Negative** (each a typed, reproducible terminal — never a silent rematerialization):
-- rollback before the bootstrap anchor → typed failure.
-- rollback beyond k / before the immutable point → typed `ExceededRollback`.
-- rollback to the same height but wrong hash / divergent lineage → typed lineage-mismatch failure.
-- non-contiguous WAL span → typed failure.
-- schema mismatch → typed failure.
+| # | fingerprint | how |
+|---|---|---|
+| 1 | accumulator canonical hash | `blake2b_256(encode_epoch_accumulator)` — byte-covers the whole non-UTxO ledger (`c97225a4…e30e9aa` @ POST-1341) |
+| 2 | reduced-checkpoint state | `blake2b(sum_base_credential_stake)` (`3b386961…3aff8ce`) |
+| 3 | treasury + reserves | `epoch_state.treasury/reserves` |
+| 4 | reward map | `cert_state.delegation.rewards` |
+| 5 | go pool-set + values | `snapshots.go.pool_stakes` |
+| 6 | accumulator-derived authority stake view | the `stake_by_pool` `to_pool_distr_view` consumes (`7952679f…c3efc6d3`) |
+| 7 | warm-start replay | durable reopen re-materialises the in-memory state (`c97225a4…` == #1) |
+
+Fixture notes (file-verified): `cp.fingerprint()` is `Incomplete` after an ADVANCE (its build-marker is
+written only by a fresh `build_from`), so #2 commits the reduced *content*. The `ce3d-s1seed-v5` store's
+bootstrap is epoch 1338 but its current is advanced to 1340, and the CE-3d corpus is late-1339→1342, so the
+differential RE-SEALS the current 1340 state as the corpus-refoldable recovery baseline (`reset_to_bootstrap`
+→ 1340) — the exact state b3c0 folds from.
+
+**Negative — a LAYERED proof** (mechanical enforcement + the seam that expresses it):
+
+| fault | enforcement locus |
+|---|---|
+| LineageMismatch | wired integration (`ade_node` `s5_warm_start_contradiction_present_anchor_wrong_hash_is_terminal`) |
+| ExceededRollback | wired integration (`s5_live_rollback_beyond_k_is_terminal_exceeded`) |
+| TargetNotOnCanonicalChain | wired integration (`s5_live_rollback_target_absent_from_chain_is_terminal`) |
+| CorruptLastAdvancedPoint | wired/store (`epoch_accumulator_store::malformed_lineage_anchor_bytes_fail_closed`) |
+| MissingCanonicalSpan | wired/refold (`accumulator_recover_admit` seed/tip resolve path) |
+| NonContiguousCanonicalSpan | wired/refold (`resolve_canonical_point` decode path) |
+| FingerprintMismatch | typed T-REC-05 (`warm_start_recovery` WAL-tail gate) |
+| BeforeBootstrapAnchor | BLUE admission guard (`rollback::admission::rollback_before_bootstrap_anchor_is_typed`); the live rollback seam is STRUCTURALLY UNREACHABLE (a selected rollback target is never below the immutable bootstrap floor), so there is no wired fixture without fabricating a lower-block second fixture |
+| SchemaMismatch | schema-v4 rejection path (`epoch_accumulator` `UnknownVersion` / `codec_rejects_pre_c_v3_store_rebootstrap_required`) |
 
 Where equality is claimed it is byte-exact; every rejection is typed and reproducible.
+
+**S5 closure claim:** S5 proves accumulator recovery admission and rematerialization are replay-equivalent for
+restart and controlled rollback. It does NOT activate accumulator-derived leadership authority (that is S4).
+With 2c green + committed, S4 becomes admissible — no seed-window deletion before that.
 
 ## 7. IDD classification
 
