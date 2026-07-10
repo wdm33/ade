@@ -1462,6 +1462,42 @@ fn s5_warm_start_hash(dst: &Path, db: &dyn ChainDb, sched: &EraSchedule) -> Hash
     s5_acc_hash(&store)
 }
 
+/// #8 the frozen leadership canonical hash = blake2b_256 of the persisted `FrozenLeadershipPoolDistr` (the
+/// self-contained leadership `nesPd` authority S4-pre persists). Recovery MUST preserve it byte-identically:
+/// it is epoch-frozen, so no advance / rollback / reset / refold changes it (`reset_to_bootstrap` deliberately
+/// preserves it, 1b), and it is durable across a warm restart.
+fn s5_leadership_hash(store: &EpochAccumulatorStore) -> Hash32 {
+    ade_ledger::frozen_leadership::canonical_hash(
+        &store.leadership_authority().expect("leadership authority"),
+    )
+}
+
+/// #8 warm-start variant: reopen the DURABLE store from disk (the kill->warm-start sequence) and hash the
+/// leadership authority — proves the PERSISTED leadership object, not just the in-memory one, is byte-identical
+/// after recovery. No `co_advance` needed: the leadership object is epoch-frozen, not fold-evolved.
+fn s5_warm_start_leadership_hash(dst: &Path) -> Hash32 {
+    let store = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb")).expect("reopen acc");
+    s5_leadership_hash(&store)
+}
+
+/// S4-pre-1c: leadership-certify a store copy from the manifest-bound seed record read from `seed_dir`'s durable
+/// chain.db sidecar (the v5 seed fixture predates 1b, so it carries no leadership object). This seals the SAME
+/// durable object the wired native bootstrap now seals — the recovery arms then prove it survives unchanged.
+fn s5_seal_leadership(store: &EpochAccumulatorStore, seed_dir: &Path) {
+    use ade_ledger::seed_consensus_inputs::decode_seed_epoch_consensus_inputs;
+    use ade_runtime::chaindb::{PersistentChainDb, PersistentChainDbOptions, SnapshotStore};
+    let cdb = PersistentChainDb::open(PersistentChainDbOptions::at(seed_dir.join("chain.db")))
+        .expect("open cdb");
+    let fps = cdb.list_seed_epoch_consensus_anchor_fps().expect("list");
+    let record = decode_seed_epoch_consensus_inputs(
+        &cdb.get_seed_epoch_consensus_inputs(&fps[0]).expect("get").expect("present"),
+    )
+    .expect("decode");
+    store
+        .seal_frozen_leadership_from_seed_record(&record, record.seed_point_slot, &record.seed_point_hash)
+        .expect("seal frozen leadership from the manifest-bound seed record");
+}
+
 /// The canonical selected point (slot, block_no, hash) of the last corpus block at-or-below `target_slot`.
 fn s5_corpus_point(corpus: &Path, target_slot: u64) -> (SlotNo, u64, Hash32) {
     let manifest: serde_json::Value =
@@ -1498,6 +1534,9 @@ fn s5_open_resealed(
     let (slot, acc) = store.load_current().expect("load").expect("sealed");
     store.seal_bootstrap(&acc, slot).expect("re-seal accumulator at current");
     cp.seal_bootstrap(slot).expect("re-seal checkpoint at current");
+    // S4-pre-1c: leadership-certify the copy (schema-v5 marker + frozen object) so the recovery arms can prove
+    // the leadership authority survives clean advance, rollback+reset+refold, and warm restart unchanged.
+    s5_seal_leadership(&store, seed_dir);
     (store, cp, dst, slot)
 }
 
@@ -1526,9 +1565,11 @@ fn s5_recovery_replay_equivalence_within_k_rollback() {
     let acc_a = s5_acc_hash(&store_a);
     let cpst_a = s5_checkpoint_state_hash(&cp_a);
     let auth_a = s5_authority_stake_view_hash(&store_a);
+    let lead_a = s5_leadership_hash(&store_a);
     drop(store_a);
     drop(cp_a);
     let warm_a = s5_warm_start_hash(&dst_a, &db, &sched);
+    let warm_lead_a = s5_warm_start_leadership_hash(&dst_a);
 
     // The within-k, SAME-LINEAGE rollback target R: a real canonical block ~5_000 slots below the tip
     // (a few hundred blocks — well inside k=2160), above the re-sealed baseline.
@@ -1560,9 +1601,11 @@ fn s5_recovery_replay_equivalence_within_k_rollback() {
     let acc_b = s5_acc_hash(&store_b);
     let cpst_b = s5_checkpoint_state_hash(&cp_b);
     let auth_b = s5_authority_stake_view_hash(&store_b);
+    let lead_b = s5_leadership_hash(&store_b);
     drop(store_b);
     drop(cp_b);
     let warm_b = s5_warm_start_hash(&dst_b, &db, &sched);
+    let warm_lead_b = s5_warm_start_leadership_hash(&dst_b);
 
     // ===== byte-identity across the S4-authority-relevant fingerprints =====
     let hx = |h: &Hash32| h.0.iter().map(|x| format!("{x:02x}")).collect::<String>();
@@ -1572,6 +1615,7 @@ fn s5_recovery_replay_equivalence_within_k_rollback() {
     eprintln!("  #2 checkpoint state   {}", hx(&cpst_a));
     eprintln!("  #6 authority stake    {}", hx(&auth_a));
     eprintln!("  #7 warm-start replay  {}", hx(&warm_a));
+    eprintln!("  #8 frozen leadership  {}", hx(&lead_a));
 
     assert_eq!(post_a.epoch, 1341, "both cross into epoch 1341");
     assert_eq!(acc_a, acc_b, "#1 accumulator canonical hash byte-identical");
@@ -1585,6 +1629,11 @@ fn s5_recovery_replay_equivalence_within_k_rollback() {
     // Warm-start reopen re-materializes the SAME state as the in-memory run (durable round-trip).
     assert_eq!(warm_a, acc_a, "warm-start reopen == in-memory accumulator (A)");
     assert_eq!(warm_b, acc_b, "warm-start reopen == in-memory accumulator (B)");
+    // #8 the frozen leadership authority (S4-pre-1c): epoch-frozen, so byte-identical across clean advance vs
+    // rollback+reset+refold, and durable across warm restart. `reset_to_bootstrap` preserves it (1b).
+    assert_eq!(lead_a, lead_b, "#8 frozen leadership canonical hash byte-identical (clean vs rollback-refold)");
+    assert_eq!(warm_lead_a, lead_a, "#8 warm-start leadership hash == in-memory (A) — durable across restart");
+    assert_eq!(warm_lead_b, lead_b, "#8 warm-start leadership hash == in-memory (B) — durable across restart");
 }
 
 /// LEADERSHIP DISTRIBUTION AUTHORITY TRACE: classify each of the 659 seed leadership pools by its
@@ -1746,5 +1795,83 @@ fn s4pre_frozen_leadership_seed_identity() {
         "S4-pre-1 SEED IDENTITY PROVEN: {} pools; the self-contained frozen leadership distr projects == the \
          seed leadership view byte-exact (no go/active-param/retiring lookup).",
         frozen.pools.len()
+    );
+}
+
+/// S4-pre-1c CERTIFIED BOOTSTRAP LINEAGE: seal the frozen leadership authority THROUGH THE DURABLE STORE via the
+/// EXACT call the native bootstrap makes (`seal_frozen_leadership_from_seed_record`), from the real v5 seed
+/// record, and prove the certified store answers leadership byte-exact + stable across reopen. This is the
+/// durable-path analog of `s4pre_frozen_leadership_seed_identity` (which proves only the in-memory projection):
+/// it covers "fresh bootstrap store has the v5 marker", "leadership_authority() loads the object", "hash stable
+/// across reopen", and "to_pool_distr_view == seed leadership PoolDistr, 659/659, incl. zero-stake + the retired
+/// 1M-ADA pool".
+#[test]
+#[ignore = "S4-pre-1c: seal_frozen_leadership_from_seed_record produces a v5-certified store == seed leadership PoolDistr, stable across reopen (env S5_SEED_STORES / CE3D_WORK); FAST"]
+fn s4pre_1c_frozen_leadership_bootstrap_lineage() {
+    use ade_ledger::consensus_view::PoolDistrView;
+    use ade_ledger::frozen_leadership::{canonical_hash, FrozenLeadershipPoolDistr};
+    use ade_ledger::seed_consensus_inputs::decode_seed_epoch_consensus_inputs;
+    use ade_runtime::chaindb::{PersistentChainDb, PersistentChainDbOptions, SnapshotStore};
+
+    let seed_dir = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
+    let work = env_path("CE3D_WORK", "/home/ts/.cardano-ce3d-extract/harness-work-s5");
+
+    // The manifest-bound seed record (the leadership nesPd) from the durable chain.db sidecar.
+    let cdb = PersistentChainDb::open(PersistentChainDbOptions::at(seed_dir.join("chain.db"))).expect("open cdb");
+    let fps = cdb.list_seed_epoch_consensus_anchor_fps().expect("list");
+    let record = decode_seed_epoch_consensus_inputs(
+        &cdb.get_seed_epoch_consensus_inputs(&fps[0]).expect("get").expect("present"),
+    )
+    .expect("decode");
+
+    // Seal via the EXACT native-bootstrap call into a FRESH store, source-bound to the record's own seed point
+    // (which the real bootstrap binds to `binding.certified_point` — proven equal by the mithril-assembly
+    // coherence gate, so the source check passes on a legitimate bootstrap).
+    let dst = work.join("s4pre-1c-lineage");
+    let _ = std::fs::remove_dir_all(&dst);
+    std::fs::create_dir_all(&dst).expect("mkdir");
+    let acc_path = dst.join("epoch-accumulator.redb");
+    {
+        let store = EpochAccumulatorStore::open(&acc_path).expect("open acc");
+        store
+            .seal_frozen_leadership_from_seed_record(&record, record.seed_point_slot, &record.seed_point_hash)
+            .expect("seal frozen leadership from the manifest-bound seed record");
+
+        // A fresh certified store: the schema-v5 marker + object are present, and the fail-closed authority read
+        // loads the object.
+        assert!(store.frozen_leadership().expect("raw read").is_some(), "v5 leadership marker + object present");
+        let leadership = store.leadership_authority().expect("leadership authority loads");
+
+        // 659/659 pools; zero-stake registered pools + the retired 1M-ADA pool are carried (the byte-exact
+        // projection below proves each pool's frozen stake+VRF, incl. the retired pool's VRF — LDAT's 1 supplement).
+        assert_eq!(leadership.pools.len(), record.pool_distribution.len(), "all leadership pools carried");
+        assert!(
+            leadership.pools.values().any(|e| e.active_stake == 0),
+            "zero-stake registered leadership pools preserved"
+        );
+        assert!(
+            leadership.pools.values().any(|e| e.active_stake >= 1_000_000_000_000),
+            "the retired 1M-ADA leadership pool is carried with its frozen stake+VRF"
+        );
+
+        // The certified store projects BYTE-EXACT to the seed leadership PoolDistr (epoch+total+asc+stake+VRF).
+        let from_store = leadership.to_pool_distr_view(record.active_slots_coeff);
+        let from_seed = PoolDistrView::from_seed_epoch_consensus_inputs(&record);
+        assert_eq!(from_store, from_seed, "certified store leadership == seed leadership PoolDistr byte-exact");
+        // No drift through the codec/store round-trip vs the direct projection.
+        assert_eq!(leadership, FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record));
+    }
+
+    // Canonical hash is STABLE across reopen (warm-restart durability of the leadership authority).
+    let reopen_hash = || {
+        let store = EpochAccumulatorStore::open(&acc_path).expect("reopen acc");
+        canonical_hash(&store.leadership_authority().expect("reopened leadership authority"))
+    };
+    assert_eq!(reopen_hash(), reopen_hash(), "frozen leadership canonical hash stable across reopen");
+
+    eprintln!(
+        "S4-pre-1c LINEAGE PROVEN: seal_frozen_leadership_from_seed_record produced a v5-certified store; \
+         {} leadership pools == the seed leadership PoolDistr byte-exact; hash stable across reopen.",
+        record.pool_distribution.len()
     );
 }

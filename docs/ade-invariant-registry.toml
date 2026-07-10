@@ -9563,3 +9563,48 @@ introduced_in = "CE3D-GO-POOLSET-INCLUSION-C"
 strengthened_in = ["CE3D-GO-POOLSET-SCHEMA-REJECT"]
 open_obligation = "SATISFIED -- ENFORCED for SNAPSHOT POOL-SET MEMBERSHIP by the CE-3d final green declaration (docs/clusters/LIVE-LEDGER-EPOCH-TRANSITION/SLICE-S3-CE3D-CLOSURE.md, 2026-07-08). On the v5 declaration seed (schema-v4; runtime-followed boundaries 1338->1339 and 1339->1340 built its C-marks under this rule + the schema-reject strengthening), the two-boundary CE-3d differential shows go_pool_stakes 626/626 only_ade=0 only_ref=0 d0 against the cardano db-analyser reference ledger states labeled POST-1341 (slot 115862416) and POST-1342 (slot 115948834); the 32 phantom pools are removed; warm-restart is byte-identical (boundary_stateful_replay / boundary_fingerprint_agreement / boundary_replay green under schema-v4, plus the v5 stage-2 cross-process warm-restart). This flip is scoped STRICTLY to snapshot pool-set membership; it does NOT assert accumulator-derived leadership authority (S4 remains a separate authority-promotion slice)."
 attack_rationale = "The tempting shortcut is a COSMETIC POST-FILTER -- strip 0-stake pools off the finished map before comparison -- which leaves the authoritative construction still emitting them (so the persisted snapshot, its fingerprint, and any downstream consumer disagree with the compared view) and silently diverges the moment the filter and the builder drift. This rule forbids that: the membership decision is MADE in the builder, so the persisted bytes, the fingerprint, and the compared map are one artifact. A second shortcut is to keep the WRONG numDelegators>0 rule (include a 0-stake pool because it has a delegator) -- correct for the derived PoolDistr, WRONG for the serialized ssActiveStake Ade decodes byte-for-byte; the frozen decision-table test pins the four (UTxO, reward) -> present/absent cases against the cardano source so a future edit cannot reintroduce it. The rule is reward/leadership neutral by construction (a 0-stake credential/pool contributes 0 to every reward and 0 leader probability), so it cannot be used to smuggle a stake or reward change. A THIRD shortcut is to warm-start-RELOAD a pre-C persisted mark under the corrected binary ('no production store predates the fix' -- operational, not constitutional): but a persisted mark is authoritative serialized state whose inclusion semantics is version-bound, so reloading a v3 mark silently carries a stale interpretation forward (non-reference-equivalent until it rotates out two boundaries later). The schema bump 3->4 forbids it -- a pre-C store fails closed (UnknownVersion), re-bootstrap is the only migration -- because persisted authority must have one unambiguous replay meaning."
+
+[[rules]]
+id = "DC-EPOCH-25"
+tier = "derived"
+statement = """
+Self-contained frozen leadership authority (S4-pre). Cardano's leadership PoolDistr (nesPd) -- the per-pool
+(active_stake, vrf_keyhash) that decides the leader schedule -- is answered by a self-contained, persisted
+FrozenLeadershipPoolDistr, and by NOTHING else. `to_pool_distr_view` reads stake AND VRF DIRECTLY from that
+frozen object; it NEVER re-derives them at leadership-use time from the go snapshot, the active
+cert_state.pool.pools params, future_pools, or the retiring map. Deriving leadership from go stake + active
+params is a DISPROVEN hypothesis (LDAT): leadership stake is the SET snapshot and includes zero-stake
+registered pools AND retired/POOLREAP'd pools whose VRF is ABSENT from active state -- the active params drop
+a real leadership-relevant pool's VRF (proven: exactly 1 retired 1M-ADA pool on the v5 seed). The disproven
+builder is quarantined test-only as `from_accumulator_go_active_params_for_test_only`.
+(a) CANONICAL + FAIL-CLOSED CODEC: `encode_frozen_leadership` / `decode_frozen_leadership`
+(`array(5)[version, epoch, source_slot, source_hash, map{ pool_keyhash -> array(2)[active_stake, vrf_keyhash] }]`,
+FROZEN_LEADERSHIP_SCHEMA_VERSION=5) + `canonical_hash` (blake2b-256). Decode fails closed on unknown version,
+wrong shape, duplicate / non-canonical pool-key order, field overflow, trailing bytes, or any non-byte-canonical
+encoding (re-encode != input); zero-stake pools are preserved.
+(b) DURABLE, SEPARATE FROM THE ACCUMULATOR BLOB: persisted in EpochAccumulatorStore under a store-level
+leadership-schema-v5 marker + the canonical object, written in ONE atomic redb commit. The accumulator BLOB
+codec is UNCHANGED (still v4-decodable), so non-authority observe-only follow still reads existing stores;
+the leadership authority read `leadership_authority()` fails closed with OldAccumulatorSchemaNotLeadershipCertified
+(legacy v4 / no marker), MissingFrozenLeadershipDistr (torn), or MalformedFrozenLeadershipDistr (corrupt).
+`reset_to_bootstrap` DELIBERATELY preserves it (epoch-frozen; a within-epoch reorg does not change nesPd).
+(c) SOURCE-BOUND BOOTSTRAP IMPORT: the native first-run bootstrap seeds it from the manifest-bound seed record
+via `seal_frozen_leadership_from_seed_record`, source-bound to the certified bootstrap point
+(FrozenLeadershipSourceMismatch on a foreign lineage) with an encode->decode self-check
+(FrozenLeadershipCanonicalDecodeFailed) before sealing. The seed record's pool_distribution IS the leadership
+nesPd (byte-exact: from_frozen == the seed leadership PoolDistr, 659/659, incl. zero-stake + the retired 1M-ADA
+pool's frozen VRF), durable + replay-equivalent (byte-identical canonical hash across clean advance, within-k
+rollback+reset+refold, and warm restart).
+This slice PERSISTS + certifies + recovers the frozen leadership authority; it does NOT yet promote it to the
+production leader-schedule source (that swap -- retiring PoolDistrView::from_seed_epoch_consensus_inputs at the
+three production sites + deleting the seed+2 ceiling -- is S4 proper, a separate authority-promotion slice).
+"""
+source = "docs/clusters/LIVE-LEDGER-EPOCH-TRANSITION/SLICE-S4-PRE-FROZEN-LEADERSHIP-DISTRIBUTION.md + SLICE-S4-PRE-1C-LEADERSHIP-BOOTSTRAP-LINEAGE.md. Root: the S4 same-epoch identity gate FAILED (from_accumulator go+active-params produced 626/627 pools vs the seed's 659; 1 leadership pool had no active params), and the Leadership Distribution Authority Trace (ce3d_boundary_differential::ldat_classify_leadership_pools) proved leadership = SET-snapshot stake + snapshot-frozen pool params/VRF, incl. a retired 1M-ADA pool whose VRF is absent from active state."
+cross_ref = ["DC-EPOCH-18", "DC-EPOCH-19", "DC-EPOCH-20", "DC-EPOCH-23", "DC-EPOCH-24", "DC-EPOCH-12", "DC-CINPUT-02b"]
+code_locus = "crates/ade_ledger/src/frozen_leadership.rs (FrozenLeadershipPoolDistr, LeadershipPoolEntry, to_pool_distr_view, from_seed_epoch_consensus_inputs, encode_frozen_leadership / decode_frozen_leadership / canonical_hash, FrozenLeadershipError, FROZEN_LEADERSHIP_SCHEMA_VERSION=5). crates/ade_runtime/src/chaindb/epoch_accumulator_store.rs (seal_frozen_leadership, frozen_leadership, leadership_authority, seal_frozen_leadership_from_seed_record, LeadershipAuthorityError; LEADERSHIP_SCHEMA_KEY + FROZEN_LEADERSHIP_KEY; reset_to_bootstrap preserves them). crates/ade_node/src/native_firstrun.rs (native_first_run_bootstrap seals the leadership beside seal_bootstrap). Quarantined disproven builder crates/ade_ledger/src/consensus_view.rs (from_accumulator_go_active_params_for_test_only -- test-only). ci/ci_check_frozen_leadership_authority.sh."
+tests = ["ade_ledger::frozen_leadership::tests (codec round-trip, stable + content-bound hash, zero-stake preserved, wrong-version / duplicate / unsorted / trailing rejected; to_pool_distr_view reads stake+VRF directly)", "ade_runtime::chaindb::epoch_accumulator_store::tests (seal/read round-trip, legacy-store fail-closed, reopen durability, reset preserves leadership, source-binding seed import, wrong-version-marker / missing-object / malformed-object fail-closed)", "ce3d_boundary_differential::s4pre_frozen_leadership_seed_identity", "ce3d_boundary_differential::s4pre_1c_frozen_leadership_bootstrap_lineage", "ce3d_boundary_differential::ldat_classify_leadership_pools", "ce3d_boundary_differential::s5_recovery_replay_equivalence_within_k_rollback (fingerprint #8 frozen leadership hash byte-identical across clean advance vs rollback-refold + warm restart)"]
+ci_scripts = ["ci/ci_check_frozen_leadership_authority.sh"]
+status = "declared"
+introduced_in = "LIVE-LEDGER-EPOCH-TRANSITION-S4-pre-1a"
+strengthened_in = ["LIVE-LEDGER-EPOCH-TRANSITION-S4-pre-1b", "LIVE-LEDGER-EPOCH-TRANSITION-S4-pre-1c"]
+open_obligation = "S4 proper promotes the frozen leadership to the SOLE production leader-schedule authority: swap the three production PoolDistrView::from_seed_epoch_consensus_inputs read sites, delete the seed+2 ceiling (epoch_wire.rs), guard the seed leadership authority off the production path, and prove the flip. S4-pre-2 first freezes the NEXT epoch's leadership at the cardano SNAP/nesPd boundary from snapshot-frozen stake + snapshot-frozen pool params/VRF (before POOLREAP). Until then this authority is persisted + recovered but NOT read as the production leader schedule."

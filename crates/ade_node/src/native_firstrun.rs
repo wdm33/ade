@@ -642,6 +642,20 @@ where
                         eprintln!(
                             "ade_node native-firstrun: epoch-accumulator seal skipped (non-fatal): {e:?}"
                         );
+                    } else if let Err(e) = store.seal_frozen_leadership_from_seed_record(
+                        // LIVE-LEDGER-EPOCH-TRANSITION S4-pre-1c: seal the leadership PoolDistr (nesPd) beside
+                        // the accumulator baseline, from the SAME manifest-bound seed record. The source
+                        // binding is the certified bootstrap point (which the seed record's own seed_point_*
+                        // is derived from, via the mithril-assembly coherence gate) -- a wrong-lineage record
+                        // fails closed. Non-fatal like the accumulator seal (nothing READS leadership as
+                        // production authority until S4); a clean bootstrap always leadership-certifies.
+                        &output.seed_epoch_consensus_inputs,
+                        binding.certified_point.slot,
+                        &binding.certified_point.block_hash,
+                    ) {
+                        eprintln!(
+                            "ade_node native-firstrun: frozen-leadership seal skipped (non-fatal): {e:?}"
+                        );
                     }
                 }
                 Err(e) => eprintln!(
