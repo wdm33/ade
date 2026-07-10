@@ -97,14 +97,16 @@ impl PoolDistrView {
         }
     }
 
-    /// LIVE-LEDGER-EPOCH-TRANSITION S4 (DC-EPOCH-19): the accumulator-derived leadership authority — the SOLE
-    /// consensus view after native bootstrap, retiring `from_seed_epoch_consensus_inputs` on the authority
-    /// path. Per-pool `active_stake` ← the go-snapshot pool stakes (byte-exact vs cardano, CE-3d); per-pool
-    /// `vrf_keyhash` ← the ACTIVE pool params (`cert_state.pool.pools`, the map header-validation/leadership
-    /// reads, VRF frozen pre-adoption); `asc` ← the bound consensus profile (never an unbound param read).
-    /// `epoch` = the accumulator's current epoch. FAIL-CLOSED `NotLeadershipComplete` if a staked go pool has
-    /// no registered params — never a zero-hash fallback, never a seed-window fallback.
-    pub fn from_accumulator(
+    /// LIVE-LEDGER-EPOCH-TRANSITION S4 — **FAILED HYPOTHESIS, test-only (do NOT use as production authority).**
+    /// Derives a leadership `PoolDistrView` from the go-snapshot stake + the ACTIVE pool-params VRF. The
+    /// Leadership Distribution Authority Trace (`ce3d_boundary_differential::ldat_classify_leadership_pools`)
+    /// PROVED this does NOT reproduce cardano's leadership `nesPd`: the leadership stake is the SET snapshot
+    /// (go is the REWARD snapshot), and a retired/POOLREAP'd pool's VRF is ABSENT from the active params (it
+    /// survives only in the snapshot-FROZEN leadership params). So this cannot be the S4 authority — the
+    /// frozen-leadership builder (S4-pre) replaces it. Retained ONLY as a negative regression; the
+    /// `_for_test_only` suffix blocks accidental production wiring. FAIL-CLOSED `NotLeadershipComplete` on a
+    /// staked go pool with no registered params.
+    pub fn from_accumulator_go_active_params_for_test_only(
         acc: &crate::epoch_accumulator::EpochAccumulator,
         asc: ActiveSlotsCoeff,
     ) -> Result<Self, AccumulatorAuthorityError> {
@@ -219,7 +221,7 @@ mod tests {
         acc.cert_state.pool.pools.insert(pid(0x22), pp(0x22, 0xB2));
 
         let asc = ActiveSlotsCoeff { numer: 1, denom: 20 };
-        let v = PoolDistrView::from_accumulator(&acc, asc).unwrap();
+        let v = PoolDistrView::from_accumulator_go_active_params_for_test_only(&acc, asc).unwrap();
         assert_eq!(v.epoch(), EpochNo(1341));
         assert_eq!(v.total_active_stake(EpochNo(1341)), Some(3_000));
         assert_eq!(v.pool_active_stake(EpochNo(1341), &pid(0x11).0), Some(1_000));
@@ -232,7 +234,7 @@ mod tests {
         // FAIL-CLOSED: a staked go pool with no active params -> NotLeadershipComplete.
         acc.cert_state.pool.pools.remove(&pid(0x22));
         assert_eq!(
-            PoolDistrView::from_accumulator(&acc, asc),
+            PoolDistrView::from_accumulator_go_active_params_for_test_only(&acc, asc),
             Err(AccumulatorAuthorityError::NotLeadershipComplete(pid(0x22)))
         );
     }

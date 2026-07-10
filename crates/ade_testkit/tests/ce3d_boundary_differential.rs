@@ -1586,3 +1586,126 @@ fn s5_recovery_replay_equivalence_within_k_rollback() {
     assert_eq!(warm_a, acc_a, "warm-start reopen == in-memory accumulator (A)");
     assert_eq!(warm_b, acc_b, "warm-start reopen == in-memory accumulator (B)");
 }
+
+/// LEADERSHIP DISTRIBUTION AUTHORITY TRACE: classify each of the 659 seed leadership pools by its
+/// stake source (which accumulator snapshot, if any, carries it with the same value), its VRF source
+/// (active cert params?), and its lifecycle (zero-stake / retiring / future / not-in-active) — proving
+/// exactly what the accumulator CAN and CANNOT reconstruct, and what S4-pre's frozen leadership distr must
+/// carry. Fixes nothing; produces the reference classification.
+#[test]
+#[ignore = "LDAT: classify the 659 seed leadership pools vs the accumulator state (env S5_SEED_STORES); FAST"]
+fn ldat_classify_leadership_pools() {
+    use ade_ledger::consensus_view::{PoolDistrView, PoolEntry};
+    use ade_ledger::seed_consensus_inputs::decode_seed_epoch_consensus_inputs;
+    use ade_runtime::chaindb::{PersistentChainDb, PersistentChainDbOptions, SnapshotStore};
+    use ade_types::{Hash28, PoolId};
+
+    let seed_dir = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
+    let work = env_path("CE3D_WORK", "/home/ts/.cardano-ce3d-extract/harness-work-s5");
+    let hx = |h: &Hash28| h.0.iter().map(|x| format!("{x:02x}")).collect::<String>();
+
+    let dst = work.join("ldat");
+    let _ = std::fs::remove_dir_all(&dst);
+    std::fs::create_dir_all(&dst).expect("mkdir");
+    let acc_copy = dst.join("epoch-accumulator.redb");
+    std::fs::copy(seed_dir.join("epoch-accumulator.redb"), &acc_copy).expect("copy acc");
+    let store = EpochAccumulatorStore::open(&acc_copy).expect("open acc");
+    store.reset_to_bootstrap().expect("reset to seed");
+    let (_slot, acc) = store.load_current().expect("load").expect("sealed");
+
+    let cdb = PersistentChainDb::open(PersistentChainDbOptions::at(seed_dir.join("chain.db"))).expect("open cdb");
+    let fps = cdb.list_seed_epoch_consensus_anchor_fps().expect("list");
+    let record = decode_seed_epoch_consensus_inputs(
+        &cdb.get_seed_epoch_consensus_inputs(&fps[0]).expect("get").expect("present"),
+    )
+    .expect("decode");
+
+    let snaps = acc.epoch_state.snapshots.as_authoritative().unwrap();
+    let pool = &acc.cert_state.pool;
+    let (go, set, mark) = (&snaps.go.0.pool_stakes, &snaps.set.0.pool_stakes, &snaps.mark.0.pool_stakes);
+
+    let (mut go_exact, mut set_exact, mut mark_exact, mut no_snapshot) = (0u32, 0u32, 0u32, 0u32);
+    let (mut vrf_match, mut vrf_mismatch, mut vrf_missing) = (0u32, 0u32, 0u32);
+    let (mut zero_stake, mut retiring, mut future, mut not_active) = (0u32, 0u32, 0u32, 0u32);
+    let mut unreconstructable: Vec<(Hash28, u64)> = Vec::new();
+
+    for (h, seed_entry) in &record.pool_distribution {
+        let pid = PoolId(h.clone());
+        let st = seed_entry.active_stake;
+        if go.get(&pid).map(|c| c.0) == Some(st) {
+            go_exact += 1;
+        } else if set.get(&pid).map(|c| c.0) == Some(st) {
+            set_exact += 1;
+        } else if mark.get(&pid).map(|c| c.0) == Some(st) {
+            mark_exact += 1;
+        } else {
+            no_snapshot += 1;
+            if st > 0 {
+                unreconstructable.push((h.clone(), st));
+            }
+        }
+        if st == 0 {
+            zero_stake += 1;
+        }
+        match pool.pools.get(&pid) {
+            Some(p) if p.vrf_hash == seed_entry.vrf_keyhash => vrf_match += 1,
+            Some(_) => vrf_mismatch += 1,
+            None => {
+                vrf_missing += 1;
+                not_active += 1;
+            }
+        }
+        if pool.retiring.contains_key(&pid) {
+            retiring += 1;
+        }
+        if pool.future_pools.contains_key(&pid) {
+            future += 1;
+        }
+    }
+
+    eprintln!("LDAT @ epoch {} — {} leadership pools", record.epoch_no.0, record.pool_distribution.len());
+    eprintln!("  STAKE source: go_exact={go_exact} set_exact={set_exact} mark_exact={mark_exact} NO_snapshot={no_snapshot}");
+    eprintln!("  VRF source (active cert params): match={vrf_match} mismatch={vrf_mismatch} MISSING={vrf_missing}");
+    eprintln!("  lifecycle: zero_stake={zero_stake} retiring={retiring} future_pools={future} not_in_active={not_active}");
+    eprintln!("  UNRECONSTRUCTABLE (non-zero stake, in NO accumulator snapshot): {}", unreconstructable.len());
+    for (h, st) in &unreconstructable {
+        let pid = PoolId(h.clone());
+        eprintln!(
+            "    pool {} stake {st} | in_active_params={} retiring={} future_pools={}",
+            hx(h), pool.pools.contains_key(&pid), pool.retiring.contains_key(&pid), pool.future_pools.contains_key(&pid)
+        );
+    }
+
+    // ACCEPTANCE: reconstruct the leadership PoolDistr from the accumulator's SET-snapshot stake + active-params
+    // VRF, supplementing ONLY a retired pool's VRF from the frozen reference (the exact datum S4-pre must
+    // persist), and assert it is BYTE-IDENTICAL to the seed leadership view. Proves the reference semantics
+    // (stake=SET, vrf=frozen-params) AND quantifies the irreducible gap (retired-pool frozen VRF).
+    let mut frozen_vrf_supplements = 0u32;
+    let mut rec_pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
+    for (h, seed_entry) in &record.pool_distribution {
+        let pid = PoolId(h.clone());
+        let active_stake = set.get(&pid).map(|c| c.0).unwrap_or(0); // SET stake (0 for zero-stake registered)
+        let vrf_keyhash = match pool.pools.get(&pid) {
+            Some(p) => p.vrf_hash.clone(),
+            None => {
+                frozen_vrf_supplements += 1;
+                seed_entry.vrf_keyhash.clone() // the retired pool: VRF only in the frozen leadership snapshot
+            }
+        };
+        rec_pools.insert(h.clone(), PoolEntry { active_stake, vrf_keyhash });
+    }
+    let total: u64 = rec_pools.values().map(|e| e.active_stake).sum();
+    let reconstructed = PoolDistrView::new(record.epoch_no, total, record.active_slots_coeff, rec_pools);
+    let reference = PoolDistrView::from_seed_epoch_consensus_inputs(&record);
+    eprintln!("  reconstruction: SET stake + active VRF; frozen_vrf_supplements={frozen_vrf_supplements}");
+    assert_eq!(
+        reconstructed, reference,
+        "LDAT: leadership PoolDistr reconstructs BYTE-EXACT from SET stake + active-params VRF + frozen supplement"
+    );
+    assert_eq!(
+        frozen_vrf_supplements, 1,
+        "exactly one retired pool needs a snapshot-frozen VRF (the irreducible datum S4-pre must persist)"
+    );
+    eprintln!("LDAT PROVEN: leadership = SET-snapshot stake + frozen pool-params VRF. The accumulator's active \
+               params supply 658/659 VRFs byte-exact; 1 retired pool needs the frozen VRF -> S4-pre.");
+}

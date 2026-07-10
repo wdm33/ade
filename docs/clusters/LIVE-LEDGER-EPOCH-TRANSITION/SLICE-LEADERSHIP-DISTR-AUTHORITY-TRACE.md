@@ -36,6 +36,39 @@ i.e. a test rebuilds the leadership `PoolDistrView` from the classified referenc
 byte-identical to `from_seed_epoch_consensus_inputs(seed record)` — the proven-byte-exact cardano leadership
 view. No production code changes; no authority swap; no ceiling deletion.
 
+## 2b. FINDINGS — GREEN (`ce3d_boundary_differential::ldat_classify_leadership_pools`, v5 seed @ epoch 1338)
+
+The 659 leadership pools cross-referenced against the accumulator's full seed-epoch state:
+
+| classification | count |
+|---|---|
+| stake matches GO snapshot | 538 |
+| stake matches SET snapshot (not go) | 89 |
+| stake in NO snapshot (all zero-stake) | 32 |
+| VRF == active cert params (byte-exact) | **658** |
+| VRF MISSING from active params | **1** |
+| zero-stake registered | 32 |
+| in `retiring` / `future_pools` | 0 / 0 |
+
+**Answers (deliverables 1–7):**
+1–2. **Leadership `nesPd` stake = the SET snapshot.** 538 + 89 = 627 = the SET pool count; every non-zero
+   leadership pool's stake matches SET (538 also match go only because their stake was unchanged go→set). The
+   **go snapshot (626) is the REWARD stake** (CE-3d) — a DIFFERENT snapshot; leadership is NOT go.
+3. **659 = SET's 627 non-zero pools + 32 zero-stake registered pools.** go (626) differs from leadership
+   because it is the reward snapshot and drops the one retired pool SET still carries.
+4. **The 33 pools absent from go = 32 zero-stake registered + 1 retired 1M-ADA pool** (present in SET, not go).
+5. **VRF = the snapshot-FROZEN pool params.** The accumulator's ACTIVE params reproduce **658/659 byte-exact**;
+   the single exception is the retired pool.
+6. **The 1M-ADA pool (`cd3114d6…`) is RETIRED + POOLREAP'd** — absent from active `pools`, `retiring`, AND
+   `future_pools`. Its stake survives (frozen) in the SET snapshot; its VRF does NOT survive in active state.
+7. **Reference fixture = the 659-pool distr, reconstructed BYTE-EXACT** from (SET stake + active-params VRF +
+   exactly **ONE** frozen-VRF supplement for the retired pool). `frozen_vrf_supplements == 1`.
+
+**The irreducible gap S4-pre must close:** the leadership pool params' **VRF must be FROZEN at the SNAP
+boundary** so a retired/POOLREAP'd pool's VRF survives — the active `cert_state.pool.pools` cannot supply it.
+Stake is recoverable from SET, but a **self-contained** `FrozenLeadershipPoolDistr { (stake, vrf) per pool }`
+(the user's shape) is the robust design: it does not depend on SET-snapshot retention for a leadership answer.
+
 ## 3. Out of scope (this slice does NOT do)
 
 - No new persisted accumulator state, no `FrozenLeadershipPoolDistr` type — that is the follow-on `S4-pre`.
