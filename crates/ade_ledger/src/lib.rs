@@ -26,6 +26,7 @@ pub mod cred;
 pub mod delegation;
 pub mod epoch;
 pub mod epoch_accumulator;
+pub mod frozen_leadership;
 pub mod error;
 pub mod fingerprint;
 pub mod genesis_source;

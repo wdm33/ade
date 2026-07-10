@@ -1709,3 +1709,42 @@ fn ldat_classify_leadership_pools() {
     eprintln!("LDAT PROVEN: leadership = SET-snapshot stake + frozen pool-params VRF. The accumulator's active \
                params supply 658/659 VRFs byte-exact; 1 retired pool needs the frozen VRF -> S4-pre.");
 }
+
+/// S4-pre-1 SEED IDENTITY (the acceptance core): the self-contained `FrozenLeadershipPoolDistr` built from the
+/// manifest-bound seed record projects BYTE-EXACT to the seed-window leadership `PoolDistr` — 659/659 pools,
+/// stake + VRF exact — WITHOUT any go / active-param / retiring lookup. Proves the frozen object answers
+/// leadership directly (design 1). Persistence codec + store schema + the real bootstrap wiring are S4-pre-1b.
+#[test]
+#[ignore = "S4-pre-1: from_frozen_leadership(seed record) == seed leadership PoolDistr byte-exact (env S5_SEED_STORES); FAST"]
+fn s4pre_frozen_leadership_seed_identity() {
+    use ade_ledger::consensus_view::PoolDistrView;
+    use ade_ledger::frozen_leadership::FrozenLeadershipPoolDistr;
+    use ade_ledger::seed_consensus_inputs::decode_seed_epoch_consensus_inputs;
+    use ade_runtime::chaindb::{PersistentChainDb, PersistentChainDbOptions, SnapshotStore};
+
+    let seed_dir = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
+    let cdb = PersistentChainDb::open(PersistentChainDbOptions::at(seed_dir.join("chain.db"))).expect("open cdb");
+    let fps = cdb.list_seed_epoch_consensus_anchor_fps().expect("list");
+    let record = decode_seed_epoch_consensus_inputs(
+        &cdb.get_seed_epoch_consensus_inputs(&fps[0]).expect("get").expect("present"),
+    )
+    .expect("decode");
+
+    // Bootstrap import: the self-contained frozen leadership distr from the manifest-bound seed record.
+    let frozen = FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record);
+    assert_eq!(frozen.epoch, record.epoch_no, "same leadership epoch");
+    assert_eq!(frozen.pools.len(), record.pool_distribution.len(), "all 659 leadership pools carried");
+
+    // Project + compare to the proven-byte-exact seed leadership view (epoch + total + asc + per-pool stake + VRF).
+    let from_frozen = frozen.to_pool_distr_view(record.active_slots_coeff);
+    let from_seed = PoolDistrView::from_seed_epoch_consensus_inputs(&record);
+    assert_eq!(
+        from_frozen, from_seed,
+        "S4-pre-1: from_frozen_leadership == seed leadership PoolDistr byte-exact (the SELF-CONTAINED authority)"
+    );
+    eprintln!(
+        "S4-pre-1 SEED IDENTITY PROVEN: {} pools; the self-contained frozen leadership distr projects == the \
+         seed leadership view byte-exact (no go/active-param/retiring lookup).",
+        frozen.pools.len()
+    );
+}
