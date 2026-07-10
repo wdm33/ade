@@ -35,6 +35,11 @@ use std::path::Path;
 use ade_ledger::epoch_accumulator::{
     decode_epoch_accumulator, encode_epoch_accumulator, EpochAccumulator,
 };
+use ade_ledger::frozen_leadership::{
+    decode_frozen_leadership, encode_frozen_leadership, FrozenLeadershipError,
+    FrozenLeadershipPoolDistr, FROZEN_LEADERSHIP_SCHEMA_VERSION,
+};
+use ade_ledger::seed_consensus_inputs::SeedEpochConsensusInputs;
 use ade_types::{BlockNo, CardanoEra, Hash32, SlotNo};
 use redb::{Database, ReadableTable, TableDefinition};
 
@@ -65,6 +70,17 @@ const PENDING_BOUNDARY_MARK_KEY: &str = "pending_boundary_mark";
 /// `reset_to_bootstrap`) — recovery must reset + re-fold from canonical blocks, never trust height alone.
 /// A present-but-malformed anchor fails closed (`CorruptLastAdvancedPoint`).
 const LAST_ADVANCED_POINT_KEY: &str = "last_advanced_point";
+
+/// LIVE-LEDGER-EPOCH-TRANSITION S4-pre-1b: the store-level LEADERSHIP CERTIFICATION marker — 4 BE bytes
+/// holding `FROZEN_LEADERSHIP_SCHEMA_VERSION`. PRESENT-and-`== 5` ⇒ the store is leadership-certified; ABSENT
+/// or `!= 5` ⇒ a legacy (v4 / pre-S4-pre) store that was never leadership-certified. The accumulator BLOB
+/// codec is UNCHANGED (still v4-decodable), so the non-authority observe-only follow still reads existing
+/// stores; ONLY the leadership authority read (`leadership_authority`) gates on this marker + the object.
+const LEADERSHIP_SCHEMA_KEY: &str = "leadership_schema_version";
+/// LIVE-LEDGER-EPOCH-TRANSITION S4-pre-1b: the canonically-encoded `FrozenLeadershipPoolDistr`
+/// (`ade_ledger::frozen_leadership`). Written in the SAME redb commit as the marker, so a certified store
+/// always carries BOTH a v5 marker and a decodable object (never a torn marker/blob pair).
+const FROZEN_LEADERSHIP_KEY: &str = "frozen_leadership_blob";
 
 /// Closed store-failure surface.
 #[derive(Debug)]
@@ -150,6 +166,38 @@ pub enum AccumulatorReadinessError {
     /// set is not an empty set); fail closed — re-bootstrap to upgrade. A v6 bootstrap always carries
     /// `gov_state = Some(..)`, even when the pending-proposal set is empty.
     GovernanceImportRequired { era_tag: u64 },
+}
+
+/// LIVE-LEDGER-EPOCH-TRANSITION S4-pre-1b — why a store cannot be read as leadership authority (or seeded as
+/// one). Every variant FAILS CLOSED: a legacy / torn / corrupt / wrong-lineage leadership certification can
+/// never load as authority. This is DISTINCT from the accumulator-blob readiness gate: the non-authority
+/// observe-only follow still decodes an existing v4 accumulator blob; only the leadership authority path is
+/// gated here.
+#[derive(Debug)]
+pub enum LeadershipAuthorityError {
+    /// The store carries no leadership-schema marker, or one that is not `FROZEN_LEADERSHIP_SCHEMA_VERSION`:
+    /// a legacy v4 / pre-S4-pre store that was never leadership-certified (or a future schema this binary
+    /// does not certify). Re-bootstrap to leadership-certify. `found` is the marker version if present.
+    OldAccumulatorSchemaNotLeadershipCertified { found: Option<u32> },
+    /// The leadership-schema marker claims certification but the frozen-leadership object blob is absent (a
+    /// torn / corrupt certified store — the two are written in one commit, so this is corruption).
+    MissingFrozenLeadershipDistr,
+    /// The persisted frozen-leadership object failed canonical decode (a corrupt store).
+    MalformedFrozenLeadershipDistr(FrozenLeadershipError),
+    /// Bootstrap seeding: the seed record's frozen source point does not match the expected bootstrap point —
+    /// a wrong-lineage seed record. Leadership is NEVER seeded from a foreign point.
+    FrozenLeadershipSourceMismatch {
+        expected_slot: u64,
+        record_slot: u64,
+        expected_hash: Hash32,
+        record_hash: Hash32,
+    },
+    /// Bootstrap seeding: the freshly built frozen-leadership object failed its encode→decode self-check
+    /// before sealing (a canonical-encoding invariant violation). A non-canonical authority object is NEVER
+    /// persisted.
+    FrozenLeadershipCanonicalDecodeFailed(FrozenLeadershipError),
+    /// An underlying store (redb) failure while reading or sealing the leadership object.
+    Store(EpochAccumulatorStoreError),
 }
 
 fn rerr(e: impl std::fmt::Debug) -> EpochAccumulatorStoreError {
@@ -354,6 +402,9 @@ impl EpochAccumulatorStore {
             // anchor. Recovery treats the cleared store as uncertified until a successful canonical re-fold
             // re-writes a fresh LastAdvancedPoint; it never trusts a reset store as lineage authority.
             let _ = meta.remove(LAST_ADVANCED_POINT_KEY).map_err(rerr)?;
+            // S4-pre-1b: the frozen leadership object + its marker are DELIBERATELY preserved. Leadership is
+            // epoch-frozen (cardano `nesPd`); a within-epoch reorg does not change it. The bootstrap-epoch
+            // leadership authority binds to the sealed seed baseline the reset restores, so it stays valid.
         }
         txn.commit().map_err(rerr)?;
         Ok(())
@@ -518,6 +569,134 @@ impl EpochAccumulatorStore {
         Ok(())
     }
 
+    // ----- LIVE-LEDGER-EPOCH-TRANSITION S4-pre-1b: the durable leadership authority -----
+
+    /// Durably SEAL a `FrozenLeadershipPoolDistr` as this store's leadership authority: the canonical object
+    /// blob + the v5 leadership-schema marker are written in ONE redb commit (atomic — a certified store
+    /// always carries BOTH, never a torn marker/blob pair). This is the raw persistence primitive; the
+    /// bootstrap path uses `seal_frozen_leadership_from_seed_record` (which validates the source binding + the
+    /// canonical self-check first). The accumulator BLOB is untouched — its codec stays v4-decodable.
+    pub fn seal_frozen_leadership(
+        &self,
+        distr: &FrozenLeadershipPoolDistr,
+    ) -> Result<(), EpochAccumulatorStoreError> {
+        let blob = encode_frozen_leadership(distr);
+        let version = FROZEN_LEADERSHIP_SCHEMA_VERSION.to_be_bytes();
+        let txn = self.db.begin_write().map_err(rerr)?;
+        {
+            let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            meta.insert(FROZEN_LEADERSHIP_KEY, blob.as_slice())
+                .map_err(rerr)?;
+            meta.insert(LEADERSHIP_SCHEMA_KEY, version.as_slice())
+                .map_err(rerr)?;
+        }
+        txn.commit().map_err(rerr)?;
+        Ok(())
+    }
+
+    /// The raw persisted frozen-leadership object, or `None` if absent (a non-certified store). A present but
+    /// undecodable blob is `Decode` (corruption). This is a diagnostic / non-authority accessor — the
+    /// fail-closed authority read is `leadership_authority`.
+    pub fn frozen_leadership(
+        &self,
+    ) -> Result<Option<FrozenLeadershipPoolDistr>, EpochAccumulatorStoreError> {
+        let txn = self.db.begin_read().map_err(rerr)?;
+        let meta = match txn.open_table(META_TABLE) {
+            Ok(t) => t,
+            Err(_) => return Ok(None),
+        };
+        match meta.get(FROZEN_LEADERSHIP_KEY).map_err(rerr)? {
+            Some(v) => decode_frozen_leadership(v.value())
+                .map(Some)
+                .map_err(|e| EpochAccumulatorStoreError::Decode(format!("{e:?}"))),
+            None => Ok(None),
+        }
+    }
+
+    /// The FAIL-CLOSED leadership authority read. Returns the certified `FrozenLeadershipPoolDistr` ONLY when
+    /// the store carries a v5 leadership-schema marker AND a canonically-decodable object; otherwise a typed
+    /// refusal. A legacy v4 / pre-S4-pre store (no marker) is `OldAccumulatorSchemaNotLeadershipCertified` —
+    /// leadership authority is refused while non-authority follow still decodes the v4 accumulator blob.
+    pub fn leadership_authority(
+        &self,
+    ) -> Result<FrozenLeadershipPoolDistr, LeadershipAuthorityError> {
+        let txn = self
+            .db
+            .begin_read()
+            .map_err(|e| LeadershipAuthorityError::Store(rerr(e)))?;
+        let meta = txn
+            .open_table(META_TABLE)
+            .map_err(|e| LeadershipAuthorityError::Store(rerr(e)))?;
+        // 1. The store-level leadership marker MUST be present and == the version this binary certifies. An
+        //    absent / wrong-length / non-v5 marker fails closed as not-leadership-certified.
+        let version = match meta
+            .get(LEADERSHIP_SCHEMA_KEY)
+            .map_err(|e| LeadershipAuthorityError::Store(rerr(e)))?
+        {
+            Some(v) if v.value().len() == 4 => {
+                let mut b = [0u8; 4];
+                b.copy_from_slice(v.value());
+                u32::from_be_bytes(b)
+            }
+            _ => {
+                return Err(LeadershipAuthorityError::OldAccumulatorSchemaNotLeadershipCertified {
+                    found: None,
+                })
+            }
+        };
+        if version != FROZEN_LEADERSHIP_SCHEMA_VERSION {
+            return Err(LeadershipAuthorityError::OldAccumulatorSchemaNotLeadershipCertified {
+                found: Some(version),
+            });
+        }
+        // 2. The certified object blob MUST be present (else a torn certified store).
+        let blob = match meta
+            .get(FROZEN_LEADERSHIP_KEY)
+            .map_err(|e| LeadershipAuthorityError::Store(rerr(e)))?
+        {
+            Some(v) => v.value().to_vec(),
+            None => return Err(LeadershipAuthorityError::MissingFrozenLeadershipDistr),
+        };
+        // 3. It MUST canonically decode (else a corrupt store).
+        decode_frozen_leadership(&blob).map_err(LeadershipAuthorityError::MalformedFrozenLeadershipDistr)
+    }
+
+    /// Bootstrap seeding: build this store's leadership authority from the manifest-bound seed record and
+    /// SEAL it, fail-closed. The record's `pool_distribution` IS cardano's leadership `nesPd` (proven
+    /// byte-exact at import, S4-pre-1a). Steps, all fail-closed: (1) the record's frozen source point MUST be
+    /// the expected bootstrap point (else `FrozenLeadershipSourceMismatch` — never seed from a foreign
+    /// lineage); (2) build the frozen distr; (3) an encode→decode canonical self-check MUST round-trip before
+    /// we persist authority (else `FrozenLeadershipCanonicalDecodeFailed`); (4) seal the blob + marker
+    /// atomically.
+    pub fn seal_frozen_leadership_from_seed_record(
+        &self,
+        record: &SeedEpochConsensusInputs,
+        expected_source_slot: SlotNo,
+        expected_source_hash: &Hash32,
+    ) -> Result<(), LeadershipAuthorityError> {
+        if record.seed_point_slot != expected_source_slot
+            || &record.seed_point_hash != expected_source_hash
+        {
+            return Err(LeadershipAuthorityError::FrozenLeadershipSourceMismatch {
+                expected_slot: expected_source_slot.0,
+                record_slot: record.seed_point_slot.0,
+                expected_hash: expected_source_hash.clone(),
+                record_hash: record.seed_point_hash.clone(),
+            });
+        }
+        let distr = FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(record);
+        let bytes = encode_frozen_leadership(&distr);
+        let back = decode_frozen_leadership(&bytes)
+            .map_err(LeadershipAuthorityError::FrozenLeadershipCanonicalDecodeFailed)?;
+        if back != distr {
+            return Err(LeadershipAuthorityError::FrozenLeadershipCanonicalDecodeFailed(
+                FrozenLeadershipError::NonCanonicalBytes,
+            ));
+        }
+        self.seal_frozen_leadership(&distr)
+            .map_err(LeadershipAuthorityError::Store)
+    }
+
     /// Shared readiness prelude: the sealed seed (lineage-checked) + the last advanced slot, fail-closed.
     fn readiness_inputs(
         &self,
@@ -545,9 +724,14 @@ impl EpochAccumulatorStore {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use ade_core::consensus::praos_state::Nonce;
+    use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
+    use ade_ledger::consensus_view::PoolEntry;
     use ade_ledger::epoch_accumulator::EpochAccumulator;
+    use ade_ledger::frozen_leadership::LeadershipPoolEntry;
     use ade_types::tx::Coin;
-    use ade_types::{CardanoEra, EpochNo};
+    use ade_types::{CardanoEra, EpochNo, Hash28};
+    use std::collections::BTreeMap;
     use tempfile::TempDir;
 
     fn store(tmp: &TempDir) -> EpochAccumulatorStore {
@@ -870,5 +1054,233 @@ mod tests {
             s2.boundary_mark_binding().unwrap(),
             Some((SlotNo(500), Hash32([0x77; 32])))
         );
+    }
+
+    // ----- S4-pre-1b: the durable leadership authority -----
+
+    fn frozen_distr() -> FrozenLeadershipPoolDistr {
+        let mut pools = BTreeMap::new();
+        pools.insert(
+            Hash28([0x01; 28]),
+            LeadershipPoolEntry { active_stake: 1_000, vrf_keyhash: Hash32([0x07; 32]) },
+        );
+        // A zero-stake registered pool — carried for leadership-set membership.
+        pools.insert(
+            Hash28([0x05; 28]),
+            LeadershipPoolEntry { active_stake: 0, vrf_keyhash: Hash32([0x08; 32]) },
+        );
+        pools.insert(
+            Hash28([0xAA; 28]),
+            LeadershipPoolEntry { active_stake: 999_999, vrf_keyhash: Hash32([0x09; 32]) },
+        );
+        FrozenLeadershipPoolDistr {
+            epoch: EpochNo(576),
+            source_slot: SlotNo(576 * 432_000 + 12_345),
+            source_hash: Hash32([0x66; 32]),
+            pools,
+        }
+    }
+
+    /// A seed record whose `pool_distribution` matches `frozen_distr`, at a given frozen source point.
+    fn seed_record(source_slot: SlotNo, source_hash: Hash32) -> SeedEpochConsensusInputs {
+        let mut pool_distribution = BTreeMap::new();
+        pool_distribution.insert(
+            Hash28([0x01; 28]),
+            PoolEntry { active_stake: 1_000, vrf_keyhash: Hash32([0x07; 32]) },
+        );
+        pool_distribution.insert(
+            Hash28([0x05; 28]),
+            PoolEntry { active_stake: 0, vrf_keyhash: Hash32([0x08; 32]) },
+        );
+        pool_distribution.insert(
+            Hash28([0xAA; 28]),
+            PoolEntry { active_stake: 999_999, vrf_keyhash: Hash32([0x09; 32]) },
+        );
+        SeedEpochConsensusInputs {
+            anchor_fp: Hash32([0x44; 32]),
+            epoch_no: EpochNo(576),
+            epoch_start_slot: SlotNo(576 * 432_000),
+            epoch_length_slots: 432_000,
+            epoch_nonce: Nonce(Hash32([0x55; 32])),
+            genesis_hash: Hash32([0x9a; 32]),
+            protocol_params_hash: Hash32([0x9b; 32]),
+            seed_point_slot: source_slot,
+            seed_point_hash: source_hash,
+            active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 20 },
+            total_active_stake: 1_000_999,
+            pool_distribution,
+        }
+    }
+
+    /// Inject raw META_TABLE entries at `path` (a fresh redb), then drop the handle so the store can open it.
+    /// Used to exercise the fail-closed corruption branches that the atomic public API cannot produce.
+    fn write_raw_meta(path: &Path, entries: &[(&str, Vec<u8>)]) {
+        let db = Database::create(path).unwrap();
+        let txn = db.begin_write().unwrap();
+        {
+            let mut meta = txn.open_table(META_TABLE).unwrap();
+            for (k, v) in entries {
+                meta.insert(*k, v.as_slice()).unwrap();
+            }
+        }
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn frozen_leadership_seal_read_round_trip() {
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        let d = frozen_distr();
+        s.seal_frozen_leadership(&d).unwrap();
+        // The raw accessor and the fail-closed authority read both return the exact object.
+        assert_eq!(s.frozen_leadership().unwrap(), Some(d.clone()));
+        assert_eq!(s.leadership_authority().unwrap(), d);
+    }
+
+    #[test]
+    fn leadership_authority_fails_closed_on_legacy_store() {
+        // A store sealed as a bootstrap accumulator but NEVER leadership-certified (an existing v4 store).
+        // Non-authority follow still decodes its accumulator blob; the leadership authority path fails closed.
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+        assert!(s.frozen_leadership().unwrap().is_none());
+        assert!(matches!(
+            s.leadership_authority(),
+            Err(LeadershipAuthorityError::OldAccumulatorSchemaNotLeadershipCertified { found: None })
+        ));
+        // The accumulator blob itself still loads (non-authority observe-only follow is unaffected).
+        assert!(s.load_current().unwrap().is_some());
+    }
+
+    #[test]
+    fn frozen_leadership_survives_reopen() {
+        let tmp = TempDir::new().unwrap();
+        let d = frozen_distr();
+        {
+            let s = store(&tmp);
+            s.seal_frozen_leadership(&d).unwrap();
+        }
+        // A fresh handle on the same path recovers the durable leadership authority (restart).
+        let s2 = EpochAccumulatorStore::open(&tmp.path().join("acc.redb")).unwrap();
+        assert_eq!(s2.leadership_authority().unwrap(), d);
+    }
+
+    #[test]
+    fn reset_to_bootstrap_preserves_frozen_leadership() {
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+        let d = frozen_distr();
+        s.seal_frozen_leadership(&d).unwrap();
+        s.advance(&acc_advanced(), SlotNo(200), BlockNo(20), Hash32([0xC8; 32])).unwrap();
+        // A reorg reset restores the bootstrap accumulator + clears the lineage anchor, but leadership is
+        // epoch-frozen — it MUST survive (a within-epoch reorg does not change nesPd).
+        s.reset_to_bootstrap().unwrap();
+        assert_eq!(s.last_advanced_point().unwrap(), None);
+        assert_eq!(s.leadership_authority().unwrap(), d);
+    }
+
+    #[test]
+    fn seal_frozen_leadership_from_seed_record_seeds_and_binds_source() {
+        let src_slot = SlotNo(576 * 432_000 + 12_345);
+        let src_hash = Hash32([0x66; 32]);
+        let record = seed_record(src_slot, src_hash.clone());
+
+        // Matching source: seals, and the authority == the direct from-seed projection (S4-pre-1a).
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        s.seal_frozen_leadership_from_seed_record(&record, src_slot, &src_hash)
+            .unwrap();
+        assert_eq!(
+            s.leadership_authority().unwrap(),
+            FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record)
+        );
+
+        // Mismatched slot: fail closed, nothing sealed.
+        let tmp2 = TempDir::new().unwrap();
+        let s2 = store(&tmp2);
+        let err = s2
+            .seal_frozen_leadership_from_seed_record(&record, SlotNo(999), &src_hash)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            LeadershipAuthorityError::FrozenLeadershipSourceMismatch { record_slot, expected_slot, .. }
+                if record_slot == src_slot.0 && expected_slot == 999
+        ));
+        assert!(s2.frozen_leadership().unwrap().is_none());
+
+        // Mismatched hash: fail closed.
+        let tmp3 = TempDir::new().unwrap();
+        let s3 = store(&tmp3);
+        let err = s3
+            .seal_frozen_leadership_from_seed_record(&record, src_slot, &Hash32([0xFF; 32]))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            LeadershipAuthorityError::FrozenLeadershipSourceMismatch { .. }
+        ));
+        assert!(s3.frozen_leadership().unwrap().is_none());
+    }
+
+    #[test]
+    fn leadership_authority_rejects_wrong_version_marker() {
+        // A store whose leadership marker is an OLD schema (4) — fail closed, not silently accepted.
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("acc.redb");
+        let blob = encode_frozen_leadership(&frozen_distr());
+        write_raw_meta(
+            &path,
+            &[
+                (LEADERSHIP_SCHEMA_KEY, 4u32.to_be_bytes().to_vec()),
+                (FROZEN_LEADERSHIP_KEY, blob),
+            ],
+        );
+        let s = EpochAccumulatorStore::open(&path).unwrap();
+        assert!(matches!(
+            s.leadership_authority(),
+            Err(LeadershipAuthorityError::OldAccumulatorSchemaNotLeadershipCertified { found: Some(4) })
+        ));
+    }
+
+    #[test]
+    fn leadership_authority_rejects_missing_object_under_valid_marker() {
+        // A v5 marker but NO object blob (a torn certified store) — fail closed.
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("acc.redb");
+        write_raw_meta(
+            &path,
+            &[(
+                LEADERSHIP_SCHEMA_KEY,
+                FROZEN_LEADERSHIP_SCHEMA_VERSION.to_be_bytes().to_vec(),
+            )],
+        );
+        let s = EpochAccumulatorStore::open(&path).unwrap();
+        assert!(matches!(
+            s.leadership_authority(),
+            Err(LeadershipAuthorityError::MissingFrozenLeadershipDistr)
+        ));
+    }
+
+    #[test]
+    fn leadership_authority_rejects_malformed_object() {
+        // A v5 marker over a corrupt object blob — fail closed (canonical decode rejects it).
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("acc.redb");
+        write_raw_meta(
+            &path,
+            &[
+                (
+                    LEADERSHIP_SCHEMA_KEY,
+                    FROZEN_LEADERSHIP_SCHEMA_VERSION.to_be_bytes().to_vec(),
+                ),
+                (FROZEN_LEADERSHIP_KEY, vec![0xFF, 0xFF, 0xFF]),
+            ],
+        );
+        let s = EpochAccumulatorStore::open(&path).unwrap();
+        assert!(matches!(
+            s.leadership_authority(),
+            Err(LeadershipAuthorityError::MalformedFrozenLeadershipDistr(_))
+        ));
     }
 }

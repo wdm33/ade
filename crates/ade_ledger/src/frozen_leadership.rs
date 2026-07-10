@@ -19,10 +19,27 @@
 
 use std::collections::BTreeMap;
 
+use ade_codec::cbor::{
+    canonical_width, read_array_header, read_bytes, read_map_header, read_uint, write_array_header,
+    write_bytes_canonical, write_map_header, write_uint_canonical, ContainerEncoding,
+};
+use ade_codec::CodecError;
 use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
+use ade_crypto::blake2b::blake2b_256;
 use ade_types::{EpochNo, Hash28, Hash32, SlotNo};
 
 use crate::consensus_view::{PoolDistrView, PoolEntry};
+
+/// The frozen-leadership canonical schema version. A store carrying a well-formed v5 object is
+/// LEADERSHIP-CERTIFIED; a v4 / absent object is not. The accumulator BLOB codec is unchanged (stays
+/// v4-decodable) so the non-authority observe-only follow still reads existing stores — only the leadership
+/// authority path fails closed when this object is missing/old/malformed.
+pub const FROZEN_LEADERSHIP_SCHEMA_VERSION: u32 = 5;
+
+/// Outer array: [version, epoch, source_slot, source_hash, pools-map].
+const OUTER_FIELDS: u64 = 5;
+/// Per-pool entry array: [active_stake, vrf_keyhash].
+const ENTRY_FIELDS: u64 = 2;
 
 /// One pool's frozen leadership slice: the stake and VRF keyhash captured at the leadership freeze point.
 /// A pool can leave active state (retire / POOLREAP) yet remain leadership-relevant, so both are captured
@@ -99,6 +116,153 @@ impl FrozenLeadershipPoolDistr {
     }
 }
 
+/// Typed, fail-closed leadership-codec faults — never a silent default or inferred VRF.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FrozenLeadershipError {
+    /// The encoded schema version is not `FROZEN_LEADERSHIP_SCHEMA_VERSION` (an old / foreign object).
+    UnknownVersion { expected: u32, found: u32 },
+    /// A structural CBOR-shape violation (wrong array/map length, indefinite container, wrong hash width).
+    Structural { reason: &'static str },
+    /// The same pool key appears twice.
+    DuplicatePoolKey,
+    /// Pool keys are not in ascending canonical order.
+    NonCanonicalMapOrder,
+    /// A `u64` field exceeds `u32`.
+    FieldOverflow { reason: &'static str },
+    /// Bytes remain after the object.
+    TrailingBytes { extra: usize },
+    /// Structurally valid but not byte-canonical (re-encode != input).
+    NonCanonicalBytes,
+    /// A lower-level CBOR read failure (short buffer, bad major type).
+    Codec,
+}
+
+impl From<CodecError> for FrozenLeadershipError {
+    fn from(_: CodecError) -> Self {
+        FrozenLeadershipError::Codec
+    }
+}
+
+/// Canonical, versioned, self-describing encoding: `array(5)[version, epoch, source_slot, source_hash,
+/// map{ pool_keyhash -> array(2)[active_stake, vrf_keyhash] }]`. `BTreeMap` iteration is ascending canonical
+/// key order (the sole acceptable map ordering on an authority path). Zero-stake pools are preserved.
+pub fn encode_frozen_leadership(d: &FrozenLeadershipPoolDistr) -> Vec<u8> {
+    let mut buf = Vec::new();
+    write_array_header(&mut buf, ContainerEncoding::Definite(OUTER_FIELDS, canonical_width(OUTER_FIELDS)));
+    write_uint_canonical(&mut buf, FROZEN_LEADERSHIP_SCHEMA_VERSION as u64);
+    write_uint_canonical(&mut buf, d.epoch.0);
+    write_uint_canonical(&mut buf, d.source_slot.0);
+    write_bytes_canonical(&mut buf, &d.source_hash.0);
+    let count = d.pools.len() as u64;
+    write_map_header(&mut buf, ContainerEncoding::Definite(count, canonical_width(count)));
+    for (keyhash, entry) in &d.pools {
+        write_bytes_canonical(&mut buf, &keyhash.0);
+        write_array_header(&mut buf, ContainerEncoding::Definite(ENTRY_FIELDS, canonical_width(ENTRY_FIELDS)));
+        write_uint_canonical(&mut buf, entry.active_stake);
+        write_bytes_canonical(&mut buf, &entry.vrf_keyhash.0);
+    }
+    buf
+}
+
+/// The stable canonical fingerprint (`blake2b-256` of the canonical encoding).
+pub fn canonical_hash(d: &FrozenLeadershipPoolDistr) -> Hash32 {
+    blake2b_256(&encode_frozen_leadership(d))
+}
+
+/// Canonical decode — fail-closed on unknown version, wrong shape, duplicate / unsorted pool keys, wrong hash
+/// width, trailing bytes, or any non-byte-canonical encoding (re-encode != input). No inferred VRF, no default.
+pub fn decode_frozen_leadership(bytes: &[u8]) -> Result<FrozenLeadershipPoolDistr, FrozenLeadershipError> {
+    let mut o = 0usize;
+    expect_array(bytes, &mut o, OUTER_FIELDS)?;
+    let version = read_u32(bytes, &mut o)?;
+    if version != FROZEN_LEADERSHIP_SCHEMA_VERSION {
+        return Err(FrozenLeadershipError::UnknownVersion {
+            expected: FROZEN_LEADERSHIP_SCHEMA_VERSION,
+            found: version,
+        });
+    }
+    let epoch = EpochNo(read_u64(bytes, &mut o)?);
+    let source_slot = SlotNo(read_u64(bytes, &mut o)?);
+    let source_hash = read_hash32(bytes, &mut o)?;
+    let pools = decode_pools(bytes, &mut o)?;
+    if o != bytes.len() {
+        return Err(FrozenLeadershipError::TrailingBytes { extra: bytes.len() - o });
+    }
+    let decoded = FrozenLeadershipPoolDistr { epoch, source_slot, source_hash, pools };
+    if encode_frozen_leadership(&decoded) != bytes {
+        return Err(FrozenLeadershipError::NonCanonicalBytes);
+    }
+    Ok(decoded)
+}
+
+fn decode_pools(
+    bytes: &[u8],
+    o: &mut usize,
+) -> Result<BTreeMap<Hash28, LeadershipPoolEntry>, FrozenLeadershipError> {
+    let count = match read_map_header(bytes, o)? {
+        ContainerEncoding::Definite(n, _) => n,
+        ContainerEncoding::Indefinite => {
+            return Err(FrozenLeadershipError::Structural { reason: "indefinite pools map" })
+        }
+    };
+    let mut pools: BTreeMap<Hash28, LeadershipPoolEntry> = BTreeMap::new();
+    let mut prev: Option<Hash28> = None;
+    for _ in 0..count {
+        let keyhash = read_hash28(bytes, o)?;
+        if let Some(p) = &prev {
+            match keyhash.0.cmp(&p.0) {
+                std::cmp::Ordering::Greater => {}
+                std::cmp::Ordering::Equal => return Err(FrozenLeadershipError::DuplicatePoolKey),
+                std::cmp::Ordering::Less => return Err(FrozenLeadershipError::NonCanonicalMapOrder),
+            }
+        }
+        expect_array(bytes, o, ENTRY_FIELDS)?;
+        let active_stake = read_u64(bytes, o)?;
+        let vrf_keyhash = read_hash32(bytes, o)?;
+        prev = Some(keyhash.clone());
+        pools.insert(keyhash, LeadershipPoolEntry { active_stake, vrf_keyhash });
+    }
+    Ok(pools)
+}
+
+fn expect_array(bytes: &[u8], o: &mut usize, len: u64) -> Result<(), FrozenLeadershipError> {
+    match read_array_header(bytes, o)? {
+        ContainerEncoding::Definite(n, _) if n == len => Ok(()),
+        ContainerEncoding::Definite(_, _) => {
+            Err(FrozenLeadershipError::Structural { reason: "wrong array length" })
+        }
+        ContainerEncoding::Indefinite => {
+            Err(FrozenLeadershipError::Structural { reason: "indefinite array" })
+        }
+    }
+}
+
+fn read_u32(bytes: &[u8], o: &mut usize) -> Result<u32, FrozenLeadershipError> {
+    let (n, _) = read_uint(bytes, o)?;
+    u32::try_from(n).map_err(|_| FrozenLeadershipError::FieldOverflow { reason: "u32 field" })
+}
+
+fn read_u64(bytes: &[u8], o: &mut usize) -> Result<u64, FrozenLeadershipError> {
+    let (n, _) = read_uint(bytes, o)?;
+    Ok(n)
+}
+
+fn read_hash32(bytes: &[u8], o: &mut usize) -> Result<Hash32, FrozenLeadershipError> {
+    let (h, _) = read_bytes(bytes, o)?;
+    let arr: [u8; 32] = h
+        .try_into()
+        .map_err(|_| FrozenLeadershipError::Structural { reason: "expected 32-byte hash" })?;
+    Ok(Hash32(arr))
+}
+
+fn read_hash28(bytes: &[u8], o: &mut usize) -> Result<Hash28, FrozenLeadershipError> {
+    let (h, _) = read_bytes(bytes, o)?;
+    let arr: [u8; 28] = h
+        .try_into()
+        .map_err(|_| FrozenLeadershipError::Structural { reason: "expected 28-byte hash" })?;
+    Ok(Hash28(arr))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -132,5 +296,136 @@ mod tests {
         // The zero-stake pool is present with its VRF (leadership-set membership), stake 0.
         assert_eq!(v.pool_active_stake(EpochNo(1341), &Hash28([0x22; 28])), Some(0));
         assert_eq!(v.pool_vrf_keyhash(EpochNo(1341), &Hash28([0x22; 28])), Some(Hash32([0xB2; 32])));
+    }
+
+    fn sample_distr() -> FrozenLeadershipPoolDistr {
+        let mut pools = BTreeMap::new();
+        pools.insert(
+            Hash28([0x11; 28]),
+            LeadershipPoolEntry { active_stake: 1_000, vrf_keyhash: Hash32([0xA1; 32]) },
+        );
+        // A zero-stake registered pool — carried for leadership-set membership / byte-identity.
+        pools.insert(
+            Hash28([0x22; 28]),
+            LeadershipPoolEntry { active_stake: 0, vrf_keyhash: Hash32([0xB2; 32]) },
+        );
+        pools.insert(
+            Hash28([0x33; 28]),
+            LeadershipPoolEntry { active_stake: 999_999_999_999, vrf_keyhash: Hash32([0xC3; 32]) },
+        );
+        FrozenLeadershipPoolDistr {
+            epoch: EpochNo(1341),
+            source_slot: SlotNo(115_862_416),
+            source_hash: Hash32([0x07; 32]),
+            pools,
+        }
+    }
+
+    /// Build the frozen-leadership CBOR for an explicit ordered pool list — allows duplicate / unsorted keys
+    /// (which a `BTreeMap` cannot express) so the fail-closed decode paths can be exercised directly.
+    fn encode_pool_order(
+        epoch: EpochNo,
+        slot: SlotNo,
+        hash: &Hash32,
+        pools: &[(Hash28, u64, Hash32)],
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        write_array_header(&mut buf, ContainerEncoding::Definite(OUTER_FIELDS, canonical_width(OUTER_FIELDS)));
+        write_uint_canonical(&mut buf, FROZEN_LEADERSHIP_SCHEMA_VERSION as u64);
+        write_uint_canonical(&mut buf, epoch.0);
+        write_uint_canonical(&mut buf, slot.0);
+        write_bytes_canonical(&mut buf, &hash.0);
+        let count = pools.len() as u64;
+        write_map_header(&mut buf, ContainerEncoding::Definite(count, canonical_width(count)));
+        for (keyhash, stake, vrf) in pools {
+            write_bytes_canonical(&mut buf, &keyhash.0);
+            write_array_header(&mut buf, ContainerEncoding::Definite(ENTRY_FIELDS, canonical_width(ENTRY_FIELDS)));
+            write_uint_canonical(&mut buf, *stake);
+            write_bytes_canonical(&mut buf, &vrf.0);
+        }
+        buf
+    }
+
+    #[test]
+    fn codec_round_trip_identity() {
+        let d = sample_distr();
+        let bytes = encode_frozen_leadership(&d);
+        let back = decode_frozen_leadership(&bytes).unwrap();
+        assert_eq!(back, d);
+        // Re-encode is byte-stable (canonical).
+        assert_eq!(encode_frozen_leadership(&back), bytes);
+    }
+
+    #[test]
+    fn canonical_hash_is_stable_and_content_bound() {
+        let d = sample_distr();
+        let h = canonical_hash(&d);
+        assert_eq!(canonical_hash(&d.clone()), h);
+        // A changed stake changes the hash.
+        let mut d_stake = d.clone();
+        d_stake.pools.get_mut(&Hash28([0x11; 28])).unwrap().active_stake = 1_001;
+        assert_ne!(canonical_hash(&d_stake), h);
+        // A changed VRF changes the hash.
+        let mut d_vrf = d.clone();
+        d_vrf.pools.get_mut(&Hash28([0x11; 28])).unwrap().vrf_keyhash = Hash32([0xFF; 32]);
+        assert_ne!(canonical_hash(&d_vrf), h);
+        // A changed source point changes the hash.
+        let mut d_src = d;
+        d_src.source_slot = SlotNo(115_862_417);
+        assert_ne!(canonical_hash(&d_src), h);
+    }
+
+    #[test]
+    fn codec_preserves_zero_stake_pool() {
+        let back = decode_frozen_leadership(&encode_frozen_leadership(&sample_distr())).unwrap();
+        let z = back.pools.get(&Hash28([0x22; 28])).unwrap();
+        assert_eq!(z.active_stake, 0);
+        assert_eq!(z.vrf_keyhash, Hash32([0xB2; 32]));
+    }
+
+    #[test]
+    fn codec_rejects_unknown_version() {
+        let mut bytes = encode_frozen_leadership(&sample_distr());
+        // Outer header (0x85) then the single-byte version uint at offset 1.
+        assert_eq!(bytes[1], FROZEN_LEADERSHIP_SCHEMA_VERSION as u8);
+        bytes[1] = 4;
+        assert_eq!(
+            decode_frozen_leadership(&bytes),
+            Err(FrozenLeadershipError::UnknownVersion { expected: 5, found: 4 })
+        );
+    }
+
+    #[test]
+    fn codec_rejects_duplicate_pool_key() {
+        let k = Hash28([0x44; 28]);
+        let bytes = encode_pool_order(
+            EpochNo(1341),
+            SlotNo(1),
+            &Hash32([0x07; 32]),
+            &[(k.clone(), 10, Hash32([0x01; 32])), (k, 20, Hash32([0x02; 32]))],
+        );
+        assert_eq!(decode_frozen_leadership(&bytes), Err(FrozenLeadershipError::DuplicatePoolKey));
+    }
+
+    #[test]
+    fn codec_rejects_unsorted_pool_keys() {
+        // Descending key order (0x55.. before 0x44..) is not ascending canonical.
+        let bytes = encode_pool_order(
+            EpochNo(1341),
+            SlotNo(1),
+            &Hash32([0x07; 32]),
+            &[(Hash28([0x55; 28]), 10, Hash32([0x01; 32])), (Hash28([0x44; 28]), 20, Hash32([0x02; 32]))],
+        );
+        assert_eq!(decode_frozen_leadership(&bytes), Err(FrozenLeadershipError::NonCanonicalMapOrder));
+    }
+
+    #[test]
+    fn codec_rejects_trailing_bytes() {
+        let mut bytes = encode_frozen_leadership(&sample_distr());
+        bytes.push(0xFF);
+        assert_eq!(
+            decode_frozen_leadership(&bytes),
+            Err(FrozenLeadershipError::TrailingBytes { extra: 1 })
+        );
     }
 }

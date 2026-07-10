@@ -67,3 +67,41 @@ the same canonical inputs.
 Do NOT touch the three production seed-window call sites yet. Do NOT delete the seed+2 ceiling yet. That is
 S4 proper, which resumes only after S4-pre proves `from_frozen_leadership(accumulator) == seed leadership
 PoolDistr`.
+
+## 7. Progress
+
+**S4-pre-1a — the type + seed identity (DONE, `501bf89a`).** `ade_ledger::frozen_leadership`:
+`FrozenLeadershipPoolDistr { epoch, source_slot, source_hash, pools: Hash28 -> LeadershipPoolEntry {
+active_stake, vrf_keyhash } }` + `to_pool_distr_view(asc)` (reads THIS object only) +
+`from_seed_epoch_consensus_inputs` (the bootstrap import from the manifest-bound seed record). SEED IDENTITY
+PROVEN (`ce3d_boundary_differential::s4pre_frozen_leadership_seed_identity`): the frozen distr projects
+BYTE-EXACT to `from_seed` — 659/659, incl. the zero-stake registered pools + the retired 1M-ADA pool's frozen
+VRF, with no go/active-param/retiring lookup.
+
+**S4-pre-1b — the durable schema/import authority (DONE).** Narrowly the durable leadership-authority schema
+slice (not the re-bootstrap/evidence slice, which is 1c). Shipped:
+- **Canonical codec** (`frozen_leadership.rs`): `encode_frozen_leadership` / `decode_frozen_leadership`
+  (`array(5)[version, epoch, source_slot, source_hash, map{ pool_keyhash -> array(2)[stake, vrf] }]`,
+  `FROZEN_LEADERSHIP_SCHEMA_VERSION = 5`) + `canonical_hash` (blake2b-256). Fail-closed `FrozenLeadershipError`:
+  unknown version, structural, duplicate/unsorted pool keys, field overflow, trailing bytes, non-canonical
+  bytes (re-encode ≠ input). Zero-stake pools preserved.
+- **Durable persistence** (`epoch_accumulator_store.rs`): `seal_frozen_leadership` (blob + a store-level
+  leadership-schema-v5 marker in ONE atomic redb commit), `frozen_leadership` (raw accessor), and the
+  fail-closed `leadership_authority` read. The accumulator BLOB codec is UNCHANGED (still v4-decodable) — a
+  legacy v4 / pre-S4-pre store fails closed as `OldAccumulatorSchemaNotLeadershipCertified` on the leadership
+  path while non-authority observe-only follow still decodes its accumulator blob. `MissingFrozenLeadershipDistr`
+  / `MalformedFrozenLeadershipDistr` cover a torn / corrupt certified store. `reset_to_bootstrap` DELIBERATELY
+  preserves the frozen leadership (epoch-frozen; a within-epoch reorg does not change `nesPd`).
+- **Bootstrap import**: `seal_frozen_leadership_from_seed_record` — source binding (`FrozenLeadershipSourceMismatch`
+  if the record's frozen point ≠ the expected bootstrap point) + an encode→decode canonical self-check
+  (`FrozenLeadershipCanonicalDecodeFailed`) before it seals.
+- **Tests**: 7 codec (round-trip, stable + content-bound hash, zero-stake preserved, wrong-version / duplicate /
+  unsorted / trailing rejected) + 8 store (seal/read round-trip, legacy-store fail-closed, reopen durability,
+  reset preserves, source-binding seed import, wrong-version-marker / missing-object / malformed-object
+  fail-closed).
+
+1b did NOT wire the import into the live `native_firstrun` bootstrap and did NOT re-bootstrap the v5 lineage —
+those are **S4-pre-1c** (re-bootstrap the v5 lineage from the seed record so the real fixture store carries the
+frozen leadership + its hash, S5 recovery evidence over the new surface, registry flip, and the CI guard that
+`from_accumulator_go_active_params_for_test_only` stays test-only). No production seed-window site touched, no
+seed+2 ceiling deleted, no SNAP boundary freeze (S4-pre-2), no S5 closure claim.
