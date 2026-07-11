@@ -58,9 +58,13 @@ pub struct LeadershipPoolEntry {
 /// at (lineage provenance).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrozenLeadershipPoolDistr {
-    /// The epoch this distribution authorizes leadership for.
-    pub epoch: EpochNo,
-    /// The canonical selected point the leadership distribution was frozen at.
+    /// The leadership epoch this distribution AUTHORIZES (cardano `nesPd` for this epoch) — i.e. the epoch
+    /// whose leader schedule reads it. NOT a source epoch: the point the distribution was frozen AT is carried
+    /// separately by `source_slot` / `source_hash`. The store indexes leadership by THIS field
+    /// (`leadership_authority_for_epoch(e)` returns the object whose `target_leadership_epoch == e`).
+    pub target_leadership_epoch: EpochNo,
+    /// The canonical selected point the leadership distribution was frozen at (lineage provenance, NOT the
+    /// epoch it authorizes).
     pub source_slot: SlotNo,
     /// Its lineage hash.
     pub source_hash: Hash32,
@@ -85,7 +89,7 @@ impl FrozenLeadershipPoolDistr {
                 },
             );
         }
-        PoolDistrView::new(self.epoch, total_active_stake, asc, pools)
+        PoolDistrView::new(self.target_leadership_epoch, total_active_stake, asc, pools)
     }
 
     /// The bootstrap import: build the frozen leadership distribution from the manifest-bound seed consensus
@@ -109,7 +113,7 @@ impl FrozenLeadershipPoolDistr {
             })
             .collect();
         FrozenLeadershipPoolDistr {
-            epoch: record.epoch_no,
+            target_leadership_epoch: record.epoch_no,
             source_slot: record.seed_point_slot,
             source_hash: record.seed_point_hash.clone(),
             pools,
@@ -150,7 +154,35 @@ impl FrozenLeadershipPoolDistr {
             }
         }
         FrozenLeadershipPoolDistr {
-            epoch,
+            target_leadership_epoch: epoch,
+            source_slot,
+            source_hash,
+            pools,
+        }
+    }
+
+    /// The bootstrap import of the seed+1 leadership `nesPd` from the imported MARK snapshot's PoolDistr
+    /// (`calculatePoolDistr(ssStakeMark)` = `s1a.mark_pool_distr`). This is the bootstrap-certified initial
+    /// condition for `target_leadership_epoch = seed_epoch + 1` — the ONE epoch no native boundary freeze can
+    /// produce (the cross into seed+1 freezes `nesPd_{seed+2}`), so it is imported verbatim as the seed window
+    /// already serves it (the bridge). `mark_pool_distr` is pool -> (active_stake, VRF keyhash).
+    pub fn from_mark_pool_distr(
+        target_leadership_epoch: EpochNo,
+        source_slot: SlotNo,
+        source_hash: Hash32,
+        mark_pool_distr: &BTreeMap<PoolId, (u64, Hash32)>,
+    ) -> Self {
+        let pools = mark_pool_distr
+            .iter()
+            .map(|(pid, (active_stake, vrf))| {
+                (
+                    pid.0.clone(),
+                    LeadershipPoolEntry { active_stake: *active_stake, vrf_keyhash: vrf.clone() },
+                )
+            })
+            .collect();
+        FrozenLeadershipPoolDistr {
+            target_leadership_epoch,
             source_slot,
             source_hash,
             pools,
@@ -192,7 +224,7 @@ pub fn encode_frozen_leadership(d: &FrozenLeadershipPoolDistr) -> Vec<u8> {
     let mut buf = Vec::new();
     write_array_header(&mut buf, ContainerEncoding::Definite(OUTER_FIELDS, canonical_width(OUTER_FIELDS)));
     write_uint_canonical(&mut buf, FROZEN_LEADERSHIP_SCHEMA_VERSION as u64);
-    write_uint_canonical(&mut buf, d.epoch.0);
+    write_uint_canonical(&mut buf, d.target_leadership_epoch.0);
     write_uint_canonical(&mut buf, d.source_slot.0);
     write_bytes_canonical(&mut buf, &d.source_hash.0);
     let count = d.pools.len() as u64;
@@ -230,7 +262,7 @@ pub fn decode_frozen_leadership(bytes: &[u8]) -> Result<FrozenLeadershipPoolDist
     if o != bytes.len() {
         return Err(FrozenLeadershipError::TrailingBytes { extra: bytes.len() - o });
     }
-    let decoded = FrozenLeadershipPoolDistr { epoch, source_slot, source_hash, pools };
+    let decoded = FrozenLeadershipPoolDistr { target_leadership_epoch: epoch, source_slot, source_hash, pools };
     if encode_frozen_leadership(&decoded) != bytes {
         return Err(FrozenLeadershipError::NonCanonicalBytes);
     }
@@ -324,7 +356,7 @@ mod tests {
             LeadershipPoolEntry { active_stake: 0, vrf_keyhash: Hash32([0xB2; 32]) },
         );
         let d = FrozenLeadershipPoolDistr {
-            epoch: EpochNo(1341),
+            target_leadership_epoch: EpochNo(1341),
             source_slot: SlotNo(115_862_416),
             source_hash: Hash32([0x07; 32]),
             pools,
@@ -370,7 +402,7 @@ mod tests {
             &mark_pool_stakes,
             &registered_pool_vrfs,
         );
-        assert_eq!(d.epoch, EpochNo(1341));
+        assert_eq!(d.target_leadership_epoch, EpochNo(1341));
         assert_eq!(d.source_slot, SlotNo(115_862_416));
         // The leadership SET is the delegation image (3 pools); the registered-but-undelegated 0x44 and the
         // stray unregistered 0x99 are BOTH excluded.
@@ -411,7 +443,7 @@ mod tests {
             LeadershipPoolEntry { active_stake: 999_999_999_999, vrf_keyhash: Hash32([0xC3; 32]) },
         );
         FrozenLeadershipPoolDistr {
-            epoch: EpochNo(1341),
+            target_leadership_epoch: EpochNo(1341),
             source_slot: SlotNo(115_862_416),
             source_hash: Hash32([0x07; 32]),
             pools,

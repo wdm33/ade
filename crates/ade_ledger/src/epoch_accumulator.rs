@@ -419,7 +419,7 @@ pub enum LedgerTransitionError {
     /// hostile-state boundary. Halt deterministically rather than wrap.
     LeadershipEpochOverflow { boundary_into_epoch: u64 },
     /// S4-pre-2: the ordered boundary-leadership effects violated a batch invariant (non-ascending source
-    /// epoch, a duplicate target leadership epoch, or an effect whose `distr.epoch` disagrees with its labeled
+    /// epoch, a duplicate target leadership epoch, or an effect whose `distr.target_leadership_epoch` disagrees with its labeled
     /// `target_leadership_epoch`). The freeze is an authoritative boundary effect, not optional evidence.
     BoundaryLeadershipEffectInvariant { reason: &'static str },
 }
@@ -434,11 +434,11 @@ pub enum EpochBoundaryEffect {
     FreezeLeadership {
         /// The epoch this boundary crossed INTO — the SNAP that captured the frozen params (pre-POOLREAP).
         source_epoch: EpochNo,
-        /// The leadership epoch the frozen distribution authorizes (`== distr.epoch`). Carried explicitly (the
+        /// The leadership epoch the frozen distribution authorizes (`== distr.target_leadership_epoch`). Carried explicitly (the
         /// empirical rotation→use mapping; candidate `source_epoch + 1`) so proofs state the target epoch, not
         /// a snapshot slot name.
         target_leadership_epoch: EpochNo,
-        /// The frozen distribution. `distr.epoch == target_leadership_epoch`; `distr.source_slot` /
+        /// The frozen distribution. `distr.target_leadership_epoch == target_leadership_epoch`; `distr.source_slot` /
         /// `distr.source_hash` = the crossing block's canonical point (the lineage binding).
         distr: FrozenLeadershipPoolDistr,
     },
@@ -463,16 +463,16 @@ impl EpochBoundaryEffect {
 
 /// Enforce the ordered-batch invariants on a boundary's leadership effects (the user's plumbing contract): the
 /// effects are in STRICT ascending `source_epoch` order, carry NO duplicate `target_leadership_epoch`, and each
-/// effect's `distr.epoch` matches its labeled `target_leadership_epoch`. A violation is a typed terminal (the
+/// effect's `distr.target_leadership_epoch` matches its labeled `target_leadership_epoch`. A violation is a typed terminal (the
 /// freeze is authoritative, never best-effort). Pure; empty is trivially valid (a within-epoch block).
 fn validate_boundary_effects(effects: &[EpochBoundaryEffect]) -> Result<(), LedgerTransitionError> {
     let mut prev_source: Option<EpochNo> = None;
     let mut prev_target: Option<EpochNo> = None;
     for eff in effects {
         let EpochBoundaryEffect::FreezeLeadership { source_epoch, target_leadership_epoch, distr } = eff;
-        if distr.epoch != *target_leadership_epoch {
+        if distr.target_leadership_epoch != *target_leadership_epoch {
             return Err(LedgerTransitionError::BoundaryLeadershipEffectInvariant {
-                reason: "distr.epoch != target_leadership_epoch",
+                reason: "distr.target_leadership_epoch != effect target_leadership_epoch",
             });
         }
         if let Some(p) = prev_source {
@@ -2251,7 +2251,7 @@ mod tests {
     fn boundary_leadership_effect_batch_invariants_are_enforced() {
         use crate::frozen_leadership::FrozenLeadershipPoolDistr;
         let distr = |epoch: u64| FrozenLeadershipPoolDistr {
-            epoch: EpochNo(epoch),
+            target_leadership_epoch: EpochNo(epoch),
             source_slot: SlotNo(100),
             source_hash: Hash32([0x07; 32]),
             pools: BTreeMap::new(),

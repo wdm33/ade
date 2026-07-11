@@ -1542,24 +1542,27 @@ fn s5_warm_start_hash(dst: &Path, db: &dyn ChainDb, sched: &EraSchedule) -> Hash
 /// self-contained leadership `nesPd` authority S4-pre persists). Recovery MUST preserve it byte-identically:
 /// it is epoch-frozen, so no advance / rollback / reset / refold changes it (`reset_to_bootstrap` deliberately
 /// preserves it, 1b), and it is durable across a warm restart.
-fn s5_leadership_hash(store: &EpochAccumulatorStore) -> Hash32 {
+fn s5_leadership_hash(store: &EpochAccumulatorStore, epoch: EpochNo) -> Hash32 {
     ade_ledger::frozen_leadership::canonical_hash(
-        &store.leadership_authority().expect("leadership authority"),
+        &store
+            .leadership_authority_for_epoch(epoch)
+            .expect("leadership authority for epoch"),
     )
 }
 
 /// #8 warm-start variant: reopen the DURABLE store from disk (the kill->warm-start sequence) and hash the
-/// leadership authority — proves the PERSISTED leadership object, not just the in-memory one, is byte-identical
-/// after recovery. No `co_advance` needed: the leadership object is epoch-frozen, not fold-evolved.
-fn s5_warm_start_leadership_hash(dst: &Path) -> Hash32 {
+/// leadership authority for `epoch` — proves the PERSISTED epoch-indexed object, not just the in-memory one, is
+/// byte-identical after recovery. No `co_advance` needed: the leadership object is epoch-frozen, not fold-evolved.
+fn s5_warm_start_leadership_hash(dst: &Path, epoch: EpochNo) -> Hash32 {
     let store = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb")).expect("reopen acc");
-    s5_leadership_hash(&store)
+    s5_leadership_hash(&store, epoch)
 }
 
-/// S4-pre-1c: leadership-certify a store copy from the manifest-bound seed record read from `seed_dir`'s durable
-/// chain.db sidecar (the v5 seed fixture predates 1b, so it carries no leadership object). This seals the SAME
-/// durable object the wired native bootstrap now seals — the recovery arms then prove it survives unchanged.
+/// S4-0: seed the BOOTSTRAP-certified leadership (`nesPd_seed`) into a store copy from the manifest-bound seed
+/// record read from `seed_dir`'s durable chain.db sidecar. The recovery arms then prove the native
+/// boundary-frozen epochs survive rollback/refold + warm restart, and a reset restores CURRENT := BOOTSTRAP.
 fn s5_seal_leadership(store: &EpochAccumulatorStore, seed_dir: &Path) {
+    use ade_ledger::frozen_leadership::FrozenLeadershipPoolDistr;
     use ade_ledger::seed_consensus_inputs::decode_seed_epoch_consensus_inputs;
     use ade_runtime::chaindb::{PersistentChainDb, PersistentChainDbOptions, SnapshotStore};
     let cdb = PersistentChainDb::open(PersistentChainDbOptions::at(seed_dir.join("chain.db")))
@@ -1569,9 +1572,10 @@ fn s5_seal_leadership(store: &EpochAccumulatorStore, seed_dir: &Path) {
         &cdb.get_seed_epoch_consensus_inputs(&fps[0]).expect("get").expect("present"),
     )
     .expect("decode");
+    let nespd_seed = FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record);
     store
-        .seal_frozen_leadership_from_seed_record(&record, record.seed_point_slot, &record.seed_point_hash)
-        .expect("seal frozen leadership from the manifest-bound seed record");
+        .seal_bootstrap_leadership_epochs(&[nespd_seed])
+        .expect("seal bootstrap leadership from the manifest-bound seed record");
 }
 
 /// The canonical selected point (slot, block_no, hash) of the last corpus block at-or-below `target_slot`.
@@ -1642,14 +1646,17 @@ fn s5_recovery_replay_equivalence_within_k_rollback() {
     let acc_a = s5_acc_hash(&store_a);
     let cpst_a = s5_checkpoint_state_hash(&cp_a);
     let auth_a = s5_authority_stake_view_hash(&store_a);
-    let lead_a = s5_leadership_hash(&store_a);
+    // The 1340->1341 cross seals nesPd for the NEXT leadership epoch (into-epoch + 1 = 1342); read it by exact index.
+    let lead_a = s5_leadership_hash(&store_a, EpochNo(1342));
 
     // ===== S4-pre-2 REFERENCE PROOF (item 2): the boundary-frozen CURRENT leadership sealed by the 1340->1341
     // cross must byte-match the cardano reference nesPd (nes[5]) for its target epoch. LET THE TEST DECIDE the
     // mapping: compare against ALL three reference epochs and REPORT which one it byte-matches, then assert it
     // is exactly the labeled target_leadership_epoch. No mark/set/go naming — the reference field is nesPd. =====
     {
-        let current = store_a.leadership_authority().expect("boundary-frozen current leadership");
+        let current = store_a
+            .leadership_authority_for_epoch(EpochNo(1342))
+            .expect("boundary-frozen current leadership for epoch 1342");
         let ade = ade_leadership_map(&current);
         let ref_1340 = ref_nes_pd(&ref_dir.join("115776011_db-analyser/state"), 115_776_011, 1340);
         let ref_1341 = ref_nes_pd(&ref_dir.join("115862416_db-analyser/state"), 115_862_416, 1341);
@@ -1668,28 +1675,28 @@ fn s5_recovery_replay_equivalence_within_k_rollback() {
         eprintln!("S4-pre-2 REFERENCE PROOF (native boundary leadership freeze):");
         eprintln!("  boundary_source_epoch          = {src_epoch}");
         eprintln!("  boundary_target_epoch          = {}", post_a.epoch);
-        eprintln!("  frozen_leadership_target_epoch = {}", current.epoch.0);
+        eprintln!("  frozen_leadership_target_epoch = {}", current.target_leadership_epoch.0);
         eprintln!(
             "  reference                      = {}",
             matched_epoch.map(|e| format!("POST-{e} nesPd")).unwrap_or_else(|| "NONE".into())
         );
         eprintln!("  pool_count ade / ref@target    = {} / {}", ade.len(),
-            match current.epoch.0 { 1340 => ref_1340.len(), 1341 => ref_1341.len(), _ => ref_1342.len() });
+            match current.target_leadership_epoch.0 { 1340 => ref_1340.len(), 1341 => ref_1341.len(), _ => ref_1342.len() });
         eprintln!("  zero_stake_pools               = {}", ade.values().filter(|(s, _)| *s == 0).count());
         eprintln!("  hash                           = {}", hxs(&lead_a));
         // Pin the mapping EMPIRICALLY: the labeled target epoch MUST be the reference the freeze byte-matches.
         assert_eq!(
             matched_epoch,
-            Some(current.epoch.0),
+            Some(current.target_leadership_epoch.0),
             "boundary-frozen leadership must byte-match reference nesPd for its labeled target epoch {} (matched {:?}) \
              — if this is off-by-one, fix the freeze target semantics + labels, NOT the reference",
-            current.epoch.0,
+            current.target_leadership_epoch.0,
             matched_epoch
         );
         // The pinned mapping: target_leadership_epoch == the boundary's into-epoch + 1.
-        assert_eq!(current.epoch.0, post_a.epoch + 1, "target_leadership_epoch == boundary into-epoch + 1");
+        assert_eq!(current.target_leadership_epoch.0, post_a.epoch + 1, "target_leadership_epoch == boundary into-epoch + 1");
         // The exact per-field proof (pool count + ids + stake + VRF, incl. zero-stake + retired, in one map eq).
-        let reference = match current.epoch.0 {
+        let reference = match current.target_leadership_epoch.0 {
             1340 => &ref_1340,
             1341 => &ref_1341,
             _ => &ref_1342,
@@ -1702,7 +1709,7 @@ fn s5_recovery_replay_equivalence_within_k_rollback() {
     drop(store_a);
     drop(cp_a);
     let warm_a = s5_warm_start_hash(&dst_a, &db, &sched);
-    let warm_lead_a = s5_warm_start_leadership_hash(&dst_a);
+    let warm_lead_a = s5_warm_start_leadership_hash(&dst_a, EpochNo(1342));
 
     // The within-k, SAME-LINEAGE rollback target R: a real canonical block ~5_000 slots below the tip
     // (a few hundred blocks — well inside k=2160), above the re-sealed baseline.
@@ -1734,11 +1741,11 @@ fn s5_recovery_replay_equivalence_within_k_rollback() {
     let acc_b = s5_acc_hash(&store_b);
     let cpst_b = s5_checkpoint_state_hash(&cp_b);
     let auth_b = s5_authority_stake_view_hash(&store_b);
-    let lead_b = s5_leadership_hash(&store_b);
+    let lead_b = s5_leadership_hash(&store_b, EpochNo(1342));
     drop(store_b);
     drop(cp_b);
     let warm_b = s5_warm_start_hash(&dst_b, &db, &sched);
-    let warm_lead_b = s5_warm_start_leadership_hash(&dst_b);
+    let warm_lead_b = s5_warm_start_leadership_hash(&dst_b, EpochNo(1342));
 
     // ===== byte-identity across the S4-authority-relevant fingerprints =====
     let hx = |h: &Hash32| h.0.iter().map(|x| format!("{x:02x}")).collect::<String>();
@@ -1914,7 +1921,7 @@ fn s4pre_frozen_leadership_seed_identity() {
 
     // Bootstrap import: the self-contained frozen leadership distr from the manifest-bound seed record.
     let frozen = FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record);
-    assert_eq!(frozen.epoch, record.epoch_no, "same leadership epoch");
+    assert_eq!(frozen.target_leadership_epoch, record.epoch_no, "same leadership epoch");
     assert_eq!(frozen.pools.len(), record.pool_distribution.len(), "all 659 leadership pools carried");
 
     // Project + compare to the proven-byte-exact seed leadership view (epoch + total + asc + per-pool stake + VRF).
@@ -1931,15 +1938,15 @@ fn s4pre_frozen_leadership_seed_identity() {
     );
 }
 
-/// S4-pre-1c CERTIFIED BOOTSTRAP LINEAGE: seal the frozen leadership authority THROUGH THE DURABLE STORE via the
-/// EXACT call the native bootstrap makes (`seal_frozen_leadership_from_seed_record`), from the real v5 seed
-/// record, and prove the certified store answers leadership byte-exact + stable across reopen. This is the
-/// durable-path analog of `s4pre_frozen_leadership_seed_identity` (which proves only the in-memory projection):
-/// it covers "fresh bootstrap store has the v5 marker", "leadership_authority() loads the object", "hash stable
-/// across reopen", and "to_pool_distr_view == seed leadership PoolDistr, 659/659, incl. zero-stake + the retired
-/// 1M-ADA pool".
+/// S4-pre-1c CERTIFIED BOOTSTRAP LINEAGE (S4-0 epoch-indexed): seal the frozen leadership authority THROUGH THE
+/// DURABLE STORE via the EXACT call the native bootstrap makes (`seal_bootstrap_leadership_epochs`), from the real
+/// v5 seed record, and prove the certified store answers leadership BY EXACT EPOCH INDEX + stable across reopen.
+/// This is the durable-path analog of `s4pre_frozen_leadership_seed_identity` (which proves only the in-memory
+/// projection): it covers "fresh bootstrap store has the v5 marker", "the bootstrap-indexed object for the seed
+/// epoch is present", "leadership_authority_for_epoch(seed_epoch) loads it", "hash stable across reopen", and
+/// "to_pool_distr_view == seed leadership PoolDistr, 659/659, incl. zero-stake + the retired 1M-ADA pool".
 #[test]
-#[ignore = "S4-pre-1c: seal_frozen_leadership_from_seed_record produces a v5-certified store == seed leadership PoolDistr, stable across reopen (env S5_SEED_STORES / CE3D_WORK); FAST"]
+#[ignore = "S4-pre-1c/S4-0: seal_bootstrap_leadership_epochs produces a v5-certified store == seed leadership PoolDistr, read by exact epoch index, stable across reopen (env S5_SEED_STORES / CE3D_WORK); FAST"]
 fn s4pre_1c_frozen_leadership_bootstrap_lineage() {
     use ade_ledger::consensus_view::PoolDistrView;
     use ade_ledger::frozen_leadership::{canonical_hash, FrozenLeadershipPoolDistr};
@@ -1967,13 +1974,19 @@ fn s4pre_1c_frozen_leadership_bootstrap_lineage() {
     {
         let store = EpochAccumulatorStore::open(&acc_path).expect("open acc");
         store
-            .seal_frozen_leadership_from_seed_record(&record, record.seed_point_slot, &record.seed_point_hash)
-            .expect("seal frozen leadership from the manifest-bound seed record");
+            .seal_bootstrap_leadership_epochs(&[FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record)])
+            .expect("seal bootstrap leadership from the manifest-bound seed record");
 
-        // A fresh certified store: the schema-v5 marker + object are present, and the fail-closed authority read
-        // loads the object.
-        assert!(store.frozen_leadership().expect("raw read").is_some(), "v5 leadership marker + object present");
-        let leadership = store.leadership_authority().expect("leadership authority loads");
+        // A fresh certified store: the schema-v5 marker + the BOOTSTRAP-indexed object for the seed epoch are
+        // present, and the fail-closed epoch-indexed authority read loads it for its exact target epoch (which
+        // also proves the CURRENT-indexed copy the bootstrap seal writes alongside it).
+        assert!(
+            store.bootstrap_frozen_leadership_for_epoch(record.epoch_no).expect("raw read").is_some(),
+            "v5 leadership marker + bootstrap-indexed object present for the seed epoch"
+        );
+        let leadership = store
+            .leadership_authority_for_epoch(record.epoch_no)
+            .expect("leadership authority loads for the seed epoch");
 
         // 659/659 pools; zero-stake registered pools + the retired 1M-ADA pool are carried (the byte-exact
         // projection below proves each pool's frozen stake+VRF, incl. the retired pool's VRF — LDAT's 1 supplement).
@@ -1998,13 +2011,199 @@ fn s4pre_1c_frozen_leadership_bootstrap_lineage() {
     // Canonical hash is STABLE across reopen (warm-restart durability of the leadership authority).
     let reopen_hash = || {
         let store = EpochAccumulatorStore::open(&acc_path).expect("reopen acc");
-        canonical_hash(&store.leadership_authority().expect("reopened leadership authority"))
+        canonical_hash(
+            &store
+                .leadership_authority_for_epoch(record.epoch_no)
+                .expect("reopened leadership authority for the seed epoch"),
+        )
     };
     assert_eq!(reopen_hash(), reopen_hash(), "frozen leadership canonical hash stable across reopen");
 
     eprintln!(
-        "S4-pre-1c LINEAGE PROVEN: seal_frozen_leadership_from_seed_record produced a v5-certified store; \
-         {} leadership pools == the seed leadership PoolDistr byte-exact; hash stable across reopen.",
+        "S4-pre-1c/S4-0 LINEAGE PROVEN: seal_bootstrap_leadership_epochs produced a v5-certified store; \
+         {} leadership pools == the seed leadership PoolDistr byte-exact, read by exact epoch index; hash stable across reopen.",
         record.pool_distribution.len()
+    );
+}
+
+/// S4-0 EPOCH-INDEXED LEADERSHIP ACCEPTANCE (1338 -> 1342): ONE certified store carrying the full leadership band,
+/// each epoch built by its REAL provenance builder and read back by EXACT index — bootstrap {1338 = the seed
+/// record's `nesPd` (SET-derived), 1339 = an imported MARK snapshot} + native {1340/1341/1342 = boundary freezes,
+/// sealed CURRENT-only}. Proves: (a) all five indices resolve to DISTINCT objects whose `target_leadership_epoch`
+/// == the queried epoch (never "the latest / current / nearest" object); (b) the bootstrap band is separable —
+/// the two bootstrap epochs are present in `bootstrap_frozen_leadership_for_epoch`, the three native epochs are
+/// not; (c) every epoch's authority hash is byte-stable across a reopen; (d) `reset_to_bootstrap` restores
+/// CURRENT := BOOTSTRAP, so 1338/1339 survive but 1340/1341/1342 fail closed (`LeadershipEpochNotSealed`); (e)
+/// off-band epochs (1337 / 1343) and a legacy (un-certified) store fail closed. The wrong-INDEX corruption case is
+/// proven by the store unit `leadership_authority_rejects_wrong_epoch_object`; byte-exact native content vs the
+/// reference nesPd is proven by the S5 #8 long proof — here 1340+ are native-shaped objects at their exact indices.
+#[test]
+#[ignore = "S4-0: epoch-indexed leadership acceptance 1338->1342 (bootstrap+MARK+native provenance, exact index, reset partition, off-band + legacy fail-closed) (env S5_SEED_STORES / CE3D_WORK); FAST"]
+fn s4_0_epoch_indexed_leadership_acceptance_1338_to_1342() {
+    use ade_ledger::epoch_accumulator::EpochAccumulator;
+    use ade_ledger::frozen_leadership::{canonical_hash, FrozenLeadershipPoolDistr};
+    use ade_ledger::seed_consensus_inputs::decode_seed_epoch_consensus_inputs;
+    use ade_runtime::chaindb::{
+        LeadershipAuthorityError, PersistentChainDb, PersistentChainDbOptions, SnapshotStore,
+    };
+    use ade_types::{Coin, PoolId};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let seed_dir = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
+    let work = env_path("CE3D_WORK", "/home/ts/.cardano-ce3d-extract/harness-work-s5");
+
+    // --- The real epoch-1338 bootstrap object: the manifest-bound seed record's `pool_distribution` IS the
+    // SET-derived leadership `nesPd_1338` (proven byte-exact vs the reference at bootstrap, S4-pre-1a). ---
+    let cdb =
+        PersistentChainDb::open(PersistentChainDbOptions::at(seed_dir.join("chain.db"))).expect("open cdb");
+    let fps = cdb.list_seed_epoch_consensus_anchor_fps().expect("list");
+    let record = decode_seed_epoch_consensus_inputs(
+        &cdb.get_seed_epoch_consensus_inputs(&fps[0]).expect("get").expect("present"),
+    )
+    .expect("decode");
+    assert_eq!(record.epoch_no.0, 1338, "the CE-3d v5 seed record is the epoch-1338 leadership nesPd");
+    let nespd_1338 = FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record);
+
+    // --- The epoch-1339 bootstrap object from an imported MARK snapshot (the seed+1 bridge source — the ONE
+    // epoch no native freeze produces). Representative MARK derived from the 1338 pool set as (stake, vrf); 1339
+    // content fidelity is the bootstrap-verbatim mark (the byte-exact reference path begins at 1340, S4-pre-2). ---
+    let mark_1339: BTreeMap<PoolId, (u64, Hash32)> = record
+        .pool_distribution
+        .iter()
+        .map(|(h, e)| (PoolId(h.clone()), (e.active_stake, e.vrf_keyhash.clone())))
+        .collect();
+    let nespd_1339 = FrozenLeadershipPoolDistr::from_mark_pool_distr(
+        EpochNo(1339),
+        record.seed_point_slot,
+        record.seed_point_hash.clone(),
+        &mark_1339,
+    );
+
+    // --- Native boundary freezes 1340/1341/1342 (S4-pre-2 shape: delegated ∩ registered). Built over the full
+    // pool set at distinct target indices; a distinct `target_leadership_epoch` => a distinct canonical hash. ---
+    let native = |target: u64| -> FrozenLeadershipPoolDistr {
+        let mut delegated = BTreeSet::new();
+        let mut stakes: BTreeMap<PoolId, Coin> = BTreeMap::new();
+        let mut vrfs: BTreeMap<PoolId, Hash32> = BTreeMap::new();
+        for (h, e) in record.pool_distribution.iter() {
+            let pid = PoolId(h.clone());
+            delegated.insert(pid.clone());
+            stakes.insert(pid.clone(), Coin(e.active_stake));
+            vrfs.insert(pid, e.vrf_keyhash.clone());
+        }
+        FrozenLeadershipPoolDistr::from_boundary_snapshot(
+            EpochNo(target),
+            SlotNo(target * 1_000),
+            Hash32([target as u8; 32]),
+            &delegated,
+            &stakes,
+            &vrfs,
+        )
+    };
+
+    // --- Populate ONE store: bootstrap {1338, 1339}; native CURRENT-only {1340, 1341, 1342}. ---
+    let dst = work.join("s4-0-acceptance-1338-1342");
+    let _ = std::fs::remove_dir_all(&dst);
+    std::fs::create_dir_all(&dst).expect("mkdir");
+    let acc_path = dst.join("epoch-accumulator.redb");
+    let store = EpochAccumulatorStore::open(&acc_path).expect("open acc");
+    // A bootstrap accumulator anchor so `reset_to_bootstrap` (below) has a target — the leadership reset is
+    // coupled to the accumulator reset in one call. (Content is irrelevant here; the leadership band is the SUT.)
+    store
+        .seal_bootstrap(&EpochAccumulator::new(CardanoEra::Conway), record.seed_point_slot)
+        .expect("seal bootstrap accumulator anchor");
+    store
+        .seal_bootstrap_leadership_epochs(&[nespd_1338.clone(), nespd_1339.clone()])
+        .expect("seal bootstrap {1338, 1339}");
+    for target in [1340u64, 1341, 1342] {
+        store.seal_current_leadership(&native(target)).expect("seal native current leadership");
+    }
+
+    // (a) exact-index reads across the whole band: each returns the object whose target == the queried epoch.
+    let mut hashes = Vec::new();
+    for epoch in [1338u64, 1339, 1340, 1341, 1342] {
+        let got = store
+            .leadership_authority_for_epoch(EpochNo(epoch))
+            .unwrap_or_else(|e| panic!("epoch {epoch} must read exact: {e:?}"));
+        assert_eq!(got.target_leadership_epoch.0, epoch, "exact-index read: object target == queried epoch");
+        hashes.push(canonical_hash(&got));
+    }
+    // Distinct objects (a distinct target => a distinct canonical authority hash).
+    for i in 0..hashes.len() {
+        for j in (i + 1)..hashes.len() {
+            assert_ne!(hashes[i], hashes[j], "each epoch's leadership authority is a distinct object");
+        }
+    }
+
+    // (b) bootstrap band separable: 1338/1339 are bootstrap-indexed; the natives are CURRENT-only.
+    for e in [1338u64, 1339] {
+        assert!(
+            store.bootstrap_frozen_leadership_for_epoch(EpochNo(e)).expect("read").is_some(),
+            "epoch {e} is bootstrap-certified"
+        );
+    }
+    for e in [1340u64, 1341, 1342] {
+        assert!(
+            store.bootstrap_frozen_leadership_for_epoch(EpochNo(e)).expect("read").is_none(),
+            "native epoch {e} is CURRENT-only, not bootstrap"
+        );
+    }
+
+    // (e) off-band epochs fail closed under the valid marker (not a nearest-neighbour read).
+    for off in [1337u64, 1343] {
+        match store.leadership_authority_for_epoch(EpochNo(off)) {
+            Err(LeadershipAuthorityError::LeadershipEpochNotSealed { requested }) => {
+                assert_eq!(requested, off)
+            }
+            other => {
+                panic!("off-band epoch {off} must fail closed as LeadershipEpochNotSealed, got {other:?}")
+            }
+        }
+    }
+
+    // (c) each epoch's authority hash is byte-stable across a reopen (drop the writer first — redb is single-open).
+    drop(store);
+    let band_hashes = || -> Vec<Hash32> {
+        let s = EpochAccumulatorStore::open(&acc_path).expect("reopen acc");
+        [1338u64, 1339, 1340, 1341, 1342]
+            .iter()
+            .map(|&e| canonical_hash(&s.leadership_authority_for_epoch(EpochNo(e)).expect("reopened read")))
+            .collect()
+    };
+    assert_eq!(band_hashes(), hashes, "the whole leadership band is byte-stable across reopen");
+
+    // (d) reset_to_bootstrap restores CURRENT := BOOTSTRAP: the bootstrap band survives, the natives fail closed.
+    let store = EpochAccumulatorStore::open(&acc_path).expect("reopen acc for reset");
+    store.reset_to_bootstrap().expect("reset to bootstrap");
+    for e in [1338u64, 1339] {
+        let got = store.leadership_authority_for_epoch(EpochNo(e)).expect("bootstrap survives reset");
+        assert_eq!(got.target_leadership_epoch.0, e);
+    }
+    for e in [1340u64, 1341, 1342] {
+        match store.leadership_authority_for_epoch(EpochNo(e)) {
+            Err(LeadershipAuthorityError::LeadershipEpochNotSealed { requested }) => {
+                assert_eq!(requested, e)
+            }
+            other => panic!("native epoch {e} must be cleared by reset (LeadershipEpochNotSealed), got {other:?}"),
+        }
+    }
+
+    // (e) a legacy / never-certified store fails closed with the schema refusal (no v5 marker).
+    let legacy_dir = work.join("s4-0-acceptance-legacy");
+    let _ = std::fs::remove_dir_all(&legacy_dir);
+    std::fs::create_dir_all(&legacy_dir).expect("mkdir");
+    let legacy =
+        EpochAccumulatorStore::open(&legacy_dir.join("epoch-accumulator.redb")).expect("open legacy");
+    match legacy.leadership_authority_for_epoch(EpochNo(1338)) {
+        Err(LeadershipAuthorityError::OldAccumulatorSchemaNotLeadershipCertified { .. }) => {}
+        other => panic!(
+            "a legacy store must fail closed as OldAccumulatorSchemaNotLeadershipCertified, got {other:?}"
+        ),
+    }
+
+    eprintln!(
+        "S4-0 ACCEPTANCE PROVEN: leadership band 1338..=1342 read by EXACT index (bootstrap 1338 seed-record + \
+         1339 MARK, native 1340/1341/1342); reset restores CURRENT:=BOOTSTRAP (natives cleared); off-band \
+         1337/1343 + legacy store fail closed."
     );
 }

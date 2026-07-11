@@ -42,6 +42,7 @@ pub use epoch_accumulator_advance::{
 };
 pub use epoch_accumulator_store::{
     AccumulatorReadinessError, EpochAccumulatorStore, EpochAccumulatorStoreError,
+    LeadershipAuthorityError,
 };
 pub use error::ChainDbError;
 pub use reduced_utxo_checkpoint::{

@@ -69,7 +69,21 @@ REG="docs/ade-invariant-registry.toml"
 grep -q 'DC-EPOCH-25' "$REG" \
     || fail "DC-EPOCH-25 is not declared in the invariant registry ($REG)"
 
+# (5) S4-0 (DC-EPOCH-25 BRIDGE): leadership is read ONLY by EXACT epoch index. The epoch-indexed reader must
+#     exist, and the store must define NO bare "current leadership" reader -- a method returning the leadership
+#     object WITHOUT an epoch argument would reintroduce a "latest / current / nearest" production read. The
+#     compiler already stops callers of a removed method, but a FUTURE re-addition of `fn leadership_authority(`
+#     would silently compile; this grep keeps the absence mechanical.
+STORE='crates/ade_runtime/src/chaindb/epoch_accumulator_store.rs'
+grep -qE 'pub fn leadership_authority_for_epoch' "$STORE" \
+    || fail "the exact epoch-indexed reader 'leadership_authority_for_epoch' is missing from the store (S4-0 contract broken)"
+BARE=$(grep -nE 'fn leadership_authority\(' "$STORE" 2>/dev/null || true)
+if [ -n "$BARE" ]; then
+    fail "the store defines a bare 'leadership_authority(' current-leadership read (S4-0 forbids it -- read leadership ONLY by exact epoch):"
+    echo "$BARE" | sed 's/^/    /'
+fi
+
 if (( FAILED == 0 )); then
-    echo "OK: frozen-leadership authority (DC-EPOCH-25) -- the go+active builder stays test-only; the persisted FrozenLeadershipPoolDistr is the sole leadership authority."
+    echo "OK: frozen-leadership authority (DC-EPOCH-25) -- the go+active builder stays test-only; leadership is answered ONLY by the exact epoch-indexed FrozenLeadershipPoolDistr read (no current / latest read)."
 fi
 exit $FAILED
