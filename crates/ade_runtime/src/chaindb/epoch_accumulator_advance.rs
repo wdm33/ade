@@ -30,7 +30,9 @@
 use std::collections::BTreeMap;
 
 use ade_core::consensus::era_schedule::EraSchedule;
-use ade_ledger::epoch_accumulator::{apply_selected_block, SelectedBlockCtx};
+use ade_ledger::epoch_accumulator::{
+    apply_selected_block, apply_selected_block_with_effects, EpochBoundaryEffect, SelectedBlockCtx,
+};
 use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::Coin;
 use ade_types::{BlockNo, CardanoEra, EpochNo, Hash32, PoolId, SlotNo};
@@ -167,6 +169,10 @@ pub enum AccumulatorChaindbError {
     /// observe-only stall: the within-epoch walk simply never reaches an absent slot, but a boundary cross
     /// is directed AT a specific slot, so its absence is a durable-store inconsistency.
     MissingBlock(SlotNo),
+    /// LIVE-LEDGER-EPOCH-TRANSITION S4-pre-2: the boundary's authoritative leadership freeze effect was
+    /// missing, extra, mislabeled, or not bound to the selected boundary block. Leadership authority is part
+    /// of the boundary transition — an inconsistency is a HARD terminal, never an observe-only stall.
+    BoundaryLeadership(String),
 }
 
 /// Reconcile the durable accumulator over the canonical selected chain in `(from, to_slot]`, where
@@ -326,14 +332,59 @@ pub fn cross_accumulator_over_boundary_block(
     };
 
     let from_epoch = acc.epoch_state.epoch;
-    match apply_selected_block(&acc, &stored.bytes, &ctx) {
-        Ok(next) => {
+    match apply_selected_block_with_effects(&acc, &stored.bytes, &ctx, &stored.hash) {
+        Ok((next, effects)) => {
+            // S4-pre-2: the boundary's leadership freeze is AUTHORITATIVE, not optional evidence — every
+            // inconsistency below is a HARD terminal (never an observe-only Stalled, never a warning).
+            //
+            // A co-advancer-positioned cross crosses EXACTLY ONE boundary (the immediate next epoch), so it
+            // must emit exactly one FreezeLeadership effect. A multi-epoch batch (empty epochs) is NOT
+            // supported for leadership sealing — each boundary's leadership must seal with its OWN accumulator
+            // transition, and the one-advance-per-block store persists no intermediate epoch state; fail
+            // closed rather than let "latest leadership wins" drop an intermediate boundary's leadership.
+            let boundaries = block_epoch.0.saturating_sub(from_epoch.0);
+            if boundaries != 1 {
+                return Err(AccumulatorChaindbError::BoundaryLeadership(format!(
+                    "boundary cross spans {boundaries} epoch(s) ({} -> {}); S4-pre-2 seals exactly one boundary's leadership per advance",
+                    from_epoch.0, block_epoch.0
+                )));
+            }
+            if effects.len() != 1 {
+                return Err(AccumulatorChaindbError::BoundaryLeadership(format!(
+                    "one boundary crossed but produced {} leadership effect(s) — a missing/extra boundary freeze",
+                    effects.len()
+                )));
+            }
+            let EpochBoundaryEffect::FreezeLeadership { source_epoch, target_leadership_epoch, distr } =
+                &effects[0];
+            // source_epoch == the boundary's into-epoch (block_epoch); target == source+1; the distr is bound
+            // to THIS selected boundary block (slot + header hash).
+            if source_epoch.0 != block_epoch.0 {
+                return Err(AccumulatorChaindbError::BoundaryLeadership(format!(
+                    "effect source_epoch {} != boundary into-epoch {}",
+                    source_epoch.0, block_epoch.0
+                )));
+            }
+            if target_leadership_epoch.0 != source_epoch.0 + 1 {
+                return Err(AccumulatorChaindbError::BoundaryLeadership(format!(
+                    "effect target_leadership_epoch {} != source_epoch+1 {}",
+                    target_leadership_epoch.0,
+                    source_epoch.0 + 1
+                )));
+            }
+            if distr.source_slot != boundary_block_slot || distr.source_hash != stored.hash {
+                return Err(AccumulatorChaindbError::BoundaryLeadership(
+                    "effect source_slot/source_hash not bound to the selected boundary block".to_string(),
+                ));
+            }
+            // ATOMIC: accumulator blob + LAST_SLOT + anchor + current leadership + marker, one redb commit.
             store
-                .advance(
+                .advance_with_current_leadership(
                     &next,
                     boundary_block_slot,
                     decoded.header_input.block_no,
                     stored.hash.clone(),
+                    distr,
                 )
                 .map_err(|e| AccumulatorChaindbError::Advance(AdvanceError::Store(e)))?;
             Ok(AccumulatorBoundaryOutcome::Crossed {

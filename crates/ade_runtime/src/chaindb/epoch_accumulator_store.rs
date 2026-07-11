@@ -77,10 +77,17 @@ const LAST_ADVANCED_POINT_KEY: &str = "last_advanced_point";
 /// codec is UNCHANGED (still v4-decodable), so the non-authority observe-only follow still reads existing
 /// stores; ONLY the leadership authority read (`leadership_authority`) gates on this marker + the object.
 const LEADERSHIP_SCHEMA_KEY: &str = "leadership_schema_version";
-/// LIVE-LEDGER-EPOCH-TRANSITION S4-pre-1b: the canonically-encoded `FrozenLeadershipPoolDistr`
-/// (`ade_ledger::frozen_leadership`). Written in the SAME redb commit as the marker, so a certified store
-/// always carries BOTH a v5 marker and a decodable object (never a torn marker/blob pair).
+/// LIVE-LEDGER-EPOCH-TRANSITION S4-pre-1b: the canonically-encoded CURRENT `FrozenLeadershipPoolDistr`
+/// (`ade_ledger::frozen_leadership`) — the leadership authority for the epoch the node is in. Written in the
+/// SAME redb commit as the marker, so a certified store always carries BOTH a v5 marker and a decodable object
+/// (never a torn marker/blob pair). S4-pre-2 makes it RECURRENT: a boundary freeze overwrites it each epoch.
 const FROZEN_LEADERSHIP_KEY: &str = "frozen_leadership_blob";
+/// LIVE-LEDGER-EPOCH-TRANSITION S4-pre-2: the IMMUTABLE BOOTSTRAP `FrozenLeadershipPoolDistr` — the leadership
+/// object sealed at native bootstrap, never overwritten by a boundary freeze. `reset_to_bootstrap` restores
+/// CURRENT := this, so a reset that rewinds the accumulator to the bootstrap baseline can never leave a stale
+/// post-boundary leadership object outrunning the refolded accumulator (replay equivalence). Sealed atomically
+/// with the initial CURRENT at bootstrap; a boundary freeze touches only CURRENT.
+const BOOTSTRAP_FROZEN_LEADERSHIP_KEY: &str = "bootstrap_frozen_leadership_blob";
 
 /// Closed store-failure surface.
 #[derive(Debug)]
@@ -325,6 +332,62 @@ impl EpochAccumulatorStore {
         Ok(())
     }
 
+    /// LIVE-LEDGER-EPOCH-TRANSITION S4-pre-2: a BOUNDARY advance — the accumulator blob + `LAST_SLOT` + the
+    /// `LastAdvancedPoint` anchor + the boundary-frozen CURRENT leadership object + the v5 marker are written
+    /// in ONE redb commit. This is the ATOMIC authoritative advance unit: the store NEVER durably exposes a
+    /// new accumulator epoch without its matching frozen leadership, or a frozen leadership without the
+    /// accumulator boundary transition that produced it (no torn split-authority state — no pending/complete
+    /// marker needed because it is one commit). The within-epoch path keeps using `advance` (no leadership
+    /// change); only a boundary cross uses this. Fail-closed if unsealed or non-forward.
+    pub fn advance_with_current_leadership(
+        &self,
+        acc: &EpochAccumulator,
+        slot: SlotNo,
+        block_no: BlockNo,
+        header_hash: Hash32,
+        leadership: &FrozenLeadershipPoolDistr,
+    ) -> Result<(), EpochAccumulatorStoreError> {
+        let last = self
+            .last_advanced_slot()?
+            .ok_or(EpochAccumulatorStoreError::NotSealed)?;
+        if !self.is_complete()? {
+            return Err(EpochAccumulatorStoreError::NotSealed);
+        }
+        if slot.0 <= last.0 {
+            return Err(EpochAccumulatorStoreError::NonMonotonicAdvance {
+                slot: slot.0,
+                last: last.0,
+            });
+        }
+        let blob = encode_epoch_accumulator(acc);
+        let slot_bytes = slot.0.to_be_bytes();
+        let anchor = LastAdvancedPoint {
+            slot,
+            block_no,
+            header_hash,
+        }
+        .encode();
+        let lead_blob = encode_frozen_leadership(leadership);
+        let version = FROZEN_LEADERSHIP_SCHEMA_VERSION.to_be_bytes();
+        let txn = self.db.begin_write().map_err(rerr)?;
+        {
+            let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            meta.insert(CURRENT_BLOB_KEY, blob.as_slice())
+                .map_err(rerr)?;
+            meta.insert(LAST_SLOT_KEY, slot_bytes.as_slice())
+                .map_err(rerr)?;
+            meta.insert(LAST_ADVANCED_POINT_KEY, anchor.as_slice())
+                .map_err(rerr)?;
+            // The boundary-frozen CURRENT leadership + the marker ride the SAME commit (never a torn pair).
+            meta.insert(FROZEN_LEADERSHIP_KEY, lead_blob.as_slice())
+                .map_err(rerr)?;
+            meta.insert(LEADERSHIP_SCHEMA_KEY, version.as_slice())
+                .map_err(rerr)?;
+        }
+        txn.commit().map_err(rerr)?;
+        Ok(())
+    }
+
     /// The lineage anchor the persisted accumulator is certified to, or `None` if the store is NOT
     /// lineage-certified — a legacy pre-anchor store, or the transitional state after `reset_to_bootstrap`.
     /// Recovery treats `None` as uncertified (reset + re-fold from canonical blocks), NEVER as trusted height
@@ -402,9 +465,27 @@ impl EpochAccumulatorStore {
             // anchor. Recovery treats the cleared store as uncertified until a successful canonical re-fold
             // re-writes a fresh LastAdvancedPoint; it never trusts a reset store as lineage authority.
             let _ = meta.remove(LAST_ADVANCED_POINT_KEY).map_err(rerr)?;
-            // S4-pre-1b: the frozen leadership object + its marker are DELIBERATELY preserved. Leadership is
-            // epoch-frozen (cardano `nesPd`); a within-epoch reorg does not change it. The bootstrap-epoch
-            // leadership authority binds to the sealed seed baseline the reset restores, so it stays valid.
+            // S4-pre-2: leadership is RECURRENT (a boundary freeze overwrites CURRENT each epoch). A reset that
+            // rewinds the accumulator to the bootstrap baseline MUST restore CURRENT := the immutable BOOTSTRAP
+            // object — NEVER preserve a stale post-boundary object (which would outrun the refolded accumulator,
+            // violating replay equivalence: e.g. CURRENT = nesPd for epoch 1341 while the accumulator is reset
+            // to bootstrap epoch 1338, before the boundary that justifies 1341). If a bootstrap leadership
+            // object is present, CURRENT := BOOTSTRAP; otherwise (an uncertified store) clear CURRENT + the
+            // marker so no stray object can survive a reset as authority.
+            let boot_lead = meta
+                .get(BOOTSTRAP_FROZEN_LEADERSHIP_KEY)
+                .map_err(rerr)?
+                .map(|v| v.value().to_vec());
+            match boot_lead {
+                Some(boot_lead) => {
+                    meta.insert(FROZEN_LEADERSHIP_KEY, boot_lead.as_slice())
+                        .map_err(rerr)?;
+                }
+                None => {
+                    let _ = meta.remove(FROZEN_LEADERSHIP_KEY).map_err(rerr)?;
+                    let _ = meta.remove(LEADERSHIP_SCHEMA_KEY).map_err(rerr)?;
+                }
+            }
         }
         txn.commit().map_err(rerr)?;
         Ok(())
@@ -571,11 +652,12 @@ impl EpochAccumulatorStore {
 
     // ----- LIVE-LEDGER-EPOCH-TRANSITION S4-pre-1b: the durable leadership authority -----
 
-    /// Durably SEAL a `FrozenLeadershipPoolDistr` as this store's leadership authority: the canonical object
-    /// blob + the v5 leadership-schema marker are written in ONE redb commit (atomic — a certified store
-    /// always carries BOTH, never a torn marker/blob pair). This is the raw persistence primitive; the
-    /// bootstrap path uses `seal_frozen_leadership_from_seed_record` (which validates the source binding + the
-    /// canonical self-check first). The accumulator BLOB is untouched — its codec stays v4-decodable.
+    /// Durably SEAL the CURRENT `FrozenLeadershipPoolDistr` (the leadership authority for the epoch the node is
+    /// in): the canonical object blob + the v5 leadership-schema marker are written in ONE redb commit (atomic —
+    /// a certified store always carries BOTH, never a torn marker/blob pair). This is the S4-pre-2 BOUNDARY
+    /// FREEZE primitive — it overwrites CURRENT only, leaving the immutable BOOTSTRAP object intact. The
+    /// bootstrap path uses `seal_frozen_leadership_from_seed_record` (which seals BOTH bootstrap + current). The
+    /// accumulator BLOB is untouched — its codec stays v4-decodable.
     pub fn seal_frozen_leadership(
         &self,
         distr: &FrozenLeadershipPoolDistr,
@@ -585,6 +667,31 @@ impl EpochAccumulatorStore {
         let txn = self.db.begin_write().map_err(rerr)?;
         {
             let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            meta.insert(FROZEN_LEADERSHIP_KEY, blob.as_slice())
+                .map_err(rerr)?;
+            meta.insert(LEADERSHIP_SCHEMA_KEY, version.as_slice())
+                .map_err(rerr)?;
+        }
+        txn.commit().map_err(rerr)?;
+        Ok(())
+    }
+
+    /// Durably SEAL the BOOTSTRAP leadership object (S4-pre-2): the immutable BOOTSTRAP blob AND the initial
+    /// CURRENT blob AND the v5 marker are written in ONE redb commit. Used at native bootstrap so the store
+    /// starts with CURRENT == BOOTSTRAP; a later boundary freeze (`seal_frozen_leadership`) overwrites only
+    /// CURRENT, and `reset_to_bootstrap` restores CURRENT := BOOTSTRAP. The BOOTSTRAP key is written ONLY here
+    /// (never by a boundary freeze), so it is the stable reset target for the store's whole lifetime.
+    pub fn seal_bootstrap_frozen_leadership(
+        &self,
+        distr: &FrozenLeadershipPoolDistr,
+    ) -> Result<(), EpochAccumulatorStoreError> {
+        let blob = encode_frozen_leadership(distr);
+        let version = FROZEN_LEADERSHIP_SCHEMA_VERSION.to_be_bytes();
+        let txn = self.db.begin_write().map_err(rerr)?;
+        {
+            let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            meta.insert(BOOTSTRAP_FROZEN_LEADERSHIP_KEY, blob.as_slice())
+                .map_err(rerr)?;
             meta.insert(FROZEN_LEADERSHIP_KEY, blob.as_slice())
                 .map_err(rerr)?;
             meta.insert(LEADERSHIP_SCHEMA_KEY, version.as_slice())
@@ -606,6 +713,25 @@ impl EpochAccumulatorStore {
             Err(_) => return Ok(None),
         };
         match meta.get(FROZEN_LEADERSHIP_KEY).map_err(rerr)? {
+            Some(v) => decode_frozen_leadership(v.value())
+                .map(Some)
+                .map_err(|e| EpochAccumulatorStoreError::Decode(format!("{e:?}"))),
+            None => Ok(None),
+        }
+    }
+
+    /// The raw persisted IMMUTABLE BOOTSTRAP frozen-leadership object, or `None` if absent (an uncertified /
+    /// legacy store). The stable target `reset_to_bootstrap` restores CURRENT to. Diagnostic / evidence
+    /// accessor; a present but undecodable blob is `Decode` (corruption).
+    pub fn bootstrap_frozen_leadership(
+        &self,
+    ) -> Result<Option<FrozenLeadershipPoolDistr>, EpochAccumulatorStoreError> {
+        let txn = self.db.begin_read().map_err(rerr)?;
+        let meta = match txn.open_table(META_TABLE) {
+            Ok(t) => t,
+            Err(_) => return Ok(None),
+        };
+        match meta.get(BOOTSTRAP_FROZEN_LEADERSHIP_KEY).map_err(rerr)? {
             Some(v) => decode_frozen_leadership(v.value())
                 .map(Some)
                 .map_err(|e| EpochAccumulatorStoreError::Decode(format!("{e:?}"))),
@@ -662,12 +788,12 @@ impl EpochAccumulatorStore {
     }
 
     /// Bootstrap seeding: build this store's leadership authority from the manifest-bound seed record and
-    /// SEAL it, fail-closed. The record's `pool_distribution` IS cardano's leadership `nesPd` (proven
-    /// byte-exact at import, S4-pre-1a). Steps, all fail-closed: (1) the record's frozen source point MUST be
-    /// the expected bootstrap point (else `FrozenLeadershipSourceMismatch` — never seed from a foreign
-    /// lineage); (2) build the frozen distr; (3) an encode→decode canonical self-check MUST round-trip before
-    /// we persist authority (else `FrozenLeadershipCanonicalDecodeFailed`); (4) seal the blob + marker
-    /// atomically.
+    /// SEAL it as BOTH the immutable BOOTSTRAP object and the initial CURRENT object, fail-closed. The record's
+    /// `pool_distribution` IS cardano's leadership `nesPd` (proven byte-exact at import, S4-pre-1a). Steps, all
+    /// fail-closed: (1) the record's frozen source point MUST be the expected bootstrap point (else
+    /// `FrozenLeadershipSourceMismatch` — never seed from a foreign lineage); (2) build the frozen distr; (3) an
+    /// encode→decode canonical self-check MUST round-trip before we persist authority (else
+    /// `FrozenLeadershipCanonicalDecodeFailed`); (4) seal bootstrap + current + marker atomically.
     pub fn seal_frozen_leadership_from_seed_record(
         &self,
         record: &SeedEpochConsensusInputs,
@@ -693,7 +819,7 @@ impl EpochAccumulatorStore {
                 FrozenLeadershipError::NonCanonicalBytes,
             ));
         }
-        self.seal_frozen_leadership(&distr)
+        self.seal_bootstrap_frozen_leadership(&distr)
             .map_err(LeadershipAuthorityError::Store)
     }
 
@@ -1167,18 +1293,80 @@ mod tests {
     }
 
     #[test]
-    fn reset_to_bootstrap_preserves_frozen_leadership() {
+    fn reset_to_bootstrap_restores_bootstrap_frozen_leadership() {
         let tmp = TempDir::new().unwrap();
         let s = store(&tmp);
         s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
-        let d = frozen_distr();
-        s.seal_frozen_leadership(&d).unwrap();
+        // Bootstrap seals BOTH the immutable bootstrap object and the initial current object.
+        let l0 = frozen_distr();
+        s.seal_bootstrap_frozen_leadership(&l0).unwrap();
+        assert_eq!(s.leadership_authority().unwrap(), l0);
+        assert_eq!(s.bootstrap_frozen_leadership().unwrap(), Some(l0.clone()));
+
+        // S4-pre-2: a boundary freeze overwrites CURRENT with a later epoch's nesPd; BOOTSTRAP stays put.
+        let mut l1 = frozen_distr();
+        l1.epoch = EpochNo(1342);
+        l1.source_slot = SlotNo(999_999);
+        assert_ne!(l1, l0);
+        s.seal_frozen_leadership(&l1).unwrap();
         s.advance(&acc_advanced(), SlotNo(200), BlockNo(20), Hash32([0xC8; 32])).unwrap();
-        // A reorg reset restores the bootstrap accumulator + clears the lineage anchor, but leadership is
-        // epoch-frozen — it MUST survive (a within-epoch reorg does not change nesPd).
+        assert_eq!(s.leadership_authority().unwrap(), l1, "current is the boundary-frozen object");
+        assert_eq!(s.bootstrap_frozen_leadership().unwrap(), Some(l0.clone()), "bootstrap is immutable");
+
+        // A reorg reset rewinds the accumulator to bootstrap — and MUST restore CURRENT := BOOTSTRAP, never
+        // preserve the stale l1 (which would outrun the refolded accumulator: a replay-equivalence violation).
         s.reset_to_bootstrap().unwrap();
         assert_eq!(s.last_advanced_point().unwrap(), None);
-        assert_eq!(s.leadership_authority().unwrap(), d);
+        assert_eq!(s.leadership_authority().unwrap(), l0, "reset restores bootstrap leadership, not stale l1");
+        assert_eq!(s.bootstrap_frozen_leadership().unwrap(), Some(l0), "bootstrap unchanged by reset");
+    }
+
+    /// The uncertified edge: a store with a CURRENT object but NO bootstrap object (a boundary freeze that
+    /// somehow preceded bootstrap — never happens in production) must NOT preserve the stray current across a
+    /// reset; the reset clears it + the marker so it can never survive as authority.
+    #[test]
+    fn reset_clears_current_leadership_when_no_bootstrap_object() {
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+        s.seal_frozen_leadership(&frozen_distr()).unwrap(); // current only, no bootstrap object
+        assert!(s.frozen_leadership().unwrap().is_some());
+        s.reset_to_bootstrap().unwrap();
+        assert!(s.frozen_leadership().unwrap().is_none(), "a bootstrap-less current object is cleared, not kept");
+        assert!(matches!(
+            s.leadership_authority(),
+            Err(LeadershipAuthorityError::OldAccumulatorSchemaNotLeadershipCertified { .. })
+        ));
+    }
+
+    #[test]
+    fn advance_with_current_leadership_seals_accumulator_and_leadership_atomically() {
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+        let l0 = frozen_distr();
+        s.seal_bootstrap_frozen_leadership(&l0).unwrap();
+
+        // A boundary advance writes accumulator + slot + anchor + current leadership + marker in ONE commit.
+        let mut l1 = frozen_distr();
+        l1.epoch = EpochNo(1341);
+        l1.source_slot = SlotNo(200);
+        s.advance_with_current_leadership(&acc_advanced(), SlotNo(200), BlockNo(20), Hash32([0xC8; 32]), &l1)
+            .unwrap();
+
+        // The accumulator advanced AND current leadership is the boundary object — never a split.
+        assert_eq!(s.load_current().unwrap(), Some((SlotNo(200), acc_advanced())));
+        assert_eq!(s.last_advanced_point().unwrap().map(|p| p.slot), Some(SlotNo(200)));
+        assert_eq!(s.leadership_authority().unwrap(), l1, "current leadership sealed atomically with the advance");
+        assert_eq!(s.bootstrap_frozen_leadership().unwrap(), Some(l0.clone()), "bootstrap untouched");
+
+        // Durable across reopen; a reorg reset restores current := bootstrap (the boundary l1 must not survive).
+        drop(s);
+        let s2 = EpochAccumulatorStore::open(&tmp.path().join("acc.redb")).unwrap();
+        assert_eq!(s2.leadership_authority().unwrap(), l1);
+        assert_eq!(s2.load_current().unwrap().map(|(slot, _)| slot), Some(SlotNo(200)));
+        s2.reset_to_bootstrap().unwrap();
+        assert_eq!(s2.leadership_authority().unwrap(), l0, "reset after a boundary advance restores bootstrap");
     }
 
     #[test]

@@ -17,7 +17,7 @@
 //! active state. Deriving leadership from go + active params is a DISPROVEN hypothesis
 //! (`consensus_view::from_accumulator_go_active_params_for_test_only`), not an optimization target.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ade_codec::cbor::{
     canonical_width, read_array_header, read_bytes, read_map_header, read_uint, write_array_header,
@@ -26,7 +26,8 @@ use ade_codec::cbor::{
 use ade_codec::CodecError;
 use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
 use ade_crypto::blake2b::blake2b_256;
-use ade_types::{EpochNo, Hash28, Hash32, SlotNo};
+use ade_types::tx::Coin;
+use ade_types::{EpochNo, Hash28, Hash32, PoolId, SlotNo};
 
 use crate::consensus_view::{PoolDistrView, PoolEntry};
 
@@ -111,6 +112,47 @@ impl FrozenLeadershipPoolDistr {
             epoch: record.epoch_no,
             source_slot: record.seed_point_slot,
             source_hash: record.seed_point_hash.clone(),
+            pools,
+        }
+    }
+
+    /// The native boundary freeze (S4-pre-2): build the next epoch's leadership `nesPd` at a self-derived epoch
+    /// boundary from the SNAP-frozen inputs — the just-built MARK snapshot's per-pool stake and the
+    /// pre-POOLREAP registered pool params' VRF. cardano's `nesPd_{e+1} = calculatePoolDistr(set_{e+1} = M_e)`,
+    /// where `M_e`'s frozen params are the active pool params at the boundary into `e`, captured BEFORE POOLREAP
+    /// removes retiring pools.
+    ///
+    /// The leadership pool SET is `numDelegators > 0` — the pools with AT LEAST ONE registered delegator
+    /// (`delegated_pools` = the image of the pre-POOLREAP delegation map), intersected with the registered pool
+    /// set (`registered_pool_vrfs`). This is the DERIVED `PoolDistr` membership (DC-EPOCH-24), DISTINCT from the
+    /// full registered set: a registered pool with NO delegator is NOT in `nesPd` (proven: 703 registered but
+    /// 658 in the reference `nesPd`). It INCLUDES zero-stake pools that have a delegator (stake 0) and pools
+    /// retiring at this boundary (their VRF still present pre-POOLREAP) — exactly as cardano's `nes[5]` does. A
+    /// delegated pool with no registered VRF cannot occur pre-POOLREAP and is excluded (no frozen params). VRF
+    /// is read HERE, at capture time — NEVER re-derived from active params at leadership-use time (the disproven
+    /// `from_accumulator_go_active_params_for_test_only` hypothesis, DC-EPOCH-25).
+    pub fn from_boundary_snapshot(
+        epoch: EpochNo,
+        source_slot: SlotNo,
+        source_hash: Hash32,
+        delegated_pools: &BTreeSet<PoolId>,
+        mark_pool_stakes: &BTreeMap<PoolId, Coin>,
+        registered_pool_vrfs: &BTreeMap<PoolId, Hash32>,
+    ) -> Self {
+        let mut pools: BTreeMap<Hash28, LeadershipPoolEntry> = BTreeMap::new();
+        for pool_id in delegated_pools {
+            if let Some(vrf_keyhash) = registered_pool_vrfs.get(pool_id) {
+                let active_stake = mark_pool_stakes.get(pool_id).map(|c| c.0).unwrap_or(0);
+                pools.insert(
+                    pool_id.0.clone(),
+                    LeadershipPoolEntry { active_stake, vrf_keyhash: vrf_keyhash.clone() },
+                );
+            }
+        }
+        FrozenLeadershipPoolDistr {
+            epoch,
+            source_slot,
+            source_hash,
             pools,
         }
     }
@@ -296,6 +338,61 @@ mod tests {
         // The zero-stake pool is present with its VRF (leadership-set membership), stake 0.
         assert_eq!(v.pool_active_stake(EpochNo(1341), &Hash28([0x22; 28])), Some(0));
         assert_eq!(v.pool_vrf_keyhash(EpochNo(1341), &Hash28([0x22; 28])), Some(Hash32([0xB2; 32])));
+    }
+
+    #[test]
+    fn from_boundary_snapshot_is_the_delegation_image_not_the_full_registered_set() {
+        // The pre-POOLREAP REGISTERED pools: a staked pool, a zero-stake pool with a delegator, a retiring
+        // pool with stake, AND a registered pool with NO delegator (0x44) — the last must be EXCLUDED (nesPd is
+        // `numDelegators > 0`, not the full registered set).
+        let mut registered_pool_vrfs: BTreeMap<PoolId, Hash32> = BTreeMap::new();
+        registered_pool_vrfs.insert(PoolId(Hash28([0x11; 28])), Hash32([0xA1; 32]));
+        registered_pool_vrfs.insert(PoolId(Hash28([0x22; 28])), Hash32([0xB2; 32])); // zero-stake, has delegator
+        registered_pool_vrfs.insert(PoolId(Hash28([0x33; 28])), Hash32([0xC3; 32])); // retiring, has stake
+        registered_pool_vrfs.insert(PoolId(Hash28([0x44; 28])), Hash32([0xD4; 32])); // registered, NO delegator
+        // The pools with >= 1 delegator (the delegation-map image) — 0x44 is registered but has no delegator.
+        let delegated_pools: BTreeSet<PoolId> = [0x11u8, 0x22, 0x33]
+            .into_iter()
+            .map(|b| PoolId(Hash28([b; 28])))
+            .collect();
+        // The mark's stake: only the non-zero pools (the ssActiveStake NonZero rule omits zero-stake), plus a
+        // STRAY pool with stake but no registration + no delegation (must not occur; excluded).
+        let mut mark_pool_stakes: BTreeMap<PoolId, Coin> = BTreeMap::new();
+        mark_pool_stakes.insert(PoolId(Hash28([0x11; 28])), Coin(1_000));
+        mark_pool_stakes.insert(PoolId(Hash28([0x33; 28])), Coin(1_000_000_000_000));
+        mark_pool_stakes.insert(PoolId(Hash28([0x99; 28])), Coin(5)); // stray
+
+        let d = FrozenLeadershipPoolDistr::from_boundary_snapshot(
+            EpochNo(1341),
+            SlotNo(115_862_416),
+            Hash32([0x07; 32]),
+            &delegated_pools,
+            &mark_pool_stakes,
+            &registered_pool_vrfs,
+        );
+        assert_eq!(d.epoch, EpochNo(1341));
+        assert_eq!(d.source_slot, SlotNo(115_862_416));
+        // The leadership SET is the delegation image (3 pools); the registered-but-undelegated 0x44 and the
+        // stray unregistered 0x99 are BOTH excluded.
+        assert_eq!(d.pools.len(), 3);
+        assert!(!d.pools.contains_key(&Hash28([0x44; 28])), "a registered pool with no delegator is not leadership");
+        assert!(!d.pools.contains_key(&Hash28([0x99; 28])), "a pool with no frozen params is not leadership");
+        // Staked pool: stake from the mark, VRF from the frozen params.
+        assert_eq!(
+            d.pools[&Hash28([0x11; 28])],
+            LeadershipPoolEntry { active_stake: 1_000, vrf_keyhash: Hash32([0xA1; 32]) }
+        );
+        // Zero-stake pool WITH a delegator: present with stake 0 + its frozen VRF (cardano's nes[5] keeps it).
+        assert_eq!(
+            d.pools[&Hash28([0x22; 28])],
+            LeadershipPoolEntry { active_stake: 0, vrf_keyhash: Hash32([0xB2; 32]) }
+        );
+        // Retiring-but-still-registered pool: its stake + frozen VRF are captured PRE-POOLREAP — the datum a
+        // use-time active-param lookup would drop once POOLREAP reaps it.
+        assert_eq!(
+            d.pools[&Hash28([0x33; 28])],
+            LeadershipPoolEntry { active_stake: 1_000_000_000_000, vrf_keyhash: Hash32([0xC3; 32]) }
+        );
     }
 
     fn sample_distr() -> FrozenLeadershipPoolDistr {

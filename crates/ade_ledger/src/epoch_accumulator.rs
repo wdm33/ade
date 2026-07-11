@@ -102,13 +102,14 @@ use ade_codec::cbor::{
 };
 use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::{Coin, PoolId};
-use ade_types::{CardanoEra, EpochNo, Hash28, SlotNo};
+use ade_types::{CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
 
 use crate::bootstrap_reward_update::{
     bootstrap_rupd_commitment, decode_bootstrap_reward_update, encode_bootstrap_reward_update,
     BootstrapRewardUpdate, BootstrapRupdError,
 };
 use crate::delegation::{apply_bootstrap_reward_deltas, CertState};
+use crate::frozen_leadership::FrozenLeadershipPoolDistr;
 use crate::error::LedgerError;
 use crate::pparams::{ConwayOnlyDepositParams, ProtocolParameters};
 use crate::rules::{apply_epoch_boundary_with_registrations, process_block_certificates};
@@ -409,9 +410,95 @@ pub enum LedgerTransitionError {
     /// mutation (no refund credited, no proposal removed) rather than refund past an unproven disposition.
     /// Carries the structured verdict that tripped it.
     GovernanceEpochTerminal(crate::governance::GovernanceTerminal),
+    /// LIVE-LEDGER-EPOCH-TRANSITION S4-pre-2: the boundary fired but its rotated snapshots are not
+    /// authoritative, so the leadership `nesPd` cannot be frozen (a reduced / unavailable-snapshot boundary
+    /// reaching the full leadership-freeze path is a miswire). Fail closed — leadership authority is part of
+    /// the boundary transition, never optional evidence.
+    BoundaryLeadershipSnapshotUnavailable { target: u64 },
+    /// S4-pre-2: the target leadership epoch (`boundary_into_epoch + 1`) overflowed `u64` — an impossible
+    /// hostile-state boundary. Halt deterministically rather than wrap.
+    LeadershipEpochOverflow { boundary_into_epoch: u64 },
+    /// S4-pre-2: the ordered boundary-leadership effects violated a batch invariant (non-ascending source
+    /// epoch, a duplicate target leadership epoch, or an effect whose `distr.epoch` disagrees with its labeled
+    /// `target_leadership_epoch`). The freeze is an authoritative boundary effect, not optional evidence.
+    BoundaryLeadershipEffectInvariant { reason: &'static str },
 }
 
-/// Apply one durable selected-chain block to the accumulator. Total, deterministic, replay-equivalent.
+/// LIVE-LEDGER-EPOCH-TRANSITION S4-pre-2: an AUTHORITATIVE effect a boundary transition emits — NOT optional
+/// evidence and NOT a side channel on the accounting. Today the sole variant freezes the next epoch's
+/// leadership `nesPd` at the SNAP point (pre-POOLREAP); the RED advancer seals it atomically with the
+/// accumulator advance. Carries EXPLICIT labels so the proof output is unambiguous (no mark/set/go naming).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EpochBoundaryEffect {
+    /// A boundary froze the leadership distribution (cardano `nesPd`) at its SNAP point.
+    FreezeLeadership {
+        /// The epoch this boundary crossed INTO — the SNAP that captured the frozen params (pre-POOLREAP).
+        source_epoch: EpochNo,
+        /// The leadership epoch the frozen distribution authorizes (`== distr.epoch`). Carried explicitly (the
+        /// empirical rotation→use mapping; candidate `source_epoch + 1`) so proofs state the target epoch, not
+        /// a snapshot slot name.
+        target_leadership_epoch: EpochNo,
+        /// The frozen distribution. `distr.epoch == target_leadership_epoch`; `distr.source_slot` /
+        /// `distr.source_hash` = the crossing block's canonical point (the lineage binding).
+        distr: FrozenLeadershipPoolDistr,
+    },
+}
+
+impl EpochBoundaryEffect {
+    /// The `FreezeLeadership` distribution.
+    pub fn leadership(&self) -> &FrozenLeadershipPoolDistr {
+        match self {
+            EpochBoundaryEffect::FreezeLeadership { distr, .. } => distr,
+        }
+    }
+    /// The target leadership epoch this effect authorizes.
+    pub fn target_leadership_epoch(&self) -> EpochNo {
+        match self {
+            EpochBoundaryEffect::FreezeLeadership { target_leadership_epoch, .. } => {
+                *target_leadership_epoch
+            }
+        }
+    }
+}
+
+/// Enforce the ordered-batch invariants on a boundary's leadership effects (the user's plumbing contract): the
+/// effects are in STRICT ascending `source_epoch` order, carry NO duplicate `target_leadership_epoch`, and each
+/// effect's `distr.epoch` matches its labeled `target_leadership_epoch`. A violation is a typed terminal (the
+/// freeze is authoritative, never best-effort). Pure; empty is trivially valid (a within-epoch block).
+fn validate_boundary_effects(effects: &[EpochBoundaryEffect]) -> Result<(), LedgerTransitionError> {
+    let mut prev_source: Option<EpochNo> = None;
+    let mut prev_target: Option<EpochNo> = None;
+    for eff in effects {
+        let EpochBoundaryEffect::FreezeLeadership { source_epoch, target_leadership_epoch, distr } = eff;
+        if distr.epoch != *target_leadership_epoch {
+            return Err(LedgerTransitionError::BoundaryLeadershipEffectInvariant {
+                reason: "distr.epoch != target_leadership_epoch",
+            });
+        }
+        if let Some(p) = prev_source {
+            if source_epoch.0 <= p.0 {
+                return Err(LedgerTransitionError::BoundaryLeadershipEffectInvariant {
+                    reason: "source epochs not strictly ascending",
+                });
+            }
+        }
+        if let Some(p) = prev_target {
+            if target_leadership_epoch.0 <= p.0 {
+                return Err(LedgerTransitionError::BoundaryLeadershipEffectInvariant {
+                    reason: "duplicate or non-ascending target leadership epoch",
+                });
+            }
+        }
+        prev_source = Some(*source_epoch);
+        prev_target = Some(*target_leadership_epoch);
+    }
+    Ok(())
+}
+
+/// Apply one durable selected-chain block to the accumulator. Total, deterministic, replay-equivalent. This is
+/// the convenience wrapper that DISCARDS the boundary leadership effects — for callers that do not seal
+/// leadership (observe-only analysis, tests). The RED advancer that persists leadership uses
+/// [`apply_selected_block_with_effects`] and seals each effect atomically with the advance.
 ///
 /// The order is the cardano NEWEPOCH order (module docs): every crossed boundary first (reward over the
 /// held `nesBprev` + pre-rotation `go`, then SNAP/POOLREAP/enactment, then the `nesBprev` rotation),
@@ -421,6 +508,22 @@ pub fn apply_selected_block(
     block_bytes: &[u8],
     ctx: &SelectedBlockCtx,
 ) -> Result<EpochAccumulator, LedgerTransitionError> {
+    // The `Hash32::default`-equivalent source hash is irrelevant here: this wrapper discards the effects, so
+    // the crossing block's lineage binding on the (dropped) frozen leadership objects is never observed.
+    apply_selected_block_with_effects(prior, block_bytes, ctx, &Hash32([0u8; 32])).map(|(acc, _)| acc)
+}
+
+/// Apply one durable selected-chain block AND return the ordered boundary leadership effects (S4-pre-2). The
+/// RED advancer uses this and seals each `FreezeLeadership` effect's distribution atomically with the
+/// accumulator advance. `block_header_hash` is the crossing block's canonical header hash — the lineage
+/// binding stamped on every effect's `source_hash`. The returned `Vec` is ordered (strict ascending source
+/// epoch, no duplicate target leadership epoch) and validated fail-closed; empty for a within-epoch block.
+pub fn apply_selected_block_with_effects(
+    prior: &EpochAccumulator,
+    block_bytes: &[u8],
+    ctx: &SelectedBlockCtx,
+    block_header_hash: &Hash32,
+) -> Result<(EpochAccumulator, Vec<EpochBoundaryEffect>), LedgerTransitionError> {
     let (era, block) = decode_selected_block(block_bytes)?;
     if (era as u8) < (CardanoEra::Conway as u8) {
         return Err(LedgerTransitionError::EraNotSupported {
@@ -441,31 +544,72 @@ pub fn apply_selected_block(
     }
 
     let mut acc = prior.clone();
+    let mut effects: Vec<EpochBoundaryEffect> = Vec::new();
     // 1. Boundary transitions first — one per crossed boundary, empty epochs included. `checked_add`
     //    keeps the transition TOTAL on hostile durable state: if `prior.epoch == u64::MAX` then (by the
     //    boundary-gap guard above) `block_epoch == u64::MAX` too, so there is no boundary to cross — an
-    //    empty range, never a wrap to `0..=u64::MAX`.
+    //    empty range, never a wrap to `0..=u64::MAX`. Each cross emits its authoritative leadership freeze.
     if let Some(first_boundary) = prior.epoch_state.epoch.0.checked_add(1) {
         for e in first_boundary..=ctx.block_epoch.0 {
-            acc = cross_epoch_boundary(acc, EpochNo(e), ctx)?;
+            let (next, effect) =
+                cross_epoch_boundary_with_effect(acc, EpochNo(e), ctx, block_header_hash)?;
+            acc = next;
+            effects.push(effect);
         }
     }
     // 2. Within-epoch effects of THIS block.
     acc = apply_within_epoch(acc, &block, era, ctx)?;
     acc.epoch_state.slot = ctx.block_slot;
-    Ok(acc)
+    // The freeze is an authoritative boundary effect: enforce the ordered-batch invariants fail-closed.
+    validate_boundary_effects(&effects)?;
+    Ok((acc, effects))
 }
 
-/// Cross ONE epoch boundary into `target`. Reuses the validated `apply_epoch_boundary_with_registrations`
-/// for the reward + pots + snapshot rotation, feeding it the held `prev_block_production`/`prev_epoch_fees`
-/// (the `nesBprev` reward inputs), then rotates `prev := <just-finished nesBcur>`, `cur := ∅`. The new
-/// MARK is BUILT (`build_boundary_mark_snapshot`) from `ctx.boundary_mark` (the per-credential base-UTxO
-/// stake) plus the held delegation state — fail-closed if `ctx.boundary_mark` is absent.
+/// Cross ONE epoch boundary into `target`, discarding the leadership freeze effect — the convenience wrapper
+/// for callers that do not seal leadership (tests / observe-only analysis). See
+/// [`cross_epoch_boundary_with_effect`].
 pub fn cross_epoch_boundary(
-    mut acc: EpochAccumulator,
+    acc: EpochAccumulator,
     target: EpochNo,
     ctx: &SelectedBlockCtx,
 ) -> Result<EpochAccumulator, LedgerTransitionError> {
+    cross_epoch_boundary_with_effect(acc, target, ctx, &Hash32([0u8; 32])).map(|(acc, _)| acc)
+}
+
+/// Cross ONE epoch boundary into `target` AND freeze the next epoch's leadership `nesPd` (S4-pre-2). Reuses
+/// the validated `apply_epoch_boundary_with_registrations` for the reward + pots + snapshot rotation, feeding
+/// it the held `prev_block_production`/`prev_epoch_fees` (the `nesBprev` reward inputs), then rotates
+/// `prev := <just-finished nesBcur>`, `cur := ∅`. The new MARK is BUILT (`build_boundary_mark_snapshot`) from
+/// `ctx.boundary_mark` (the per-credential base-UTxO stake) plus the held delegation state — fail-closed if
+/// `ctx.boundary_mark` is absent.
+///
+/// The leadership freeze: the pre-POOLREAP registered pool params' VRF is captured HERE (SNAP time, before the
+/// boundary fn reaps retiring pools), and combined with the just-built mark's per-pool stake into the target
+/// epoch's `FrozenLeadershipPoolDistr` — cardano's `nesPd_{target+1} = calculatePoolDistr(set_{target+1} = the
+/// mark built here)`. The shared, byte-exact `apply_epoch_boundary_with_registrations` is untouched.
+pub fn cross_epoch_boundary_with_effect(
+    mut acc: EpochAccumulator,
+    target: EpochNo,
+    ctx: &SelectedBlockCtx,
+    block_header_hash: &Hash32,
+) -> Result<(EpochAccumulator, EpochBoundaryEffect), LedgerTransitionError> {
+    // S4-pre-2: capture the pre-POOLREAP registered pool params' VRF (cardano's SNAP-time `_poolParams`) from
+    // the PRIOR accumulator's active set — BEFORE `apply_epoch_boundary_with_registrations` runs POOLREAP
+    // (which reaps retiring pools). This is the frozen VRF the leadership `nesPd` reads; a use-time
+    // active-param lookup would drop a retiring pool's VRF once reaped (the disproven hypothesis, DC-EPOCH-25).
+    let registered_pool_vrfs: BTreeMap<PoolId, Hash32> = acc
+        .cert_state
+        .pool
+        .pools
+        .iter()
+        .map(|(pid, params)| (pid.clone(), params.vrf_hash.clone()))
+        .collect();
+    // S4-pre-2: the leadership pool SET is `numDelegators > 0` — the pools with >=1 delegator (the image of the
+    // pre-POOLREAP delegation map), NOT all registered pools (DC-EPOCH-24: 703 registered vs 658 in nesPd).
+    // Captured from the PRIOR accumulator (pre-boundary = pre-POOLREAP; applyRUpd does not change the
+    // delegation map, and POOLREAP clears reaped pools' delegators only AFTER the mark is built).
+    let delegated_pools: std::collections::BTreeSet<PoolId> =
+        acc.cert_state.delegation.delegations.values().cloned().collect();
     let base_utxo = ctx
         .boundary_mark
         .as_ref()
@@ -621,7 +765,36 @@ pub fn cross_epoch_boundary(
             .checked_add(delta_treasury.0)
             .ok_or(LedgerTransitionError::ArithmeticOverflow)?;
     }
-    Ok(acc)
+
+    // S4-pre-2: FREEZE the leadership `nesPd` for the target leadership epoch. The just-rotated mark (built
+    // from `ctx.boundary_mark`) supplies each pool's stake; `registered_pool_vrfs` (captured pre-POOLREAP,
+    // above) supplies the frozen VRF + the leadership pool SET (every registered pool, incl. zero-stake +
+    // pools retiring at this boundary). `nesPd_{target+1} = calculatePoolDistr(set = this mark)`.
+    let target_leadership_epoch = EpochNo(target.0.checked_add(1).ok_or(
+        LedgerTransitionError::LeadershipEpochOverflow { boundary_into_epoch: target.0 },
+    )?);
+    let mark_pool_stakes = &acc
+        .epoch_state
+        .snapshots
+        .as_authoritative()
+        .ok_or(LedgerTransitionError::BoundaryLeadershipSnapshotUnavailable { target: target.0 })?
+        .mark
+        .0
+        .pool_stakes;
+    let distr = FrozenLeadershipPoolDistr::from_boundary_snapshot(
+        target_leadership_epoch,
+        ctx.block_slot,
+        block_header_hash.clone(),
+        &delegated_pools,
+        mark_pool_stakes,
+        &registered_pool_vrfs,
+    );
+    let effect = EpochBoundaryEffect::FreezeLeadership {
+        source_epoch: target,
+        target_leadership_epoch,
+        distr,
+    };
+    Ok((acc, effect))
 }
 
 /// The canonical per-credential base-UTxO stake at a specific boundary point — the ONLY base input a boundary
@@ -2072,6 +2245,45 @@ mod tests {
             crate::state::DormantEpochs::Unversioned,
             "a V1 store is never silently promoted to a fabricated Bound(0) on restart"
         );
+    }
+
+    #[test]
+    fn boundary_leadership_effect_batch_invariants_are_enforced() {
+        use crate::frozen_leadership::FrozenLeadershipPoolDistr;
+        let distr = |epoch: u64| FrozenLeadershipPoolDistr {
+            epoch: EpochNo(epoch),
+            source_slot: SlotNo(100),
+            source_hash: Hash32([0x07; 32]),
+            pools: BTreeMap::new(),
+        };
+        let eff = |source: u64, target: u64| EpochBoundaryEffect::FreezeLeadership {
+            source_epoch: EpochNo(source),
+            target_leadership_epoch: EpochNo(target),
+            distr: distr(target),
+        };
+        // Empty (a within-epoch block) is trivially valid; a well-formed ascending batch is valid.
+        assert!(validate_boundary_effects(&[]).is_ok());
+        assert!(validate_boundary_effects(&[eff(1339, 1340), eff(1340, 1341)]).is_ok());
+        // Non-ascending source epoch → typed terminal (not a warning).
+        assert!(matches!(
+            validate_boundary_effects(&[eff(1340, 1341), eff(1339, 1340)]),
+            Err(LedgerTransitionError::BoundaryLeadershipEffectInvariant { .. })
+        ));
+        // Duplicate target leadership epoch → typed terminal.
+        assert!(matches!(
+            validate_boundary_effects(&[eff(1339, 1340), eff(1340, 1340)]),
+            Err(LedgerTransitionError::BoundaryLeadershipEffectInvariant { .. })
+        ));
+        // A distribution whose epoch disagrees with its labeled target → typed terminal.
+        let mislabeled = EpochBoundaryEffect::FreezeLeadership {
+            source_epoch: EpochNo(1339),
+            target_leadership_epoch: EpochNo(1340),
+            distr: distr(9999),
+        };
+        assert!(matches!(
+            validate_boundary_effects(&[mislabeled]),
+            Err(LedgerTransitionError::BoundaryLeadershipEffectInvariant { .. })
+        ));
     }
 
     #[test]

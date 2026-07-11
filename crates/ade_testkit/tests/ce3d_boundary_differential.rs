@@ -245,6 +245,82 @@ fn ref_post_state(state_path: &Path, slot: u64, epoch: u64) -> PostState {
     }
 }
 
+/// The cardano reference leadership PoolDistr (`nes[5]` / `nesPd`) for the epoch this reference state is at —
+/// the SAME `decode_native_nonutxo_state(...).pool_distr` field that produced the proven-byte-exact seed
+/// pool_distribution. Keyed by pool keyhash(28B) -> (active_stake, VRF keyhash). This is the LITERAL nes[5]
+/// (incl. zero-stake registered + retired/POOLREAP'd pools); NEVER the lossy `.mark_pool_distr`.
+fn ref_nes_pd(state_path: &Path, slot: u64, epoch: u64) -> BTreeMap<[u8; 28], (u64, [u8; 32])> {
+    use ade_ledger::bootstrap_anchor::SeedPoint;
+    use ade_ledger::ledgerdb_state::decode_native_nonutxo_state;
+    let state = std::fs::read(state_path).expect("ref state");
+    let point = SeedPoint { slot: SlotNo(slot), block_hash: Hash32([0u8; 32]) };
+    let (s1a, _commit) =
+        decode_native_nonutxo_state(&state, point, epoch, 2).expect("decode cardano ref state");
+    s1a.pool_distr
+        .iter()
+        .map(|(pid, (stake, vrf))| ((pid.0).0, (*stake, vrf.0)))
+        .collect()
+}
+
+/// Ade's boundary-frozen leadership in the SAME comparable form as [`ref_nes_pd`] (keyhash -> (stake, VRF)).
+fn ade_leadership_map(
+    distr: &ade_ledger::frozen_leadership::FrozenLeadershipPoolDistr,
+) -> BTreeMap<[u8; 28], (u64, [u8; 32])> {
+    distr
+        .pools
+        .iter()
+        .map(|(h, e)| (h.0, (e.active_stake, e.vrf_keyhash.0)))
+        .collect()
+}
+
+/// S4-pre-2 probe (FAST): the leadership pool SET is the DELEGATION IMAGE (pools with >=1 delegator), NOT all
+/// registered pools. Verify against the v5 store's accumulator state at epoch 1340 that `image ∩ registered`
+/// is ~658 (the reference nesPd count), while `registered` is ~703.
+#[test]
+#[ignore = "S4-pre-2 probe: delegation-image pool set size vs registered (env S5_SEED_STORES); FAST"]
+fn s4pre2_delegation_image_pool_set_size() {
+    let seed_dir = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
+    let work = env_path("CE3D_WORK", "/home/ts/.cardano-ce3d-extract/harness-work-s5");
+    let dst = work.join("s4pre2-probe");
+    let _ = std::fs::remove_dir_all(&dst);
+    std::fs::create_dir_all(&dst).expect("mkdir");
+    let acc_copy = dst.join("epoch-accumulator.redb");
+    std::fs::copy(seed_dir.join("epoch-accumulator.redb"), &acc_copy).expect("copy acc");
+    let store = EpochAccumulatorStore::open(&acc_copy).expect("open acc");
+    let (_slot, acc) = store.load_current().expect("load").expect("sealed");
+    let registered = acc.cert_state.pool.pools.len();
+    let image: std::collections::BTreeSet<_> =
+        acc.cert_state.delegation.delegations.values().cloned().collect();
+    let image_registered = image
+        .iter()
+        .filter(|p| acc.cert_state.pool.pools.contains_key(p))
+        .count();
+    eprintln!(
+        "epoch {} — registered_pools={registered} delegation_image={} image_registered={image_registered}",
+        acc.epoch_state.epoch.0,
+        image.len()
+    );
+}
+
+/// S4-pre-2 sanity (FAST): the cardano reference `nesPd` (`nes[5]`) decodes non-empty from each POST state —
+/// the reference the boundary-freeze proof compares against. Confirms the decoder + fixtures before the SLOW
+/// recovery run relies on them.
+#[test]
+#[ignore = "S4-pre-2 sanity: reference nesPd (nes[5]) decodes non-empty from the POST states (env CE3D_REF); FAST"]
+fn s4pre2_reference_nespd_decodes_nonempty() {
+    let ref_dir = env_path("CE3D_REF", "/home/ts/.cardano-ce3d-extract/db/ledger");
+    for (dir, slot, epoch) in [
+        ("115776011_db-analyser/state", 115_776_011u64, 1340u64),
+        ("115862416_db-analyser/state", 115_862_416, 1341),
+        ("115948834_db-analyser/state", 115_948_834, 1342),
+    ] {
+        let pd = ref_nes_pd(&ref_dir.join(dir), slot, epoch);
+        let zero = pd.values().filter(|(s, _)| *s == 0).count();
+        eprintln!("reference nesPd POST-{epoch}: {} pools ({zero} zero-stake)", pd.len());
+        assert!(pd.len() > 100, "reference nesPd for epoch {epoch} decodes non-empty (nes[5])");
+    }
+}
+
 fn ok(b: bool) -> &'static str {
     if b {
         "MATCH"
@@ -1549,6 +1625,7 @@ fn s5_recovery_replay_equivalence_within_k_rollback() {
     let seed_dir = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
     let corpus = env_path("CE3D_CORPUS", "/home/ts/.cardano-ce3d-extract/corpus_blocks");
     let work = env_path("CE3D_WORK", "/home/ts/.cardano-ce3d-extract/harness-work-s5");
+    let ref_dir = env_path("CE3D_REF", "/home/ts/.cardano-ce3d-extract/db/ledger");
     let sched = preview_schedule();
     // Post-boundary tip = the first block of epoch 1341 (crosses the 1340->1341 self-derived boundary).
     let final_slot = EPOCH_1341_FIRST_SLOT;
@@ -1566,6 +1643,62 @@ fn s5_recovery_replay_equivalence_within_k_rollback() {
     let cpst_a = s5_checkpoint_state_hash(&cp_a);
     let auth_a = s5_authority_stake_view_hash(&store_a);
     let lead_a = s5_leadership_hash(&store_a);
+
+    // ===== S4-pre-2 REFERENCE PROOF (item 2): the boundary-frozen CURRENT leadership sealed by the 1340->1341
+    // cross must byte-match the cardano reference nesPd (nes[5]) for its target epoch. LET THE TEST DECIDE the
+    // mapping: compare against ALL three reference epochs and REPORT which one it byte-matches, then assert it
+    // is exactly the labeled target_leadership_epoch. No mark/set/go naming — the reference field is nesPd. =====
+    {
+        let current = store_a.leadership_authority().expect("boundary-frozen current leadership");
+        let ade = ade_leadership_map(&current);
+        let ref_1340 = ref_nes_pd(&ref_dir.join("115776011_db-analyser/state"), 115_776_011, 1340);
+        let ref_1341 = ref_nes_pd(&ref_dir.join("115862416_db-analyser/state"), 115_862_416, 1341);
+        let ref_1342 = ref_nes_pd(&ref_dir.join("115948834_db-analyser/state"), 115_948_834, 1342);
+        let matched_epoch: Option<u64> = if ref_1342 == ade {
+            Some(1342)
+        } else if ref_1341 == ade {
+            Some(1341)
+        } else if ref_1340 == ade {
+            Some(1340)
+        } else {
+            None
+        };
+        let src_epoch = post_a.epoch.saturating_sub(1);
+        let hxs = |h: &Hash32| h.0.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        eprintln!("S4-pre-2 REFERENCE PROOF (native boundary leadership freeze):");
+        eprintln!("  boundary_source_epoch          = {src_epoch}");
+        eprintln!("  boundary_target_epoch          = {}", post_a.epoch);
+        eprintln!("  frozen_leadership_target_epoch = {}", current.epoch.0);
+        eprintln!(
+            "  reference                      = {}",
+            matched_epoch.map(|e| format!("POST-{e} nesPd")).unwrap_or_else(|| "NONE".into())
+        );
+        eprintln!("  pool_count ade / ref@target    = {} / {}", ade.len(),
+            match current.epoch.0 { 1340 => ref_1340.len(), 1341 => ref_1341.len(), _ => ref_1342.len() });
+        eprintln!("  zero_stake_pools               = {}", ade.values().filter(|(s, _)| *s == 0).count());
+        eprintln!("  hash                           = {}", hxs(&lead_a));
+        // Pin the mapping EMPIRICALLY: the labeled target epoch MUST be the reference the freeze byte-matches.
+        assert_eq!(
+            matched_epoch,
+            Some(current.epoch.0),
+            "boundary-frozen leadership must byte-match reference nesPd for its labeled target epoch {} (matched {:?}) \
+             — if this is off-by-one, fix the freeze target semantics + labels, NOT the reference",
+            current.epoch.0,
+            matched_epoch
+        );
+        // The pinned mapping: target_leadership_epoch == the boundary's into-epoch + 1.
+        assert_eq!(current.epoch.0, post_a.epoch + 1, "target_leadership_epoch == boundary into-epoch + 1");
+        // The exact per-field proof (pool count + ids + stake + VRF, incl. zero-stake + retired, in one map eq).
+        let reference = match current.epoch.0 {
+            1340 => &ref_1340,
+            1341 => &ref_1341,
+            _ => &ref_1342,
+        };
+        assert_eq!(ade.len(), reference.len(), "pool_count exact");
+        assert_eq!(&ade, reference, "pool ids + stake + VRF byte-exact vs reference nesPd (incl zero-stake + retired)");
+        assert!(ade.values().any(|(s, _)| *s == 0), "zero-stake registered leadership pools preserved");
+    }
+
     drop(store_a);
     drop(cp_a);
     let warm_a = s5_warm_start_hash(&dst_a, &db, &sched);
