@@ -1,11 +1,23 @@
 # S4 — the sealed authority flip: epoch-indexed frozen leadership replaces the seed-window read
 
-> **Status: OPEN.** All admissibility preconditions GREEN + committed: CE-3d byte-exact (`e476415a`), S5
-> restart/rollback replay-equivalence (`8d6bf874` + `687fea98`), S4-pre frozen leadership authority
-> (`501bf89a`/`13829660`/`3f93252d`/`8cdd1471`), S4-0 epoch-indexed reader (`c7e1c18f`). This is the enforcing
-> consumer. It declares no new invariant; it PROMOTES the frozen leadership authority (DC-EPOCH-25) to the sole
-> production leader-schedule source and lifts the seed+2 ceiling. Supersedes `SLICE-S4-contract.md` §1/§7.2
-> (the disproven `from_accumulator(go+active params)` route — LDAT `67890681`).
+> **Status: staged in two sealed slices.** All admissibility preconditions GREEN + committed: CE-3d byte-exact
+> (`e476415a`), S5 restart/rollback replay-equivalence (`8d6bf874` + `687fea98`), S4-pre frozen leadership
+> authority (`501bf89a`/`13829660`/`3f93252d`/`8cdd1471`), S4-0 epoch-indexed reader (`c7e1c18f`). This declares
+> no new invariant; it PROMOTES the frozen leadership authority (DC-EPOCH-25) to the sole production
+> leader-schedule source and lifts the seed+2 ceiling. Supersedes `SLICE-S4-contract.md` §1/§7.2 (the disproven
+> `from_accumulator(go+active params)` route — LDAT `67890681`).
+>
+> - **S4-L1 — DONE (this doc's L1 + L2 layers split at a strict boundary).** Retires seed-window authority from
+>   the INITIAL/WARM live leadership view: sites 658/840/3397 read `leadership_authority_for_epoch(seed_epoch)`,
+>   byte-identical to the retired seed projection (proven), fail-closed with NO seed fallback. Every production
+>   first-run route (native + legacy) now seals readable leadership; all end-to-end fixtures seal a
+>   leadership-certified store. **S4 is NOT complete:** the seed+2 ceiling and the promotion path
+>   (`prepare_authority_for_candidate_slot`, boundary 2+) remain seed-window-bound until S4-L2. This is a staged
+>   authority retirement (each of the three sites has exactly ONE authority), not a fallback.
+> - **S4-L2 — OPEN.** The real ceiling lift: thread the store through `run_node_sync` → the promotion; read
+>   `leadership_authority_for_epoch(candidate_epoch)` for boundary 2+; delete the `epoch_wire.rs` seed+2 ceiling;
+>   add the production seed-authority resurrection guard; prove the former ceiling crossed with no seed-window
+>   authority. The higher-risk consensus wiring, its own sealed proof.
 
 **Cluster:** LIVE-LEDGER-EPOCH-TRANSITION. **Depends on:** CE-3d + S5 + S4-pre + S4-0 (all GREEN).
 

@@ -326,6 +326,14 @@ pub enum NodeLifecycleError {
     /// never validate a peer's block against an empty stake view, never
     /// accept-if-missing.
     FeedMissingRecoveredConsensusInputs,
+    /// LIVE-LEDGER-EPOCH-TRANSITION S4: the epoch-indexed frozen leadership authority
+    /// (DC-EPOCH-25) cannot answer for the epoch the node must validate a slot in — the
+    /// accumulator store is absent, uncertified (legacy / no leadership marker), or
+    /// carries no sealed leadership object for the epoch. Post-S4 the leader schedule is
+    /// read ONLY from the frozen authority (`leadership_authority_for_epoch`), by EXACT
+    /// epoch; there is NO seed-window fallback. Fail closed — re-bootstrap to
+    /// leadership-certify the store.
+    ProductionLeadershipAuthorityUnavailable { epoch: u64, reason: String },
     /// A restart-supplied shelley genesis `epochLength` disagrees with the durable
     /// seed-epoch sidecar's persisted `epoch_length_slots`. The sidecar is the
     /// epoch-geometry AUTHORITY (WARMSTART-ERA-SCHEDULE-VENUE / DC-CINPUT-05); a
@@ -479,9 +487,37 @@ fn exit_code_for(e: &NodeLifecycleError) -> i32 {
         | NodeLifecycleError::AccumulatorPredatesGovernanceImport { .. }
         | NodeLifecycleError::RecoveryAdmission(_) => EXIT_NODE_WARM_START_RECOVERY_FAILED,
         NodeLifecycleError::RelaySync(_)
-        | NodeLifecycleError::FeedMissingRecoveredConsensusInputs => EXIT_NODE_RELAY_SYNC_FAILED,
+        | NodeLifecycleError::FeedMissingRecoveredConsensusInputs
+        | NodeLifecycleError::ProductionLeadershipAuthorityUnavailable { .. } => {
+            EXIT_NODE_RELAY_SYNC_FAILED
+        }
         NodeLifecycleError::ForgeKeyIngress(_) => EXIT_NODE_FORGE_KEY_INGRESS_FAILED,
     }
+}
+
+/// LIVE-LEDGER-EPOCH-TRANSITION S4: the SOLE production leadership / header-validation view for the epoch a
+/// recovered seed record anchors — the epoch-indexed frozen leadership authority (DC-EPOCH-25), read by EXACT
+/// epoch from the durable native-frozen store. Byte-identical to the retired
+/// `PoolDistrView::from_seed_epoch_consensus_inputs(record)` for the seed epoch (S4-0 proved
+/// `leadership_authority_for_epoch(seed) == from_seed`), but sourced from the durable authority, never
+/// re-projected from the seed record's pool set. Fail closed if the store is absent / uncertified / missing the
+/// epoch — there is NO seed-window fallback. `active_slots_coeff` is the venue genesis constant (geometry, not a
+/// leadership read); the retired call was the pool-set projection, which is what the flip removes.
+fn leadership_view_from_frozen_authority(
+    store: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
+    record: &SeedEpochConsensusInputs,
+) -> Result<PoolDistrView, NodeLifecycleError> {
+    let store = store.ok_or_else(|| NodeLifecycleError::ProductionLeadershipAuthorityUnavailable {
+        epoch: record.epoch_no.0,
+        reason: "epoch-accumulator store absent (re-bootstrap to leadership-certify)".to_string(),
+    })?;
+    let frozen = store.leadership_authority_for_epoch(record.epoch_no).map_err(|e| {
+        NodeLifecycleError::ProductionLeadershipAuthorityUnavailable {
+            epoch: record.epoch_no.0,
+            reason: format!("{e:?}"),
+        }
+    })?;
+    Ok(frozen.to_pool_distr_view(record.active_slots_coeff))
 }
 
 async fn run_node_lifecycle_inner(
@@ -552,10 +588,22 @@ async fn run_node_lifecycle_inner(
     //    authority (FirstRun via bootstrap_from_mithril_snapshot; WarmStart
     //    via the warm-start verify chain). Fail closed; NO genesis / bundle /
     //    cold / tip fallback on either arm.
+    // LIVE-LEDGER-EPOCH-TRANSITION S4: the warm-start recovery replay reads the leader schedule by EXACT epoch
+    // from the epoch-indexed frozen leadership authority (DC-EPOCH-25), which for a warm start PRE-EXISTS (a prior
+    // run sealed it). Open a SHORT-LIVED handle here and drop it before the live authority open below (redb is
+    // single-open). A FirstRun has no store yet (the bootstrap below creates it), so this is None and the
+    // warm-start arm is not taken.
+    let accumulator_path = snapshot_dir.join("epoch-accumulator.redb");
+    let warm_accumulator = if accumulator_path.exists() {
+        ade_runtime::chaindb::EpochAccumulatorStore::open(&accumulator_path).ok()
+    } else {
+        None
+    };
     let state = match start {
         NodeStart::FirstRun => first_run_mithril_bootstrap(cli, &chaindb, &mut wal)?,
-        NodeStart::WarmStart => warm_start_recovery(&chaindb, &wal)?,
+        NodeStart::WarmStart => warm_start_recovery(&chaindb, &wal, warm_accumulator.as_ref())?,
     };
+    drop(warm_accumulator);
 
     // ECA-5: on a true FirstRun the line-461 binding ran against an empty store dir (the bootstrap had
     // not run yet) -> None. first_run_mithril_bootstrap (above) has now built the live reduced checkpoint
@@ -575,8 +623,9 @@ async fn run_node_lifecycle_inner(
     // proves it), so a native-bootstrapped node finds the sealed store; a warm start finds its prior
     // store; a non-native start finds none. OBSERVE-ONLY in S2 (S4 makes it the leadership authority),
     // so an open failure is NON-FATAL -- logged, `None`, and the follow continues without it (the live
-    // advance is gated on `Some`). It NEVER blocks the proven follow.
-    let accumulator_path = snapshot_dir.join("epoch-accumulator.redb");
+    // advance is gated on `Some`). It NEVER blocks the proven follow. (`accumulator_path` was computed above for
+    // the short-lived warm-start handle; reused here for the live authority handle now the bootstrap has sealed
+    // it on FirstRun.)
     let epoch_accumulator = if accumulator_path.exists() {
         match ade_runtime::chaindb::EpochAccumulatorStore::open(&accumulator_path) {
             Ok(s) => {
@@ -655,7 +704,9 @@ async fn run_node_lifecycle_inner(
             // leadership view -- the SAME view the forge-ON path uses, from the seed-epoch sidecar.
             // Empty placeholder only when there is neither a live feed nor recovered inputs.
             let ledger_view = match state.seed_epoch_consensus_inputs.as_ref() {
-                Some(record) => PoolDistrView::from_seed_epoch_consensus_inputs(record),
+                Some(record) => {
+                    leadership_view_from_frozen_authority(epoch_accumulator.as_ref(), record)?
+                }
                 None if !cli.peer_addrs.is_empty() => {
                     return Err(NodeLifecycleError::FeedMissingRecoveredConsensusInputs)
                 }
@@ -837,7 +888,9 @@ async fn run_node_lifecycle_inner(
             // provably-unconsumed placeholder rather than a hard stop.
             let live_feed_wired = !cli.peer_addrs.is_empty();
             let ledger_view = match state.seed_epoch_consensus_inputs.as_ref() {
-                Some(record) => PoolDistrView::from_seed_epoch_consensus_inputs(record),
+                Some(record) => {
+                    leadership_view_from_frozen_authority(epoch_accumulator.as_ref(), record)?
+                }
                 None if live_feed_wired => {
                     return Err(NodeLifecycleError::FeedMissingRecoveredConsensusInputs)
                 }
@@ -3310,6 +3363,7 @@ fn forge_outcome_of(ev: &CoordinatorEvent) -> crate::live_log::ForgeOutcome {
 pub(crate) fn warm_start_recovery(
     chaindb: &PersistentChainDb,
     wal: &FileWalStore,
+    epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
 ) -> Result<BootstrapState, NodeLifecycleError> {
     // 1. W2 discovery: the independent anchor lineage(s) from the sidecar
     //    table key. Discovery ONLY — the verify chain below is the authority.
@@ -3394,7 +3448,11 @@ pub(crate) fn warm_start_recovery(
         }
         other => NodeLifecycleError::WarmStartBootstrap(format!("sidecar decode: {other:?}")),
     })?;
-    let ledger_view = PoolDistrView::from_seed_epoch_consensus_inputs(&sidecar);
+    // LIVE-LEDGER-EPOCH-TRANSITION S4: the warm-start replay leader schedule is the epoch-indexed frozen
+    // leadership authority for the recovered seed epoch (read by EXACT epoch), not a re-projection of the seed
+    // record's pool set. Byte-identical for the seed epoch (S4-0 1c lineage proof); fail closed if the durable
+    // authority cannot answer (absent / uncertified / unsealed) — no seed-window fallback.
+    let ledger_view = leadership_view_from_frozen_authority(epoch_accumulator, &sidecar)?;
     // WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05): rebuild the recovery
     // era-schedule from the DURABLE sidecar geometry persisted at import -- the
     // venue's real epoch_start_slot + epoch_length (preview 86400, preprod
@@ -3699,6 +3757,35 @@ fn first_run_mithril_bootstrap(
          (anchor initial_ledger_fingerprint={:?}, epoch={}).",
         out.anchor.initial_ledger_fingerprint, canonical.epoch_no.0
     );
+    // LIVE-LEDGER-EPOCH-TRANSITION S4-L1: seal the epoch-indexed frozen leadership authority (DC-EPOCH-25) from
+    // the manifest-bound seed record so the production leadership reads (initial/warm header-validation view) read
+    // it by EXACT epoch — the legacy-route analog of the native route's bootstrap seal (native_firstrun). The
+    // seed record's pool_distribution IS the seed leadership nesPd (S4-0, proven byte-exact). Leadership-only (no
+    // accumulator baseline on this route): the governance gate ignores the resulting `Unsealed` verdict, and
+    // `leadership_authority_for_epoch` needs only the leadership marker. Block-scoped so the redb handle drops
+    // before the caller re-opens the store as the live authority. Non-fatal, like the native seal.
+    {
+        if let Ok(store_dir) = resolve_store_dir(cli) {
+            match ade_runtime::chaindb::EpochAccumulatorStore::open(
+                &store_dir.join("epoch-accumulator.redb"),
+            ) {
+                Ok(store) => {
+                    if let Err(e) = store.seal_bootstrap_leadership_epochs(&[
+                        ade_ledger::frozen_leadership::FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(
+                            &out.seed_epoch_consensus_inputs,
+                        ),
+                    ]) {
+                        eprintln!(
+                            "ade_node --mode node: legacy first-run frozen-leadership seal skipped (non-fatal): {e:?}"
+                        );
+                    }
+                }
+                Err(e) => eprintln!(
+                    "ade_node --mode node: legacy first-run accumulator open skipped (non-fatal): {e:?}"
+                ),
+            }
+        }
+    }
     Ok(BootstrapState {
         ledger: out.ledger,
         chain_dep: out.chain_dep,
@@ -4214,6 +4301,14 @@ fn report(e: &NodeLifecycleError) {
                  header-validation view (leader threshold + VRF-keyhash) cannot be \
                  projected from the recovered consensus surface; failing closed \
                  (no empty-stake view, no accept-if-missing)."
+            );
+        }
+        NodeLifecycleError::ProductionLeadershipAuthorityUnavailable { epoch, reason } => {
+            eprintln!(
+                "ade_node --mode node: the epoch-indexed frozen leadership authority cannot \
+                 answer for epoch {epoch} ({reason}); the leader schedule is read ONLY from \
+                 the durable frozen authority (no seed-window fallback), so failing closed. \
+                 Re-bootstrap to leadership-certify the store."
             );
         }
         NodeLifecycleError::ForgeKeyIngress(d) => {
@@ -6872,6 +6967,72 @@ mod tests {
         (chaindb, wal)
     }
 
+    /// S4: seal a leadership-certified epoch-accumulator store beside the warm-start ChainDb so the recovery
+    /// replay (which reads the leader schedule by EXACT epoch from the frozen leadership authority) can proceed.
+    /// The seed record's `pool_distribution` IS the seed leadership nesPd (S4-0). Returns the opened store to pass
+    /// as `warm_start_recovery`'s leadership authority. A separate redb file from `chain.db` (no lock conflict).
+    fn seal_warm_leadership(
+        d: &WarmDirs,
+        record: &SeedEpochConsensusInputs,
+    ) -> ade_runtime::chaindb::EpochAccumulatorStore {
+        use ade_ledger::frozen_leadership::FrozenLeadershipPoolDistr;
+        // Leadership-ONLY (the seed record's pool_distribution IS the seed nesPd, S4-0): the warm-start replay +
+        // the initial/warm header-validation view read leadership by exact epoch; they do not read an accumulator
+        // baseline from this store. Leadership-only also passes the dispatch path's governance gate (which acts
+        // only on GovernanceImportRequired, not the `Unsealed` a marker-only store yields).
+        let store = ade_runtime::chaindb::EpochAccumulatorStore::open(
+            &d.snap.join("epoch-accumulator.redb"),
+        )
+        .expect("open warm accumulator");
+        store
+            .seal_bootstrap_leadership_epochs(&[
+                FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(record),
+            ])
+            .expect("seal warm seed leadership");
+        store
+    }
+
+    /// S4-L1 ACCEPTANCE: the flipped production leadership read (`leadership_view_from_frozen_authority`) reads
+    /// the epoch-indexed frozen leadership authority by EXACT epoch and produces a PoolDistrView BYTE-IDENTICAL
+    /// to the retired seed projection `PoolDistrView::from_seed_epoch_consensus_inputs` — and FAILS CLOSED (no
+    /// seed fallback) when the authority is absent or uncertified. This is the sealed-slice claim: the three
+    /// initial/warm sites (658/840/3397) now have exactly one authority, byte-identical to before, fail-closed.
+    #[test]
+    fn s4_l1_frozen_leadership_view_is_byte_identical_to_seed_and_fails_closed() {
+        let d = fresh_warm_dirs();
+        let record = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
+
+        // Fail closed — NO store (never a seed read).
+        assert!(
+            matches!(
+                leadership_view_from_frozen_authority(None, &record),
+                Err(NodeLifecycleError::ProductionLeadershipAuthorityUnavailable { epoch, .. }) if epoch == WARM_EPOCH.0
+            ),
+            "absent leadership authority must fail closed, not fall back to the seed projection"
+        );
+
+        // Fail closed — an UNCERTIFIED store (fresh, no leadership marker).
+        let uncertified = ade_runtime::chaindb::EpochAccumulatorStore::open(&d.snap.join("uncert.redb"))
+            .expect("open uncertified");
+        assert!(
+            matches!(
+                leadership_view_from_frozen_authority(Some(&uncertified), &record),
+                Err(NodeLifecycleError::ProductionLeadershipAuthorityUnavailable { .. })
+            ),
+            "an uncertified (legacy) store must fail closed"
+        );
+
+        // Byte-identical — a leadership-certified store yields EXACTLY the seed projection.
+        let store = seal_warm_leadership(&d, &record);
+        let via_authority = leadership_view_from_frozen_authority(Some(&store), &record)
+            .expect("certified store answers leadership by exact epoch");
+        let via_seed = PoolDistrView::from_seed_epoch_consensus_inputs(&record);
+        assert_eq!(
+            via_authority, via_seed,
+            "S4-L1: the frozen-authority leadership view is byte-identical to the retired seed projection"
+        );
+    }
+
     fn warm_sample_record(anchor_fp: Hash32, epoch: EpochNo) -> SeedEpochConsensusInputs {
         let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
         pools.insert(
@@ -6996,7 +7157,7 @@ mod tests {
         }
 
         let (chaindb, wal) = open_warm_stores(&d);
-        let state = warm_start_recovery(&chaindb, &wal).expect("warm-start recovers");
+        let state = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record))).expect("warm-start recovers");
 
         let recovered = state
             .seed_epoch_consensus_inputs
@@ -7031,7 +7192,7 @@ mod tests {
         }
 
         let (chaindb, wal) = open_warm_stores(&d);
-        let err = warm_start_recovery(&chaindb, &wal)
+        let err = warm_start_recovery(&chaindb, &wal, None)
             .expect_err("a pre-v4 sidecar must fail closed on the warm-start path");
         assert!(
             matches!(
@@ -7083,7 +7244,7 @@ mod tests {
         }
 
         let (chaindb, wal) = open_warm_stores(&d);
-        let state = warm_start_recovery(&chaindb, &wal).expect("bare-anchor warm-start recovers");
+        let state = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record))).expect("bare-anchor warm-start recovers");
 
         // The live-follow start tip is the persisted anchor (slot + REAL hash),
         // NOT None — the durable restart authority is the store, not the CLI.
@@ -7130,6 +7291,8 @@ mod tests {
             append_seed_epoch_provenance(&mut wal, &WARM_ANCHOR_FP, WARM_EPOCH, &bytes).unwrap();
             put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
         }
+        // S4: seal the leadership authority at the snap dir so the warm-start dispatch's live open finds it.
+        drop(seal_warm_leadership(&d, &record));
         let cli = warm_cli(&d);
         let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
         let r = run_node_lifecycle_inner(&cli, &mut sd_rx).await;
@@ -7150,7 +7313,7 @@ mod tests {
             put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let r = warm_start_recovery(&chaindb, &wal);
+        let r = warm_start_recovery(&chaindb, &wal, None);
         assert!(
             matches!(r, Err(NodeLifecycleError::WarmStartNoAnchorLineage)),
             "missing sidecar must fail closed, got {r:?}"
@@ -7173,7 +7336,7 @@ mod tests {
             // No append_seed_epoch_provenance.
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let r = warm_start_recovery(&chaindb, &wal);
+        let r = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)));
         assert!(
             matches!(r, Err(NodeLifecycleError::WarmStartNoProvenance)),
             "missing WAL provenance must fail closed, got {r:?}"
@@ -7203,7 +7366,7 @@ mod tests {
             put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let r = warm_start_recovery(&chaindb, &wal);
+        let r = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)));
         match r {
             Err(NodeLifecycleError::WarmStartBootstrap(d)) => {
                 assert!(
@@ -7236,7 +7399,7 @@ mod tests {
             put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let r = warm_start_recovery(&chaindb, &wal);
+        let r = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)));
         match r {
             Err(NodeLifecycleError::WarmStartWalReplay(d)) => {
                 assert!(
@@ -7265,7 +7428,7 @@ mod tests {
             put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let r = warm_start_recovery(&chaindb, &wal);
+        let r = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)));
         match r {
             Err(NodeLifecycleError::WarmStartWalReplay(d)) => {
                 assert!(
@@ -7301,7 +7464,7 @@ mod tests {
             put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let r = warm_start_recovery(&chaindb, &wal);
+        let r = warm_start_recovery(&chaindb, &wal, None);
         assert!(
             matches!(
                 r,
@@ -7337,7 +7500,7 @@ mod tests {
         }
 
         let (chaindb, wal) = open_warm_stores(&d);
-        let state = warm_start_recovery(&chaindb, &wal)
+        let state = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)))
             .expect("warm-start recovers from the persisted admission store (no mock)");
         assert_eq!(
             state.tip.map(|t| t.slot.0),
@@ -7386,7 +7549,7 @@ mod tests {
             .unwrap();
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let r = warm_start_recovery(&chaindb, &wal);
+        let r = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)));
         match r {
             Err(NodeLifecycleError::DurableBlockBytesMissing {
                 block_hash,
@@ -7512,7 +7675,7 @@ mod tests {
                 .unwrap();
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let state = warm_start_recovery(&chaindb, &wal)
+        let state = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)))
             .expect("warm-start recovers, reconciling the orphan away");
         // The recovered tip is the WAL-tail tip, NOT the un-WAL'd orphan above it.
         assert_eq!(
@@ -7659,6 +7822,9 @@ mod tests {
             .unwrap();
         append_seed_epoch_provenance(&mut wal, &WARM_ANCHOR_FP, WARM_EPOCH, &bytes).unwrap();
         put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
+        // S4: seal the epoch-indexed leadership authority beside the warm store (a distinct redb file) so the
+        // dispatch's live open reads the leader schedule by exact epoch — the warm store's leadership certificate.
+        drop(seal_warm_leadership(d, &record));
     }
 
     #[tokio::test]
