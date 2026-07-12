@@ -2152,12 +2152,30 @@ fn advance_ledger_state_to_durable_tip(
                             );
                             break;
                         }
+                        // S4-L2 (v6): capture the reduced-checkpoint commitment finalized AT s_prev (the mark
+                        // source; cp was advanced to s_prev above). This is sealed INTO the frozen leadership
+                        // object so the promoted candidate authority carries its own provenance — no window
+                        // replay, no live-checkpoint lookup at promotion time. Observe-only on a fault.
+                        let source_commitment = match cp.finalize() {
+                            Ok(c) => c,
+                            Err(e) => {
+                                crate::node_log!(
+                                    "epoch-accumulator: checkpoint finalize at s_prev {} failed (observe-only): {:?}",
+                                    s_prev.0,
+                                    e
+                                );
+                                break;
+                            }
+                        };
                         match cross_accumulator_over_boundary_block(
                             store,
                             chaindb,
                             era_schedule,
                             s_bb,
                             &mark,
+                            s_prev,
+                            &boundary_hash,
+                            &source_commitment,
                         ) {
                             Ok(AccumulatorBoundaryOutcome::Crossed {
                                 from_epoch,
@@ -2774,6 +2792,9 @@ pub async fn run_relay_loop_with_sched(
                         Some(&mut authority),
                         eview_activation,
                         reduced_checkpoint,
+                        // S4-L2: the frozen leadership authority — the SOLE promotion source for candidate
+                        // epochs >= seed+2 (prepare_authority_for_candidate_slot fails closed without it).
+                        epoch_accumulator,
                     )
                         .await
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
@@ -3766,13 +3787,44 @@ fn first_run_mithril_bootstrap(
     // before the caller re-opens the store as the live authority. Non-fatal, like the native seal.
     {
         if let Ok(store_dir) = resolve_store_dir(cli) {
-            match ade_runtime::chaindb::EpochAccumulatorStore::open(
-                &store_dir.join("epoch-accumulator.redb"),
+            // S4-L2 (v6): derive the seed-point checkpoint commitment HONESTLY from THIS route's OWN restored seed
+            // ledger -- the reduced-UTxO checkpoint over `out.ledger`, the SAME derivation the native route uses
+            // (reduce the UTxO -> build_from -> seal at the seed point -> finalize). This mithril cold-start
+            // persists no live checkpoint at seal time, so it is computed in a SCRATCH checkpoint that is removed
+            // immediately. NEVER fabricated. These bootstrap-indexed objects are non-promotion-certified regardless
+            // (the promotion reader requires current-only-non-bootstrap), so the commitment is honest provenance.
+            let seed_commitment: Option<Hash32> = {
+                use ade_ledger::reduced_utxo::{reduce_txout, ReducedStakeRef};
+                let mut reduced: std::collections::BTreeMap<
+                    ade_types::tx::TxIn,
+                    (ade_types::tx::Coin, ReducedStakeRef),
+                > = std::collections::BTreeMap::new();
+                for (txin, txout) in out.ledger.utxo_state.utxos.iter() {
+                    reduced.insert(txin.clone(), reduce_txout(txout));
+                }
+                let scratch = store_dir.join("seed-commitment-scratch.redb");
+                let _ = std::fs::remove_file(&scratch);
+                let commitment = ade_runtime::chaindb::ReducedUtxoCheckpoint::open(&scratch)
+                    .ok()
+                    .and_then(|cp| {
+                        cp.build_from(&reduced).ok()?;
+                        cp.seal_bootstrap(out.seed_epoch_consensus_inputs.seed_point_slot).ok()?;
+                        cp.finalize().ok()
+                    });
+                let _ = std::fs::remove_file(&scratch);
+                commitment
+            };
+            match (
+                seed_commitment,
+                ade_runtime::chaindb::EpochAccumulatorStore::open(
+                    &store_dir.join("epoch-accumulator.redb"),
+                ),
             ) {
-                Ok(store) => {
+                (Some(commitment), Ok(store)) => {
                     if let Err(e) = store.seal_bootstrap_leadership_epochs(&[
                         ade_ledger::frozen_leadership::FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(
                             &out.seed_epoch_consensus_inputs,
+                            commitment,
                         ),
                     ]) {
                         eprintln!(
@@ -3780,7 +3832,10 @@ fn first_run_mithril_bootstrap(
                         );
                     }
                 }
-                Err(e) => eprintln!(
+                (None, _) => eprintln!(
+                    "ade_node --mode node: legacy first-run frozen-leadership seal skipped (seed-point reduced-checkpoint commitment derivation failed; L1-view-only until re-bootstrap)"
+                ),
+                (_, Err(e)) => eprintln!(
                     "ade_node --mode node: legacy first-run accumulator open skipped (non-fatal): {e:?}"
                 ),
             }
@@ -6986,7 +7041,7 @@ mod tests {
         .expect("open warm accumulator");
         store
             .seal_bootstrap_leadership_epochs(&[
-                FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(record),
+                FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(record, Hash32([0x0C; 32])),
             ])
             .expect("seal warm seed leadership");
         store

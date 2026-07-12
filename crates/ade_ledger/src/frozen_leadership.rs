@@ -31,14 +31,17 @@ use ade_types::{EpochNo, Hash28, Hash32, PoolId, SlotNo};
 
 use crate::consensus_view::{PoolDistrView, PoolEntry};
 
-/// The frozen-leadership canonical schema version. A store carrying a well-formed v5 object is
-/// LEADERSHIP-CERTIFIED; a v4 / absent object is not. The accumulator BLOB codec is unchanged (stays
-/// v4-decodable) so the non-authority observe-only follow still reads existing stores — only the leadership
-/// authority path fails closed when this object is missing/old/malformed.
-pub const FROZEN_LEADERSHIP_SCHEMA_VERSION: u32 = 5;
+/// The frozen-leadership canonical schema version. A store carrying a well-formed v6 object is
+/// PROMOTION-CERTIFIED (S4-L2: carries `source_checkpoint_commitment`); a v5 / v4 / absent object is not. The
+/// accumulator BLOB codec is unchanged (stays v4-decodable) so the non-authority observe-only follow still reads
+/// existing stores — only the leadership authority path fails closed when this object is missing/old/malformed.
+/// v6 (S4-L2) added `source_checkpoint_commitment` so the promoted candidate authority is FULLY self-contained
+/// (leadership + its provenance commitment both from the one frozen object; no window replay, no live-checkpoint
+/// lookup at promotion time).
+pub const FROZEN_LEADERSHIP_SCHEMA_VERSION: u32 = 6;
 
-/// Outer array: [version, epoch, source_slot, source_hash, pools-map].
-const OUTER_FIELDS: u64 = 5;
+/// Outer array: [version, target_leadership_epoch, source_slot, source_hash, source_checkpoint_commitment, pools-map].
+const OUTER_FIELDS: u64 = 6;
 /// Per-pool entry array: [active_stake, vrf_keyhash].
 const ENTRY_FIELDS: u64 = 2;
 
@@ -68,6 +71,12 @@ pub struct FrozenLeadershipPoolDistr {
     pub source_slot: SlotNo,
     /// Its lineage hash.
     pub source_hash: Hash32,
+    /// S4-L2 (v6): the reduced-checkpoint commitment finalized AT `source_slot`/`source_hash` — captured at
+    /// freeze time, when the checkpoint is at that exact point. This is the leader schedule's provenance
+    /// binding: the promoted candidate authority reads it DIRECTLY (never a live/historical checkpoint lookup or
+    /// a window-replay re-materialization), so the frozen object is fully self-contained. It byte-matches the
+    /// commitment the retired window-replay path bound for the same source point.
+    pub source_checkpoint_commitment: Hash32,
     /// Per-pool frozen leadership entry, canonical key order.
     pub pools: BTreeMap<Hash28, LeadershipPoolEntry>,
 }
@@ -98,6 +107,7 @@ impl FrozenLeadershipPoolDistr {
     /// the 659-pool leadership set incl. zero-stake + retired-frozen pools).
     pub fn from_seed_epoch_consensus_inputs(
         record: &crate::seed_consensus_inputs::SeedEpochConsensusInputs,
+        source_checkpoint_commitment: Hash32,
     ) -> Self {
         let pools = record
             .pool_distribution
@@ -116,6 +126,7 @@ impl FrozenLeadershipPoolDistr {
             target_leadership_epoch: record.epoch_no,
             source_slot: record.seed_point_slot,
             source_hash: record.seed_point_hash.clone(),
+            source_checkpoint_commitment,
             pools,
         }
     }
@@ -139,6 +150,7 @@ impl FrozenLeadershipPoolDistr {
         epoch: EpochNo,
         source_slot: SlotNo,
         source_hash: Hash32,
+        source_checkpoint_commitment: Hash32,
         delegated_pools: &BTreeSet<PoolId>,
         mark_pool_stakes: &BTreeMap<PoolId, Coin>,
         registered_pool_vrfs: &BTreeMap<PoolId, Hash32>,
@@ -157,6 +169,7 @@ impl FrozenLeadershipPoolDistr {
             target_leadership_epoch: epoch,
             source_slot,
             source_hash,
+            source_checkpoint_commitment,
             pools,
         }
     }
@@ -170,6 +183,7 @@ impl FrozenLeadershipPoolDistr {
         target_leadership_epoch: EpochNo,
         source_slot: SlotNo,
         source_hash: Hash32,
+        source_checkpoint_commitment: Hash32,
         mark_pool_distr: &BTreeMap<PoolId, (u64, Hash32)>,
     ) -> Self {
         let pools = mark_pool_distr
@@ -185,6 +199,7 @@ impl FrozenLeadershipPoolDistr {
             target_leadership_epoch,
             source_slot,
             source_hash,
+            source_checkpoint_commitment,
             pools,
         }
     }
@@ -217,9 +232,10 @@ impl From<CodecError> for FrozenLeadershipError {
     }
 }
 
-/// Canonical, versioned, self-describing encoding: `array(5)[version, epoch, source_slot, source_hash,
-/// map{ pool_keyhash -> array(2)[active_stake, vrf_keyhash] }]`. `BTreeMap` iteration is ascending canonical
-/// key order (the sole acceptable map ordering on an authority path). Zero-stake pools are preserved.
+/// Canonical, versioned, self-describing encoding: `array(6)[version, target_leadership_epoch, source_slot,
+/// source_hash, source_checkpoint_commitment, map{ pool_keyhash -> array(2)[active_stake, vrf_keyhash] }]`.
+/// `BTreeMap` iteration is ascending canonical key order (the sole acceptable map ordering on an authority
+/// path). Zero-stake pools are preserved.
 pub fn encode_frozen_leadership(d: &FrozenLeadershipPoolDistr) -> Vec<u8> {
     let mut buf = Vec::new();
     write_array_header(&mut buf, ContainerEncoding::Definite(OUTER_FIELDS, canonical_width(OUTER_FIELDS)));
@@ -227,6 +243,7 @@ pub fn encode_frozen_leadership(d: &FrozenLeadershipPoolDistr) -> Vec<u8> {
     write_uint_canonical(&mut buf, d.target_leadership_epoch.0);
     write_uint_canonical(&mut buf, d.source_slot.0);
     write_bytes_canonical(&mut buf, &d.source_hash.0);
+    write_bytes_canonical(&mut buf, &d.source_checkpoint_commitment.0);
     let count = d.pools.len() as u64;
     write_map_header(&mut buf, ContainerEncoding::Definite(count, canonical_width(count)));
     for (keyhash, entry) in &d.pools {
@@ -258,11 +275,18 @@ pub fn decode_frozen_leadership(bytes: &[u8]) -> Result<FrozenLeadershipPoolDist
     let epoch = EpochNo(read_u64(bytes, &mut o)?);
     let source_slot = SlotNo(read_u64(bytes, &mut o)?);
     let source_hash = read_hash32(bytes, &mut o)?;
+    let source_checkpoint_commitment = read_hash32(bytes, &mut o)?;
     let pools = decode_pools(bytes, &mut o)?;
     if o != bytes.len() {
         return Err(FrozenLeadershipError::TrailingBytes { extra: bytes.len() - o });
     }
-    let decoded = FrozenLeadershipPoolDistr { target_leadership_epoch: epoch, source_slot, source_hash, pools };
+    let decoded = FrozenLeadershipPoolDistr {
+        target_leadership_epoch: epoch,
+        source_slot,
+        source_hash,
+        source_checkpoint_commitment,
+        pools,
+    };
     if encode_frozen_leadership(&decoded) != bytes {
         return Err(FrozenLeadershipError::NonCanonicalBytes);
     }
@@ -359,6 +383,7 @@ mod tests {
             target_leadership_epoch: EpochNo(1341),
             source_slot: SlotNo(115_862_416),
             source_hash: Hash32([0x07; 32]),
+            source_checkpoint_commitment: Hash32([0x0C; 32]),
             pools,
         };
         let asc = ActiveSlotsCoeff { numer: 1, denom: 20 };
@@ -398,6 +423,7 @@ mod tests {
             EpochNo(1341),
             SlotNo(115_862_416),
             Hash32([0x07; 32]),
+            Hash32([0x0C; 32]),
             &delegated_pools,
             &mark_pool_stakes,
             &registered_pool_vrfs,
@@ -446,6 +472,7 @@ mod tests {
             target_leadership_epoch: EpochNo(1341),
             source_slot: SlotNo(115_862_416),
             source_hash: Hash32([0x07; 32]),
+            source_checkpoint_commitment: Hash32([0x0C; 32]),
             pools,
         }
     }
@@ -464,6 +491,7 @@ mod tests {
         write_uint_canonical(&mut buf, epoch.0);
         write_uint_canonical(&mut buf, slot.0);
         write_bytes_canonical(&mut buf, &hash.0);
+        write_bytes_canonical(&mut buf, &[0x0C; 32]); // v6: source_checkpoint_commitment
         let count = pools.len() as u64;
         write_map_header(&mut buf, ContainerEncoding::Definite(count, canonical_width(count)));
         for (keyhash, stake, vrf) in pools {
@@ -520,7 +548,7 @@ mod tests {
         bytes[1] = 4;
         assert_eq!(
             decode_frozen_leadership(&bytes),
-            Err(FrozenLeadershipError::UnknownVersion { expected: 5, found: 4 })
+            Err(FrozenLeadershipError::UnknownVersion { expected: 6, found: 4 })
         );
     }
 

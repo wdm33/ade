@@ -508,21 +508,43 @@ pub fn apply_selected_block(
     block_bytes: &[u8],
     ctx: &SelectedBlockCtx,
 ) -> Result<EpochAccumulator, LedgerTransitionError> {
-    // The `Hash32::default`-equivalent source hash is irrelevant here: this wrapper discards the effects, so
-    // the crossing block's lineage binding on the (dropped) frozen leadership objects is never observed.
-    apply_selected_block_with_effects(prior, block_bytes, ctx, &Hash32([0u8; 32])).map(|(acc, _)| acc)
+    // Observe/analysis path: `freeze = None`, so NO `FreezeLeadership` effect is ever constructed — the
+    // effect-producing code is not reached, so there is no zero/placeholder commitment to fabricate.
+    apply_selected_block_core(prior, block_bytes, ctx, None).map(|(acc, _)| acc)
 }
 
-/// Apply one durable selected-chain block AND return the ordered boundary leadership effects (S4-pre-2). The
-/// RED advancer uses this and seals each `FreezeLeadership` effect's distribution atomically with the
-/// accumulator advance. `block_header_hash` is the crossing block's canonical header hash — the lineage
-/// binding stamped on every effect's `source_hash`. The returned `Vec` is ordered (strict ascending source
+/// Apply one durable selected-chain block AND return the ordered boundary leadership effects (S4-pre-2/S4-L2).
+/// The RED advancer uses this and seals each `FreezeLeadership` effect's distribution atomically with the
+/// advance. The frozen object's source is the MARK source `s_prev` (`mark_source_slot`/`mark_source_hash`, NOT
+/// the crossing trigger block), and its provenance is `source_checkpoint_commitment` = the reduced checkpoint
+/// finalized AT `s_prev`. A real commitment is REQUIRED. The returned `Vec` is ordered (strict ascending source
 /// epoch, no duplicate target leadership epoch) and validated fail-closed; empty for a within-epoch block.
 pub fn apply_selected_block_with_effects(
     prior: &EpochAccumulator,
     block_bytes: &[u8],
     ctx: &SelectedBlockCtx,
-    block_header_hash: &Hash32,
+    mark_source_slot: SlotNo,
+    mark_source_hash: &Hash32,
+    source_checkpoint_commitment: &Hash32,
+) -> Result<(EpochAccumulator, Vec<EpochBoundaryEffect>), LedgerTransitionError> {
+    apply_selected_block_core(
+        prior,
+        block_bytes,
+        ctx,
+        Some((mark_source_slot, mark_source_hash, source_checkpoint_commitment)),
+    )
+}
+
+/// The shared apply core. `freeze = None` crosses boundaries via [`cross_epoch_boundary`] — NO effect ever
+/// constructed (the observe/discard contract). `freeze = Some((s_prev slot, s_prev hash, commitment))` crosses
+/// via [`cross_epoch_boundary_with_effect`], binding each freeze to the MARK source `s_prev` + the real
+/// commitment. This makes a zero/fabricated-commitment effect unrepresentable (illegal-states-unrepresentable,
+/// S4-L2): the discard path has no commitment argument, and the effect path cannot exist without one.
+fn apply_selected_block_core(
+    prior: &EpochAccumulator,
+    block_bytes: &[u8],
+    ctx: &SelectedBlockCtx,
+    freeze: Option<(SlotNo, &Hash32, &Hash32)>,
 ) -> Result<(EpochAccumulator, Vec<EpochBoundaryEffect>), LedgerTransitionError> {
     let (era, block) = decode_selected_block(block_bytes)?;
     if (era as u8) < (CardanoEra::Conway as u8) {
@@ -547,14 +569,26 @@ pub fn apply_selected_block_with_effects(
     let mut effects: Vec<EpochBoundaryEffect> = Vec::new();
     // 1. Boundary transitions first — one per crossed boundary, empty epochs included. `checked_add`
     //    keeps the transition TOTAL on hostile durable state: if `prior.epoch == u64::MAX` then (by the
-    //    boundary-gap guard above) `block_epoch == u64::MAX` too, so there is no boundary to cross — an
-    //    empty range, never a wrap to `0..=u64::MAX`. Each cross emits its authoritative leadership freeze.
+    //    boundary-gap guard above) `block_epoch == u64::MAX` too, so there is no boundary to cross.
     if let Some(first_boundary) = prior.epoch_state.epoch.0.checked_add(1) {
         for e in first_boundary..=ctx.block_epoch.0 {
-            let (next, effect) =
-                cross_epoch_boundary_with_effect(acc, EpochNo(e), ctx, block_header_hash)?;
-            acc = next;
-            effects.push(effect);
+            acc = match freeze {
+                // Effect-producing: bind the freeze to the MARK source `s_prev` + the real commitment.
+                Some((mark_source_slot, mark_source_hash, source_checkpoint_commitment)) => {
+                    let (next, effect) = cross_epoch_boundary_with_effect(
+                        acc,
+                        EpochNo(e),
+                        ctx,
+                        mark_source_slot,
+                        mark_source_hash.clone(),
+                        source_checkpoint_commitment.clone(),
+                    )?;
+                    effects.push(effect);
+                    next
+                }
+                // Observe/discard: pure transition, NO leadership effect constructed.
+                None => cross_epoch_boundary(acc, EpochNo(e), ctx)?,
+            };
         }
     }
     // 2. Within-epoch effects of THIS block.
@@ -565,34 +599,30 @@ pub fn apply_selected_block_with_effects(
     Ok((acc, effects))
 }
 
-/// Cross ONE epoch boundary into `target`, discarding the leadership freeze effect — the convenience wrapper
-/// for callers that do not seal leadership (tests / observe-only analysis). See
-/// [`cross_epoch_boundary_with_effect`].
-pub fn cross_epoch_boundary(
-    acc: EpochAccumulator,
-    target: EpochNo,
-    ctx: &SelectedBlockCtx,
-) -> Result<EpochAccumulator, LedgerTransitionError> {
-    cross_epoch_boundary_with_effect(acc, target, ctx, &Hash32([0u8; 32])).map(|(acc, _)| acc)
+/// S4-L2: the accumulator-derived facts a boundary needs to FREEZE the target leadership epoch's `nesPd` — the
+/// SET/pool inputs only. It carries NO source point and NO checkpoint commitment: those are the caller's `s_prev`
+/// lineage + finalized-checkpoint provenance (the mark SOURCE, not the crossing trigger block), supplied ONLY on
+/// the effect-producing path. Producing a `FreezeLeadership` effect from this REQUIRES a real
+/// `source_checkpoint_commitment` — a zero/placeholder is unrepresentable because the observe/discard path never
+/// reaches effect construction at all.
+pub struct BoundaryFreezeInputs {
+    pub source_epoch: EpochNo,
+    pub target_leadership_epoch: EpochNo,
+    pub delegated_pools: std::collections::BTreeSet<PoolId>,
+    pub registered_pool_vrfs: BTreeMap<PoolId, Hash32>,
+    pub mark_pool_stakes: BTreeMap<PoolId, Coin>,
 }
 
-/// Cross ONE epoch boundary into `target` AND freeze the next epoch's leadership `nesPd` (S4-pre-2). Reuses
-/// the validated `apply_epoch_boundary_with_registrations` for the reward + pots + snapshot rotation, feeding
-/// it the held `prev_block_production`/`prev_epoch_fees` (the `nesBprev` reward inputs), then rotates
-/// `prev := <just-finished nesBcur>`, `cur := ∅`. The new MARK is BUILT (`build_boundary_mark_snapshot`) from
-/// `ctx.boundary_mark` (the per-credential base-UTxO stake) plus the held delegation state — fail-closed if
-/// `ctx.boundary_mark` is absent.
-///
-/// The leadership freeze: the pre-POOLREAP registered pool params' VRF is captured HERE (SNAP time, before the
-/// boundary fn reaps retiring pools), and combined with the just-built mark's per-pool stake into the target
-/// epoch's `FrozenLeadershipPoolDistr` — cardano's `nesPd_{target+1} = calculatePoolDistr(set_{target+1} = the
-/// mark built here)`. The shared, byte-exact `apply_epoch_boundary_with_registrations` is untouched.
-pub fn cross_epoch_boundary_with_effect(
+/// Cross ONE epoch boundary into `target`, returning the accumulator + the [`BoundaryFreezeInputs`] — the pure
+/// state transition, with NO leadership effect and NO commitment. The observe/discard wrapper
+/// ([`cross_epoch_boundary`]) drops the inputs; the effect wrapper ([`cross_epoch_boundary_with_effect`]) binds
+/// them to the caller's `s_prev` source + a real checkpoint commitment. Splitting here makes a zero/fabricated
+/// commitment path unrepresentable (illegal-states-unrepresentable, S4-L2).
+fn cross_epoch_boundary_transition(
     mut acc: EpochAccumulator,
     target: EpochNo,
     ctx: &SelectedBlockCtx,
-    block_header_hash: &Hash32,
-) -> Result<(EpochAccumulator, EpochBoundaryEffect), LedgerTransitionError> {
+) -> Result<(EpochAccumulator, BoundaryFreezeInputs), LedgerTransitionError> {
     // S4-pre-2: capture the pre-POOLREAP registered pool params' VRF (cardano's SNAP-time `_poolParams`) from
     // the PRIOR accumulator's active set — BEFORE `apply_epoch_boundary_with_registrations` runs POOLREAP
     // (which reaps retiring pools). This is the frozen VRF the leadership `nesPd` reads; a use-time
@@ -773,25 +803,64 @@ pub fn cross_epoch_boundary_with_effect(
     let target_leadership_epoch = EpochNo(target.0.checked_add(1).ok_or(
         LedgerTransitionError::LeadershipEpochOverflow { boundary_into_epoch: target.0 },
     )?);
-    let mark_pool_stakes = &acc
+    let mark_pool_stakes = acc
         .epoch_state
         .snapshots
         .as_authoritative()
         .ok_or(LedgerTransitionError::BoundaryLeadershipSnapshotUnavailable { target: target.0 })?
         .mark
         .0
-        .pool_stakes;
+        .pool_stakes
+        .clone();
+    Ok((
+        acc,
+        BoundaryFreezeInputs {
+            source_epoch: target,
+            target_leadership_epoch,
+            delegated_pools,
+            registered_pool_vrfs,
+            mark_pool_stakes,
+        },
+    ))
+}
+
+/// Cross ONE epoch boundary into `target`, discarding the leadership freeze inputs — the observe/analysis path
+/// that seals NO leadership authority (no effect, no commitment ever constructed). See
+/// [`cross_epoch_boundary_transition`].
+pub fn cross_epoch_boundary(
+    acc: EpochAccumulator,
+    target: EpochNo,
+    ctx: &SelectedBlockCtx,
+) -> Result<EpochAccumulator, LedgerTransitionError> {
+    cross_epoch_boundary_transition(acc, target, ctx).map(|(acc, _inputs)| acc)
+}
+
+/// Cross ONE epoch boundary into `target` AND freeze the target leadership epoch's `nesPd` (S4-L2). The frozen
+/// object's source is the MARK source `s_prev` (`mark_source_slot`/`mark_source_hash` — NOT the crossing trigger
+/// block), and its provenance is `source_checkpoint_commitment` = the reduced checkpoint finalized AT `s_prev`
+/// (the run loop advances the checkpoint to `s_prev` before calling this). A real commitment is REQUIRED; there
+/// is no zero/placeholder path.
+pub fn cross_epoch_boundary_with_effect(
+    acc: EpochAccumulator,
+    target: EpochNo,
+    ctx: &SelectedBlockCtx,
+    mark_source_slot: SlotNo,
+    mark_source_hash: Hash32,
+    source_checkpoint_commitment: Hash32,
+) -> Result<(EpochAccumulator, EpochBoundaryEffect), LedgerTransitionError> {
+    let (acc, inputs) = cross_epoch_boundary_transition(acc, target, ctx)?;
     let distr = FrozenLeadershipPoolDistr::from_boundary_snapshot(
-        target_leadership_epoch,
-        ctx.block_slot,
-        block_header_hash.clone(),
-        &delegated_pools,
-        mark_pool_stakes,
-        &registered_pool_vrfs,
+        inputs.target_leadership_epoch,
+        mark_source_slot,
+        mark_source_hash,
+        source_checkpoint_commitment,
+        &inputs.delegated_pools,
+        &inputs.mark_pool_stakes,
+        &inputs.registered_pool_vrfs,
     );
     let effect = EpochBoundaryEffect::FreezeLeadership {
-        source_epoch: target,
-        target_leadership_epoch,
+        source_epoch: inputs.source_epoch,
+        target_leadership_epoch: inputs.target_leadership_epoch,
         distr,
     };
     Ok((acc, effect))
@@ -2254,6 +2323,7 @@ mod tests {
             target_leadership_epoch: EpochNo(epoch),
             source_slot: SlotNo(100),
             source_hash: Hash32([0x07; 32]),
+            source_checkpoint_commitment: Hash32([0x0C; 32]),
             pools: BTreeMap::new(),
         };
         let eff = |source: u64, target: u64| EpochBoundaryEffect::FreezeLeadership {

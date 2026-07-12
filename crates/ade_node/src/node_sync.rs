@@ -506,6 +506,8 @@ where
         None,
         None,
         None,
+        // S4-L2: run_node_sync_no_eview does no epoch promotion (no EVIEW inputs), so no frozen authority.
+        None,
     )
     .await?
     {
@@ -563,6 +565,9 @@ pub async fn run_node_sync<D>(
     mut authority: Option<&mut crate::epoch_activation::ActiveEpochAuthority<'_>>,
     eview: Option<&crate::epoch_wire::EviewActivationInputs>,
     reduced_checkpoint: Option<&ade_runtime::chaindb::ReducedUtxoCheckpoint>,
+    // S4-L2: the epoch-indexed frozen leadership authority — the SOLE promotion source for candidate epochs
+    // beyond the bootstrap bridge (>= seed+2). Threaded to `prepare_authority_for_candidate_slot`.
+    epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
 ) -> Result<SyncOutcome, NodeSyncError>
 where
     D: ChainDb + SnapshotStore,
@@ -640,6 +645,7 @@ where
                     chaindb,
                     &state.receive.chain_dep,
                     auth,
+                    epoch_accumulator,
                     |entry| wal.append(entry.clone()).is_ok(),
                 )
                 .map_err(|e| NodeSyncError::Pump(format!("eview prepare: {e:?}")))?;
@@ -3565,7 +3571,7 @@ mod tests {
         .expect("open sync accumulator");
         store
             .seal_bootstrap_leadership_epochs(&[
-                FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record),
+                FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record, Hash32([0x0C; 32])),
             ])
             .expect("seal sync seed leadership");
         store

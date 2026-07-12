@@ -14,10 +14,21 @@
 >   leadership-certified store. **S4 is NOT complete:** the seed+2 ceiling and the promotion path
 >   (`prepare_authority_for_candidate_slot`, boundary 2+) remain seed-window-bound until S4-L2. This is a staged
 >   authority retirement (each of the three sites has exactly ONE authority), not a fallback.
-> - **S4-L2 — OPEN.** The real ceiling lift: thread the store through `run_node_sync` → the promotion; read
->   `leadership_authority_for_epoch(candidate_epoch)` for boundary 2+; delete the `epoch_wire.rs` seed+2 ceiling;
->   add the production seed-authority resurrection guard; prove the former ceiling crossed with no seed-window
->   authority. The higher-risk consensus wiring, its own sealed proof.
+> - **S4-L2 — DONE (uncommitted; final S5 replay gate folding).** The ceiling lift is wired and proven. The
+>   accumulator store is threaded `run_node_sync` → `prepare_authority_for_candidate_slot`; for every candidate
+>   beyond the bridge (`candidate ≥ seed+2`) leadership is sourced SOLELY from
+>   `promotion_leadership_authority_for_epoch(candidate)` (promotion-certified = current-present AND
+>   bootstrap-absent, else `NotPromotionCertified`) → `from_frozen_leadership` over the frozen object's OWN
+>   freeze-time source point + `source_checkpoint_commitment` (v6). The seed+2 window-replay ceiling is DELETED.
+>   Proven: `s4_l2_frozen_promotion_crosses_seed_plus_2_and_seed_plus_3` (seed+2 view == the frozen projection ==
+>   the retired window view per the identity gate; the former-ceiling seed+3 CROSSES) +
+>   `s4_l2_frozen_promotion_fails_closed_on_every_non_promotion_source` (missing store / unsealed / bootstrap-only
+>   / corrupt each fail closed, never a window/seed fallback). Resurrection guard
+>   `ci/ci_check_frozen_promotion_no_seed_window.sh` keeps the promotion block mechanically frozen-only. Two v6
+>   regressions surfaced + fixed: the boundary-freeze effect source now binds the mark source `s_prev` (a real
+>   durable block), not the crossing trigger `s_bb`; the legacy/mithril first-run derives its checkpoint
+>   commitment honestly from its own restored seed ledger. The final S5 replay/recovery proof (v6 `#8`) is the
+>   only remaining commit gate.
 
 **Cluster:** LIVE-LEDGER-EPOCH-TRANSITION. **Depends on:** CE-3d + S5 + S4-pre + S4-0 (all GREEN).
 
@@ -112,17 +123,23 @@ any commit. The production read is EXACT `leadership_authority_for_epoch(slot_ep
 
 ## 6. Acceptance (S4 is green only when ALL hold)
 
-1. **3 sites flipped** — all read epoch-indexed frozen leadership; seed-window read count on production
-   leadership paths = 0 (CI grep-gate).
-2. **Ceiling deleted** — `epoch_wire.rs` seed+2 `WindowReplayPrepare` gone; a hermetic proof crosses PAST the
-   former ceiling (seed+3 and beyond) with epoch-indexed frozen leadership only — no `rc=43`, no seed read, no
-   re-import, no CLI oracle.
-3. **Same-epoch byte-identical** — within an already-followed epoch the accumulator-derived authority equals
-   what the seed view produced (source-only change), on the existing corpus.
-4. **Replay-equivalence** — S5 warm-restart + within-k rollback+reset+refold still byte-identical with the flip
-   (the resolved authority is reproducible from the durable accumulator + WAL).
-5. **Fail-closed** — a missing / corrupt / uncertified leadership authority halts deterministically; the seed
-   authority cannot silently resume control.
+Status: 1/2/3/5 GREEN (L1 + L2 uncommitted); 4 is the final folding gate.
+
+1. **3 sites flipped — DONE.** L1 flipped the initial/warm view; L2 flipped the promotion path; all read
+   epoch-indexed frozen leadership. Seed-window read count on production leadership paths = 0, enforced by
+   `ci/ci_check_frozen_promotion_no_seed_window.sh` (+ the `ci_check_frozen_leadership_authority.sh` note).
+2. **Ceiling deleted — DONE.** `epoch_wire.rs` seed+2 `WindowReplayPrepare` gone;
+   `s4_l2_frozen_promotion_crosses_seed_plus_2_and_seed_plus_3` crosses PAST the former ceiling (seed+3) with
+   epoch-indexed frozen leadership only — no `rc=43`, no seed read, no re-import, no CLI oracle.
+3. **Same-epoch byte-identical — DONE.** The identity gate
+   (`s4_l2_frozen_candidate_view_byte_identical_to_window_replay_view`) proves the frozen candidate view equals
+   the retired window-replay view; the seed+2 promotion projection equals the frozen projection.
+4. **Replay-equivalence — FOLDING (the final gate).** S5 warm-restart + within-k rollback+reset+refold
+   byte-identical with the flip, re-run under v6 (`#8` shifts to a v6 hash; pool content stays 658/658 and A==B
+   holds). This is the only remaining commit gate.
+5. **Fail-closed — DONE.** `s4_l2_frozen_promotion_fails_closed_on_every_non_promotion_source` +
+   `leadership_authority_rejects_malformed_object`: a missing / unsealed / bootstrap-only / corrupt authority
+   halts deterministically (`PromotionLeadershipUnavailable` / typed terminal); the seed authority cannot resume.
 
 ## 7. Invariants (enforcement, no new IDs)
 

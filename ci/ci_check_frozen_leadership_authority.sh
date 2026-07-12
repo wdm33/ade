@@ -11,10 +11,13 @@ set -uo pipefail
 #
 # Repo-root-relative. Mirrors the other ci_check_*.sh gates (esp. ci_check_transient_view_no_fallback.sh).
 #
-# NOTE (S4 boundary): guarding direct use of the SEED leadership authority
-# (PoolDistrView::from_seed_epoch_consensus_inputs) on production paths is DELIBERATELY NOT done here -- those
-# three sites are still the live leadership authority until S4 proper flips them. Adding that guard now would
-# fail against the still-unflipped code. It belongs to S4.
+# NOTE (S4 DONE): the SEED leadership authority (PoolDistrView::from_seed_epoch_consensus_inputs) has been
+# retired from every production authority path -- S4-L1 flipped the initial/warm live view (node_lifecycle
+# 658/840/3397 -> leadership_authority_for_epoch), and S4-L2 flipped the forward promotion path (epoch_wire
+# prepare_authority_for_candidate_slot -> promotion_leadership_authority_for_epoch, seed+2 ceiling deleted).
+# The seed projection now survives ONLY as a RECOVERY-identity check (proving a recovered view == the seed
+# projection) and in tests -- never as a production leadership source. The forward promotion path is kept
+# mechanically frozen-only by the sibling gate ci_check_frozen_promotion_no_seed_window.sh (S4-L2).
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$REPO_ROOT"
 FAILED=0; fail() { echo "FAIL: $1"; FAILED=1; }

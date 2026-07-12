@@ -134,7 +134,19 @@ fn co_advance(
                 let boundary_hash =
                     chaindb.get_block_by_slot(s_prev).expect("hash read").expect("boundary block").hash;
                 store.bind_boundary_mark(s_prev, &boundary_hash).expect("bind mark");
-                match cross_accumulator_over_boundary_block(store, chaindb, sched, s_bb, &mark) {
+                // S4-L2 (v6): the reduced-checkpoint commitment finalized AT s_prev (the mark source) — the
+                // frozen object's own provenance, exactly as the run loop captures it.
+                let source_commitment = cp.finalize().expect("boundary-finalized checkpoint commitment");
+                match cross_accumulator_over_boundary_block(
+                    store,
+                    chaindb,
+                    sched,
+                    s_bb,
+                    &mark,
+                    s_prev,
+                    &boundary_hash,
+                    &source_commitment,
+                ) {
                     Ok(AccumulatorBoundaryOutcome::Crossed { from_epoch, to_epoch, slot }) => {
                         let _ = store.clear_boundary_mark();
                         eprintln!(
@@ -1572,7 +1584,7 @@ fn s5_seal_leadership(store: &EpochAccumulatorStore, seed_dir: &Path) {
         &cdb.get_seed_epoch_consensus_inputs(&fps[0]).expect("get").expect("present"),
     )
     .expect("decode");
-    let nespd_seed = FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record);
+    let nespd_seed = FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record, Hash32([0x0C; 32]));
     store
         .seal_bootstrap_leadership_epochs(&[nespd_seed])
         .expect("seal bootstrap leadership from the manifest-bound seed record");
@@ -1920,7 +1932,7 @@ fn s4pre_frozen_leadership_seed_identity() {
     .expect("decode");
 
     // Bootstrap import: the self-contained frozen leadership distr from the manifest-bound seed record.
-    let frozen = FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record);
+    let frozen = FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record, Hash32([0x0C; 32]));
     assert_eq!(frozen.target_leadership_epoch, record.epoch_no, "same leadership epoch");
     assert_eq!(frozen.pools.len(), record.pool_distribution.len(), "all 659 leadership pools carried");
 
@@ -1974,7 +1986,7 @@ fn s4pre_1c_frozen_leadership_bootstrap_lineage() {
     {
         let store = EpochAccumulatorStore::open(&acc_path).expect("open acc");
         store
-            .seal_bootstrap_leadership_epochs(&[FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record)])
+            .seal_bootstrap_leadership_epochs(&[FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record, Hash32([0x0C; 32]))])
             .expect("seal bootstrap leadership from the manifest-bound seed record");
 
         // A fresh certified store: the schema-v5 marker + the BOOTSTRAP-indexed object for the seed epoch are
@@ -2005,7 +2017,7 @@ fn s4pre_1c_frozen_leadership_bootstrap_lineage() {
         let from_seed = PoolDistrView::from_seed_epoch_consensus_inputs(&record);
         assert_eq!(from_store, from_seed, "certified store leadership == seed leadership PoolDistr byte-exact");
         // No drift through the codec/store round-trip vs the direct projection.
-        assert_eq!(leadership, FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record));
+        assert_eq!(leadership, FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record, Hash32([0x0C; 32])));
     }
 
     // Canonical hash is STABLE across reopen (warm-restart durability of the leadership authority).
@@ -2062,7 +2074,7 @@ fn s4_0_epoch_indexed_leadership_acceptance_1338_to_1342() {
     )
     .expect("decode");
     assert_eq!(record.epoch_no.0, 1338, "the CE-3d v5 seed record is the epoch-1338 leadership nesPd");
-    let nespd_1338 = FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record);
+    let nespd_1338 = FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(&record, Hash32([0x0C; 32]));
 
     // --- The epoch-1339 bootstrap object from an imported MARK snapshot (the seed+1 bridge source — the ONE
     // epoch no native freeze produces). Representative MARK derived from the 1338 pool set as (stake, vrf); 1339
@@ -2076,6 +2088,7 @@ fn s4_0_epoch_indexed_leadership_acceptance_1338_to_1342() {
         EpochNo(1339),
         record.seed_point_slot,
         record.seed_point_hash.clone(),
+        Hash32([0x0C; 32]),
         &mark_1339,
     );
 
@@ -2095,6 +2108,7 @@ fn s4_0_epoch_indexed_leadership_acceptance_1338_to_1342() {
             EpochNo(target),
             SlotNo(target * 1_000),
             Hash32([target as u8; 32]),
+            Hash32([0x0D; 32]),
             &delegated,
             &stakes,
             &vrfs,

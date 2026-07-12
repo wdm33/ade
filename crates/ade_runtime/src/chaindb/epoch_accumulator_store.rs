@@ -215,6 +215,11 @@ pub enum LeadershipAuthorityError {
     /// S4-0 bootstrap seeding: two bootstrap leadership objects claim the SAME `target_leadership_epoch`. The
     /// bootstrap-certified initial condition must have one object per epoch.
     DuplicateBootstrapLeadershipEpoch { epoch: u64 },
+    /// S4-L2: a PROMOTION read found the epoch's leadership object present in `current` but ALSO in `bootstrap`
+    /// — a bootstrap-IMPORTED object (seed / seed+1), which is L1-initial-view-only and NOT promotion-certified.
+    /// The promotion path (candidate epochs beyond the bootstrap bridge) requires a NATIVE boundary freeze
+    /// (`current` present, `bootstrap` absent). Fail closed — a bootstrap import is never promoted.
+    NotPromotionCertified { epoch: u64 },
     /// An underlying store (redb) failure while reading or sealing the leadership object.
     Store(EpochAccumulatorStoreError),
 }
@@ -754,6 +759,27 @@ impl EpochAccumulatorStore {
         Ok(distr)
     }
 
+    /// LIVE-LEDGER-EPOCH-TRANSITION S4-L2: the SOLE reader for PROMOTION (candidate epochs BEYOND the bootstrap
+    /// bridge). Returns the frozen leadership authority for `epoch` ONLY if it is PROMOTION-CERTIFIED — present in
+    /// `current` AND ABSENT from `bootstrap` (a NATIVE boundary freeze, never a bootstrap import), with
+    /// `target_leadership_epoch == epoch`. Bootstrap-imported epochs (seed / seed+1, which live in BOTH tables)
+    /// fail closed `NotPromotionCertified`: they are L1-initial/warm-view only and must never be promoted. The S4
+    /// promotion path uses THIS reader; L1's initial/warm view uses the general `leadership_authority_for_epoch`.
+    pub fn promotion_leadership_authority_for_epoch(
+        &self,
+        epoch: EpochNo,
+    ) -> Result<FrozenLeadershipPoolDistr, LeadershipAuthorityError> {
+        let distr = self.leadership_authority_for_epoch(epoch)?;
+        if self
+            .bootstrap_frozen_leadership_for_epoch(epoch)
+            .map_err(LeadershipAuthorityError::Store)?
+            .is_some()
+        {
+            return Err(LeadershipAuthorityError::NotPromotionCertified { epoch: epoch.0 });
+        }
+        Ok(distr)
+    }
+
     /// Durably SEAL the CURRENT leadership object for its target epoch (the S4-pre-2 BOUNDARY FREEZE primitive):
     /// `current_leadership_by_epoch[distr.target_leadership_epoch]` + the v5 marker, in ONE redb commit. Keys by
     /// `target_leadership_epoch` and overwrites only that epoch's CURRENT entry; the BOOTSTRAP table is
@@ -1249,6 +1275,7 @@ mod tests {
             target_leadership_epoch: EpochNo(576),
             source_slot: SlotNo(576 * 432_000 + 12_345),
             source_hash: Hash32([0x66; 32]),
+            source_checkpoint_commitment: Hash32([0x0C; 32]),
             pools,
         }
     }
@@ -1460,6 +1487,12 @@ mod tests {
         let s = EpochAccumulatorStore::open(&path).unwrap();
         assert!(matches!(
             s.leadership_authority_for_epoch(EpochNo(1338)),
+            Err(LeadershipAuthorityError::MalformedFrozenLeadershipDistr(_))
+        ));
+        // S4-L2: the promotion reader propagates the decode failure as the SAME typed terminal (never a
+        // fabricated/empty object) -- the frozen-promotion authority path fails closed on corruption.
+        assert!(matches!(
+            s.promotion_leadership_authority_for_epoch(EpochNo(1338)),
             Err(LeadershipAuthorityError::MalformedFrozenLeadershipDistr(_))
         ));
     }

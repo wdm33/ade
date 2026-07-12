@@ -458,26 +458,38 @@ where
     //     (ECA derives + promotes the next-epoch authority from it). Sealed at the certified
     //     slot; gated on delegations so a no-EVIEW snapshot is byte-identical. Fail-closed: a
     //     build failure aborts before authority visibility.
-    if !s1a.cert_state.delegation.delegations.is_empty() {
-        use ade_ledger::reduced_utxo::{reduce_txout, ReducedStakeRef};
-        let mut reduced: std::collections::BTreeMap<
-            ade_types::tx::TxIn,
-            (ade_types::tx::Coin, ReducedStakeRef),
-        > = std::collections::BTreeMap::new();
-        for (txin, txout) in utxo.utxos.iter() {
-            reduced.insert(txin.clone(), reduce_txout(txout));
-        }
-        let checkpoint = ade_runtime::chaindb::ReducedUtxoCheckpoint::open(
-            &snapshot_dir.join("reduced-checkpoint.redb"),
-        )
-        .map_err(|e| NativeFirstRunError::ReducedCheckpoint(format!("{e:?}")))?;
-        checkpoint
-            .build_from(&reduced)
+    // S4-L2 (v6): the reduced-checkpoint commitment finalized AT the seed point — the REAL provenance the
+    // bootstrap-certified leadership objects (nesPd_seed / nesPd_seed+1) bind. Captured from the just-built
+    // checkpoint (sealed at the certified/seed slot), never fabricated. `None` iff no reduced checkpoint is built
+    // (no delegations → no leadership authority to seal anyway).
+    let seed_checkpoint_commitment: Option<Hash32> =
+        if !s1a.cert_state.delegation.delegations.is_empty() {
+            use ade_ledger::reduced_utxo::{reduce_txout, ReducedStakeRef};
+            let mut reduced: std::collections::BTreeMap<
+                ade_types::tx::TxIn,
+                (ade_types::tx::Coin, ReducedStakeRef),
+            > = std::collections::BTreeMap::new();
+            for (txin, txout) in utxo.utxos.iter() {
+                reduced.insert(txin.clone(), reduce_txout(txout));
+            }
+            let checkpoint = ade_runtime::chaindb::ReducedUtxoCheckpoint::open(
+                &snapshot_dir.join("reduced-checkpoint.redb"),
+            )
             .map_err(|e| NativeFirstRunError::ReducedCheckpoint(format!("{e:?}")))?;
-        checkpoint
-            .seal_bootstrap(binding.certified_point.slot)
-            .map_err(|e| NativeFirstRunError::ReducedCheckpoint(format!("{e:?}")))?;
-    }
+            checkpoint
+                .build_from(&reduced)
+                .map_err(|e| NativeFirstRunError::ReducedCheckpoint(format!("{e:?}")))?;
+            checkpoint
+                .seal_bootstrap(binding.certified_point.slot)
+                .map_err(|e| NativeFirstRunError::ReducedCheckpoint(format!("{e:?}")))?;
+            Some(
+                checkpoint
+                    .finalize()
+                    .map_err(|e| NativeFirstRunError::ReducedCheckpoint(format!("{e:?}")))?,
+            )
+        } else {
+            None
+        };
 
     // 6. Build the single-era Conway schedule anchored at the snapshot epoch's
     //    absolute geometry (the network boundary + the genesis epoch length).
@@ -657,16 +669,24 @@ where
                             eprintln!(
                                 "ade_node native-firstrun: frozen-leadership seal skipped (source mismatch, non-fatal)"
                             );
-                        } else {
+                        } else if let Some(commitment) = seed_checkpoint_commitment.as_ref() {
+                            // S4-L2 (v6): bind the REAL seed-point checkpoint commitment (captured above) into
+                            // both bootstrap-certified objects. These are bootstrap-indexed (seed / seed+1), so
+                            // they are L1-initial/warm-view only and NOT promotion-certified (the promotion
+                            // reader requires current-only-non-bootstrap); the commitment is honest provenance.
                             use ade_ledger::frozen_leadership::FrozenLeadershipPoolDistr;
                             let mut distrs = vec![
-                                FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(record),
+                                FrozenLeadershipPoolDistr::from_seed_epoch_consensus_inputs(
+                                    record,
+                                    commitment.clone(),
+                                ),
                             ];
                             if let Some(next_epoch) = record.epoch_no.0.checked_add(1) {
                                 distrs.push(FrozenLeadershipPoolDistr::from_mark_pool_distr(
                                     ade_types::EpochNo(next_epoch),
                                     binding.certified_point.slot,
                                     binding.certified_point.block_hash.clone(),
+                                    commitment.clone(),
                                     &s1a.mark_pool_distr,
                                 ));
                             }

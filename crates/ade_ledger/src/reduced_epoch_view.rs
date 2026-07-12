@@ -119,6 +119,27 @@ fn canonical_bytes(
     buf
 }
 
+/// LIVE-LEDGER-EPOCH-TRANSITION S4-L2: the NON-LEADERSHIP context for a frozen-leadership candidate view. By
+/// construction it carries NO stake, NO pool set, NO VRF keyhash, NO pool params — the leadership probability
+/// distribution comes EXCLUSIVELY from the [`crate::frozen_leadership::FrozenLeadershipPoolDistr`] passed
+/// alongside it. This structural split makes it impossible to smuggle a seed-window (or any non-frozen) pool
+/// distribution into a promoted candidate view via the metadata path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrozenLeadershipViewMetadata {
+    pub network_magic: u32,
+    pub era: CardanoEra,
+    /// The canonical selected point the candidate authority binds to (the boundary transition point).
+    pub source_point: Point,
+    /// The boundary-aligned reduced-checkpoint commitment — the EXACT value the prior candidate-view
+    /// construction bound for this source point (never a guess; mirrored from the accepted path).
+    pub checkpoint_commitment: Hash32,
+    /// eta0 for the candidate epoch (the chain-dep epoch tick), NOT a stake/leadership input.
+    pub nonce: Hash32,
+    pub snapshot_phase: SnapshotPhase,
+    /// Commitment to the bound consensus profile (genesis + protocol-params + ASC).
+    pub protocol_params_commitment: Hash32,
+}
+
 impl EpochConsensusView {
     /// Bind a finalized snapshot into an immutable view, computing the canonical-bytes
     /// hash identity over every binding + the stake distribution.
@@ -163,6 +184,42 @@ impl EpochConsensusView {
             protocol_params_commitment,
             canonical_hash,
         }
+    }
+
+    /// LIVE-LEDGER-EPOCH-TRANSITION S4-L2: bind a candidate authority whose LEADERSHIP (per-pool stake + VRF +
+    /// total + epoch) comes EXCLUSIVELY from the epoch-indexed frozen leadership authority (DC-EPOCH-25) for
+    /// `frozen.target_leadership_epoch`, and whose non-leadership context is the structurally leadership-free
+    /// [`FrozenLeadershipViewMetadata`]. This is the SOLE constructor the promotion path uses past the seed+1
+    /// bridge: the stake / pool set / VRF are read ONLY from `frozen`, and the metadata type CANNOT carry any of
+    /// them, so a seed-window replay's pool distribution cannot be smuggled into the promoted view by either
+    /// argument. `total_active_stake` is summed EXACTLY as `frozen.to_pool_distr_view` (u64 saturating), so
+    /// `from_frozen_leadership(..).to_pool_distr_view(..) == frozen.to_pool_distr_view(asc)` byte-for-byte.
+    pub fn from_frozen_leadership(
+        frozen: &crate::frozen_leadership::FrozenLeadershipPoolDistr,
+        metadata: &FrozenLeadershipViewMetadata,
+    ) -> Self {
+        let mut stake_by_pool: BTreeMap<PoolId, Coin> = BTreeMap::new();
+        let mut pool_vrf_keyhashes: BTreeMap<PoolId, Hash32> = BTreeMap::new();
+        let mut total_active_stake: u64 = 0;
+        for (keyhash, entry) in &frozen.pools {
+            let pool = PoolId(keyhash.clone());
+            total_active_stake = total_active_stake.saturating_add(entry.active_stake);
+            stake_by_pool.insert(pool.clone(), Coin(entry.active_stake));
+            pool_vrf_keyhashes.insert(pool, entry.vrf_keyhash.clone());
+        }
+        Self::bind(
+            metadata.network_magic,
+            metadata.era,
+            frozen.target_leadership_epoch,
+            metadata.source_point.clone(),
+            metadata.checkpoint_commitment.clone(),
+            metadata.nonce.clone(),
+            metadata.snapshot_phase,
+            stake_by_pool,
+            pool_vrf_keyhashes,
+            Coin(total_active_stake),
+            metadata.protocol_params_commitment.clone(),
+        )
     }
 
     /// The self-describing canonical-bytes hash identity.
@@ -339,6 +396,50 @@ mod tests {
             Coin(300),
             consensus_profile_commitment(&test_gen(), &test_pp(), test_asc()),
         )
+    }
+
+    #[test]
+    fn from_frozen_leadership_takes_leadership_only_from_frozen_and_projects_byte_identical() {
+        use crate::frozen_leadership::{FrozenLeadershipPoolDistr, LeadershipPoolEntry};
+        // A frozen leadership authority: two staked pools + one zero-stake (carried for byte-identity).
+        let mut pools: BTreeMap<Hash28, LeadershipPoolEntry> = BTreeMap::new();
+        pools.insert(pool(1).0, LeadershipPoolEntry { active_stake: 100, vrf_keyhash: Hash32([0x71; 32]) });
+        pools.insert(pool(2).0, LeadershipPoolEntry { active_stake: 0, vrf_keyhash: Hash32([0x72; 32]) });
+        pools.insert(pool(3).0, LeadershipPoolEntry { active_stake: 200, vrf_keyhash: Hash32([0x73; 32]) });
+        let frozen = FrozenLeadershipPoolDistr {
+            target_leadership_epoch: EpochNo(1342),
+            source_slot: ade_types::SlotNo(115_862_416),
+            source_hash: Hash32([0x07; 32]),
+            source_checkpoint_commitment: Hash32([0x0C; 32]),
+            pools,
+        };
+        let commitment = consensus_profile_commitment(&test_gen(), &test_pp(), test_asc());
+        let view = EpochConsensusView::from_frozen_leadership(
+            &frozen,
+            &FrozenLeadershipViewMetadata {
+                network_magic: 2,
+                era: CardanoEra::Conway,
+                source_point: point(115_948_834, 0xbb),
+                checkpoint_commitment: Hash32([0xc2; 32]),
+                nonce: Hash32([0xe8; 32]),
+                snapshot_phase: SnapshotPhase::Mark,
+                protocol_params_commitment: commitment,
+            },
+        );
+        // Leadership (epoch + per-pool stake/VRF + total) comes ONLY from the frozen authority.
+        assert_eq!(view.epoch, EpochNo(1342));
+        assert!(view.is_leadership_complete());
+        assert_eq!(view.stake_by_pool.len(), 3);
+        assert_eq!(view.total_active_stake, Coin(300));
+        assert_eq!(view.pool_vrf_keyhashes.get(&pool(2)), Some(&Hash32([0x72; 32])));
+        assert!(view.stake_by_pool.values().any(|c| c.0 == 0), "zero-stake pool carried");
+        // BYTE-IDENTICAL: the view projects to EXACTLY frozen.to_pool_distr_view(asc) — no mixing, no drift.
+        let via_view = view.to_pool_distr_view(&test_gen(), &test_pp(), test_asc()).expect("projects");
+        let via_frozen = frozen.to_pool_distr_view(test_asc());
+        assert_eq!(
+            via_view, via_frozen,
+            "S4-L2: from_frozen_leadership projects byte-identical to frozen.to_pool_distr_view"
+        );
     }
     fn bindings_of(v: &EpochConsensusView) -> ViewBindings {
         ViewBindings {

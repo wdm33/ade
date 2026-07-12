@@ -19,7 +19,7 @@ use ade_ledger::reduced_epoch_view::{consensus_profile_commitment, EpochConsensu
 use ade_ledger::reduced_snapshot::SnapshotPhase;
 use ade_ledger::state::LedgerState;
 use ade_runtime::chaindb::{
-    ChainDb, CheckpointReadinessError, ReducedCheckpointError, ReducedUtxoCheckpoint,
+    ChainDb, CheckpointReadinessError, EpochAccumulatorStore, ReducedCheckpointError, ReducedUtxoCheckpoint,
 };
 use ade_types::shelley::block::ShelleyBlock;
 use ade_types::{CardanoEra, EpochNo, Hash32, SlotNo};
@@ -372,6 +372,12 @@ pub enum ActivationError {
     /// over the live chain-dep, the C-2 window bounds, or the (not-yet-wired) beyond-seed+2 case.
     /// Terminal: there is no silent bridge fallback past seed+1.
     WindowReplayPrepare(String),
+    /// LIVE-LEDGER-EPOCH-TRANSITION S4-L2: the promotion path for a candidate epoch BEYOND the bootstrap bridge
+    /// (>= seed+2) could not obtain a promotion-certified frozen leadership authority — the store is absent, the
+    /// epoch is unsealed / non-promotion-certified (a bootstrap import) / mismatched / malformed, or the frozen
+    /// view failed to project. Fail closed: post-bootstrap candidate leadership comes ONLY from the
+    /// promotion-certified epoch-indexed frozen object, never a window replay / seed fallback.
+    PromotionLeadershipUnavailable { candidate_epoch: EpochNo, reason: String },
 }
 
 /// S3f-4d-wire-3 (DC-EPOCH-11): the live boundary-activation orchestration -- the SINGLE entry
@@ -576,6 +582,10 @@ pub fn prepare_authority_for_candidate_slot(
     chaindb: &dyn ChainDb,
     chain_dep: &ade_core::consensus::praos_state::PraosChainDepState,
     active_view: &mut ActiveEpochAuthority,
+    // S4-L2: the epoch-indexed frozen leadership authority. For candidate epochs beyond the bootstrap bridge
+    // (>= seed+2) it is the SOLE promotion source (promotion-certified, never a window replay / seed fallback);
+    // its absence is a fail-closed terminal on that path.
+    epoch_accumulator: Option<&EpochAccumulatorStore>,
     wal_write: impl FnOnce(&WalEntry) -> bool,
 ) -> Result<bool, ActivationError> {
     let seed_epoch = inputs.seed_epoch;
@@ -615,69 +625,70 @@ pub fn prepare_authority_for_candidate_slot(
         });
     }
 
-    // WINDOW-REPLAY (DC-EPOCH-17, boundary 2+): for a candidate past seed+1 the seed+C authority is
-    // replay(C-2). For boundary 2 (C == seed+2) that is the seed (N) window Ade followed from bootstrap.
-    // eta0(C) is the chain-dep epoch tick over the LIVE chain-dep (candidate (X) last_epoch_block_nonce
-    // -- the value the boundary-2 live gate proved, DC-EPOCH-16); node_sync applies the SAME tick to the
-    // chain-dep after, so the bound view's nonce and the live chain-dep agree by construction. Boundary
-    // 3+ (the general C-2 window) is the continuous-crossing refinement -- fail closed here.
+    // FROZEN PROMOTION (DC-EPOCH-17, boundary 2+): for EVERY candidate past seed+1 -- boundary 2 (seed+2)
+    // AND every boundary beyond (the former seed+2 ceiling is GONE, LIVE-LEDGER-EPOCH-TRANSITION S4-L2) --
+    // the seed+C leadership authority is the promotion-certified, epoch-indexed frozen object for C, not a
+    // window replay. eta0(C) is the chain-dep epoch tick over the LIVE chain-dep (DC-EPOCH-16); node_sync
+    // applies the SAME tick after, so the bound view's nonce and the live chain-dep agree by construction.
     if candidate_epoch.0 >= seed_epoch.0 + 2 {
-        if candidate_epoch.0 != seed_epoch.0 + 2 {
-            return Err(ActivationError::WindowReplayPrepare(format!(
-                "window-replay beyond seed+2 not yet wired (candidate {candidate_epoch:?}, seed {seed_epoch:?})"
-            )));
-        }
-        // Option B (B3c, DC-EPOCH-18): the seed+2 authority's stake snapshot REQUIRES the snapshot-bound
-        // bootstrap reward update; the fail-closed (absent / wrong-epoch is terminal) is now enforced
-        // MECHANICALLY at the single derivation site (derive_candidate over the seed window), so it
-        // cannot drift across the activate / recover / first-boundary callers. The update is carried on
-        // the profile below.
+        // LIVE-LEDGER-EPOCH-TRANSITION S4-L2 AUTHORITY FLIP: for candidate epochs BEYOND the bootstrap bridge,
+        // the leadership authority is the promotion-certified, epoch-indexed frozen leadership object — and
+        // NOTHING else. NO window replay, NO materialize_bootstrap_into, NO live-checkpoint shortcut, NO seed
+        // fallback, NO latest/current/nearest read. The store is REQUIRED: its absence, or a
+        // non-promotion-certified / unsealed / mismatched / malformed object, is a fail-closed terminal — never
+        // a fallback to the retired window replay.
+        let store = epoch_accumulator.ok_or(ActivationError::PromotionLeadershipUnavailable {
+            candidate_epoch,
+            reason: "epoch-accumulator store absent on the promotion path".to_string(),
+        })?;
+        let frozen = store
+            .promotion_leadership_authority_for_epoch(candidate_epoch)
+            .map_err(|e| ActivationError::PromotionLeadershipUnavailable {
+                candidate_epoch,
+                reason: format!("{e:?}"),
+            })?;
+        // eta0(C): the SAME chain-dep epoch tick the retired path used (DC-EPOCH-16); node_sync applies the
+        // SAME tick to the live chain-dep after, so the bound nonce and the live chain-dep agree.
         let ticked = ade_core::consensus::apply_nonce_input(
             chain_dep,
-            &ade_core::consensus::NonceInput::EpochBoundary {
-                new_epoch: candidate_epoch,
-            },
+            &ade_core::consensus::NonceInput::EpochBoundary { new_epoch: candidate_epoch },
         )
-        .map_err(|e| ActivationError::WindowReplayPrepare(format!("eta0 boundary tick: {e:?}")))?;
-        let eta0 = ticked.epoch_nonce.0.clone();
-        let bounds = compute_first_window_bounds(
-            era_schedule,
-            inputs.seed_point_slot,
-            inputs.seed_point_hash.clone(),
-            seed_epoch,
-        )
-        .ok_or_else(|| {
-            ActivationError::WindowReplayPrepare("seed window bounds unavailable".to_string())
+        .map_err(|e| ActivationError::PromotionLeadershipUnavailable {
+            candidate_epoch,
+            reason: format!("eta0 boundary tick: {e:?}"),
         })?;
-        let profile = CandidateProfile {
-            slots_per_epoch: bounds.slots_per_epoch,
-            genesis_hash: inputs.genesis_hash.clone(),
-            protocol_params_hash: inputs.protocol_params_hash.clone(),
-            asc: inputs.asc,
-            bootstrap_reward_update: inputs.bootstrap_reward_delta.clone(),
-            seed_epoch,
+        // Leadership-FREE metadata: source point + checkpoint commitment come from the FROZEN object's own
+        // freeze-time lineage (the MARK source `s_prev`), NEVER the durable tip; ASC/params from the bound
+        // profile. `from_frozen_leadership` reads stake / pool set / VRF ONLY from `frozen`.
+        let metadata = ade_ledger::reduced_epoch_view::FrozenLeadershipViewMetadata {
+            network_magic: inputs.network_magic,
+            era: CardanoEra::Conway,
+            source_point: Point { slot: frozen.source_slot, hash: frozen.source_hash.clone() },
+            checkpoint_commitment: frozen.source_checkpoint_commitment.clone(),
+            nonce: ticked.epoch_nonce.0.clone(),
+            snapshot_phase: SnapshotPhase::Set,
+            protocol_params_commitment: consensus_profile_commitment(
+                &inputs.genesis_hash,
+                &inputs.protocol_params_hash,
+                inputs.asc,
+            ),
         };
-        let selected_point = Point {
-            slot: durable_tip_slot,
-            hash: durable_tip_hash.clone(),
-        };
-        try_activate_at_boundary(
-            live,
-            chaindb,
-            &bounds,
-            &inputs.seed_bootstrap_state,
-            inputs.network_magic,
-            eta0,
-            &profile,
-            &selected_point,
-            true,
-            active_view,
-            &inputs.replay_scratch_path,
-            wal_write,
-        )?;
-        // B3b (DC-EPOCH-17): return DID-THIS-CALL-ADVANCE (not is_promoted). A window-replay that
-        // declines (NotYet -- e.g. the source is not yet ancestor-or-equal of the selected tip)
-        // leaves the authority at the current epoch and MUST NOT be reported as a boundary crossing.
+        let source = EpochConsensusView::from_frozen_leadership(&frozen, &metadata);
+        let projected = source
+            .to_pool_distr_view(&inputs.genesis_hash, &inputs.protocol_params_hash, inputs.asc)
+            .map_err(|e| ActivationError::PromotionLeadershipUnavailable {
+                candidate_epoch,
+                reason: format!("frozen projection: {e:?}"),
+            })?;
+        // Durable-before-visible: WAL the activation record BEFORE publishing the active view.
+        let record = activation_record_for(&source);
+        if !wal_write(&record) {
+            return Err(ActivationError::PromotionLeadershipUnavailable {
+                candidate_epoch,
+                reason: "wal activation-record write rejected".to_string(),
+            });
+        }
+        active_view.advance(source, projected).map_err(ActivationError::Activate)?;
         return Ok(active_view.epoch().0 > current_epoch.0);
     }
 
@@ -1386,5 +1397,231 @@ mod tests {
             .expect("already-promoted is an idempotent no-op");
         assert!(a1.is_promoted(), "still promoted (unchanged)");
         assert_eq!(a1.epoch(), EpochNo(101), "the promoted epoch is unchanged by the no-op");
+    }
+
+    // ---- S4-L2 SEED+3 CROSSING PROOF (the commit gate for the ceiling deletion) ----
+    //
+    // The retired path capped candidate promotion at seed+2 (the +2 window replay only ever derived
+    // seed+2 leadership; candidate == seed+3 was a fail-closed terminal). S4-L2 replaces that block: for
+    // EVERY candidate epoch beyond the bootstrap bridge (>= seed+2) the leadership authority is sourced
+    // SOLELY from `promotion_leadership_authority_for_epoch(candidate)` -> a promotion-certified v6
+    // `FrozenLeadershipPoolDistr` (its own freeze-time source point + checkpoint commitment) ->
+    // `from_frozen_leadership`. No window replay, no materialize_bootstrap_into, no live checkpoint, no
+    // seed fallback. These tests prove seed+2 AND the former-ceiling seed+3 cross through that path, and
+    // that every non-promotion source fails closed.
+
+    fn s4l2_era() -> EraSchedule {
+        // seed = 100, 1000 slots/epoch: locate(10X_010) = epoch 10X, locate(10X_999) = epoch 10X.
+        EraSchedule::new(
+            ade_core::consensus::era_schedule::BootstrapAnchorHash(Hash32([0u8; 32])),
+            100_000,
+            vec![ade_core::consensus::era_schedule::EraSummary {
+                randomness_stabilisation_window_slots: None,
+                era: CardanoEra::Conway,
+                start_slot: SlotNo(100_000),
+                start_epoch: EpochNo(100),
+                slot_length_ms: 1_000,
+                epoch_length_slots: 1_000,
+                safe_zone_slots: 1_000,
+            }],
+        )
+        .unwrap()
+    }
+
+    /// A promotion-certified (native, current-only) v6 frozen leadership object AUTHORIZING `target`.
+    /// Its source point is `s_prev` = the last slot of `target-1` (the MARK source), with a fixed v6
+    /// checkpoint commitment captured "at freeze".
+    fn s4l2_native(target: u64) -> ade_ledger::frozen_leadership::FrozenLeadershipPoolDistr {
+        let mut pools = std::collections::BTreeMap::new();
+        pools.insert(
+            ade_types::Hash28([0x11; 28]),
+            ade_ledger::frozen_leadership::LeadershipPoolEntry {
+                active_stake: 1_000,
+                vrf_keyhash: Hash32([0xA1; 32]),
+            },
+        );
+        ade_ledger::frozen_leadership::FrozenLeadershipPoolDistr {
+            target_leadership_epoch: EpochNo(target),
+            source_slot: SlotNo(target * 1_000 - 1),
+            source_hash: Hash32([target as u8; 32]),
+            source_checkpoint_commitment: Hash32([0xCC; 32]),
+            pools,
+        }
+    }
+
+    fn s4l2_inputs() -> EviewActivationInputs {
+        EviewActivationInputs {
+            seed_bootstrap_state: ade_ledger::state::LedgerState::new(CardanoEra::Conway),
+            seed_point_slot: SlotNo(100_010),
+            seed_point_hash: Hash32([0x10; 32]),
+            seed_epoch: EpochNo(100),
+            network_magic: 1,
+            nonce: Hash32([0x0e; 32]),
+            genesis_hash: Hash32([0x91; 32]),
+            protocol_params_hash: Hash32([0x92; 32]),
+            asc: ActiveSlotsCoeff { numer: 1, denom: 20 },
+            replay_scratch_path: std::path::PathBuf::from("/nonexistent"),
+            next_epoch_bridge: None,
+            bootstrap_reward_delta: None,
+        }
+    }
+
+    /// Build a `(source, projection)` pair from a frozen object EXACTLY as the promotion path does --
+    /// used only to pre-promote the authority into the `Promoted(current)` state the crossing under test
+    /// starts from (representing the boundaries already crossed).
+    fn s4l2_frozen_source(
+        frozen: &ade_ledger::frozen_leadership::FrozenLeadershipPoolDistr,
+        inputs: &EviewActivationInputs,
+    ) -> (EpochConsensusView, ade_ledger::consensus_view::PoolDistrView) {
+        let metadata = ade_ledger::reduced_epoch_view::FrozenLeadershipViewMetadata {
+            network_magic: inputs.network_magic,
+            era: CardanoEra::Conway,
+            source_point: Point { slot: frozen.source_slot, hash: frozen.source_hash.clone() },
+            checkpoint_commitment: frozen.source_checkpoint_commitment.clone(),
+            nonce: inputs.nonce.clone(),
+            snapshot_phase: SnapshotPhase::Set,
+            protocol_params_commitment: consensus_profile_commitment(
+                &inputs.genesis_hash,
+                &inputs.protocol_params_hash,
+                inputs.asc,
+            ),
+        };
+        let source = EpochConsensusView::from_frozen_leadership(frozen, &metadata);
+        let projected = source
+            .to_pool_distr_view(&inputs.genesis_hash, &inputs.protocol_params_hash, inputs.asc)
+            .unwrap();
+        (source, projected)
+    }
+
+    /// Drive `prepare_authority_for_candidate_slot` for the boundary `current -> candidate` (== current+1).
+    /// The authority is seeded at the ORIGINAL seed epoch (100) then promoted forward to `current`, so the
+    /// crossing under test is the REAL production shape: `Promoted(current) -> advance(+1) -> candidate`.
+    fn s4l2_run(
+        store: Option<&EpochAccumulatorStore>,
+        current: u64,
+        candidate: u64,
+    ) -> Result<(bool, EpochNo, ade_ledger::consensus_view::PoolDistrView), ActivationError> {
+        let era = s4l2_era();
+        let inputs = s4l2_inputs();
+        let dir = tempfile::tempdir().unwrap();
+        let live = ReducedUtxoCheckpoint::open(&dir.path().join("live.redb")).unwrap();
+        let db = InMemoryChainDb::new();
+        let mut chain_dep = ade_core::consensus::praos_state::PraosChainDepState::genesis(
+            ade_core::consensus::praos_state::Nonce(inputs.nonce.clone()),
+        );
+        // The boundary eta0 tick combines `candidate ⭒ last_epoch_block_nonce`; prime the operand a
+        // prior boundary rotation would have left (genesis leaves it None). Its value is not asserted --
+        // the promoted leadership comes ENTIRELY from the frozen object, never this nonce.
+        chain_dep.last_epoch_block_nonce =
+            Some(ade_core::consensus::praos_state::Nonce(Hash32([0x55; 32])));
+        let sv = ade_ledger::consensus_view::PoolDistrView::new(
+            EpochNo(100),
+            1_000,
+            inputs.asc,
+            std::collections::BTreeMap::new(),
+        );
+        let mut active = ActiveEpochAuthority::seed(&sv);
+        // Promote forward to `current` (unconstrained first promotion from Seed) so the boundary under
+        // test advances from a real Promoted view -- the shape production reaches boundary 3+ in.
+        let (s, p) = s4l2_frozen_source(&s4l2_native(current), &inputs);
+        active.advance(s, p).expect("pre-promotion to current");
+        let tip_slot = SlotNo(current * 1_000 + 10);
+        let tip_hash = Hash32([0xAB; 32]);
+        let candidate_slot = SlotNo(candidate * 1_000 + 10);
+        let promoted = prepare_authority_for_candidate_slot(
+            &inputs,
+            &era,
+            tip_slot,
+            &tip_hash,
+            candidate_slot,
+            &tip_hash, // candidate_parent binds to the durable tip
+            &live,
+            &db,
+            &chain_dep,
+            &mut active,
+            store,
+            |_| true,
+        )?;
+        let pdv = active.pool_distr_view().clone();
+        Ok((promoted, active.epoch(), pdv))
+    }
+
+    /// candidate == seed+2 AND candidate == seed+3 both promote through the frozen authority; the promoted
+    /// leadership is EXACTLY the frozen projection. seed+3 is the former ceiling -- the retired path
+    /// returned a terminal here; the new path CROSSES it, and ONLY through the promotion-certified frozen
+    /// object (there is no other leadership source on this path).
+    #[test]
+    fn s4_l2_frozen_promotion_crosses_seed_plus_2_and_seed_plus_3() {
+        let asc = ActiveSlotsCoeff { numer: 1, denom: 20 };
+        let dir = tempfile::tempdir().unwrap();
+        let store =
+            EpochAccumulatorStore::open(&dir.path().join("acc.redb")).unwrap();
+        store.seal_current_leadership(&s4l2_native(102)).unwrap();
+        store.seal_current_leadership(&s4l2_native(103)).unwrap();
+
+        let (p2, e2, v2) = s4l2_run(Some(&store), 101, 102).expect("seed+2 promotes via frozen");
+        assert!(p2, "seed+2 crossed");
+        assert_eq!(e2, EpochNo(102));
+        assert_eq!(
+            v2,
+            s4l2_native(102).to_pool_distr_view(asc),
+            "seed+2 leadership is EXACTLY the frozen projection"
+        );
+
+        let (p3, e3, v3) =
+            s4l2_run(Some(&store), 102, 103).expect("seed+3 promotes via frozen -- CEILING CROSSED");
+        assert!(p3, "seed+3 crossed the FORMER CEILING");
+        assert_eq!(e3, EpochNo(103));
+        assert_eq!(
+            v3,
+            s4l2_native(103).to_pool_distr_view(asc),
+            "seed+3 leadership is EXACTLY the frozen projection"
+        );
+    }
+
+    /// Every non-promotion source on the frozen path is a fail-closed terminal -- NEVER a fallback to the
+    /// retired window replay: missing store, an unsealed epoch, and a bootstrap-only (not
+    /// promotion-certified) epoch each terminate with the specific cause.
+    #[test]
+    fn s4_l2_frozen_promotion_fails_closed_on_every_non_promotion_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let store =
+            EpochAccumulatorStore::open(&dir.path().join("acc.redb")).unwrap();
+        store.seal_current_leadership(&s4l2_native(102)).unwrap();
+        // A BOOTSTRAP-only epoch (written to BOTH tables) -> not promotion-certified.
+        store.seal_bootstrap_leadership_epochs(&[s4l2_native(104)]).unwrap();
+
+        // (1) missing store -> PromotionLeadershipUnavailable (store absent).
+        match s4l2_run(None, 101, 102) {
+            Err(ActivationError::PromotionLeadershipUnavailable { candidate_epoch, reason }) => {
+                assert_eq!(candidate_epoch, EpochNo(102));
+                assert!(reason.contains("absent"), "missing store reason: {reason}");
+            }
+            other => panic!("missing store must fail closed, got {other:?}"),
+        }
+
+        // (2) an unsealed epoch -> LeadershipEpochNotSealed (propagated as the terminal reason).
+        match s4l2_run(Some(&store), 104, 105) {
+            Err(ActivationError::PromotionLeadershipUnavailable { candidate_epoch, reason }) => {
+                assert_eq!(candidate_epoch, EpochNo(105));
+                assert!(
+                    reason.contains("LeadershipEpochNotSealed"),
+                    "unsealed epoch reason: {reason}"
+                );
+            }
+            other => panic!("unsealed epoch must fail closed, got {other:?}"),
+        }
+
+        // (3) a bootstrap-only epoch -> NotPromotionCertified (the promotion-certification gate).
+        match s4l2_run(Some(&store), 103, 104) {
+            Err(ActivationError::PromotionLeadershipUnavailable { candidate_epoch, reason }) => {
+                assert_eq!(candidate_epoch, EpochNo(104));
+                assert!(
+                    reason.contains("NotPromotionCertified"),
+                    "bootstrap-only epoch reason: {reason}"
+                );
+            }
+            other => panic!("bootstrap-only epoch must fail closed, got {other:?}"),
+        }
     }
 }

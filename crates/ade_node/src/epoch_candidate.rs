@@ -285,6 +285,132 @@ mod tests {
         );
     }
 
+    /// S4-L2 IDENTITY GATE (runs BEFORE the seed+2 ceiling is deleted): the frozen-leadership candidate view is
+    /// BYTE-IDENTICAL to the accepted window-replay candidate view — proven field-by-field so a failure localizes
+    /// to METADATA (source point / checkpoint commitment / phase / nonce / params) vs LEADERSHIP (the projected
+    /// PoolDistrView). The checkpoint commitment is the EXACT boundary-finalized reduced-checkpoint value
+    /// (`cp.finalize()` AFTER the window drive), never a live shortcut. The store-vs-window LEADERSHIP identity
+    /// (that `leadership_authority_for_epoch(candidate)` equals this window-replay leadership) is S4-pre-2's
+    /// reference proof + the live cross proof; here the frozen leadership IS the window-derived nesPd, which
+    /// isolates the metadata derivation + the constructor.
+    #[test]
+    fn s4_l2_frozen_candidate_view_byte_identical_to_window_replay_view() {
+        use ade_ledger::frozen_leadership::{FrozenLeadershipPoolDistr, LeadershipPoolEntry};
+        use ade_ledger::reduced_epoch_view::FrozenLeadershipViewMetadata;
+
+        // The SAME fixture the accepted derive_candidate path uses.
+        let dir = tempfile::tempdir().unwrap();
+        let cp = ReducedUtxoCheckpoint::open(&dir.path().join("rc.redb")).unwrap();
+        let mut reduced: BTreeMap<TxIn, (Coin, ReducedStakeRef)> = BTreeMap::new();
+        reduced.insert(
+            TxIn { tx_hash: Hash32([7; 32]), index: 0 },
+            (Coin(5_000_000), ReducedStakeRef::Base(StakeCredential::KeyHash(Hash28([0xc; 28])))),
+        );
+        cp.build_from(&reduced).unwrap();
+        let mut state = LedgerState::new(CardanoEra::Conway);
+        {
+            let cs = state.cert_state.as_authoritative_mut().expect("authoritative cert state");
+            cs.delegation
+                .delegations
+                .insert(StakeCredential::KeyHash(Hash28([0xc; 28])), PoolId(Hash28([0x9; 28])));
+            cs.pool.pools.insert(
+                PoolId(Hash28([0x9; 28])),
+                PoolParams {
+                    pool_id: PoolId(Hash28([0x9; 28])),
+                    vrf_hash: Hash32([0x9e; 32]),
+                    pledge: Coin(0),
+                    cost: Coin(0),
+                    margin: (0, 1),
+                    reward_account: vec![],
+                    owners: vec![],
+                },
+            );
+        }
+        let w = window();
+        let block = conway_block();
+        let profile = test_profile();
+        let nonce = Hash32([0x42; 32]);
+
+        // OLD: the accepted window-replay candidate view (drives the window into `cp`, then binds).
+        let old = derive_candidate(
+            &w,
+            &cp,
+            &state,
+            std::slice::from_ref(&block),
+            CardanoEra::Conway,
+            2,
+            nonce.clone(),
+            &profile,
+        )
+        .expect("derive window-replay candidate");
+
+        // The frozen leadership for the candidate epoch == the window-replay's derived per-pool stake + VRF (in
+        // production this is `leadership_authority_for_epoch(candidate)`; using it here isolates the metadata).
+        let mut pools: BTreeMap<Hash28, LeadershipPoolEntry> = BTreeMap::new();
+        for (pid, coin) in &old.stake_by_pool {
+            let vrf = old.pool_vrf_keyhashes.get(pid).expect("leadership-complete").clone();
+            pools.insert(pid.0.clone(), LeadershipPoolEntry { active_stake: coin.0, vrf_keyhash: vrf });
+        }
+        // The frozen leadership object carries its OWN lineage: the leadership-snapshot source point. S4-L2's
+        // source-point rule reads `metadata.source_point` from HERE (frozen.source_slot/source_hash), NEVER the
+        // current durable tip. At seed+2 that snapshot source == the window source point.
+        let frozen = FrozenLeadershipPoolDistr {
+            target_leadership_epoch: old.epoch,
+            source_slot: w.source_window_end,
+            source_hash: w.lineage_pin.clone(),
+            // v6: the frozen object's OWN provenance = the boundary-finalized reduced-checkpoint commitment
+            // (the exact value the retired window path bound). The metadata below reads it from HERE.
+            source_checkpoint_commitment: cp.finalize().expect("boundary-finalized checkpoint commitment"),
+            pools,
+        };
+
+        // METADATA derived from the FROZEN OBJECT's own source point + the reduced checkpoint finalized AT that
+        // source point (`cp.finalize()` after the window drive), never a live-tip shortcut.
+        let frozen_metadata = FrozenLeadershipViewMetadata {
+            network_magic: 2,
+            era: CardanoEra::Conway,
+            source_point: Point { slot: frozen.source_slot, hash: frozen.source_hash.clone() },
+            checkpoint_commitment: cp.finalize().expect("boundary-finalized checkpoint commitment"),
+            nonce: nonce.clone(),
+            snapshot_phase: w.snapshot_phase,
+            protocol_params_commitment: consensus_profile_commitment(
+                &profile.genesis_hash,
+                &profile.protocol_params_hash,
+                profile.asc,
+            ),
+        };
+
+        // Hard METADATA assertions — a regression localizes to the exact field.
+        assert_eq!(old.source_point, frozen_metadata.source_point, "source_point");
+        assert_eq!(
+            old.checkpoint_commitment, frozen_metadata.checkpoint_commitment,
+            "checkpoint_commitment (boundary-finalized, not a live shortcut)"
+        );
+        assert_eq!(old.snapshot_phase, frozen_metadata.snapshot_phase, "snapshot_phase");
+        assert_eq!(old.nonce, frozen_metadata.nonce, "nonce/eta0");
+        assert_eq!(
+            old.protocol_params_commitment, frozen_metadata.protocol_params_commitment,
+            "protocol_params_commitment"
+        );
+        assert_eq!(frozen.target_leadership_epoch, old.epoch, "target_leadership_epoch == candidate_epoch");
+
+        // FULL view identity: the frozen-constructed candidate IS the accepted view, byte-for-byte.
+        let frozen_view = EpochConsensusView::from_frozen_leadership(&frozen, &frozen_metadata);
+        assert_eq!(
+            frozen_view.canonical_hash(),
+            old.canonical_hash(),
+            "S4-L2: frozen candidate view canonical hash == window-replay view"
+        );
+        assert_eq!(frozen_view, old, "S4-L2: frozen candidate view == window-replay view byte-for-byte");
+
+        // LEADERSHIP kept SEPARATE: the projected PoolDistrViews match.
+        let old_pdv = old
+            .to_pool_distr_view(&profile.genesis_hash, &profile.protocol_params_hash, profile.asc)
+            .expect("old projects");
+        let frozen_pdv = frozen.to_pool_distr_view(profile.asc);
+        assert_eq!(old_pdv, frozen_pdv, "S4-L2: old PoolDistrView == frozen PoolDistrView");
+    }
+
     fn test_profile() -> CandidateProfile {
         CandidateProfile {
             slots_per_epoch: 432_000,

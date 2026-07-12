@@ -278,6 +278,14 @@ pub fn cross_accumulator_over_boundary_block(
     era_schedule: &EraSchedule,
     boundary_block_slot: SlotNo,
     boundary_mark: &BTreeMap<StakeCredential, Coin>,
+    // S4-L2 (v6): the MARK SOURCE point `s_prev` (the boundary point the mark + reduced checkpoint are settled
+    // at, NOT the crossing trigger block `boundary_block_slot`) and the reduced-checkpoint commitment finalized
+    // THERE, both captured by the run loop (the only layer holding the boundary context AND the reduced
+    // checkpoint advanced to `s_prev`). Sealed into the frozen leadership object so the promoted candidate
+    // authority is fully self-contained (leadership + source + provenance, no window replay).
+    mark_source_slot: SlotNo,
+    mark_source_hash: &Hash32,
+    source_checkpoint_commitment: &Hash32,
 ) -> Result<AccumulatorBoundaryOutcome, AccumulatorChaindbError> {
     let (last_slot, acc) = store
         .load_current()
@@ -332,7 +340,14 @@ pub fn cross_accumulator_over_boundary_block(
     };
 
     let from_epoch = acc.epoch_state.epoch;
-    match apply_selected_block_with_effects(&acc, &stored.bytes, &ctx, &stored.hash) {
+    match apply_selected_block_with_effects(
+        &acc,
+        &stored.bytes,
+        &ctx,
+        mark_source_slot,
+        mark_source_hash,
+        source_checkpoint_commitment,
+    ) {
         Ok((next, effects)) => {
             // S4-pre-2: the boundary's leadership freeze is AUTHORITATIVE, not optional evidence — every
             // inconsistency below is a HARD terminal (never an observe-only Stalled, never a warning).
@@ -372,9 +387,26 @@ pub fn cross_accumulator_over_boundary_block(
                     source_epoch.0 + 1
                 )));
             }
-            if distr.source_slot != boundary_block_slot || distr.source_hash != stored.hash {
+            // The frozen leadership source binds to the MARK SOURCE `s_prev` (where the shell settled the mark +
+            // reduced checkpoint), NOT the crossing trigger `boundary_block_slot` (s_bb). Ground it in the REAL
+            // durable block at `s_prev` so a shell that declares a bogus source fails closed: BLUE must echo the
+            // exact (slot, hash), that hash must be the durable block's hash, and the v6 checkpoint commitment
+            // must be the one the shell captured at `s_prev`.
+            let mark_stored = chaindb
+                .get_block_by_slot(mark_source_slot)
+                .map_err(AccumulatorChaindbError::ChainDb)?
+                .ok_or(AccumulatorChaindbError::MissingBlock(mark_source_slot))?;
+            if distr.source_slot != mark_source_slot
+                || distr.source_hash != mark_stored.hash
+                || mark_stored.hash != *mark_source_hash
+            {
                 return Err(AccumulatorChaindbError::BoundaryLeadership(
-                    "effect source_slot/source_hash not bound to the selected boundary block".to_string(),
+                    "effect source_slot/source_hash not bound to the mark source block (s_prev)".to_string(),
+                ));
+            }
+            if distr.source_checkpoint_commitment != *source_checkpoint_commitment {
+                return Err(AccumulatorChaindbError::BoundaryLeadership(
+                    "effect source_checkpoint_commitment != the mark-source-finalized commitment".to_string(),
                 ));
             }
             // ATOMIC: accumulator blob + LAST_SLOT + anchor + current leadership + marker, one redb commit.
@@ -703,7 +735,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let s = sealed_store_at_epoch_500(&tmp, SlotNo(42_000_000));
         let db = InMemoryChainDb::new();
-        put_raw(&db, 43_086_000); // 86_000 * 501 -> epoch 501, a boundary crossing
+        put_raw(&db, 42_000_000); // s_prev: the MARK SOURCE = the settled store cursor (epoch 500)
+        put_raw(&db, 43_086_000); // s_bb: 86_000 * 501 -> epoch 501, the boundary crossing block
+        // The leadership source binds to s_prev (NOT s_bb): its REAL durable hash is the freeze provenance.
+        let s_prev_hash = db.get_block_by_slot(SlotNo(42_000_000)).unwrap().unwrap().hash;
         let mut mark: BTreeMap<StakeCredential, Coin> = BTreeMap::new();
         mark.insert(cred(0x11), Coin(5_000_000));
         mark.insert(cred(0x22), Coin(7_000_000));
@@ -713,6 +748,9 @@ mod tests {
             &schedule_86k(),
             SlotNo(43_086_000),
             &mark,
+            SlotNo(42_000_000),
+            &s_prev_hash,
+            &Hash32([0x0C; 32]),
         )
         .unwrap();
         assert_eq!(
@@ -745,6 +783,9 @@ mod tests {
             &schedule_86k(),
             SlotNo(43_086_000),
             &mark,
+            SlotNo(43_086_000),
+            &Hash32([0x07; 32]),
+            &Hash32([0x0C; 32]),
         )
         .unwrap();
         assert_eq!(
@@ -775,6 +816,9 @@ mod tests {
             &schedule_86k(),
             SlotNo(43_086_000),
             &mark,
+            SlotNo(43_086_000),
+            &Hash32([0x07; 32]),
+            &Hash32([0x0C; 32]),
         )
         .unwrap_err();
         assert!(
