@@ -146,6 +146,10 @@ disconnect→reconnect as an outer lifecycle; keyed forge + Haskell-peer adoptio
   cardano-node's reward update + stake snapshot at ≥2 self-derived boundaries (the live differential gate).
 - **CE-4 (self-sufficiency, DC-EPOCH-19):** N → N+1 → N+2 → N+3 crossed with NO Mithril re-import, no CLI
   oracle, no injected authority; every block in N+3 validates against the self-derived authority.
+  Delivered in two layers (see `SLICE-CE-4A-CONTINUOUS-SELF-SUFFICIENCY.md`): **CE-4A** = the mechanical
+  gate — TWO consecutive boundaries past the former ceiling (1340→1341→1342) through the production
+  run-loop composition (available now, the S4-L2 unlock); **CE-4B** = the literal three-boundary N→N+3
+  (deferred strengthening — needs a 1343 extraction or a confirmed 4-boundary corpus; does not gate 4A).
 - **CE-5 (restart/rollback equivalence):** restart in each epoch phase + one controlled rollback
   re-derive the IDENTICAL accumulator + authority.
 - **CE-6 (memory, HARD):** the §4 memory criteria — bounded RssAnon under long follow, no per-block full
