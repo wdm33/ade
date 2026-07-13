@@ -75,12 +75,51 @@ CE-4A.1 feeds the corpus as a `NodeBlockSource` into THIS composition. It does n
 ## 4. Acceptance (CE-4A is green only when ALL hold)
 
 ### CE-4A.1 — real production-loop composition over corpus 1340→1342
-- The harness drives `run_node_sync` + `advance_ledger_state_to_durable_tip` (the production entry points),
-  NOT a re-composition. A `NodeBlockSource` over the corpus blocks feeds the real loop.
+**Locked claim:** *CE-4A.1 proves production-loop continuous self-sufficiency across two real boundaries.* It
+does NOT claim byte-exact boundary equivalence, restart/rollback equivalence, live preview/preprod operation,
+or bounty readiness.
+
+- The harness drives `run_relay_loop_with_sched` + `advance_ledger_state_to_durable_tip` (the production entry
+  points), NOT a re-composition. A `NodeBlockSource::InMemory` over the corpus blocks feeds the real loop. The
+  setup is the production warm-start (`warm_start_recovery` + the production input assembly), not a hand-built
+  state.
+- **Critical guard:** `run_relay_loop_with_sched` is invoked with ALL THREE authority inputs present —
+  `Some(reduced_checkpoint)`, `Some(eview_activation)`, `Some(epoch_accumulator)` — asserted. A green run with
+  any of them `None` does NOT count for CE-4A.
 - Both boundaries (1340→1341, 1341→1342) are crossed IN ONE RUN via the frozen freeze → promotion.
 - Every block in the final epoch (1342) validates against the self-derived authority.
 - No re-import, no CLI oracle, no seed-window leadership read, no materialize/window-replay promotion (the
   S4-L2 resurrection guard holds over the run).
+
+**FAIL-LOUD (this is an `#[ignore]`, fixture-heavy evidence run — it must NEVER silently skip and appear
+green).** Each of the following is a TEST FAILURE, not a skip:
+- the v5/v6 fixture missing or incomplete (chain.db / epoch-accumulator.redb / reduced-checkpoint.redb / wal)
+- the corpus missing
+- any of the three authority inputs not `Some(...)`
+- an expected boundary not crossed
+- an expected frozen-leadership target epoch not sealed
+- an expected promotion WAL record absent
+- any forbidden-path marker present
+
+**Machine-readable evidence bundle** — the test emits this JSON (auditable, not buried in logs); a green run
+means every field below holds:
+```json
+{
+  "slice": "CE-4A.1",
+  "claim": "production-loop continuous self-sufficiency across two real boundaries",
+  "start_epoch": 1340,
+  "crossed_boundaries": ["1340->1341", "1341->1342"],
+  "frozen_leadership_targets": [1342, 1343],
+  "promotion_source": "FrozenLeadershipPoolDistr",
+  "promotion_certified": true,
+  "authority_inputs_present": {
+    "reduced_checkpoint": true, "eview_activation": true, "epoch_accumulator": true
+  },
+  "forbidden_paths": {
+    "reimport": false, "cli_oracle": false, "seed_window_replay": false, "materialize_bootstrap_into": false
+  }
+}
+```
 
 ### CE-4A.2 — boundary outputs byte-match the cardano reference at BOTH boundaries
 At 1341 AND 1342, the self-derived boundary output byte-matches the cardano reference:
