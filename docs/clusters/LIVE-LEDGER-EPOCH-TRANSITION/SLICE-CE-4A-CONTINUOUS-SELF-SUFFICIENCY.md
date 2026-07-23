@@ -122,6 +122,8 @@ means every field below holds:
 ```
 
 ### CE-4A.2 — boundary outputs byte-match the cardano reference at BOTH boundaries
+> **Slice doc (scoped, doc-before-impl):** `SLICE-CE-4A-2-BOUNDARY-BYTE-EXACT.md`.
+
 At 1341 AND 1342, the self-derived boundary output byte-matches the cardano reference:
 - rewards
 - pots (treasury / reserves / fees)
