@@ -132,6 +132,10 @@ At 1341 AND 1342, the self-derived boundary output byte-matches the cardano refe
 - authority fingerprints (the accumulator + leadership canonical hashes)
 
 ### CE-4A.3 — restart + rollback INSIDE the production-loop harness
+> **Slice doc (scoped, doc-before-impl):** `SLICE-CE-4A-3-RESTART-ROLLBACK.md`. Resolves the
+> `EpochViewPostPromotionMismatch` finding as first-class (harness-only re-entry artifact vs. a sealed
+> production fix).
+
 - A warm restart mid-run + one controlled within-k rollback + refold, driven through the SAME production
   composition (NOT `co_advance`).
 - The recovered state (accumulator + checkpoint + leadership authority) is BYTE-IDENTICAL to the
