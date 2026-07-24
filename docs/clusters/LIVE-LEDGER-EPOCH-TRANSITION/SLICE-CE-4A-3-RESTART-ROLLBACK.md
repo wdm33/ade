@@ -77,6 +77,14 @@ per-assert). Local `#[ignore]` evidence run (like CE-4A.1/4A.2), NOT a CI gate.
 
 ## 4. `EpochViewPostPromotionMismatch` — FIRST-CLASS finding (the load-bearing gate)
 
+> **RESULT (2026-07-24): landed on (b) — a REAL production restart-authority gap.** The restart-only
+> proof ran the genuine warm restart and tripped `EpochViewPostPromotionMismatch` at POST-1341 (seed+3).
+> Root cause: `maybe_recover_promoted_authority` (`epoch_wire.rs:912–915`) terminates at seed+3 — S4-L2
+> extended the LIVE promotion to the frozen regime but not the recovery seam. Sealed fix opened as
+> **`SLICE-CE-4A-3-R1-WARMSTART-FROZEN-RECOVERY.md`**; CE-4A.3 restart-only (#12) is BLOCKED on it. The
+> restart harness is written (local, uncommitted) as the reproducer/validator.
+
+
 CE-4A.2 surfaced it: splitting one continuous fold into TWO `run_relay_loop_with_sched` calls over the
 SAME live stores + SAME in-memory `ForwardSyncState`, **without a `warm_start_recovery` between them**,
 re-enters the eview warm-start-across-boundary recovery at POST-1341 and fails closed
