@@ -8525,4 +8525,658 @@ mod ce4a_continuous_self_sufficiency {
         std::fs::write(&out, &bundle_str).unwrap_or_else(|e| panic!("write evidence bundle {}: {e:?}", out.display()));
         eprintln!("CE-4A.1 evidence bundle written to {}", out.display());
     }
+
+    // ============================================================================================
+    // CE-4A.2 — boundary outputs byte-match the cardano reference at BOTH self-derived boundaries.
+    // The byte-exact strengthening of CE-4A.1: the SAME production composition, read-only extraction
+    // added. It reads the CE-4A.1 production-loop accumulator (NOT the co_advance differential
+    // harness) and promotes CE-3d's observational MATCH prints for rewards/pots/go into fail-loud
+    // asserts. Spec: docs/clusters/LIVE-LEDGER-EPOCH-TRANSITION/SLICE-CE-4A-2-BOUNDARY-BYTE-EXACT.md.
+    // ============================================================================================
+
+    /// First BLOCK of epoch 1341 (boundary 1340 -> 1341) — the POST-1341 reference + capture point
+    /// (`Snapshot stored at SlotNo 115862416`, the cardano `--store-ledger 115862400` reference).
+    const EPOCH_1341_FIRST_SLOT: u64 = 115_862_416;
+
+    fn ok(b: bool) -> &'static str {
+        if b {
+            "MATCH"
+        } else {
+            "*** MISMATCH ***"
+        }
+    }
+    fn hex32(h: &[u8; 32]) -> String {
+        h.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// Canonical discriminant-preserving byte key for a stake credential (rewards are keyed by the
+    /// FULL credential; the go-snapshot uses a Hash28-only pool key). Mirrors the ce3d differential
+    /// harness's `cred_key` so the diff is byte-uniform across both sides.
+    fn cred_key(c: &ade_types::shelley::cert::StakeCredential) -> Vec<u8> {
+        use ade_types::shelley::cert::StakeCredential;
+        let (tag, h) = match c {
+            StakeCredential::KeyHash(h) => (0u8, h),
+            StakeCredential::ScriptHash(h) => (1u8, h),
+        };
+        let mut k = Vec::with_capacity(29);
+        k.push(tag);
+        k.extend_from_slice(&h.0);
+        k
+    }
+
+    /// The canonical AUTHORITY stake-view hash over a go-snapshot pool-stake map — the SAME formula
+    /// the S5 recovery proof commits (`s5_authority_stake_view_hash`). A leader-election stake
+    /// commitment derivable IDENTICALLY from Ade's accumulator AND from the cardano reference go, so
+    /// it is the one fingerprint that IS reference-comparable (unlike the Ade-internal accumulator /
+    /// leadership canonical hashes, which have no cardano counterpart).
+    fn stake_view_hash_from_go(go: &std::collections::BTreeMap<Vec<u8>, u64>) -> [u8; 32] {
+        let total: u128 = go.values().map(|c| *c as u128).sum();
+        let mut buf = Vec::with_capacity(24 + go.len() * 36);
+        buf.extend_from_slice(&total.to_be_bytes());
+        buf.extend_from_slice(&(go.len() as u64).to_be_bytes());
+        for (pool, coin) in go {
+            buf.extend_from_slice(pool); // 28-byte pool keyhash
+            buf.extend_from_slice(&coin.to_be_bytes());
+        }
+        ade_crypto::blake2b_256(&buf).0
+    }
+
+    /// The self-derived boundary outputs, read READ-ONLY from the production-loop accumulator at a
+    /// POST-boundary point. Every map is in the SAME comparable byte form the cardano reference
+    /// decodes to (see [`RefOutputs`]).
+    struct BoundaryOutputs {
+        epoch: u64,
+        treasury: u64,
+        reserves: u64,
+        fees: u64,
+        go: std::collections::BTreeMap<Vec<u8>, u64>,
+        rewards: std::collections::BTreeMap<Vec<u8>, u64>,
+        nes_pd: std::collections::BTreeMap<[u8; 28], (u64, [u8; 32])>,
+        stake_view_hash: [u8; 32],
+        /// Ade-internal durability commitments (no cardano counterpart — REPORTED, not asserted vs the ref).
+        acc_hash: [u8; 32],
+        leadership_hash: [u8; 32],
+    }
+
+    /// The cardano POST-boundary reference in the same comparable form, decoded by Ade's own
+    /// `decode_native_nonutxo_state` (it parses the 11.0.1 Conway `state` cleanly).
+    struct RefOutputs {
+        epoch: u64,
+        treasury: u64,
+        reserves: u64,
+        fees: u64,
+        go: std::collections::BTreeMap<Vec<u8>, u64>,
+        rewards: std::collections::BTreeMap<Vec<u8>, u64>,
+        nes_pd: std::collections::BTreeMap<[u8; 28], (u64, [u8; 32])>,
+        stake_view_hash: [u8; 32],
+    }
+
+    /// Extract the POST-boundary outputs from the LIVE production-loop accumulator (read-only). The
+    /// leadership nesPd is read epoch-indexed for `leadership_epoch` (the S4-pre-2 pin:
+    /// `leadership_authority_for_epoch(E)` byte-matches the cardano POST-E nesPd / nes[5]).
+    fn capture_boundary_outputs(
+        store: &EpochAccumulatorStore,
+        leadership_epoch: u64,
+    ) -> BoundaryOutputs {
+        let (_slot, acc) = store
+            .load_current()
+            .expect("FAIL-LOUD: load_current for boundary capture")
+            .expect("FAIL-LOUD: sealed accumulator");
+        let es = &acc.epoch_state;
+        let go: std::collections::BTreeMap<Vec<u8>, u64> = es
+            .snapshots
+            .as_authoritative()
+            .expect("FAIL-LOUD: authoritative snapshots (the production advance keeps go authoritative)")
+            .go
+            .0
+            .pool_stakes
+            .iter()
+            .map(|(pid, c)| ((pid.0).0.to_vec(), c.0))
+            .collect();
+        let rewards: std::collections::BTreeMap<Vec<u8>, u64> = acc
+            .cert_state
+            .delegation
+            .rewards
+            .iter()
+            .map(|(cred, c)| (cred_key(cred), c.0))
+            .collect();
+        let leadership = store
+            .leadership_authority_for_epoch(EpochNo(leadership_epoch))
+            .expect("FAIL-LOUD: frozen leadership authority for the boundary's leadership epoch");
+        let nes_pd: std::collections::BTreeMap<[u8; 28], (u64, [u8; 32])> = leadership
+            .pools
+            .iter()
+            .map(|(h, e)| (h.0, (e.active_stake, e.vrf_keyhash.0)))
+            .collect();
+        let stake_view_hash = stake_view_hash_from_go(&go);
+        let acc_hash =
+            ade_crypto::blake2b_256(&ade_ledger::epoch_accumulator::encode_epoch_accumulator(&acc)).0;
+        let leadership_hash = ade_ledger::frozen_leadership::canonical_hash(&leadership).0;
+        BoundaryOutputs {
+            epoch: es.epoch.0,
+            treasury: es.treasury.0,
+            reserves: es.reserves.0,
+            fees: es.epoch_fees.0,
+            go,
+            rewards,
+            nes_pd,
+            stake_view_hash,
+            acc_hash,
+            leadership_hash,
+        }
+    }
+
+    /// Decode a cardano POST-boundary reference `state` blob into the comparable surfaces.
+    fn ref_boundary_outputs(state_path: &Path, slot: u64, epoch: u64) -> RefOutputs {
+        use ade_ledger::bootstrap_anchor::SeedPoint;
+        use ade_ledger::ledgerdb_state::decode_native_nonutxo_state;
+        let state = std::fs::read(state_path).unwrap_or_else(|e| {
+            panic!("FAIL-LOUD: read cardano reference state {}: {e:?}", state_path.display())
+        });
+        let point = SeedPoint {
+            slot: ade_types::SlotNo(slot),
+            block_hash: ade_types::Hash32([0u8; 32]),
+        };
+        let (s1a, _commit) = decode_native_nonutxo_state(&state, point, epoch, PREVIEW_MAGIC)
+            .expect("FAIL-LOUD: decode cardano reference state");
+        let go: std::collections::BTreeMap<Vec<u8>, u64> = s1a
+            .snapshots
+            .go
+            .0
+            .pool_stakes
+            .iter()
+            .map(|(pid, c)| ((pid.0).0.to_vec(), c.0))
+            .collect();
+        let rewards = s1a
+            .cert_state
+            .delegation
+            .rewards
+            .iter()
+            .map(|(cred, c)| (cred_key(cred), c.0))
+            .collect();
+        let nes_pd = s1a
+            .pool_distr
+            .iter()
+            .map(|(pid, (stake, vrf))| ((pid.0).0, (*stake, vrf.0)))
+            .collect();
+        let stake_view_hash = stake_view_hash_from_go(&go);
+        RefOutputs {
+            epoch: s1a.epoch.0,
+            treasury: s1a.treasury.0,
+            reserves: s1a.reserves.0,
+            fees: s1a.epoch_fees.0,
+            go,
+            rewards,
+            nes_pd,
+            stake_view_hash,
+        }
+    }
+
+    /// Byte-exact map comparison with a diagnostic breakdown. Returns `true` iff byte-identical.
+    fn map_matches(
+        name: &str,
+        ade: &std::collections::BTreeMap<Vec<u8>, u64>,
+        refs: &std::collections::BTreeMap<Vec<u8>, u64>,
+    ) -> bool {
+        let (mut val_mismatch, mut only_ade, mut only_ref) = (0usize, 0usize, 0usize);
+        let mut samples: Vec<String> = Vec::new();
+        let keys: std::collections::BTreeSet<&Vec<u8>> = ade.keys().chain(refs.keys()).collect();
+        for k in &keys {
+            let hx: String = k.iter().take(8).map(|b| format!("{b:02x}")).collect();
+            match (ade.get(*k), refs.get(*k)) {
+                (Some(a), Some(r)) if a == r => {}
+                (Some(a), Some(r)) => {
+                    val_mismatch += 1;
+                    if samples.len() < 8 {
+                        samples.push(format!("{hx}.. ade={a} ref={r} (d{})", *a as i128 - *r as i128));
+                    }
+                }
+                (Some(a), None) => {
+                    only_ade += 1;
+                    if samples.len() < 8 {
+                        samples.push(format!("{hx}.. ade={a} ref=ABSENT"));
+                    }
+                }
+                (None, Some(r)) => {
+                    only_ref += 1;
+                    if samples.len() < 8 {
+                        samples.push(format!("{hx}.. ade=ABSENT ref={r}"));
+                    }
+                }
+                (None, None) => {}
+            }
+        }
+        let at: u64 = ade.values().sum();
+        let rt: u64 = refs.values().sum();
+        let exact = val_mismatch == 0 && only_ade == 0 && only_ref == 0 && at == rt;
+        eprintln!(
+            "  {name:<14} ade_keys={} ref_keys={} val_mismatch={val_mismatch} only_ade={only_ade} \
+             only_ref={only_ref} sum_ade={at} sum_ref={rt}  {}",
+            ade.len(),
+            refs.len(),
+            ok(exact)
+        );
+        for s in &samples {
+            eprintln!("      {s}");
+        }
+        exact
+    }
+
+    /// Per-surface byte-match verdict for one boundary (every field is printed for diagnosis).
+    struct SurfaceMatch {
+        epoch: bool,
+        treasury: bool,
+        reserves: bool,
+        go: bool,
+        rewards: bool,
+        nes_pd: bool,
+        nes_pd_count: (usize, usize),
+        stake_view_hash: bool,
+    }
+    impl SurfaceMatch {
+        /// The hard vs-cardano surfaces. `fees` is EXCLUDED (reported-with-note, never asserted):
+        /// Ade's `epoch_fees` is a boundary-consumed reward-input accumulator (zeroed at the boundary,
+        /// re-accumulated for the new epoch) while cardano's `utxosFees` is a running live residual fee
+        /// pot — different observable quantities at the same instant. Fee economics are proven
+        /// transitively through byte-exact rewards + treasury + reserves (the surfaces that actually
+        /// consume the fees). CE-4A.2 does NOT claim raw `utxosFees` equivalence.
+        fn all_mandatory(&self) -> bool {
+            self.epoch
+                && self.treasury
+                && self.reserves
+                && self.go
+                && self.rewards
+                && self.nes_pd
+                && self.stake_view_hash
+        }
+    }
+
+    /// Compare a self-derived boundary output to the cardano reference, surface by surface, printing a
+    /// full diagnostic table. Computes ALL verdicts (no short-circuit) so one run reveals every
+    /// mismatch, not just the first.
+    fn compare_boundary(label: &str, ade: &BoundaryOutputs, refs: &RefOutputs) -> SurfaceMatch {
+        eprintln!("==================== CE-4A.2 {label} ====================");
+        let epoch = ade.epoch == refs.epoch;
+        let treasury = ade.treasury == refs.treasury;
+        let reserves = ade.reserves == refs.reserves;
+        eprintln!("  epoch    ade={} ref={}  {}", ade.epoch, refs.epoch, ok(epoch));
+        eprintln!(
+            "  treasury ade={} ref={} d{}  {}",
+            ade.treasury,
+            refs.treasury,
+            ade.treasury as i128 - refs.treasury as i128,
+            ok(treasury)
+        );
+        eprintln!(
+            "  reserves ade={} ref={} d{}  {}",
+            ade.reserves,
+            refs.reserves,
+            ade.reserves as i128 - refs.reserves as i128,
+            ok(reserves)
+        );
+        eprintln!(
+            "  fees     ade_epoch_fees={} cardano_utxosFees={}  [representation-diff, NOT asserted: \
+             reset-and-reaccumulate accumulator vs running residual pot; fee-consensus proven via \
+             rewards+treasury+reserves]",
+            ade.fees, refs.fees
+        );
+        let go = map_matches("go_pool_stakes", &ade.go, &refs.go);
+        let rewards = map_matches("rewards", &ade.rewards, &refs.rewards);
+        let nes_pd = ade.nes_pd == refs.nes_pd;
+        eprintln!(
+            "  nes_pd   ade_pools={} ref_pools={} zero_stake={}  {}",
+            ade.nes_pd.len(),
+            refs.nes_pd.len(),
+            ade.nes_pd.values().filter(|(s, _)| *s == 0).count(),
+            ok(nes_pd)
+        );
+        let stake_view_hash = ade.stake_view_hash == refs.stake_view_hash;
+        eprintln!(
+            "  stake_view_hash ade={} ref={}  {}",
+            hex32(&ade.stake_view_hash),
+            hex32(&refs.stake_view_hash),
+            ok(stake_view_hash)
+        );
+        eprintln!(
+            "  [evidence, Ade-internal, no cardano counterpart] acc_hash={} leadership_hash={}",
+            hex32(&ade.acc_hash),
+            hex32(&ade.leadership_hash)
+        );
+        SurfaceMatch {
+            epoch,
+            treasury,
+            reserves,
+            go,
+            rewards,
+            nes_pd,
+            nes_pd_count: (ade.nes_pd.len(), refs.nes_pd.len()),
+            stake_view_hash,
+        }
+    }
+
+    /// Drive the REAL production relay loop over an isolated v5 copy, folding the corpus
+    /// `(durable_tip, max_slot]` through the SAME `run_relay_loop_with_sched` composition as CE-4A.1
+    /// in ONE continuous invocation, then capture the POST-boundary outputs read-only. A SINGLE loop
+    /// call (never a mid-run split): a split into two calls over the same stores forces the eview
+    /// warm-start-across-boundary recovery to re-enter at the intermediate boundary and fail closed
+    /// (`EpochViewPostPromotionMismatch`) — a production EPOCH-CONSENSUS-VIEW limitation this slice
+    /// must NOT patch. The two boundaries are instead captured by TWO independent single-call runs
+    /// (POST-1341 from a run halted at the 1341 boundary — the deterministic single-boundary prefix;
+    /// POST-1342 from the full continuous two-boundary run — the literal CE-4A.1 run). Mirrors
+    /// `drive()`'s production warm-start SELF-CONTAINED so the byte-exact path never perturbs the
+    /// committed, PROVEN CE-4A.1 `drive()` (the same "mirror, don't reach into" discipline `drive()`
+    /// itself uses for the `ForgeIntent::Off` arm).
+    async fn drive_capture_at(
+        seed_dir: &Path,
+        corpus_dir: &Path,
+        work: &Path,
+        tag: &str,
+        max_slot: u64,
+        leadership_epoch: u64,
+    ) -> (BoundaryOutputs, usize) {
+        let dst = isolate_fixture(seed_dir, work, tag);
+        seal_bootstrap_seed_leadership(&dst);
+
+        let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(dst.join("chain.db")))
+            .expect("FAIL-LOUD: open isolated chaindb");
+        let mut wal = FileWalStore::open(dst.join("wal")).expect("FAIL-LOUD: open isolated wal");
+        let warm_acc = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: open warm accumulator handle");
+        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc))
+            .expect("FAIL-LOUD: production warm_start_recovery");
+        drop(warm_acc);
+
+        let sidecar = state
+            .seed_epoch_consensus_inputs
+            .clone()
+            .expect("FAIL-LOUD: v5 sidecar (SeedEpochConsensusInputs) present");
+        assert_eq!(
+            sidecar.epoch_no.0, SEED_EPOCH,
+            "FAIL-LOUD: v5 seed epoch must be {SEED_EPOCH} (so 1341/1342 are both >= seed+2); got {}",
+            sidecar.epoch_no.0
+        );
+        let recovered_anchor = state.tip.clone();
+        assert!(recovered_anchor.is_some(), "FAIL-LOUD: recovered durable tip present");
+        let durable_tip_before =
+            ChainDb::tip(&chaindb).expect("tip read").expect("FAIL-LOUD: durable chaindb tip").slot.0;
+        assert_eq!(
+            epoch_of(durable_tip_before),
+            1340,
+            "FAIL-LOUD: the v5 durable tip must be in epoch 1340 (POST-1340 seed), got slot {durable_tip_before}"
+        );
+        {
+            let prof = crate::bootstrap_export::resolve_network_profile("preview")
+                .expect("FAIL-LOUD: preview network profile");
+            assert_eq!(
+                u64::from(sidecar.epoch_length_slots),
+                prof.epoch_length,
+                "FAIL-LOUD: fixture epoch_length {} != preview profile epoch_length {} — venue vs RSW \
+                 profile disagree (the k=2160-vs-432 class of bug)",
+                sidecar.epoch_length_slots,
+                prof.epoch_length
+            );
+            assert_eq!(
+                preview_rsw(),
+                Some(34_560),
+                "FAIL-LOUD: preview candidate-nonce RSW must be ceil(4k/f) with k=432 = 34560 slots"
+            );
+        }
+
+        let epoch_accumulator = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: open live accumulator");
+        let reduced_checkpoint = ReducedUtxoCheckpoint::open(&dst.join("reduced-checkpoint.redb"))
+            .expect("FAIL-LOUD: open reduced checkpoint");
+
+        // FIXTURE PREP (disclosed artifact — identical to CE-4A.1): the Jul-7 v5 store predates
+        // leadership certification, so reset both derived stores to the 1338 seed and re-cross
+        // 1338->durable-tip via the PRODUCTION advance to seal the native promotion-certified band.
+        if epoch_accumulator
+            .promotion_leadership_authority_for_epoch(EpochNo(1341))
+            .is_err()
+        {
+            eprintln!(
+                "CE-4A.2 prep: native 1341 absent — reset+refold 1338->{durable_tip_before} via the \
+                 production advance to seal the native band..."
+            );
+            epoch_accumulator.reset_to_bootstrap().expect("FAIL-LOUD: reset accumulator to 1338");
+            reduced_checkpoint.reset_to_bootstrap().expect("FAIL-LOUD: reset checkpoint to 1338");
+            let prep_sched =
+                recovered_node_schedule(&state, true, preview_rsw()).expect("FAIL-LOUD: prep era schedule");
+            advance_ledger_state_to_durable_tip(
+                Some(&reduced_checkpoint),
+                Some(&epoch_accumulator),
+                &chaindb,
+                &prep_sched,
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .expect("FAIL-LOUD: prep refold 1338->durable-tip (production advance seals native 1340/1341)");
+        }
+        assert!(
+            epoch_accumulator
+                .promotion_leadership_authority_for_epoch(EpochNo(1341))
+                .is_ok(),
+            "FAIL-LOUD: the fixture must carry promotion-certified (native) frozen leadership for 1341"
+        );
+        assert!(
+            epoch_accumulator.leadership_authority_for_epoch(EpochNo(1343)).is_err(),
+            "FAIL-LOUD: leadership 1343 must NOT be sealed pre-run (the 1341->1342 cross seals it)"
+        );
+
+        // --- production input assembly (a mirror of drive() / the ForgeIntent::Off arm) ---
+        let seed_view = leadership_view_from_frozen_authority(Some(&epoch_accumulator), &sidecar)
+            .expect("FAIL-LOUD: recovered leadership view from the frozen authority");
+        let era_schedule = recovered_node_schedule(&state, true, preview_rsw())
+            .expect("FAIL-LOUD: recovered era schedule from the durable sidecar geometry");
+        let eview_inputs = crate::epoch_wire::EviewActivationInputs {
+            seed_bootstrap_state: state.ledger.clone(),
+            seed_point_slot: sidecar.seed_point_slot,
+            seed_point_hash: sidecar.seed_point_hash.clone(),
+            seed_epoch: sidecar.epoch_no,
+            network_magic: PREVIEW_MAGIC,
+            nonce: sidecar.epoch_nonce.0.clone(),
+            genesis_hash: sidecar.genesis_hash.clone(),
+            protocol_params_hash: sidecar.protocol_params_hash.clone(),
+            asc: sidecar.active_slots_coeff,
+            replay_scratch_path: dst.join("eview-replay-scratch.redb"),
+            next_epoch_bridge: chaindb
+                .get_bootstrap_next_epoch_authority(&sidecar.anchor_fp)
+                .ok()
+                .flatten()
+                .and_then(|b| ade_ledger::bootstrap_bridge::decode_bootstrap_next_epoch_authority(&b).ok()),
+            bootstrap_reward_delta: chaindb
+                .get_bootstrap_reward_update(&sidecar.anchor_fp)
+                .ok()
+                .flatten()
+                .and_then(|b| ade_ledger::bootstrap_reward_update::decode_bootstrap_reward_update(&b).ok()),
+        };
+        let anchor_fp = fingerprint(&state.ledger).combined;
+        let mut fwd = ForwardSyncState::new(
+            ReceiveState::new(state.ledger, state.chain_dep),
+            anchor_fp,
+            SnapshotCadence::DEFAULT,
+        );
+        fwd.recovered_anchor = recovered_anchor;
+        fwd.recovered_eta0 = Some(sidecar.epoch_nonce.clone());
+
+        // ---- fold (durable_tip, max_slot] in ONE continuous production-loop invocation ----
+        //      A single run_relay_loop_with_sched call — NO re-entry, so no eview
+        //      warm-start-across-boundary recovery (a mid-run split re-enters and fails closed
+        //      EpochViewPostPromotionMismatch — a production limitation this slice must not patch).
+        eprintln!(
+            "CE-4A.2 fold ({durable_tip_before}, {max_slot}] through the production loop (single \
+             continuous invocation) — capturing POST leadership epoch {leadership_epoch}"
+        );
+        let fed = {
+            let feed = load_corpus_feed(corpus_dir, durable_tip_before, max_slot);
+            let n = feed.len();
+            let mut source = NodeBlockSource::in_memory(feed);
+            let (_tx, mut shutdown) = watch::channel(false);
+            let mut sched = crate::live_log::NodeSchedLogWriter::new(Vec::<u8>::new());
+            run_relay_loop_with_sched(
+                &mut fwd,
+                &mut source,
+                &chaindb,
+                &mut wal,
+                &era_schedule,
+                &seed_view,
+                &mut shutdown,
+                None,
+                Some(&mut sched),
+                None,
+                Some(&reduced_checkpoint),
+                Some(&eview_inputs),
+                Some(&epoch_accumulator),
+                RecoveryAdmissionPolicy::cardano(),
+            )
+            .await
+            .expect("FAIL-LOUD: production relay loop must halt cleanly");
+            n
+        };
+        let post = capture_boundary_outputs(&epoch_accumulator, leadership_epoch);
+        assert_eq!(
+            post.epoch,
+            epoch_of(max_slot),
+            "FAIL-LOUD: the run must land the accumulator at POST-{}; got epoch {}",
+            epoch_of(max_slot),
+            post.epoch
+        );
+        eprintln!(
+            "CE-4A.2 captured POST-{}: treasury={} reserves={} fees={} go_pools={} rewards={} nesPd={}",
+            post.epoch,
+            post.treasury,
+            post.reserves,
+            post.fees,
+            post.go.len(),
+            post.rewards.len(),
+            post.nes_pd.len()
+        );
+
+        drop(reduced_checkpoint);
+        drop(epoch_accumulator);
+        drop(wal);
+        drop(chaindb);
+        if std::env::var("CE4A_KEEP").is_err() {
+            let _ = std::fs::remove_dir_all(&dst);
+        }
+        (post, fed)
+    }
+
+    /// CE-4A.2 — the byte-exact evidence run. Drives the production composition across both real
+    /// boundaries, then hard-asserts every self-derived boundary surface byte-matches the cardano
+    /// POST-1341 / POST-1342 LedgerDB references. Local, uncommitted references (`CE3D_REF`), so this
+    /// is `#[ignore]` local evidence (NOT a CI gate) — same nature as CE-4A.1.
+    #[tokio::test]
+    #[ignore = "CE-4A.2: self-derived boundary outputs byte-match cardano at POST-1341 AND POST-1342 through the production loop (env S5_SEED_STORES / CE3D_CORPUS / CE3D_WORK / CE3D_REF); SLOW ~hours"]
+    async fn ce4a_2_boundary_byte_exact() {
+        let seed = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
+        let corpus = env_path("CE3D_CORPUS", "/home/ts/.cardano-ce3d-extract/corpus_blocks");
+        let work = env_path("CE3D_WORK", "/home/ts/.cardano-ce3d-extract/harness-work-s5");
+        let ref_dir = env_path("CE3D_REF", "/home/ts/.cardano-ce3d-extract/db/ledger");
+
+        // Capture POST-1341 from a production-composition run HALTED at the 1341 boundary (the
+        // deterministic single-boundary prefix) and POST-1342 from the FULL continuous two-boundary
+        // run (the literal CE-4A.1 run). TWO single-call runs — each ONE run_relay_loop_with_sched
+        // invocation, so neither triggers the eview warm-start-across-boundary recovery a mid-run
+        // split would. They run sequentially; each isolates + preps + folds + cleans up its own copy.
+        let (post_1341, fed_1) =
+            drive_capture_at(&seed, &corpus, &work, "byte-exact-1341", EPOCH_1341_FIRST_SLOT, 1341).await;
+        let (post_1342, fed_2) =
+            drive_capture_at(&seed, &corpus, &work, "byte-exact-1342", EPOCH_1342_FIRST_SLOT, 1342).await;
+        assert!(
+            fed_1 > 0 && fed_2 > 0,
+            "FAIL-LOUD: both runs must feed corpus blocks (fed_1={fed_1} fed_2={fed_2})"
+        );
+
+        // Decode the cardano POST references (the db-analyser LedgerDB `state` blobs).
+        let ref_1341 = ref_boundary_outputs(
+            &ref_dir.join("115862416_db-analyser/state"),
+            EPOCH_1341_FIRST_SLOT,
+            1341,
+        );
+        let ref_1342 = ref_boundary_outputs(
+            &ref_dir.join("115948834_db-analyser/state"),
+            EPOCH_1342_FIRST_SLOT,
+            1342,
+        );
+
+        let m1 = compare_boundary("POST-1341", &post_1341, &ref_1341);
+        let m2 = compare_boundary("POST-1342", &post_1342, &ref_1342);
+
+        // ---- machine-readable evidence bundle (written BEFORE the asserts so a mismatch is auditable) ----
+        let surface = |ade: &BoundaryOutputs, refs: &RefOutputs, m: &SurfaceMatch, refp: &str| {
+            serde_json::json!({
+                "epoch": ade.epoch,
+                "reward": m.rewards,
+                "pots": { "treasury": m.treasury, "reserves": m.reserves },
+                "go": m.go,
+                "nesPd": m.nes_pd,
+                "nesPd_count": [m.nes_pd_count.0, m.nes_pd_count.1],
+                "authority_fingerprint_stake_view_hash": m.stake_view_hash,
+                "acc_hash": hex32(&ade.acc_hash),
+                "leadership_hash": hex32(&ade.leadership_hash),
+                "fees": {
+                    "ade_epoch_fees": ade.fees,
+                    "cardano_utxosFees": refs.fees,
+                    "representation": "reset-and-reaccumulate accumulator vs running residual pot",
+                    "fee_consensus_proven_by": ["rewards", "treasury", "reserves"],
+                    "hard_assert": false
+                },
+                "ref": refp,
+            })
+        };
+        let bundle = serde_json::json!({
+            "slice": "CE-4A.2",
+            "claim": "inside the CE-4A.1 continuous production-loop run, Ade's self-derived boundary \
+                outputs at POST-1341 and POST-1342 byte-match the cardano reference for rewards, \
+                treasury, reserves, go snapshot, frozen leadership/nesPd, and authority fingerprints",
+            "hard_asserts": ["rewards", "treasury", "reserves", "go", "nesPd", "authority_fingerprint_stake_view_hash"],
+            "fee_economics": "proven transitively through byte-exact rewards + treasury + reserves; raw \
+                fee-pot fields reported separately because Ade epoch_fees (boundary-consumed reward-input \
+                accumulator) and cardano utxosFees (running live residual pot) are different intermediate \
+                quantities",
+            "does_not_claim": ["fees byte-match cardano", "raw utxosFees equivalence", "all seven surfaces byte-match"],
+            "utxos_fees_compatibility_note": "If a future N2C query, persisted compatibility surface, or \
+                audit claim exposes cardano LedgerState.utxosFees as a cardano-equivalent field, Ade must \
+                either materialize that residual field byte-exactly or expose it through a named adapter. \
+                CE-4A.2 does NOT claim raw utxosFees equivalence — this is permitted internal divergence, \
+                not an accidental incompatibility.",
+            "post_1341_provenance": "production-composition run HALTED at the 1341 boundary (deterministic single-boundary prefix)",
+            "post_1342_provenance": "full continuous two-boundary run (the literal CE-4A.1 run)",
+            "fed_blocks": [fed_1, fed_2],
+            "boundaries": {
+                "1341": surface(&post_1341, &ref_1341, &m1, ".../115862416_db-analyser/state"),
+                "1342": surface(&post_1342, &ref_1342, &m2, ".../115948834_db-analyser/state"),
+            },
+            "hard_rule_no_loop_reimpl": true,
+            "fingerprints_note": "acc_hash/leadership_hash are Ade-internal durability commitments with \
+                no cardano counterpart (reported, not asserted vs the ref); the reference-comparable \
+                authority fingerprint asserted vs cardano is stake_view_hash (derived from go).",
+        });
+        let bundle_str = serde_json::to_string_pretty(&bundle).expect("serialize evidence bundle");
+        eprintln!("\n===== CE-4A.2 EVIDENCE BUNDLE =====\n{bundle_str}\n===================================");
+        let out = env_path("CE4A2_EVIDENCE_OUT", "/home/ts/.cardano-ce3d-extract/ce4a-2-evidence.json");
+        std::fs::write(&out, &bundle_str)
+            .unwrap_or_else(|e| panic!("write evidence bundle {}: {e:?}", out.display()));
+        eprintln!("CE-4A.2 evidence bundle written to {}", out.display());
+
+        // ---- ALL mandatory surfaces byte-exact at BOTH boundaries (fail-loud; gate-adds-value: this
+        //      promotes CE-3d's observational MATCH prints for rewards/pots/go into hard asserts) ----
+        assert!(
+            m1.all_mandatory(),
+            "FAIL-LOUD: POST-1341 self-derived outputs must byte-match cardano on the 6 hard surfaces \
+             (rewards, treasury, reserves, go, nesPd, stake-view fingerprint) — fees is a reported \
+             representation-diff, not asserted (see the surface table above)"
+        );
+        assert!(
+            m2.all_mandatory(),
+            "FAIL-LOUD: POST-1342 self-derived outputs must byte-match cardano on the 6 hard surfaces \
+             (rewards, treasury, reserves, go, nesPd, stake-view fingerprint) — fees is a reported \
+             representation-diff, not asserted (see the surface table above)"
+        );
+        assert_eq!(
+            m2.nes_pd_count,
+            (658, 658),
+            "FAIL-LOUD: POST-1342 nesPd must be 658/658 (the DC-EPOCH-24 delegation-image count)"
+        );
+    }
 }

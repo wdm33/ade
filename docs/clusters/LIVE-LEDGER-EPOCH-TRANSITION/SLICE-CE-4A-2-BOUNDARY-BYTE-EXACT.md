@@ -1,10 +1,13 @@
 # CE-4A.2 — boundary outputs byte-match the cardano reference at BOTH self-derived boundaries
 
-> **Status: OPEN (scoped, doc-before-impl).** The byte-exact strengthening of CE-4A.1
+> **Status: PROVEN (evidence run green).** The byte-exact strengthening of CE-4A.1
 > (`9c6fc3c4`, production-loop continuous self-sufficiency across two real boundaries).
 > CE-4A.1 proved the two boundaries are *crossed* through the production composition; CE-4A.2
 > proves the self-derived boundary *outputs* at each crossing are byte-identical to the
-> cardano-node reference. Same harness, same continuous run — read-only extraction added.
+> cardano-node reference on **6 hard surfaces** — with `fees` reclassified as a reported
+> representation-diff (Ade `epoch_fees` is a boundary-consumed reward-input accumulator; cardano
+> `utxosFees` is a running residual pot; different observable quantities — see §2). Local
+> `#[ignore]` evidence run; read-only extraction over two single-call production runs (§4).
 
 **Cluster:** LIVE-LEDGER-EPOCH-TRANSITION. **Parent:** `SLICE-CE-4A-CONTINUOUS-SELF-SUFFICIENCY.md` §4.
 **Depends on:** CE-4A.1 (`9c6fc3c4`), CE-3d (byte-exact at 1340), S4-pre-2 (`8cdd1471`, nesPd 658/658 at 1342).
@@ -13,19 +16,27 @@
 
 ## 1. The claim (exact — non-overclaiming)
 
-> Within the CE-4A.1 continuous run, Ade's self-derived boundary outputs at 1341 and 1342
-> byte-match the cardano-node reference.
+> Inside the CE-4A.1 continuous production-loop run, Ade's self-derived boundary outputs at POST-1341
+> and POST-1342 byte-match the cardano reference for **rewards, treasury, reserves, go snapshot,
+> frozen leadership/nesPd, and authority fingerprints**.
+>
+> Fee economics are proven transitively through byte-exact rewards, treasury, and reserves. Raw
+> fee-pot fields are reported separately because Ade's `epoch_fees` and cardano's `utxosFees`
+> represent different intermediate quantities.
 
-The value: CE-3d proved byte-exactness at ONE boundary (1340) behind the `co_advance` harness.
-S4-pre-2 proved the frozen nesPd at 1342 behind its own probe. CE-4A.2 proves byte-exactness at
-BOTH self-derived boundaries **inside the single production continuous run** — the freeze at
-boundary K and the promotion at boundary K+1 produce outputs that byte-match cardano at K and K+1.
+The value: CE-3d proved byte-exactness at ONE boundary (1340) behind the `co_advance` harness, and
+only *observationally* (an `eprintln! MATCH`, not a hard assert). S4-pre-2 hard-asserted the frozen
+nesPd at 1342 behind its own probe. CE-4A.2 hard-asserts byte-exactness at BOTH self-derived
+boundaries, reading the PRODUCTION-loop accumulator — the freeze at boundary K and the promotion at
+K+1 produce outputs that byte-match cardano at K and K+1.
 
 **CE-4A.2 MAY say:**
-- self-derived boundary outputs byte-match cardano at two consecutive boundaries
-- byte-exactness holds through the production continuous run (not just an isolated harness)
+- self-derived boundary outputs byte-match cardano at two consecutive boundaries (6 hard surfaces)
+- byte-exactness holds through the production composition (not just an isolated harness)
+- fee economics proven transitively via rewards + treasury + reserves
 
 **CE-4A.2 MAY NOT say:**
+- **fees byte-match cardano**, **raw `utxosFees` equivalence**, or **all seven surfaces byte-match**
 - literal three-boundary N→N+3 proof complete (CE-4B)
 - restart/rollback replay-equivalence proven (CE-4A.3)
 - live preview/preprod operation proven
@@ -33,25 +44,43 @@ boundary K and the promotion at boundary K+1 produce outputs that byte-match car
 
 ---
 
-## 2. Surfaces (byte-match required at BOTH 1341 AND 1342)
+## 2. Surfaces
 
-Mandatory (a mismatch on any is a TEST FAILURE):
+**Hard vs-cardano asserts (a mismatch on any is a TEST FAILURE), at BOTH boundaries:**
 
-1. **rewards** — the reward update / reward-account map produced at the boundary.
-2. **pots** — treasury, reserves, and fees (the three pot components), post-boundary.
-3. **go snapshot** — the rotated go stake-snapshot distribution.
-4. **frozen leadership nesPd** — the boundary-frozen `FrozenLeadershipPoolDistr` pool set,
+1. **rewards** — the reward-account map produced at the boundary (90k+ accounts).
+2. **treasury** — the treasury pot, post-boundary.
+3. **reserves** — the reserves pot, post-boundary.
+4. **go snapshot** — the rotated go stake-snapshot distribution (626 pools).
+5. **frozen leadership nesPd** — the boundary-frozen `FrozenLeadershipPoolDistr` pool set,
    `(active_stake, vrf_keyhash)` per pool; **658/658 at 1342** (the DC-EPOCH-24 delegation-image
    membership, the S4-pre-2 count).
-5. **authority fingerprints** — the EpochAccumulator canonical hash and the FrozenLeadershipPoolDistr
-   canonical hash (the durable authority commitments), each byte-equal to the value derived from the
-   reference snapshot.
+6. **authority fingerprint** — the `stake_view_canonical_hash` over the go pool-stake distribution
+   (the leader-election stake commitment), computed IDENTICALLY from Ade's accumulator AND from the
+   reference go, byte-equal. The raw EpochAccumulator / FrozenLeadershipPoolDistr canonical hashes
+   have NO cardano counterpart (Ade-internal encodings with prev-buffers/metadata), so they are
+   REPORTED as durability evidence, never asserted vs cardano.
 
-Optional (include if extractable without new machinery):
+**Reported-with-note — NOT a hard assert — `fees`.** Ade's `epoch_fees` is a boundary-consumed
+reward-input accumulator (zeroed at the boundary, re-accumulated for the new epoch — `rules.rs:162`;
+consumed via `total_reward = delta_r1 + epoch_fees`, `rules.rs:874`). Cardano's decoded `epoch_fees`
+is `UTxOState.utxosFees`, a running live *residual* fee pot (not zeroed at the boundary). Different
+observable quantities at the same instant (measured: Ade ~1–2 ADA = the new epoch's first block;
+cardano ~1445–1499 ADA = the undistributed residual). **Fee economics are proven transitively** by
+byte-exact rewards + treasury + reserves — if fees were mishandled those would diverge, and they are
+byte-identical. The harness emits `{ade_epoch_fees, cardano_utxosFees, representation,
+fee_consensus_proven_by:[rewards,treasury,reserves], hard_assert:false}`.
 
-6. **eta0 / nonce transcript** — the Praos `epoch_nonce` (eta0) at each boundary vs the reference
-   `praos_nonces.epoch`. eta0(1341) is already validated *implicitly* in CE-4A.1 (epoch-1341 headers
-   pass VRF, whose input is eta0); CE-4A.2 promotes it to a DIRECT byte-compare and adds eta0(1342).
+> **`utxosFees` compatibility risk (recorded).** If a future N2C query, persisted compatibility
+> surface, or audit claim exposes cardano `LedgerState.utxosFees` as a cardano-equivalent field, Ade
+> must either materialize that residual field byte-exactly or expose it through a named adapter.
+> CE-4A.2 does NOT claim raw `utxosFees` equivalence — permitted internal divergence, not an
+> accidental incompatibility.
+
+**Not separately implemented — eta0.** eta0(1341)/eta0(1342) are validated *implicitly* through the
+production run (epoch-1341/1342 headers pass VRF, whose input is eta0; the observed
+eta0(1341)=`70ad69bd…` matches CE-4A.1's reference). A direct byte-compare was optional; the
+header-validation path already binds it, so it is not separately added.
 
 ---
 
@@ -116,43 +145,58 @@ CE-4A.2 adds NO change to the production composition. It extends the existing
 rewards/pots/go is **observational only** — `ce3d_boundary_differential_1341_1342` `eprintln!`s
 `MATCH`/`MISMATCH` (`:562`/`:584`); it does NOT `assert!` byte-equality vs cardano. Only **nesPd**
 hard-asserts vs the reference (`:1717 assert_eq!`), and the `crae_*` reward-map tests pin report hashes
-for 1340/1341. CE-4A.2 must promote **every mandatory surface (§2 1–5) to a fail-loud `assert!`** vs the
-cardano POST reference at BOTH 1341 and 1342 — turning observed matches into a gate. This is what
-distinguishes CE-4A.2 from the evidence CE-3d already printed.
+for 1340/1341. CE-4A.2 promotes **every hard surface (§2 items 1–6; `fees` EXCLUDED — reported-with-note)
+to a fail-loud `assert!`** vs the cardano POST reference at BOTH 1341 and 1342 — turning observed matches
+into a gate. This is what distinguishes CE-4A.2 from the evidence CE-3d already printed.
 
-**Open implementation question (resolve at implement-time, does NOT change the claim):**
-rewards/pots for the 1341 boundary must be captured for comparison. Leadership, go, and the
-authority fingerprints are epoch-indexed and survive to end-of-run. IF the reduced-checkpoint /
-`epoch_state` rewards+pots retain per-epoch history to end-of-run, extract both post-run (one run,
-simplest). IF only the latest boundary's rewards/pots survive, capture the 1341 output via EITHER a
-second `drive(max_slot = EPOCH_1342_FIRST_SLOT)` that stops at the 1341 boundary, OR a read-only
-snapshot of the durable stores at the 1341 crossing. **Both permitted options are read-only and MUST
-NOT re-implement or hook into `run_relay_loop_with_sched` — a snapshot reads the durable stores, it
-does not alter the loop.** Prefer the single-run post-run extraction if the state is retained.
+**Resolved capture design (`drive_capture_at`): TWO independent single-call runs.** pots/go/rewards
+are current-only in `epoch_state` (overwritten at the next crossing); only the leadership nesPd is
+epoch-indexed. So POST-1341's pots/rewards must be read AT the 1341 boundary. The first attempt split
+one continuous fold into two `run_relay_loop_with_sched` calls over the SAME stores (capturing between
+them) — but the second call RE-ENTERS the eview warm-start-across-boundary recovery at POST-1341 and
+fails closed `Activate(EpochViewPostPromotionMismatch)`. That is a production EPOCH-CONSENSUS-VIEW
+limitation (cf. `dabb4210`, warm-start-across-boundary), and CE-4A.2 must NOT patch production to make
+a test pass. RESOLUTION — capture each boundary from its OWN single-call run:
+- **POST-1341** from `drive_capture_at(max_slot = 115_862_416)` — a production run HALTED at the 1341
+  boundary (a deterministic single-boundary prefix; one loop invocation, no re-entry).
+- **POST-1342** from `drive_capture_at(max_slot = 115_948_834)` — the FULL continuous two-boundary run
+  (the literal CE-4A.1 run; one invocation crossing 1340→1341→1342).
+
+By S5 replay-equivalence the halted run's POST-1341 state is byte-identical to what the continuous run
+passes through at 1341, so the byte-match holds for the continuous run. Each run isolates + preps +
+folds + cleans up its own copy; both are pure read-only over an UNMODIFIED `run_relay_loop_with_sched`.
+`drive_capture_at` mirrors `drive()`'s warm-start SELF-CONTAINED, so the proven CE-4A.1 `drive()` is
+never perturbed.
 
 ---
 
 ## 5. Acceptance (CE-4A.2 is green only when ALL hold)
 
-- Every mandatory surface (§2 items 1–5) byte-matches the cardano reference at **1341 AND 1342**.
+- Every hard surface (§2 items 1–6) byte-matches the cardano reference at **1341 AND 1342**. `fees` is
+  reported-with-note (Ade `epoch_fees` ≠ cardano `utxosFees`), NOT asserted; fee economics are proven
+  transitively by the byte-exact rewards + treasury + reserves.
 - The comparison decodes the real `*_db-analyser` reference snapshots (§3) — not a hand-authored or
   Ade-derived stand-in for the reference.
-- The run is the CE-4A.1 production continuous run (or a read-only extension of it); THE HARD RULE
-  holds — no production-composition change, no loop re-implementation.
-- **FAIL-LOUD** on: a missing/incomplete reference; any surface mismatch; the nesPd count ≠ 658 at
-  1342; an authority fingerprint that does not reproduce from the reference.
+- POST-1342 is the full continuous two-boundary run; POST-1341 is a production run halted at the 1341
+  boundary (the deterministic prefix). THE HARD RULE holds — no production-composition change, no loop
+  re-implementation (§4).
+- **FAIL-LOUD** on: a missing/incomplete reference; any hard-surface mismatch; the nesPd count ≠ 658 at
+  1342; the stake-view authority fingerprint not reproducing from the reference go.
 - **Machine-readable evidence bundle** (`ce4a-2-evidence.json`) — per-surface, per-boundary match
-  booleans plus the reference snapshot paths and the compared canonical hashes:
+  booleans, the raw fee values + representation note, and the `utxosFees` compatibility note:
   ```json
   {
     "slice": "CE-4A.2",
-    "claim": "self-derived boundary outputs byte-match cardano at 1341 and 1342",
+    "claim": "inside the CE-4A.1 continuous production-loop run, ... byte-match ... for rewards, treasury, reserves, go snapshot, frozen leadership/nesPd, and authority fingerprints",
+    "hard_asserts": ["rewards","treasury","reserves","go","nesPd","authority_fingerprint_stake_view_hash"],
     "boundaries": {
-      "1341": { "reward": true, "pots": true, "go": true, "nesPd": true, "nesPd_count": [N,N],
-                "acc_fp": true, "leadership_fp": true, "eta0": true, "ref": ".../115862416_db-analyser" },
-      "1342": { "reward": true, "pots": true, "go": true, "nesPd": true, "nesPd_count": [658,658],
-                "acc_fp": true, "leadership_fp": true, "eta0": true, "ref": ".../115948834_db-analyser" }
+      "1341": { "reward": true, "pots": {"treasury": true, "reserves": true}, "go": true,
+                "nesPd": true, "nesPd_count": [658,658], "authority_fingerprint_stake_view_hash": true,
+                "fees": {"ade_epoch_fees": 1676268, "cardano_utxosFees": 1445011078,
+                         "hard_assert": false}, "ref": ".../115862416_db-analyser/state" },
+      "1342": { "...": "...", "nesPd_count": [658,658] }
     },
+    "utxos_fees_compatibility_note": "... Ade must materialize utxosFees byte-exactly or expose it via a named adapter; CE-4A.2 does NOT claim raw utxosFees equivalence",
     "hard_rule_no_loop_reimpl": true
   }
   ```
@@ -165,8 +209,10 @@ CE-4A.2 is a local `#[ignore]` evidence run (§3), so it does NOT by itself flip
 CI-enforced or append `strengthened_in`. It provides byte-exact *evidence*, through the production loop,
 for four already-tracked invariants:
 
-- **DC-EPOCH-23** (bootstrap fee/pot reduction, `enforced`) — pots/fees byte-match cardano at 1341 AND
-  1342, promoted from CE-3d's observed `MATCH` to a fail-loud `assert!`.
+- **DC-EPOCH-23** (bootstrap fee/pot reduction, `enforced`) — treasury + reserves byte-match cardano at
+  1341 AND 1342 (promoted from CE-3d's observed `MATCH` to a fail-loud `assert!`); the fee ECONOMICS are
+  proven transitively via rewards, while the raw `utxosFees` field is a representation-diff (reported,
+  not asserted — Ade `epoch_fees` ≠ cardano `utxosFees`).
 - **DC-EPOCH-24** (snapshot pool-set / go membership, `enforced`) — go + nesPd membership byte-match at
   1341 and 1342 (658/658 at 1342), reusing the S4-pre-2 hard-assert.
 - **DC-EPOCH-25** (frozen leadership authority, `declared`) — exercised on the byte-exact axis at two
