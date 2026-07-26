@@ -378,6 +378,57 @@ pub enum ActivationError {
     /// view failed to project. Fail closed: post-bootstrap candidate leadership comes ONLY from the
     /// promotion-certified epoch-indexed frozen object, never a window replay / seed fallback.
     PromotionLeadershipUnavailable { candidate_epoch: EpochNo, reason: String },
+    // CE-4A.3-R1: DISTINCT frozen-regime warm-start recovery failures. Never collapsed into one generic
+    // error, and NEVER a window-replay / seed fallback for a post-S4 store. `record/source` divergence is
+    // NOT here — it stays the terminal `Activate(EpochViewPostPromotionMismatch)` (reject-non-recomputable).
+    /// The epoch-accumulator store is absent on the frozen-regime recovery path.
+    RecoveryStoreAbsent { target_epoch: EpochNo },
+    /// No frozen leadership object is sealed for the recovered target epoch (`LeadershipEpochNotSealed`).
+    RecoveryEpochUnsealed { target_epoch: EpochNo },
+    /// The frozen object exists but is NOT promotion-certified (a bootstrap import / L1-warm view).
+    RecoveryNotPromotionCertified { target_epoch: EpochNo },
+    /// The frozen leadership object is malformed / mis-keyed / source-mismatched / a store read failed.
+    RecoveryMalformedFrozen { target_epoch: EpochNo, reason: String },
+    /// The recovered epoch-nonce is bound to a DIFFERENT epoch than the record's target (a caller handed a
+    /// pre-boundary / wrong-epoch chain-dep) — terminal, never a silently-wrong view.
+    RecoveryNonceEpochMismatch { nonce_epoch: EpochNo, target_epoch: EpochNo },
+    /// The frozen object's own `target_leadership_epoch` disagrees with the record's target epoch.
+    RecoveryFrozenTargetMismatch { frozen_target: EpochNo, target_epoch: EpochNo },
+    /// Projecting the reconstructed frozen view to a `PoolDistrView` failed.
+    RecoveryProjection { target_epoch: EpochNo, reason: String },
+}
+
+/// CE-4A.3-R1: the epoch nonce recovered from the durable chain-dep at the POST-target-epoch tip —
+/// eta0(target_epoch). The `epoch` field BINDS the nonce to its epoch so a caller cannot hand a
+/// pre-boundary chain-dep and silently produce a plausible-but-wrong recovered view.
+/// `maybe_recover_promoted_authority` asserts `epoch == target_epoch` (fail-closed
+/// `RecoveryNonceEpochMismatch`) and uses `eta0` as the frozen view's nonce metadata — NEVER re-ticking
+/// it (the durable chain-dep at POST-C already carries eta0(C); re-ticking would compute eta0(C+1)).
+#[derive(Clone, Debug)]
+pub struct RecoveredEpochNonce {
+    pub epoch: EpochNo,
+    pub eta0: Hash32,
+}
+
+/// Map a promotion-read `LeadershipAuthorityError` to the DISTINCT frozen-regime recovery error (§ hard
+/// prohibition: never collapse). The two contract-load-bearing cases — unsealed (missing epoch) and
+/// not-promotion-certified (bootstrap-only) — get their own variants; the remaining corruption / mis-key
+/// / source-mismatch / store-io cases carry a preserved reason under `RecoveryMalformedFrozen`.
+fn map_recovery_leadership_error(
+    target_epoch: EpochNo,
+    e: ade_runtime::chaindb::LeadershipAuthorityError,
+) -> ActivationError {
+    use ade_runtime::chaindb::LeadershipAuthorityError as E;
+    match e {
+        E::LeadershipEpochNotSealed { .. } => ActivationError::RecoveryEpochUnsealed { target_epoch },
+        E::NotPromotionCertified { .. } => {
+            ActivationError::RecoveryNotPromotionCertified { target_epoch }
+        }
+        other => ActivationError::RecoveryMalformedFrozen {
+            target_epoch,
+            reason: format!("{other:?}"),
+        },
+    }
 }
 
 /// S3f-4d-wire-3 (DC-EPOCH-11): the live boundary-activation orchestration -- the SINGLE entry
@@ -799,22 +850,15 @@ pub fn try_recover_at_boundary(
 #[allow(clippy::too_many_arguments)]
 pub fn maybe_recover_promoted_authority(
     record: Option<&WalEntry>,
-    era_schedule: &EraSchedule,
     seed_epoch: EpochNo,
-    seed_point_slot: SlotNo,
-    seed_point_hash: Hash32,
-    live: &ReducedUtxoCheckpoint,
-    chaindb: &dyn ChainDb,
-    bootstrap_state: &LedgerState,
     network_magic: u32,
-    nonce: Hash32,
     genesis_hash: Hash32,
     protocol_params_hash: Hash32,
     asc: ActiveSlotsCoeff,
-    bootstrap_reward_update: Option<&ade_ledger::bootstrap_reward_update::BootstrapRewardUpdate>,
     next_epoch_bridge: Option<&BootstrapNextEpochAuthority>,
+    epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
+    recovered_epoch_nonce: RecoveredEpochNonce,
     active_view: &mut ActiveEpochAuthority,
-    scratch_path: &std::path::Path,
 ) -> Result<(), ActivationError> {
     // idempotent: nothing to recover once promoted.
     if active_view.is_promoted() {
@@ -864,52 +908,76 @@ pub fn maybe_recover_promoted_authority(
         }
         return Ok(());
     }
-    if target_epoch.0 == seed_epoch.0 + 2 {
-        // Option B (B3c, DC-EPOCH-18): reproducing the recovered seed+2 authority REQUIRES the
-        // snapshot-bound bootstrap reward update; the fail-closed (absent / wrong-epoch is terminal) is
-        // enforced MECHANICALLY at the shared derivation site (derive_candidate over the seed window), so a
-        // legacy store (no rupd sidecar, e.g. a mutated post-RUPD seed) cannot re-derive this authority via
-        // the accidental-correctness path. The update is carried on the profile below.
-        // a durable record is present (checked above), so the boundary WAS crossed and its first-boundary
-        // window WAS computable when the record was written. If the bounds are now uncomputable from the
-        // SAME durable seed point/epoch, the store is inconsistent with the record -- the recorded promotion
-        // CANNOT be reproduced => TERMINAL (reject-non-recomputable surfaces at the recovery seam, louder +
-        // earlier, never a deferred no-op). (The live path's bounds-None IS a no-op -- there is no record.)
-        let bounds = match compute_first_window_bounds(
-            era_schedule,
-            seed_point_slot,
-            seed_point_hash,
-            seed_epoch,
-        ) {
-            Some(b) => b,
-            None => {
+    // CE-4A.3-R1 FROZEN-REGIME RECOVERY (post-S4, target >= seed+2): reconstruct the SAME authority the
+    // LIVE promotion produces (prepare_authority_for_candidate_slot, the candidate>=seed+2 branch) from the
+    // promotion-certified epoch-indexed frozen object -- byte-identically. NO window replay, NO materialize,
+    // NO seed fallback, NO latest/current/nearest read, NO terminal-at-seed+3. Missing / non-certified /
+    // malformed -> a DISTINCT structured recovery error (never collapsed, never a fallback). NO new WAL
+    // write -- the durable record is already authoritative.
+    if target_epoch.0 >= seed_epoch.0 + 2 {
+        // Bind the recovered eta0 to this target epoch: a caller that handed a pre-boundary / wrong-epoch
+        // chain-dep (a nonce for a different epoch) is a terminal fault, never a silently-wrong view.
+        if recovered_epoch_nonce.epoch.0 != target_epoch.0 {
+            return Err(ActivationError::RecoveryNonceEpochMismatch {
+                nonce_epoch: recovered_epoch_nonce.epoch,
+                target_epoch,
+            });
+        }
+        let store =
+            epoch_accumulator.ok_or(ActivationError::RecoveryStoreAbsent { target_epoch })?;
+        let frozen = store
+            .promotion_leadership_authority_for_epoch(target_epoch)
+            .map_err(|e| map_recovery_leadership_error(target_epoch, e))?;
+        if frozen.target_leadership_epoch.0 != target_epoch.0 {
+            return Err(ActivationError::RecoveryFrozenTargetMismatch {
+                frozen_target: frozen.target_leadership_epoch,
+                target_epoch,
+            });
+        }
+        // Leadership-FREE metadata: source point + checkpoint commitment from the FROZEN object's own
+        // freeze-time lineage (never the durable tip); nonce = the recovered eta0(target) AS-IS (the durable
+        // chain-dep already carries it -- NEVER re-tick, that would compute eta0(target+1)); ASC/params from
+        // the bound profile. Byte-identical to the live branch's metadata construction (epoch_wire.rs ~663).
+        let metadata = ade_ledger::reduced_epoch_view::FrozenLeadershipViewMetadata {
+            network_magic,
+            era: CardanoEra::Conway,
+            source_point: Point {
+                slot: frozen.source_slot,
+                hash: frozen.source_hash.clone(),
+            },
+            checkpoint_commitment: frozen.source_checkpoint_commitment.clone(),
+            nonce: recovered_epoch_nonce.eta0.clone(),
+            snapshot_phase: SnapshotPhase::Set,
+            protocol_params_commitment: consensus_profile_commitment(
+                &genesis_hash,
+                &protocol_params_hash,
+                asc,
+            ),
+        };
+        let source = EpochConsensusView::from_frozen_leadership(&frozen, &metadata);
+        let projected = source
+            .to_pool_distr_view(&genesis_hash, &protocol_params_hash, asc)
+            .map_err(|e| ActivationError::RecoveryProjection {
+                target_epoch,
+                reason: format!("{e:?}"),
+            })?;
+        // Recover the active view against the durable record (mirror the seed+1 bridge shape). NO new WAL
+        // write. `recover_active_view` fails closed `EpochViewPostPromotionMismatch` if the durable record's
+        // committed identity diverges from the reconstructed `source` -- the record/source hash guard stays
+        // terminal. A present record that yields NO promoted view (Seed) is likewise a contradiction.
+        match recover_active_view(Some(record), Some(&source)).map_err(ActivationError::Activate)? {
+            ActiveEpochView::Promoted(v) => active_view
+                .promote(v, projected)
+                .map_err(ActivationError::Activate)?,
+            ActiveEpochView::Seed => {
                 return Err(ActivationError::Activate(
                     EpochViewActivationError::EpochViewPostPromotionMismatch,
                 ))
             }
-        };
-        let profile = CandidateProfile {
-            slots_per_epoch: bounds.slots_per_epoch,
-            genesis_hash,
-            protocol_params_hash,
-            asc,
-            bootstrap_reward_update: bootstrap_reward_update.cloned(),
-            seed_epoch,
-        };
-        return try_recover_at_boundary(
-            live,
-            chaindb,
-            &bounds,
-            bootstrap_state,
-            network_magic,
-            nonce,
-            &profile,
-            record,
-            active_view,
-            scratch_path,
-        );
+        }
+        return Ok(());
     }
-    // an unexpected target epoch (neither seed+1 nor seed+2) -> terminal, never a silent skip.
+    // a target epoch <= seed (neither the seed+1 bridge nor the seed+2+ frozen regime) -> terminal.
     Err(ActivationError::Activate(
         EpochViewActivationError::EpochViewPostPromotionMismatch,
     ))
@@ -1167,8 +1235,11 @@ mod tests {
         assert!(!av2.is_promoted(), "fail-closed: no promotion, the seed stays authoritative");
     }
 
-    // ---- ECA-4 warm-start recovery DISPATCH: seed+1 bridge twin vs seed+2 window replay ----
+    // ---- ECA-4 warm-start recovery DISPATCH: seed+1 bridge twin vs seed+2+ frozen regime (CE-4A.3-R1) ----
 
+    // Held for fixture construction / RAII (the TempDir keeps the scratch alive); the bridge tests no
+    // longer read the individual stores through `call_recover` (the frozen inputs are None / a dummy).
+    #[allow(dead_code)]
     struct RecoverFixture {
         dir: tempfile::TempDir,
         live: ReducedUtxoCheckpoint,
@@ -1222,34 +1293,30 @@ mod tests {
         )
     }
 
-    // The recovery call with the constant geometry (seed epoch 100, a mid-epoch-100 seed point) and the
-    // boilerplate the seed+1 bridge branch never reads (live / chaindb / state / nonce / profile /
-    // scratch) baked in; only the record + bridge + authority vary. network_magic is 2 -- the bridges
+    // The recovery call with the constant geometry (seed epoch 100). The seed+1 BRIDGE branch reads neither
+    // the epoch-accumulator nor the recovered nonce (those are the CE-4A.3-R1 frozen-regime inputs), so they
+    // are None / a dummy here; only the record + bridge + authority vary. network_magic is 2 -- the bridges
     // below bind their source view with the SAME magic.
     fn call_recover(
-        fx: &RecoverFixture,
+        _fx: &RecoverFixture,
         record: Option<&WalEntry>,
         next_epoch_bridge: Option<&BootstrapNextEpochAuthority>,
         active_view: &mut ActiveEpochAuthority,
     ) -> Result<(), ActivationError> {
         maybe_recover_promoted_authority(
             record,
-            &fx.sched,
             EpochNo(100),
-            SlotNo(8_640_000 + 50_000),
-            Hash32([7; 32]),
-            &fx.live,
-            &fx.db,
-            &fx.state,
             2,
-            Hash32([0; 32]),
             Hash32([0x91; 32]),
             Hash32([0x92; 32]),
             ActiveSlotsCoeff { numer: 1, denom: 20 },
-            None,
             next_epoch_bridge,
+            None,
+            RecoveredEpochNonce {
+                epoch: EpochNo(0),
+                eta0: Hash32([0; 32]),
+            },
             active_view,
-            &fx.dir.path().join("scratch.redb"),
         )
     }
 
@@ -1343,13 +1410,12 @@ mod tests {
         assert!(!active.is_promoted(), "a non-recomputable bridge never promotes");
     }
 
-    /// A seed+2 (= seed_epoch+2) record dispatches to the UNCHANGED window-replay recovery, NOT the
-    /// bridge branch: an empty durable ChainDb fails the window extraction closed (`SourceWindow`),
-    /// proving seed+2 routes to the window path (a `BridgeMissing` here would be a mis-route). No
-    /// bridge is supplied -- the seed+2 path must not consult it.
+    /// CE-4A.3-R1: a seed+2 (= seed_epoch+2) record now dispatches to the FROZEN regime, NOT the retired
+    /// window-replay path and NOT the bridge branch. With no epoch-accumulator store it fails closed
+    /// `RecoveryStoreAbsent` (never `SourceWindow` / `BridgeMissing`) -- proving the frozen routing. The
+    /// nonce is bound to the target epoch so the STORE-absent case (not the nonce-epoch guard) is exercised.
     #[test]
-    fn recover_seed_plus_two_still_routes_to_the_window_replay_path() {
-        let fx = recover_fixture();
+    fn recover_seed_plus_two_routes_to_the_frozen_regime() {
         let record = WalEntry::EpochConsensusViewActivated {
             target_epoch: EpochNo(102),
             network_magic: 2,
@@ -1363,12 +1429,192 @@ mod tests {
         };
         let sv = pdv();
         let mut active = ActiveEpochAuthority::seed(&sv);
-        let r = call_recover(&fx, Some(&record), None, &mut active);
+        let r = maybe_recover_promoted_authority(
+            Some(&record),
+            EpochNo(100),
+            2,
+            Hash32([0x91; 32]),
+            Hash32([0x92; 32]),
+            ActiveSlotsCoeff { numer: 1, denom: 20 },
+            None,
+            None,
+            RecoveredEpochNonce { epoch: EpochNo(102), eta0: Hash32([0; 32]) },
+            &mut active,
+        );
         assert!(
-            matches!(r, Err(ActivationError::SourceWindow(_))),
-            "seed+2 routes to the window-replay path, not the bridge branch"
+            matches!(
+                r,
+                Err(ActivationError::RecoveryStoreAbsent { target_epoch: EpochNo(102) })
+            ),
+            "seed+2 routes to the frozen regime and fails closed on an absent store, got {r:?}"
         );
         assert!(!active.is_promoted());
+    }
+
+    // ---- CE-4A.3-R1 frozen-regime warm-start recovery regressions (§5) ----
+
+    /// A minimal seed-view for a fresh Seed authority.
+    fn r1_seed_view() -> ade_ledger::consensus_view::PoolDistrView {
+        ade_ledger::consensus_view::PoolDistrView::new(
+            EpochNo(100),
+            1_000,
+            ActiveSlotsCoeff { numer: 1, denom: 20 },
+            std::collections::BTreeMap::new(),
+        )
+    }
+
+    /// A minimal activation record for `target` (identity is only checked in the SUCCESS path, where the
+    /// record is built from the live view; the store-read negatives fail before `recover_active_view`).
+    fn r1_record(target: u64) -> WalEntry {
+        WalEntry::EpochConsensusViewActivated {
+            target_epoch: EpochNo(target),
+            network_magic: 1,
+            era: CardanoEra::Conway,
+            transition_point: Point { slot: SlotNo(0), hash: Hash32([0; 32]) },
+            source_checkpoint_commitment: Hash32([0; 32]),
+            snapshot_phase: SnapshotPhase::Set,
+            nonce_commitment: Hash32([0; 32]),
+            stake_view_canonical_hash: Hash32([0; 32]),
+            view_canonical_hash: Hash32([0; 32]),
+        }
+    }
+
+    /// §5.1/§5.2: a seed+3 record RECOVERS the promoted authority from the promotion-certified frozen
+    /// object, and the recovered view is BYTE-IDENTICAL to the LIVE promoted view — same canonical hash
+    /// (binding-sensitive over source_point + checkpoint_commitment + nonce + leadership) and same
+    /// projected `PoolDistrView`. This is the same-authority-contract proof: recovery == live.
+    #[test]
+    fn r1_seed_plus_three_recovers_from_frozen_and_matches_live() {
+        let inputs = s4l2_inputs();
+        let asc = inputs.asc;
+        let dir = tempfile::tempdir().unwrap();
+        let store = EpochAccumulatorStore::open(&dir.path().join("acc.redb")).unwrap();
+        store.seal_current_leadership(&s4l2_native(103)).unwrap();
+
+        // The LIVE promoted view for seed+3 (exactly what prepare_authority_for_candidate_slot produces)
+        // + the durable activation record it would have written.
+        let (source_live, projected_live) = s4l2_frozen_source(&s4l2_native(103), &inputs);
+        let record = activation_record_for(&source_live);
+
+        let sv = r1_seed_view();
+        let mut active = ActiveEpochAuthority::seed(&sv);
+        let r = maybe_recover_promoted_authority(
+            Some(&record),
+            EpochNo(100),
+            inputs.network_magic,
+            inputs.genesis_hash.clone(),
+            inputs.protocol_params_hash.clone(),
+            asc,
+            None,
+            Some(&store),
+            RecoveredEpochNonce {
+                epoch: EpochNo(103),
+                eta0: inputs.nonce.clone(),
+            },
+            &mut active,
+        );
+        assert!(r.is_ok(), "seed+3 frozen recovery succeeds, got {r:?}");
+        assert!(active.is_promoted(), "the authority is promoted after recovery");
+        assert_eq!(active.epoch(), EpochNo(103));
+        // recovered view canonical hash == live promoted view canonical hash (binds source_point,
+        // checkpoint_commitment, nonce, and the leadership view — the canonical hash is binding-sensitive).
+        assert_eq!(
+            active.active_view_identity(),
+            (EpochNo(103), Some(source_live.canonical_hash())),
+            "recovered view == live promoted view (canonical hash)"
+        );
+        // recovered leadership view == the frozen leadership projection (== the live projection).
+        assert_eq!(*active.pool_distr_view(), projected_live);
+        assert_eq!(*active.pool_distr_view(), s4l2_native(103).to_pool_distr_view(asc));
+    }
+
+    /// §5.3: each frozen-regime failure is a DISTINCT structured error — never collapsed, never a
+    /// window-replay / seed fallback.
+    #[test]
+    fn r1_frozen_regime_negatives_are_distinct_structured_errors() {
+        let inputs = s4l2_inputs();
+        let dir = tempfile::tempdir().unwrap();
+        let store = EpochAccumulatorStore::open(&dir.path().join("acc.redb")).unwrap();
+        store.seal_current_leadership(&s4l2_native(103)).unwrap();
+        // A BOOTSTRAP-only (NOT promotion-certified) epoch 105.
+        store.seal_bootstrap_leadership_epochs(&[s4l2_native(105)]).unwrap();
+
+        let sv = r1_seed_view();
+        let call = |target: u64, nonce_epoch: u64, store: Option<&EpochAccumulatorStore>| {
+            let record = r1_record(target);
+            let mut active = ActiveEpochAuthority::seed(&sv);
+            maybe_recover_promoted_authority(
+                Some(&record),
+                EpochNo(100),
+                inputs.network_magic,
+                inputs.genesis_hash.clone(),
+                inputs.protocol_params_hash.clone(),
+                inputs.asc,
+                None,
+                store,
+                RecoveredEpochNonce {
+                    epoch: EpochNo(nonce_epoch),
+                    eta0: inputs.nonce.clone(),
+                },
+                &mut active,
+            )
+        };
+        assert!(
+            matches!(
+                call(103, 103, None),
+                Err(ActivationError::RecoveryStoreAbsent { target_epoch: EpochNo(103) })
+            ),
+            "store absent"
+        );
+        assert!(
+            matches!(
+                call(104, 104, Some(&store)),
+                Err(ActivationError::RecoveryEpochUnsealed { target_epoch: EpochNo(104) })
+            ),
+            "unsealed epoch"
+        );
+        assert!(
+            matches!(
+                call(105, 105, Some(&store)),
+                Err(ActivationError::RecoveryNotPromotionCertified { target_epoch: EpochNo(105) })
+            ),
+            "bootstrap-only epoch is not promotion-certified"
+        );
+        assert!(
+            matches!(
+                call(103, 999, Some(&store)),
+                Err(ActivationError::RecoveryNonceEpochMismatch {
+                    nonce_epoch: EpochNo(999),
+                    target_epoch: EpochNo(103)
+                })
+            ),
+            "nonce epoch != target is terminal before the store read"
+        );
+    }
+
+    /// The `LeadershipAuthorityError -> ActivationError` mapping keeps the load-bearing cases distinct
+    /// (unsealed / not-promotion-certified get their own variant); corruption / mis-key carry a reason.
+    /// Never one generic error.
+    #[test]
+    fn r1_map_recovery_leadership_error_preserves_distinct_variants() {
+        use ade_runtime::chaindb::LeadershipAuthorityError as E;
+        let t = EpochNo(103);
+        assert!(matches!(
+            map_recovery_leadership_error(t, E::LeadershipEpochNotSealed { requested: 103 }),
+            ActivationError::RecoveryEpochUnsealed { target_epoch: EpochNo(103) }
+        ));
+        assert!(matches!(
+            map_recovery_leadership_error(t, E::NotPromotionCertified { epoch: 103 }),
+            ActivationError::RecoveryNotPromotionCertified { target_epoch: EpochNo(103) }
+        ));
+        assert!(matches!(
+            map_recovery_leadership_error(t, E::LeadershipEpochMismatch { requested: 103, found: 104 }),
+            ActivationError::RecoveryMalformedFrozen { .. }
+        ));
+        assert!(matches!(
+            map_recovery_leadership_error(t, E::MissingFrozenLeadershipDistr),
+            ActivationError::RecoveryMalformedFrozen { .. }
+        ));
     }
 
     /// The recovery is a no-op in the two boundary cases: no durable record (the seed stays

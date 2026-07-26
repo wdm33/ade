@@ -2386,35 +2386,38 @@ pub async fn run_relay_loop_with_sched(
     // view (criteria 4/5), never a stale seed. The live first-boundary re-fire is then idempotent. A
     // None record (crash before the WAL) keeps Seed; a record whose candidate cannot be RECOMPUTED
     // identically is a TERMINAL halt (never trust a parsed record alone, never fall back to the seed).
-    if let (Some(inputs), Some(live)) = (eview_activation, reduced_checkpoint) {
+    if let (Some(inputs), Some(_live)) = (eview_activation, reduced_checkpoint) {
         let entries = wal
             .read_all()
             .map_err(|e| NodeLifecycleError::RelaySync(format!("eview recovery WAL read: {e:?}")))?;
         let resolved = crate::epoch_activation::resolve_activation_record(&entries)
             .map_err(|e| NodeLifecycleError::RelaySync(format!("eview recovery resolve: {e:?}")))?;
+        // CE-4A.3-R1: the recovered epoch nonce is eta0(C) where C = the durable tip's epoch (the chain-dep
+        // was replay-derived to the tip, so its epoch_nonce is that epoch's eta0 -- NOT the seed sidecar
+        // nonce). Bind it to that epoch so the frozen-regime recovery asserts the nonce matches the record's
+        // target (never a pre-boundary / wrong-epoch chain-dep silently producing a plausible-wrong view).
+        let recovered_tip_epoch = match ChainDb::tip(chaindb).ok().flatten() {
+            Some(tip) => {
+                let mut sched = era_schedule.clone();
+                sched.extend_to_slot(tip.slot);
+                sched.locate(tip.slot).map(|l| l.epoch).unwrap_or(inputs.seed_epoch)
+            }
+            None => inputs.seed_epoch,
+        };
         crate::epoch_wire::maybe_recover_promoted_authority(
             resolved.as_ref(),
-            &era_schedule,
             inputs.seed_epoch,
-            inputs.seed_point_slot,
-            inputs.seed_point_hash.clone(),
-            live,
-            chaindb,
-            &inputs.seed_bootstrap_state,
             inputs.network_magic,
-            // Layer 4 (DC-EPOCH-06): the recovery re-derives the LATEST record's epoch view, whose
-            // eta0 is the durable tip's epoch nonce -- NOT the seed sidecar nonce (`inputs.nonce`).
-            // The replay-forward reconstructed that nonce into the recovered chain_dep (replay-derived
-            // from the durable blocks, independent of the record), so feeding it and then comparing the
-            // re-derived candidate against the record stays reject-non-recomputable.
-            state.receive.chain_dep.epoch_nonce.0.clone(),
             inputs.genesis_hash.clone(),
             inputs.protocol_params_hash.clone(),
             inputs.asc,
-            inputs.bootstrap_reward_delta.as_ref(),
             inputs.next_epoch_bridge.as_ref(),
+            epoch_accumulator,
+            crate::epoch_wire::RecoveredEpochNonce {
+                epoch: recovered_tip_epoch,
+                eta0: state.receive.chain_dep.epoch_nonce.0.clone(),
+            },
             &mut authority,
-            &inputs.replay_scratch_path,
         )
         .map_err(|e| NodeLifecycleError::RelaySync(format!("eview recovery: {e:?}")))?;
     }
@@ -8247,6 +8250,25 @@ mod ce4a_continuous_self_sufficiency {
             epoch_accumulator.leadership_authority_for_epoch(EpochNo(1341)).is_ok(),
         );
 
+        // CE-4A.3-R1 fixture-lineage refresh: rewrite the stale WAL eview records (pre-dafe0faf / pre-CE-3d)
+        // to current lineage from the fresh frozen authority, so CE-4A.1 stays rerunnable under strict
+        // frozen recovery (the same refresh the #12-green drive_restart_proof uses). Guarded on the frozen
+        // durable-epoch being sealed (prep-refold ran); when it is not, the fail-loud recovery correctly
+        // surfaces an un-refreshable store rather than a silent stale record. Done BEFORE `state` moves.
+        if epoch_accumulator
+            .promotion_leadership_authority_for_epoch(EpochNo(epoch_of(durable_tip_before)))
+            .is_ok()
+        {
+            wal = refresh_prep_eview_records(
+                wal,
+                &dst,
+                &epoch_accumulator,
+                &sidecar,
+                state.chain_dep.epoch_nonce.0.clone(),
+                epoch_of(durable_tip_before),
+            );
+        }
+
         // --- production input assembly (a mirror of the ForgeIntent::Off arm) ---
         let seed_view = leadership_view_from_frozen_authority(Some(&epoch_accumulator), &sidecar)
             .expect("FAIL-LOUD: recovered leadership view from the frozen authority");
@@ -8375,13 +8397,13 @@ mod ce4a_continuous_self_sufficiency {
     /// authority recovery + a clean halt — with NO fold. Fails loud in seconds if the composition
     /// or the fixture's leadership certification is inadequate.
     #[tokio::test]
-    #[ignore = "CE-4A.1 inspect: v5 fixture warm-start + input assembly + loop recovery, empty feed, NO fold (env S5_SEED_STORES / CE3D_WORK); ~fast (10GB copy)"]
+    #[ignore = "CE-4A.1 inspect: v5 fixture warm-start + prep-refold + fixture-lineage refresh + input assembly + loop recovery of the frozen 1340 authority, empty feed, NO fold (env S5_SEED_STORES / CE3D_WORK); ~30min (prep-refold under strict frozen recovery)"]
     async fn ce4a_inspect_fixture() {
         let seed = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
         let corpus = env_path("CE3D_CORPUS", "/home/ts/.cardano-ce3d-extract/corpus_blocks");
         let work = env_path("CE3D_WORK", "/home/ts/.cardano-ce3d-extract/harness-work-s5");
         // max_slot == durable tip => empty feed (no block has tip < slot <= tip).
-        let run = drive(&seed, &corpus, &work, "inspect", env_u64("CE4A_INSPECT_MAX", 0), false).await;
+        let run = drive(&seed, &corpus, &work, "inspect", env_u64("CE4A_INSPECT_MAX", 0), true).await;
         eprintln!(
             "CE-4A.1 INSPECT: tip_before={} tip_after={} fed={} final_epoch={} \
              lead_1341_promo_certified={} activation_targets={:?}",
@@ -8401,7 +8423,7 @@ mod ce4a_continuous_self_sufficiency {
     /// ADMITS corpus blocks against the RECOVERED authority (so the loop's authority recovered to
     /// epoch 1340 — a 1340 block would fail header validation against a stale seed view).
     #[tokio::test]
-    #[ignore = "CE-4A.1 smoke: production loop admits epoch-1340 corpus blocks (recovered authority), NO boundary (env S5_SEED_STORES / CE3D_CORPUS / CE3D_WORK / CE4A_SMOKE_MAX); minutes"]
+    #[ignore = "CE-4A.1 smoke: prep-refold + fixture-lineage refresh, then the production loop admits epoch-1340 corpus blocks against the recovered frozen 1340 authority, NO boundary (env S5_SEED_STORES / CE3D_CORPUS / CE3D_WORK / CE4A_SMOKE_MAX); ~30min+ (prep under strict frozen recovery)"]
     async fn ce4a_smoke_admit_within_epoch() {
         let seed = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
         let corpus = env_path("CE3D_CORPUS", "/home/ts/.cardano-ce3d-extract/corpus_blocks");
@@ -8409,7 +8431,7 @@ mod ce4a_continuous_self_sufficiency {
         // A few thousand slots into epoch 1340 — well below the 1341 boundary (115_862_400).
         let max_slot = env_u64("CE4A_SMOKE_MAX", 115_780_000);
         assert!(epoch_of(max_slot) == 1340, "smoke ceiling must stay inside epoch 1340");
-        let run = drive(&seed, &corpus, &work, "smoke", max_slot, false).await;
+        let run = drive(&seed, &corpus, &work, "smoke", max_slot, true).await;
         eprintln!(
             "CE-4A.1 SMOKE: tip_before={} tip_after={} fed={} final_epoch={}",
             run.durable_tip_before, run.durable_tip_after, run.fed_blocks, run.final_epoch
@@ -8962,6 +8984,23 @@ mod ce4a_continuous_self_sufficiency {
             "FAIL-LOUD: leadership 1343 must NOT be sealed pre-run (the 1341->1342 cross seals it)"
         );
 
+        // CE-4A.3-R1 fixture-lineage refresh: rewrite the stale WAL eview records (pre-dafe0faf / pre-CE-3d)
+        // to current lineage from the fresh frozen authority, so CE-4A.2 stays rerunnable under strict
+        // frozen recovery (the same refresh drive_restart_proof uses). Done BEFORE `state` moves below.
+        if epoch_accumulator
+            .promotion_leadership_authority_for_epoch(EpochNo(epoch_of(durable_tip_before)))
+            .is_ok()
+        {
+            wal = refresh_prep_eview_records(
+                wal,
+                &dst,
+                &epoch_accumulator,
+                &sidecar,
+                state.chain_dep.epoch_nonce.0.clone(),
+                epoch_of(durable_tip_before),
+            );
+        }
+
         // --- production input assembly (a mirror of drive() / the ForgeIntent::Off arm) ---
         let seed_view = leadership_view_from_frozen_authority(Some(&epoch_accumulator), &sidecar)
             .expect("FAIL-LOUD: recovered leadership view from the frozen authority");
@@ -9178,5 +9217,676 @@ mod ce4a_continuous_self_sufficiency {
             (658, 658),
             "FAIL-LOUD: POST-1342 nesPd must be 658/658 (the DC-EPOCH-24 delegation-image count)"
         );
+    }
+
+    // ============================================================================================
+    // CE-4A.3 — restart + rollback replay-equivalence INSIDE the production-loop harness. This block
+    // is the RESTART-ONLY proof: an uninterrupted production run vs. a GENUINE warm restart from
+    // durable state after promotion, compared on the self-derived authority fingerprint. It handles
+    // EpochViewPostPromotionMismatch as a FIRST-CLASS finding (hard stop, exact evidence, no patch).
+    // Spec: docs/clusters/LIVE-LEDGER-EPOCH-TRANSITION/SLICE-CE-4A-3-RESTART-ROLLBACK.md.
+    // ============================================================================================
+
+    /// Reassemble the production authority inputs from a (warm-start-)recovered `BootstrapState` — the
+    /// SAME assembly `drive()` / the `ForgeIntent::Off` arm performs. Used for the initial run AND,
+    /// identically, after the genuine warm restart (so the restart path is production, not synthetic).
+    fn assemble_production_inputs(
+        state: BootstrapState,
+        sidecar: &SeedEpochConsensusInputs,
+        dst: &Path,
+        chaindb: &PersistentChainDb,
+        epoch_accumulator: &EpochAccumulatorStore,
+    ) -> (PoolDistrView, EraSchedule, crate::epoch_wire::EviewActivationInputs, ForwardSyncState) {
+        let seed_view = leadership_view_from_frozen_authority(Some(epoch_accumulator), sidecar)
+            .expect("FAIL-LOUD: recovered leadership view from the frozen authority");
+        let era_schedule = recovered_node_schedule(&state, true, preview_rsw())
+            .expect("FAIL-LOUD: recovered era schedule from the durable sidecar geometry");
+        let eview_inputs = crate::epoch_wire::EviewActivationInputs {
+            seed_bootstrap_state: state.ledger.clone(),
+            seed_point_slot: sidecar.seed_point_slot,
+            seed_point_hash: sidecar.seed_point_hash.clone(),
+            seed_epoch: sidecar.epoch_no,
+            network_magic: PREVIEW_MAGIC,
+            nonce: sidecar.epoch_nonce.0.clone(),
+            genesis_hash: sidecar.genesis_hash.clone(),
+            protocol_params_hash: sidecar.protocol_params_hash.clone(),
+            asc: sidecar.active_slots_coeff,
+            replay_scratch_path: dst.join("eview-replay-scratch.redb"),
+            next_epoch_bridge: chaindb
+                .get_bootstrap_next_epoch_authority(&sidecar.anchor_fp)
+                .ok()
+                .flatten()
+                .and_then(|b| ade_ledger::bootstrap_bridge::decode_bootstrap_next_epoch_authority(&b).ok()),
+            bootstrap_reward_delta: chaindb
+                .get_bootstrap_reward_update(&sidecar.anchor_fp)
+                .ok()
+                .flatten()
+                .and_then(|b| ade_ledger::bootstrap_reward_update::decode_bootstrap_reward_update(&b).ok()),
+        };
+        let anchor_fp = fingerprint(&state.ledger).combined;
+        let recovered_anchor = state.tip.clone();
+        let mut fwd = ForwardSyncState::new(
+            ReceiveState::new(state.ledger, state.chain_dep),
+            anchor_fp,
+            SnapshotCadence::DEFAULT,
+        );
+        fwd.recovered_anchor = recovered_anchor;
+        fwd.recovered_eta0 = Some(sidecar.epoch_nonce.clone());
+        (seed_view, era_schedule, eview_inputs, fwd)
+    }
+
+    /// The self-derived AUTHORITY fingerprint at the end of a run (read-only): the durable tip, the
+    /// accumulator + reduced-checkpoint commitments, the epoch-indexed frozen-leadership hashes, and
+    /// the promotion-certified authority availability. `forbidden_paths_clean` is structural — this
+    /// harness never calls a re-import / cli-oracle / seed-window replay / materialize_bootstrap_into.
+    struct Ce4aAuthorityFp {
+        final_tip: u64,
+        acc_hash: [u8; 32],
+        checkpoint_commitment: [u8; 32],
+        leadership_hashes: std::collections::BTreeMap<u64, [u8; 32]>,
+        promotion_certified: std::collections::BTreeMap<u64, bool>,
+        forbidden_paths_clean: bool,
+    }
+
+    fn capture_authority_fp(
+        chaindb: &PersistentChainDb,
+        epoch_accumulator: &EpochAccumulatorStore,
+        reduced_checkpoint: &ReducedUtxoCheckpoint,
+    ) -> Ce4aAuthorityFp {
+        let final_tip = ChainDb::tip(chaindb).expect("tip read").expect("durable tip").slot.0;
+        let (_s, acc) = epoch_accumulator
+            .load_current()
+            .expect("load_current")
+            .expect("sealed accumulator");
+        let acc_hash =
+            ade_crypto::blake2b_256(&ade_ledger::epoch_accumulator::encode_epoch_accumulator(&acc)).0;
+        let checkpoint_commitment = {
+            let sums = reduced_checkpoint
+                .sum_base_credential_stake()
+                .expect("reduced base-credential stake");
+            let mut buf = Vec::with_capacity(8 + sums.len() * 37);
+            buf.extend_from_slice(&(sums.len() as u64).to_be_bytes());
+            for (cred, coin) in &sums {
+                buf.extend_from_slice(&cred_key(cred));
+                buf.extend_from_slice(&coin.0.to_be_bytes());
+            }
+            ade_crypto::blake2b_256(&buf).0
+        };
+        let mut leadership_hashes = std::collections::BTreeMap::new();
+        for e in [1342u64, 1343] {
+            if let Ok(l) = epoch_accumulator.leadership_authority_for_epoch(EpochNo(e)) {
+                leadership_hashes.insert(e, ade_ledger::frozen_leadership::canonical_hash(&l).0);
+            }
+        }
+        let mut promotion_certified = std::collections::BTreeMap::new();
+        for e in [1341u64, 1342, 1343] {
+            promotion_certified.insert(
+                e,
+                epoch_accumulator
+                    .promotion_leadership_authority_for_epoch(EpochNo(e))
+                    .is_ok(),
+            );
+        }
+        Ce4aAuthorityFp {
+            final_tip,
+            acc_hash,
+            checkpoint_commitment,
+            leadership_hashes,
+            promotion_certified,
+            forbidden_paths_clean: true,
+        }
+    }
+
+    /// CE-4A.3-R1 FIXTURE-LINEAGE REFRESH (harness-local — NEVER a production WAL migration, NEVER a
+    /// recovery fallback). The v5 fixture's WAL eview activation records predate `dafe0faf` (point-bound
+    /// boundary mark) + the CE-3d stake corrections, so their source_point + stake are OLD lineage; the
+    /// prep-refold re-derives the ACCUMULATOR to current lineage but leaves the WAL records stale. Rebuild
+    /// the WAL: keep every non-eview entry, DROP the stale eview records (the WAL is append-only and
+    /// `resolve_activation_record` conflicts on a same-epoch byte-different record, so a rewrite is
+    /// required), then append ONE current-lineage eview record for the durable-tip epoch, reconstructed
+    /// from the FRESH frozen authority exactly as the recovery does (`resolve` reads the max-epoch record).
+    /// Frozen recovery stays STRICT — it rejects the stale record; this fixes the fixture, not the recovery.
+    fn refresh_prep_eview_records(
+        wal: FileWalStore,
+        dst: &Path,
+        epoch_accumulator: &EpochAccumulatorStore,
+        sidecar: &SeedEpochConsensusInputs,
+        eta0_durable: Hash32,
+        durable_epoch: u64,
+    ) -> FileWalStore {
+        let frozen = epoch_accumulator
+            .promotion_leadership_authority_for_epoch(EpochNo(durable_epoch))
+            .expect("FAIL-LOUD: promotion-certified frozen authority for the durable epoch (eview refresh)");
+        let view = ade_ledger::reduced_epoch_view::EpochConsensusView::from_frozen_leadership(
+            &frozen,
+            &ade_ledger::reduced_epoch_view::FrozenLeadershipViewMetadata {
+                network_magic: PREVIEW_MAGIC,
+                era: ade_types::CardanoEra::Conway,
+                source_point: Point {
+                    slot: frozen.source_slot,
+                    hash: frozen.source_hash.clone(),
+                },
+                checkpoint_commitment: frozen.source_checkpoint_commitment.clone(),
+                nonce: eta0_durable,
+                snapshot_phase: ade_ledger::reduced_snapshot::SnapshotPhase::Set,
+                protocol_params_commitment: ade_ledger::reduced_epoch_view::consensus_profile_commitment(
+                    &sidecar.genesis_hash,
+                    &sidecar.protocol_params_hash,
+                    sidecar.active_slots_coeff,
+                ),
+            },
+        );
+        let fresh_record = crate::epoch_activation::activation_record_for(&view);
+        let kept: Vec<WalEntry> = wal
+            .read_all()
+            .expect("FAIL-LOUD: wal read for eview refresh")
+            .into_iter()
+            .filter(|e| !matches!(e, WalEntry::EpochConsensusViewActivated { .. }))
+            .collect();
+        drop(wal);
+        let _ = std::fs::remove_dir_all(dst.join("wal"));
+        let mut fresh = FileWalStore::open(dst.join("wal")).expect("FAIL-LOUD: reopen wal after refresh");
+        for e in kept {
+            fresh.append(e).expect("FAIL-LOUD: re-append kept wal entry");
+        }
+        fresh.append(fresh_record).expect("FAIL-LOUD: append current-lineage eview record");
+        // ASSERT the rewritten durable record is CURRENT-LINEAGE (== the fresh frozen recovery view) —
+        // this proves the prep REWROTE the record correctly, not merely that it cleared the error.
+        let durable = crate::epoch_activation::resolve_activation_record(
+            &fresh.read_all().expect("re-read wal"),
+        )
+        .expect("resolve")
+        .expect("FAIL-LOUD: a durable eview record after refresh");
+        match &durable {
+            WalEntry::EpochConsensusViewActivated {
+                target_epoch,
+                transition_point,
+                view_canonical_hash,
+                stake_view_canonical_hash,
+                ..
+            } => {
+                assert_eq!(target_epoch.0, durable_epoch, "refreshed record targets the durable epoch");
+                assert_eq!(
+                    *view_canonical_hash,
+                    view.canonical_hash(),
+                    "FAIL-LOUD: refreshed durable eview record canonical hash == fresh frozen recovery view (current lineage)"
+                );
+                assert_eq!(
+                    transition_point.slot, frozen.source_slot,
+                    "refreshed source_slot == current frozen source_slot"
+                );
+                assert_eq!(
+                    *stake_view_canonical_hash,
+                    view.stake_view_canonical_hash(),
+                    "refreshed stake_view_hash == current frozen stake_view_hash"
+                );
+            }
+            _ => panic!("FAIL-LOUD: expected the refreshed eview activation record"),
+        }
+        fresh
+    }
+
+    /// Drive the production loop and capture the authority fingerprint. `do_restart=false` = one
+    /// uninterrupted run to 1342 (the reference). `do_restart=true` = cross 1340->1341, then a GENUINE
+    /// warm restart (drop every handle + the ForwardSyncState, reopen from durable disk, re-run
+    /// `warm_start_recovery` + input reassembly — the real process-restart sequence, NOT a reuse of
+    /// in-memory state), then continue through 1341->1342. Returns `Err(finding)` if the post-restart
+    /// loop trips a fail-closed error (e.g. EpochViewPostPromotionMismatch) — the §4 hard stop.
+    async fn drive_restart_proof(
+        seed_dir: &Path,
+        corpus_dir: &Path,
+        work: &Path,
+        tag: &str,
+        do_restart: bool,
+    ) -> Result<Ce4aAuthorityFp, String> {
+        let dst = isolate_fixture(seed_dir, work, tag);
+        seal_bootstrap_seed_leadership(&dst);
+        let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(dst.join("chain.db")))
+            .expect("FAIL-LOUD: open isolated chaindb");
+        let mut wal = FileWalStore::open(dst.join("wal")).expect("FAIL-LOUD: open isolated wal");
+        let warm_acc = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: open warm accumulator handle");
+        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc))
+            .expect("FAIL-LOUD: production warm_start_recovery");
+        drop(warm_acc);
+
+        let sidecar = state
+            .seed_epoch_consensus_inputs
+            .clone()
+            .expect("FAIL-LOUD: v5 sidecar (SeedEpochConsensusInputs) present");
+        assert_eq!(
+            sidecar.epoch_no.0, SEED_EPOCH,
+            "FAIL-LOUD: v5 seed epoch must be {SEED_EPOCH}; got {}",
+            sidecar.epoch_no.0
+        );
+        let durable_tip_before =
+            ChainDb::tip(&chaindb).expect("tip read").expect("FAIL-LOUD: durable chaindb tip").slot.0;
+        assert_eq!(
+            epoch_of(durable_tip_before),
+            1340,
+            "FAIL-LOUD: the v5 durable tip must be in epoch 1340, got slot {durable_tip_before}"
+        );
+        {
+            let prof = crate::bootstrap_export::resolve_network_profile("preview")
+                .expect("FAIL-LOUD: preview network profile");
+            assert_eq!(
+                u64::from(sidecar.epoch_length_slots),
+                prof.epoch_length,
+                "FAIL-LOUD: fixture epoch_length venue mismatch (k=2160-vs-432 class of bug)"
+            );
+            assert_eq!(preview_rsw(), Some(34_560), "FAIL-LOUD: preview RSW must be 34560 (k=432)");
+        }
+
+        let epoch_accumulator = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: open live accumulator");
+        let reduced_checkpoint = ReducedUtxoCheckpoint::open(&dst.join("reduced-checkpoint.redb"))
+            .expect("FAIL-LOUD: open reduced checkpoint");
+
+        // FIXTURE PREP (disclosed artifact — identical to CE-4A.1/4A.2).
+        if epoch_accumulator
+            .promotion_leadership_authority_for_epoch(EpochNo(1341))
+            .is_err()
+        {
+            eprintln!("CE-4A.3 [{tag}] prep: native 1341 absent — reset+refold 1338->{durable_tip_before}...");
+            epoch_accumulator.reset_to_bootstrap().expect("FAIL-LOUD: reset accumulator");
+            reduced_checkpoint.reset_to_bootstrap().expect("FAIL-LOUD: reset checkpoint");
+            let prep_sched =
+                recovered_node_schedule(&state, true, preview_rsw()).expect("FAIL-LOUD: prep era schedule");
+            advance_ledger_state_to_durable_tip(
+                Some(&reduced_checkpoint),
+                Some(&epoch_accumulator),
+                &chaindb,
+                &prep_sched,
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .expect("FAIL-LOUD: prep refold 1338->durable-tip");
+        }
+        assert!(
+            epoch_accumulator
+                .promotion_leadership_authority_for_epoch(EpochNo(1341))
+                .is_ok(),
+            "FAIL-LOUD (hard stop: missing promotion-certified authority): native frozen leadership 1341 required"
+        );
+        assert!(
+            epoch_accumulator.leadership_authority_for_epoch(EpochNo(1343)).is_err(),
+            "FAIL-LOUD: leadership 1343 must NOT be sealed pre-run"
+        );
+
+        // CE-4A.3-R1 fixture-lineage refresh (harness-local; NOT a production WAL migration, NOT a
+        // recovery fallback): the v5 fixture's WAL eview records predate dafe0faf + the CE-3d stake
+        // corrections, while the refold re-derived the accumulator to current lineage. Rebuild the WAL
+        // with a CURRENT-lineage eview record from the fresh frozen authority so the loop's recovery has
+        // a lineage-consistent durable record to reconstruct. Frozen recovery stays STRICT (it rejects
+        // the stale record); we fix the fixture, not the recovery. Done BEFORE `state` is moved below.
+        wal = refresh_prep_eview_records(
+            wal,
+            &dst,
+            &epoch_accumulator,
+            &sidecar,
+            state.chain_dep.epoch_nonce.0.clone(),
+            epoch_of(durable_tip_before),
+        );
+
+        let (seed_view, era_schedule, eview_inputs, mut fwd) =
+            assemble_production_inputs(state, &sidecar, &dst, &chaindb, &epoch_accumulator);
+
+        // ---- run 1: uninterrupted (to 1342) OR pre-restart (to 1341) ----
+        let first_max = if do_restart { EPOCH_1341_FIRST_SLOT } else { EPOCH_1342_FIRST_SLOT };
+        eprintln!("CE-4A.3 [{tag}] fold ({durable_tip_before}, {first_max}] (do_restart={do_restart})");
+        {
+            let feed = load_corpus_feed(corpus_dir, durable_tip_before, first_max);
+            assert!(!feed.is_empty(), "FAIL-LOUD: the feed must contain corpus blocks");
+            let mut source = NodeBlockSource::in_memory(feed);
+            let (_tx, mut shutdown) = watch::channel(false);
+            let mut sched = crate::live_log::NodeSchedLogWriter::new(Vec::<u8>::new());
+            run_relay_loop_with_sched(
+                &mut fwd, &mut source, &chaindb, &mut wal, &era_schedule, &seed_view, &mut shutdown,
+                None, Some(&mut sched), None, Some(&reduced_checkpoint), Some(&eview_inputs),
+                Some(&epoch_accumulator), RecoveryAdmissionPolicy::cardano(),
+            )
+            .await
+            .expect("FAIL-LOUD: first production loop must halt cleanly");
+        }
+
+        if !do_restart {
+            let fp = capture_authority_fp(&chaindb, &epoch_accumulator, &reduced_checkpoint);
+            drop(reduced_checkpoint);
+            drop(epoch_accumulator);
+            drop(wal);
+            drop(chaindb);
+            if std::env::var("CE4A_KEEP").is_err() {
+                let _ = std::fs::remove_dir_all(&dst);
+            }
+            return Ok(fp);
+        }
+
+        // ---- GENUINE WARM RESTART from durable state (the production restart path) ----
+        // Drop the in-memory ForwardSyncState + assembled inputs + ALL store handles, then reopen from
+        // the durable disk and re-run warm_start_recovery + input reassembly. NOT a reuse of in-memory
+        // state (that is the CE-4A.2 invalid split that trips EpochViewPostPromotionMismatch).
+        eprintln!("CE-4A.3 [{tag}] GENUINE WARM RESTART: drop handles + fwd, reopen from durable, warm_start_recovery, reassemble");
+        drop(fwd);
+        drop(seed_view);
+        drop(era_schedule);
+        drop(eview_inputs);
+        drop(reduced_checkpoint);
+        drop(epoch_accumulator);
+        drop(wal);
+        drop(chaindb);
+
+        let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(dst.join("chain.db")))
+            .expect("FAIL-LOUD: reopen chaindb after restart");
+        let mut wal = FileWalStore::open(dst.join("wal")).expect("FAIL-LOUD: reopen wal after restart");
+        let warm_acc = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: reopen warm accumulator after restart");
+        let state2 = warm_start_recovery(&chaindb, &wal, Some(&warm_acc))
+            .expect("FAIL-LOUD: warm_start_recovery after restart (the genuine restart path)");
+        drop(warm_acc);
+        let sidecar2 = state2
+            .seed_epoch_consensus_inputs
+            .clone()
+            .expect("FAIL-LOUD: sidecar after restart");
+        let restart_tip =
+            ChainDb::tip(&chaindb).expect("tip read").expect("durable tip").slot.0;
+        assert_eq!(
+            epoch_of(restart_tip),
+            1341,
+            "FAIL-LOUD: post-restart durable tip must be in epoch 1341 (crossed pre-restart); got slot {restart_tip}"
+        );
+        let epoch_accumulator = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: reopen accumulator after restart");
+        let reduced_checkpoint = ReducedUtxoCheckpoint::open(&dst.join("reduced-checkpoint.redb"))
+            .expect("FAIL-LOUD: reopen checkpoint after restart");
+        assert!(
+            epoch_accumulator
+                .promotion_leadership_authority_for_epoch(EpochNo(1342))
+                .is_ok(),
+            "FAIL-LOUD (hard stop: missing promotion-certified authority): post-restart must carry \
+             promotion-certified native 1342 (sealed by the pre-restart 1340->1341 cross)"
+        );
+        let (seed_view, era_schedule, eview_inputs, mut fwd) =
+            assemble_production_inputs(state2, &sidecar2, &dst, &chaindb, &epoch_accumulator);
+
+        // ---- run 2 (post-restart): continue through 1341->1342 over the RECOVERED state; CATCH the finding ----
+        eprintln!("CE-4A.3 [{tag}] post-restart fold ({restart_tip}, {EPOCH_1342_FIRST_SLOT}] — cross 1341->1342");
+        let restart_run = {
+            let feed = load_corpus_feed(corpus_dir, restart_tip, EPOCH_1342_FIRST_SLOT);
+            assert!(!feed.is_empty(), "FAIL-LOUD: the post-restart feed must contain corpus blocks");
+            let mut source = NodeBlockSource::in_memory(feed);
+            let (_tx, mut shutdown) = watch::channel(false);
+            let mut sched = crate::live_log::NodeSchedLogWriter::new(Vec::<u8>::new());
+            run_relay_loop_with_sched(
+                &mut fwd, &mut source, &chaindb, &mut wal, &era_schedule, &seed_view, &mut shutdown,
+                None, Some(&mut sched), None, Some(&reduced_checkpoint), Some(&eview_inputs),
+                Some(&epoch_accumulator), RecoveryAdmissionPolicy::cardano(),
+            )
+            .await
+        };
+        if let Err(e) = restart_run {
+            // §4 HARD STOP — do NOT patch, do NOT weaken, do NOT claim CE-4A.3.
+            let err = format!("{e:?}");
+            let is_eview = err.contains("EpochViewPostPromotionMismatch");
+            let stop = serde_json::json!({
+                "slice": "CE-4A.3",
+                "result": "HARD STOP — the GENUINE warm restart tripped a fail-closed error on the post-restart fold",
+                "epoch_view_post_promotion_mismatch": is_eview,
+                "error": err,
+                "restart_tip": restart_tip,
+                "meaning": if is_eview {
+                    "the genuine production warm restart across a crossed boundary trips the eview post-promotion cross-check — a REAL production restart/re-entry authority gap (§4 outcome b). Open a sealed fix slice; do NOT claim CE-4A.3 restart equivalence."
+                } else {
+                    "the genuine warm restart failed closed for another reason — investigate before any claim."
+                },
+            });
+            let out = env_path("CE4A3_STOP_OUT", "/home/ts/.cardano-ce3d-extract/ce4a-3-STOP-evidence.json");
+            let pretty = serde_json::to_string_pretty(&stop).unwrap_or_default();
+            let _ = std::fs::write(&out, &pretty);
+            eprintln!("\n===== CE-4A.3 HARD STOP =====\n{pretty}\n=============================");
+            if std::env::var("CE4A_KEEP").is_err() {
+                let _ = std::fs::remove_dir_all(&dst);
+            }
+            return Err(format!("CE-4A.3 HARD STOP (eview_mismatch={is_eview}): {err}"));
+        }
+
+        let fp = capture_authority_fp(&chaindb, &epoch_accumulator, &reduced_checkpoint);
+        drop(reduced_checkpoint);
+        drop(epoch_accumulator);
+        drop(wal);
+        drop(chaindb);
+        if std::env::var("CE4A_KEEP").is_err() {
+            let _ = std::fs::remove_dir_all(&dst);
+        }
+        Ok(fp)
+    }
+
+    /// CE-4A.3 restart-only proof: a GENUINE warm restart mid-run (after crossing 1340->1341) is
+    /// replay-equivalent to the uninterrupted run on the self-derived authority fingerprint. Resolves
+    /// the EpochViewPostPromotionMismatch finding: green here => the CE-4A.2 mismatch was a harness-only
+    /// re-entry artifact; a hard stop => a real production restart-authority gap (a sealed fix decision).
+    #[tokio::test]
+    #[ignore = "CE-4A.3 restart-only: production warm-restart mid-run == uninterrupted run, self-derived authority fingerprint (env S5_SEED_STORES / CE3D_CORPUS / CE3D_WORK); SLOW ~hours"]
+    async fn ce4a_3_restart_only_equivalence() {
+        let seed = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
+        let corpus = env_path("CE3D_CORPUS", "/home/ts/.cardano-ce3d-extract/corpus_blocks");
+        let work = env_path("CE3D_WORK", "/home/ts/.cardano-ce3d-extract/harness-work-s5");
+
+        // uninterrupted reference (one continuous run to 1342)
+        let uninterrupted = drive_restart_proof(&seed, &corpus, &work, "restart-uninterrupted", false)
+            .await
+            .expect("FAIL-LOUD: the uninterrupted reference run must complete");
+        // genuine warm restart mid-run (to 1341 -> restart -> to 1342)
+        let restarted = match drive_restart_proof(&seed, &corpus, &work, "restart-warm", true).await {
+            Ok(fp) => fp,
+            Err(finding) => panic!(
+                "FAIL-LOUD — first-class finding (NOT to be patched around; this is the sealed-fix \
+                 decision): {finding}"
+            ),
+        };
+
+        // ---- evidence bundle (written BEFORE the asserts) ----
+        let fp_json = |fp: &Ce4aAuthorityFp| {
+            serde_json::json!({
+                "final_tip": fp.final_tip,
+                "acc_hash": hex32(&fp.acc_hash),
+                "checkpoint_commitment": hex32(&fp.checkpoint_commitment),
+                "leadership_hashes": fp.leadership_hashes.iter()
+                    .map(|(e, h)| (e.to_string(), hex32(h))).collect::<std::collections::BTreeMap<_, _>>(),
+                "promotion_certified": fp.promotion_certified.iter()
+                    .map(|(e, b)| (e.to_string(), *b)).collect::<std::collections::BTreeMap<_, _>>(),
+                "forbidden_paths_clean": fp.forbidden_paths_clean,
+            })
+        };
+        let bundle = serde_json::json!({
+            "slice": "CE-4A.3 (restart-only)",
+            "claim": "a genuine production warm restart from durable state after promotion is replay-equivalent to the uninterrupted run",
+            "epoch_view_post_promotion_mismatch": false,
+            "uninterrupted": fp_json(&uninterrupted),
+            "restarted": fp_json(&restarted),
+        });
+        let bundle_str = serde_json::to_string_pretty(&bundle).expect("serialize evidence bundle");
+        eprintln!("\n===== CE-4A.3 RESTART-ONLY EVIDENCE =====\n{bundle_str}\n=========================================");
+        let out = env_path("CE4A3_EVIDENCE_OUT", "/home/ts/.cardano-ce3d-extract/ce4a-3-restart-evidence.json");
+        std::fs::write(&out, &bundle_str)
+            .unwrap_or_else(|e| panic!("write evidence bundle {}: {e:?}", out.display()));
+
+        // ---- HARD ASSERTS: restarted == uninterrupted on the self-derived authority fingerprint ----
+        assert_eq!(restarted.final_tip, uninterrupted.final_tip, "FAIL-LOUD: same final selected tip");
+        assert_eq!(restarted.acc_hash, uninterrupted.acc_hash, "FAIL-LOUD: same accumulator canonical hash");
+        assert_eq!(
+            restarted.checkpoint_commitment, uninterrupted.checkpoint_commitment,
+            "FAIL-LOUD: same reduced checkpoint commitment"
+        );
+        assert_eq!(
+            restarted.leadership_hashes, uninterrupted.leadership_hashes,
+            "FAIL-LOUD: same frozen leadership hashes"
+        );
+        assert_eq!(
+            restarted.promotion_certified, uninterrupted.promotion_certified,
+            "FAIL-LOUD: same promotion-certified authority availability"
+        );
+        assert!(
+            restarted.forbidden_paths_clean && uninterrupted.forbidden_paths_clean,
+            "FAIL-LOUD: forbidden_paths must be false (clean) on both runs"
+        );
+        // sanity: the runs genuinely crossed to 1342 and sealed frozen leadership 1342 AND 1343.
+        assert!(
+            uninterrupted.leadership_hashes.contains_key(&1342)
+                && uninterrupted.leadership_hashes.contains_key(&1343),
+            "FAIL-LOUD: the run must seal frozen leadership 1342 AND 1343 (crossed both boundaries)"
+        );
+        assert_eq!(
+            epoch_of(uninterrupted.final_tip),
+            1342,
+            "FAIL-LOUD: the run must land the durable tip in epoch 1342"
+        );
+    }
+
+    /// CE-4A.3-R1 DIAGNOSTIC (step 3): PROVE the v5 fixture's seed+2 (1340) durable eview activation record
+    /// is LEGACY-lineage, not current frozen-shaped. Its source_point, stake-view, AND full canonical hash
+    /// all DIFFER from the fresh frozen authority (only the checkpoint commitment coincides) -- which is
+    /// EXACTLY the EpochViewPostPromotionMismatch the #12 baseline hit. This confirms the failure is a
+    /// FIXTURE LINEAGE problem (a stale pre-dafe0faf/pre-CE-3d record shape),
+    /// NOT a bad frozen reconstruction (the `r1_seed_plus_three...` unit test already proved frozen recovery
+    /// matches a frozen-written record). The refreshed fixture (current binary) will write a frozen-shaped
+    /// seed+2 record and this mismatch disappears.
+    #[tokio::test]
+    #[ignore = "CE-4A.3-R1 diagnostic: prove the v5 fixture's seed+2 (1340) eview record is legacy window-replay-shaped (env S5_SEED_STORES / CE3D_WORK); ~30min prep"]
+    async fn ce4a_3_r1_legacy_seed2_record_diagnostic() {
+        let seed = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
+        let work = env_path("CE3D_WORK", "/home/ts/.cardano-ce3d-extract/harness-work-s5");
+        let dst = isolate_fixture(&seed, &work, "r1-diag");
+        seal_bootstrap_seed_leadership(&dst);
+        let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(dst.join("chain.db")))
+            .expect("FAIL-LOUD: chaindb");
+        let wal = FileWalStore::open(dst.join("wal")).expect("FAIL-LOUD: wal");
+        let warm_acc = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: warm acc");
+        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc)).expect("FAIL-LOUD: warm start");
+        drop(warm_acc);
+        let sidecar = state.seed_epoch_consensus_inputs.clone().expect("FAIL-LOUD: sidecar");
+        let epoch_accumulator = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: acc");
+        let reduced_checkpoint = ReducedUtxoCheckpoint::open(&dst.join("reduced-checkpoint.redb"))
+            .expect("FAIL-LOUD: cp");
+        if epoch_accumulator
+            .promotion_leadership_authority_for_epoch(EpochNo(1341))
+            .is_err()
+        {
+            eprintln!("CE-4A.3-R1 diag: prep-refold 1338->1340 to seal native frozen 1340/1341...");
+            epoch_accumulator.reset_to_bootstrap().expect("reset acc");
+            reduced_checkpoint.reset_to_bootstrap().expect("reset cp");
+            let prep_sched =
+                recovered_node_schedule(&state, true, preview_rsw()).expect("prep sched");
+            advance_ledger_state_to_durable_tip(
+                Some(&reduced_checkpoint),
+                Some(&epoch_accumulator),
+                &chaindb,
+                &prep_sched,
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .expect("FAIL-LOUD: prep refold");
+        }
+
+        // (1) the DURABLE seed+2 (1340) eview activation record (the LATEST activation record).
+        let entries = wal.read_all().expect("wal read");
+        let record = crate::epoch_activation::resolve_activation_record(&entries)
+            .expect("resolve")
+            .expect("FAIL-LOUD: a durable activation record");
+        let (rec_target, rec_source, rec_ckpt, rec_stake_hash, rec_view_hash) = match &record {
+            WalEntry::EpochConsensusViewActivated {
+                target_epoch,
+                transition_point,
+                source_checkpoint_commitment,
+                stake_view_canonical_hash,
+                view_canonical_hash,
+                ..
+            } => (
+                target_epoch.0,
+                transition_point.clone(),
+                source_checkpoint_commitment.clone(),
+                stake_view_canonical_hash.clone(),
+                view_canonical_hash.clone(),
+            ),
+            other => panic!("FAIL-LOUD: expected an activation record, got {other:?}"),
+        };
+        assert_eq!(
+            rec_target, 1340,
+            "the latest durable record is the seed+2 (1340) promotion; got {rec_target}"
+        );
+
+        // (2) the FROZEN 1340 reconstruction — EXACTLY as maybe_recover_promoted_authority builds it.
+        let frozen = epoch_accumulator
+            .promotion_leadership_authority_for_epoch(EpochNo(1340))
+            .expect("FAIL-LOUD: promotion-certified frozen 1340");
+        let eta0_1340 = state.chain_dep.epoch_nonce.0.clone();
+        let metadata = ade_ledger::reduced_epoch_view::FrozenLeadershipViewMetadata {
+            network_magic: PREVIEW_MAGIC,
+            era: ade_types::CardanoEra::Conway,
+            source_point: Point {
+                slot: frozen.source_slot,
+                hash: frozen.source_hash.clone(),
+            },
+            checkpoint_commitment: frozen.source_checkpoint_commitment.clone(),
+            nonce: eta0_1340.clone(),
+            snapshot_phase: ade_ledger::reduced_snapshot::SnapshotPhase::Set,
+            protocol_params_commitment: ade_ledger::reduced_epoch_view::consensus_profile_commitment(
+                &sidecar.genesis_hash,
+                &sidecar.protocol_params_hash,
+                sidecar.active_slots_coeff,
+            ),
+        };
+        let frozen_view =
+            ade_ledger::reduced_epoch_view::EpochConsensusView::from_frozen_leadership(&frozen, &metadata);
+        let hx = |h: &Hash32| h.0.iter().map(|b| format!("{b:02x}")).collect::<String>();
+
+        eprintln!("\n===== CE-4A.3-R1 LEGACY-RECORD DIAGNOSTIC (seed+2 = 1340) =====");
+        eprintln!(
+            "DURABLE RECORD:   target={rec_target} source=(slot {}, hash {}) ckpt={} stake_hash={} view_hash={}",
+            rec_source.slot.0,
+            hx(&rec_source.hash),
+            hx(&rec_ckpt),
+            hx(&rec_stake_hash),
+            hx(&rec_view_hash)
+        );
+        eprintln!(
+            "FROZEN RECONSTR:  target=1340 source=(slot {}, hash {}) ckpt={} stake_hash={} view_hash={}",
+            frozen.source_slot.0,
+            hx(&frozen.source_hash),
+            hx(&frozen.source_checkpoint_commitment),
+            hx(&frozen_view.stake_view_canonical_hash()),
+            hx(&frozen_view.canonical_hash())
+        );
+        eprintln!("================================================================\n");
+
+        // (3) THE PROOF: the legacy record differs from the CURRENT frozen authority on source_point AND
+        // stake-view AND full canonical hash (only the checkpoint commitment coincides) — a STALE-LINEAGE
+        // record (pre-`dafe0faf` source labeling + pre-CE-3d stake), NOT a bad reconstruction. The
+        // fixture-refresh (`refresh_prep_eview_records`) rewrites it to current lineage; #12 then passes.
+        assert_ne!(
+            rec_stake_hash,
+            frozen_view.stake_view_canonical_hash(),
+            "legacy record stake-view DIFFERS from the current frozen authority (pre-CE-3d stake corrections)"
+        );
+        assert_ne!(
+            rec_source, frozen_view.source_point,
+            "legacy record source_point DIFFERS (pre-dafe0faf nominal epoch-end slot vs frozen MARK block slot)"
+        );
+        assert_ne!(
+            rec_view_hash,
+            frozen_view.canonical_hash(),
+            "legacy record view canonical hash DIFFERS — exactly the EpochViewPostPromotionMismatch cause (LEGACY lineage, NOT a bad reconstruction)"
+        );
+        assert_eq!(
+            rec_ckpt, frozen.source_checkpoint_commitment,
+            "checkpoint commitment coincides — the differing fields are source_point + stake-view"
+        );
+
+        drop(reduced_checkpoint);
+        drop(epoch_accumulator);
+        drop(wal);
+        drop(chaindb);
+        if std::env::var("CE4A_KEEP").is_err() {
+            let _ = std::fs::remove_dir_all(&dst);
+        }
     }
 }
