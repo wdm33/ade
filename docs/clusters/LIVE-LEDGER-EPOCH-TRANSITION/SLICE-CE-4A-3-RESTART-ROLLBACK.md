@@ -123,9 +123,10 @@ mismatch skipped that recovery. But CE-4A.3 proves it through a genuine restart 
   genuine warm restart (drop handles + fwd → reopen → `warm_start_recovery` → reassemble inputs →
   continue the loop to 1342), and compares the §3 surfaces to the uninterrupted CE-4A.1 run. The restart
   must NOT reuse the pre-restart `ForwardSyncState` or live store handles (that is the §4 invalid setup).
-- **Rollback/refold (add SECOND):** within-k canonical rollback (the `48fc423a` guard) + forward refold
-  through the production path (the `WalEntry::RollBack` marker, `RecoveryAdmissionPolicy::cardano()`),
-  then re-compare. Reuses the S5 rollback machinery but drives it via the production loop, not `co_advance`.
+- **Rollback/refold (add SECOND) — `SLICE-CE-4A-3-R2-ROLLBACK-REFOLD.md` (#13):** within-k canonical
+  rollback (the `48fc423a` guard) + forward refold through the production path (the `WalEntry::RollBack`
+  marker, `RecoveryAdmissionPolicy::cardano()`), then re-compare. Reuses the S5 rollback machinery but
+  drives it via the production loop, not `co_advance`. Restart-only (#12) is R1-sealed (`7266f90c`).
 - THE HARD RULE: no change to the production composition to make the test pass. If restart re-entry needs
   a production change, that is §4 outcome (b) — a sealed slice, reviewed and committed on its own.
 
