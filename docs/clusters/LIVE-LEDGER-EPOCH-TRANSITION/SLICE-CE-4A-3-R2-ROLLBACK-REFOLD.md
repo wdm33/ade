@@ -24,6 +24,48 @@ boundaries and re-recover the frozen-promoted authority end to end.
 
 ---
 
+## 1a. Ratified mechanism (option a — controlled durable rollback, NOT a natural fork-switch)
+
+**Claim nuance (load-bearing):** CE-4A.3 does NOT claim a natural live fork-switch event. It proves
+replay equivalence after a CONTROLLED durable rollback using the SAME production rollback + recovery
+machinery a real rollback path uses:
+
+```
+controlled durable rollback to a canonical within-k ancestor P
+  -> production commit_rollback (real WalEntry::RollBack marker)
+  -> production admit_rollback k-guard approves
+  -> ResetAndRefold
+  -> refold the SAME canonical block bytes
+  -> compare against the uninterrupted run
+```
+
+This satisfies CE-4A.3's intent (replay-equivalent recovery/refold) better than a fork-switch, which
+adopts a DIFFERENT chain. The rollback is CONTROLLED but NOT fake: the authority transition still goes
+through the real durable rollback + recovery/refold path.
+
+**Allowed:** `commit_rollback` to move the ChainDB to P; a replay-reconstructed P ledger/chain_dep ONLY
+as harness setup input; P MUST be a real canonical point from the same corpus, within k; the production
+`admit_rollback` guard MUST approve it; `ResetAndRefold` MUST execute; refold the EXACT same canonical
+block bytes; compare final state to the uninterrupted run.
+
+**Forbidden:** no direct accumulator mutation; no manual WAL surgery; no bypassing `commit_rollback`; no
+bypassing `admit_rollback`; no fake rollback marker; no synthetic non-canonical point; no fork-switch
+claim; no different-chain adoption claim; no CE-4 final claim from this alone.
+
+**Evidence bundle MUST carry:**
+```json
+{
+  "rollback_trigger": "controlled_commit_rollback_to_canonical_within_k_point",
+  "natural_fork_switch": false,
+  "same_block_refold": true,
+  "production_commit_rollback_used": true,
+  "production_admit_rollback_used": true,
+  "reset_and_refold_used": true
+}
+```
+
+---
+
 ## 2. Path
 
 - **uninterrupted CE-4A run** (the reference — `drive_restart_proof(do_restart=false)`; the #12
