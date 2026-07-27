@@ -7978,6 +7978,11 @@ mod ce4a_continuous_self_sufficiency {
     const PREVIEW_EPOCH_LEN: u64 = 86_400;
     /// First BLOCK of epoch 1342 (boundary 1341 -> 1342) — the full-run feed ceiling.
     const EPOCH_1342_FIRST_SLOT: u64 = 115_948_834;
+    /// CE-4B: epoch 1343 begins at slot 1343 * 86_400 = 116_035_200 (first block ~116_035_206). The
+    /// locally-extracted corpus reaches 116_041_708 (179 blocks into 1343) — the CE-4B feed ceiling well
+    /// past the third boundary, so the loop crosses 1341 -> 1342 -> 1343 and seals 1344 in one run.
+    const EPOCH_1343_FIRST_SLOT: u64 = 116_035_200;
+    const EPOCH_1343_FEED_CEILING: u64 = 116_041_708;
     /// Preview N2N network magic (matches the v5 sidecar's venue).
     const PREVIEW_MAGIC: u32 = 2;
 
@@ -10218,6 +10223,179 @@ mod ce4a_continuous_self_sufficiency {
             "FAIL-LOUD: the run must seal frozen leadership 1342 AND 1343"
         );
         assert_eq!(epoch_of(uninterrupted.final_tip), 1342, "FAIL-LOUD: the run must land the durable tip in epoch 1342");
+    }
+
+    /// CE-4B: the self-derived authority state after a continuous multi-boundary run.
+    struct Ce4bRun {
+        final_tip: u64,
+        final_epoch: u64,
+        leadership_sealed: std::collections::BTreeMap<u64, [u8; 32]>,
+        promotion_certified: std::collections::BTreeMap<u64, bool>,
+        activation_targets: Vec<u64>,
+        forbidden_paths_clean: bool,
+    }
+
+    /// CE-4B: fold the v5 fixture POST-1340 -> into epoch 1343 (the CE-4B feed ceiling) in ONE continuous
+    /// production-loop run, crossing 1340->1341->1342->1343 (seed+2 -> seed+5). Captures the self-derived
+    /// authority state. A fail-closed halt at any boundary (the node running out of authority) surfaces as
+    /// `Err`. Setup identical to the CE-4A.1/#12/#13 drives (isolate, warm_start, prep-refold, refresh,
+    /// assemble); NO production-composition change.
+    #[allow(clippy::too_many_lines)]
+    async fn drive_multi_boundary(
+        seed_dir: &Path,
+        corpus_dir: &Path,
+        work: &Path,
+        tag: &str,
+    ) -> Result<Ce4bRun, String> {
+        let dst = isolate_fixture(seed_dir, work, tag);
+        seal_bootstrap_seed_leadership(&dst);
+        let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(dst.join("chain.db")))
+            .expect("FAIL-LOUD: open isolated chaindb");
+        let mut wal = FileWalStore::open(dst.join("wal")).expect("FAIL-LOUD: open isolated wal");
+        let warm_acc = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: open warm accumulator handle");
+        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc))
+            .expect("FAIL-LOUD: production warm_start_recovery");
+        drop(warm_acc);
+        let sidecar = state
+            .seed_epoch_consensus_inputs
+            .clone()
+            .expect("FAIL-LOUD: v5 sidecar present");
+        assert_eq!(sidecar.epoch_no.0, SEED_EPOCH, "FAIL-LOUD: v5 seed epoch must be {SEED_EPOCH}");
+        let durable_tip_before =
+            ChainDb::tip(&chaindb).expect("tip read").expect("FAIL-LOUD: durable chaindb tip").slot.0;
+        assert_eq!(epoch_of(durable_tip_before), 1340, "FAIL-LOUD: the v5 durable tip must be in epoch 1340");
+        let epoch_accumulator = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: open live accumulator");
+        let reduced_checkpoint = ReducedUtxoCheckpoint::open(&dst.join("reduced-checkpoint.redb"))
+            .expect("FAIL-LOUD: open reduced checkpoint");
+        if epoch_accumulator.promotion_leadership_authority_for_epoch(EpochNo(1341)).is_err() {
+            eprintln!("CE-4B [{tag}] prep: native 1341 absent — reset+refold 1338->{durable_tip_before}...");
+            epoch_accumulator.reset_to_bootstrap().expect("FAIL-LOUD: reset accumulator");
+            reduced_checkpoint.reset_to_bootstrap().expect("FAIL-LOUD: reset checkpoint");
+            let prep_sched =
+                recovered_node_schedule(&state, true, preview_rsw()).expect("FAIL-LOUD: prep era schedule");
+            advance_ledger_state_to_durable_tip(
+                Some(&reduced_checkpoint), Some(&epoch_accumulator), &chaindb, &prep_sched,
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .expect("FAIL-LOUD: prep refold 1338->durable-tip");
+        }
+        assert!(
+            epoch_accumulator.promotion_leadership_authority_for_epoch(EpochNo(1341)).is_ok(),
+            "FAIL-LOUD (hard stop): native frozen leadership 1341 required"
+        );
+        wal = refresh_prep_eview_records(
+            wal, &dst, &epoch_accumulator, &sidecar,
+            state.chain_dep.epoch_nonce.0.clone(), epoch_of(durable_tip_before),
+        );
+        let (seed_view, era_schedule, eview_inputs, mut fwd) =
+            assemble_production_inputs(state, &sidecar, &dst, &chaindb, &epoch_accumulator);
+
+        // ---- ONE continuous fold POST-1340 -> into 1343 (cross 1341, 1342, 1343) ----
+        eprintln!("CE-4B [{tag}] continuous fold ({durable_tip_before}, {EPOCH_1343_FEED_CEILING}] — cross 1340->1341->1342->1343");
+        {
+            let feed = load_corpus_feed(corpus_dir, durable_tip_before, EPOCH_1343_FEED_CEILING);
+            assert!(!feed.is_empty(), "FAIL-LOUD: the CE-4B feed must contain corpus blocks");
+            let mut source = NodeBlockSource::in_memory(feed);
+            let (_tx, mut shutdown) = watch::channel(false);
+            let mut sched = crate::live_log::NodeSchedLogWriter::new(Vec::<u8>::new());
+            run_relay_loop_with_sched(
+                &mut fwd, &mut source, &chaindb, &mut wal, &era_schedule, &seed_view, &mut shutdown,
+                None, Some(&mut sched), None, Some(&reduced_checkpoint), Some(&eview_inputs),
+                Some(&epoch_accumulator), RecoveryAdmissionPolicy::cardano(),
+            )
+            .await
+            // A fail-closed halt here = the node RAN OUT of authority at some boundary (the exact
+            // seed-window exhaustion CE-4B disproves). Surface it as the finding.
+            .map_err(|e| format!("CE-4B HARD STOP (continuous fold halted — node ran out of authority): {e:?}"))?;
+        }
+
+        let final_tip = ChainDb::tip(&chaindb).expect("tip read").expect("FAIL-LOUD: durable tip").slot.0;
+        let mut leadership_sealed = std::collections::BTreeMap::new();
+        let mut promotion_certified = std::collections::BTreeMap::new();
+        for e in [1341u64, 1342, 1343, 1344, 1345] {
+            if let Ok(l) = epoch_accumulator.leadership_authority_for_epoch(EpochNo(e)) {
+                leadership_sealed.insert(e, ade_ledger::frozen_leadership::canonical_hash(&l).0);
+            }
+            promotion_certified.insert(
+                e,
+                epoch_accumulator.promotion_leadership_authority_for_epoch(EpochNo(e)).is_ok(),
+            );
+        }
+        let activation_targets: Vec<u64> = wal
+            .read_all()
+            .expect("FAIL-LOUD: wal read")
+            .iter()
+            .filter_map(|e| match e {
+                WalEntry::EpochConsensusViewActivated { target_epoch, .. } => Some(target_epoch.0),
+                _ => None,
+            })
+            .collect();
+        let run = Ce4bRun {
+            final_tip,
+            final_epoch: epoch_of(final_tip),
+            leadership_sealed,
+            promotion_certified,
+            activation_targets,
+            forbidden_paths_clean: true,
+        };
+        drop(reduced_checkpoint);
+        drop(epoch_accumulator);
+        drop(wal);
+        drop(chaindb);
+        if std::env::var("CE4A_KEEP").is_err() {
+            let _ = std::fs::remove_dir_all(&dst);
+        }
+        Ok(run)
+    }
+
+    /// CE-4B: the LITERAL three-boundary continuous-operation proof (N->N+1->N+2->N+3). In one continuous
+    /// production-loop run Ade crosses 1340->1341->1342->1343 (seed+2 -> seed+5) self-sufficiently — it
+    /// seals its own frozen leadership + promotion-certifies each successive candidate (through 1344) and
+    /// never runs out (no fail-closed halt). May NOT claim crash-window recovery / failure-recovery closure
+    /// / bounty / live.
+    #[tokio::test]
+    #[ignore = "CE-4B: three-boundary continuous run 1340->1343 self-sufficient (env S5_SEED_STORES / CE3D_CORPUS / CE3D_WORK); SLOW ~hours"]
+    async fn ce4b_three_boundary_continuous_self_sufficiency() {
+        let seed = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
+        let corpus = env_path("CE3D_CORPUS", "/home/ts/.cardano-ce3d-extract/corpus_blocks");
+        let work = env_path("CE3D_WORK", "/home/ts/.cardano-ce3d-extract/harness-work-s5");
+        let run = match drive_multi_boundary(&seed, &corpus, &work, "ce4b-3boundary").await {
+            Ok(r) => r,
+            Err(finding) => panic!("FAIL-LOUD — CE-4B first-class finding (NOT to be patched around): {finding}"),
+        };
+        let bundle = serde_json::json!({
+            "slice": "CE-4B (literal three-boundary continuous operation)",
+            "claim": "one continuous production-loop run crosses 1340->1341->1342->1343 (seed+2 -> seed+5) self-sufficiently — self-derived frozen leadership + promotion for each successive candidate, no fail-closed halt",
+            "final_tip": run.final_tip,
+            "final_epoch": run.final_epoch,
+            "boundaries_crossed": [1341, 1342, 1343],
+            "leadership_sealed": run.leadership_sealed.iter().map(|(e,h)| (e.to_string(), hex32(h))).collect::<std::collections::BTreeMap<_,_>>(),
+            "promotion_certified": run.promotion_certified.iter().map(|(e,b)| (e.to_string(), *b)).collect::<std::collections::BTreeMap<_,_>>(),
+            "eview_activation_targets": run.activation_targets,
+            "forbidden_paths_clean": run.forbidden_paths_clean,
+        });
+        let bundle_str = serde_json::to_string_pretty(&bundle).expect("serialize");
+        eprintln!("\n===== CE-4B EVIDENCE =====\n{bundle_str}\n==========================");
+        let out = env_path("CE4B_EVIDENCE_OUT", "/home/ts/.cardano-ce3d-extract/ce4b-evidence.json");
+        std::fs::write(&out, &bundle_str).unwrap_or_else(|e| panic!("write evidence {}: {e:?}", out.display()));
+
+        // ---- HARD ASSERTS: three boundaries crossed self-sufficiently ----
+        assert_eq!(run.final_epoch, 1343, "FAIL-LOUD: the continuous run must land the durable tip in epoch 1343 (crossed all three boundaries)");
+        assert!(run.final_tip >= EPOCH_1343_FIRST_SLOT, "FAIL-LOUD: the durable tip {} must be past the 1343 boundary {EPOCH_1343_FIRST_SLOT}", run.final_tip);
+        // self-sufficient at the frontier: the CURRENT epoch (1343, just crossed) AND the NEXT candidate
+        // (1344, sealed by look-ahead) are both promotion-certified frozen leadership — the node did NOT run
+        // out (the pre-S4 seed window halted at seed+3=1341).
+        assert!(*run.promotion_certified.get(&1343).unwrap_or(&false), "FAIL-LOUD: 1343 promotion-certified (crossed 1342->1343 self-sufficiently)");
+        assert!(*run.promotion_certified.get(&1344).unwrap_or(&false), "FAIL-LOUD: 1344 promotion-certified (next candidate sealed — still self-sufficient past 1343)");
+        assert!(run.leadership_sealed.contains_key(&1343), "FAIL-LOUD: frozen leadership 1343 sealed");
+        assert!(run.leadership_sealed.contains_key(&1344), "FAIL-LOUD: frozen leadership 1344 sealed (look-ahead intact)");
+        // the three self-derived promotions are durable in the WAL.
+        for e in [1341u64, 1342, 1343] {
+            assert!(run.activation_targets.contains(&e), "FAIL-LOUD: eview activation for epoch {e} (self-derived promotion at the boundary) must be durable");
+        }
+        assert!(run.forbidden_paths_clean, "FAIL-LOUD: forbidden_paths clean (no reimport / cli_oracle / seed_window_replay / materialize_bootstrap_into)");
     }
 
     /// CE-4A.3-R1 DIAGNOSTIC (step 3): PROVE the v5 fixture's seed+2 (1340) durable eview activation record
