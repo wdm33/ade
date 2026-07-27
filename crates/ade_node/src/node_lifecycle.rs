@@ -2390,20 +2390,37 @@ pub async fn run_relay_loop_with_sched(
         let entries = wal
             .read_all()
             .map_err(|e| NodeLifecycleError::RelaySync(format!("eview recovery WAL read: {e:?}")))?;
-        let resolved = crate::epoch_activation::resolve_activation_record(&entries)
-            .map_err(|e| NodeLifecycleError::RelaySync(format!("eview recovery resolve: {e:?}")))?;
+        // CE-4A.3-R3: the durable tip bounds BOTH the rollback-aware activation resolution (an activation
+        // for an epoch a rollback un-crossed, or above the tip epoch, is not selected) AND
+        // `recovered_tip_epoch`. Build the era schedule ONCE (extended to the tip) so the resolver's
+        // epoch-of-rollback-target and the nonce-epoch derivation agree on the same selected-chain tip.
+        let durable_tip = ChainDb::tip(chaindb).ok().flatten();
+        let recovery_sched = {
+            let mut s = era_schedule.clone();
+            if let Some(tip) = &durable_tip {
+                s.extend_to_slot(tip.slot);
+            }
+            s
+        };
         // CE-4A.3-R1: the recovered epoch nonce is eta0(C) where C = the durable tip's epoch (the chain-dep
         // was replay-derived to the tip, so its epoch_nonce is that epoch's eta0 -- NOT the seed sidecar
         // nonce). Bind it to that epoch so the frozen-regime recovery asserts the nonce matches the record's
         // target (never a pre-boundary / wrong-epoch chain-dep silently producing a plausible-wrong view).
-        let recovered_tip_epoch = match ChainDb::tip(chaindb).ok().flatten() {
-            Some(tip) => {
-                let mut sched = era_schedule.clone();
-                sched.extend_to_slot(tip.slot);
-                sched.locate(tip.slot).map(|l| l.epoch).unwrap_or(inputs.seed_epoch)
-            }
+        let recovered_tip_epoch = match &durable_tip {
+            Some(tip) => recovery_sched.locate(tip.slot).map(|l| l.epoch).unwrap_or(inputs.seed_epoch),
             None => inputs.seed_epoch,
         };
+        let resolved = crate::epoch_activation::resolve_active_activation_at_tip(
+            &entries,
+            durable_tip.as_ref().map(|_| recovered_tip_epoch.0),
+            |slot| {
+                recovery_sched
+                    .locate(SlotNo(slot))
+                    .map(|l| l.epoch.0)
+                    .unwrap_or(inputs.seed_epoch.0)
+            },
+        )
+        .map_err(|e| NodeLifecycleError::RelaySync(format!("eview recovery resolve: {e:?}")))?;
         crate::epoch_wire::maybe_recover_promoted_authority(
             resolved.as_ref(),
             inputs.seed_epoch,
@@ -9739,6 +9756,468 @@ mod ce4a_continuous_self_sufficiency {
             1342,
             "FAIL-LOUD: the run must land the durable tip in epoch 1342"
         );
+    }
+
+    /// CE-4A.3-R2 SNAPSHOT PROBE (de-risk, fast — no fold): confirm the v5 fixture ChainDb carries a
+    /// durable snapshot <= a within-k rollback point P so `materialize_rolled_back_state`'s `nearest_le(P)`
+    /// resolves (else the production rollback fails RollbackTooDeep). Lists the durable snapshot slots +
+    /// the nearest snapshot at/below the tip and within a ~within-k band below it. FAST: isolate + read,
+    /// no fold.
+    #[tokio::test]
+    #[ignore = "CE-4A.3-R2 snapshot probe: list fixture ChainDb snapshot slots for the rollback materialize floor (env S5_SEED_STORES / CE3D_WORK); fast ~isolate only"]
+    async fn ce4a_3_r2_snapshot_probe() {
+        use ade_ledger::rollback::SnapshotReader;
+        let seed = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
+        let work = env_path("CE3D_WORK", "/home/ts/.cardano-ce3d-extract/harness-work-s5");
+        let dst = isolate_fixture(&seed, &work, "r2-snap-probe");
+        let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(dst.join("chain.db")))
+            .expect("FAIL-LOUD: open isolated chaindb");
+        let tip = ChainDb::tip(&chaindb).expect("tip read").expect("FAIL-LOUD: durable tip");
+        let slots = chaindb.list_snapshot_slots().expect("FAIL-LOUD: list snapshot slots");
+        eprintln!(
+            "CE-4A.3-R2 snapshot probe: durable tip slot={} epoch={}",
+            tip.slot.0,
+            epoch_of(tip.slot.0)
+        );
+        eprintln!(
+            "CE-4A.3-R2 snapshot probe: {} durable snapshot slots: {:?}",
+            slots.len(),
+            slots.iter().map(|s| s.0).collect::<Vec<_>>()
+        );
+        let cache = PersistentSnapshotCache::new(&chaindb);
+        for probe in [
+            tip.slot.0,
+            tip.slot.0.saturating_sub(2_000),
+            tip.slot.0.saturating_sub(6_000),
+            tip.slot.0.saturating_sub(10_000),
+        ] {
+            let near = cache.nearest_le(SlotNo(probe)).map(|(s, _, _)| s.0);
+            eprintln!("  nearest_le({probe}) -> {near:?}");
+        }
+        assert!(
+            !slots.is_empty(),
+            "FAIL-LOUD: the fixture ChainDb must carry >=1 snapshot (the materialize floor for the rollback)"
+        );
+        if std::env::var("CE4A_KEEP").is_err() {
+            let _ = std::fs::remove_dir_all(&dst);
+        }
+    }
+
+    /// CE-4A.3-R2 (#13): the rollback trace — the controlled-rollback proof condition (ratified §1a). It
+    /// records that the durable rollback went through the PRODUCTION rollback primitives (NOT a natural
+    /// fork-switch, NOT a synthetic edit), so the evidence bundle can carry the honest mechanism flags.
+    struct Ce4aRollbackTrace {
+        rollback_from_tip: u64,
+        rollback_target_slot: u64,
+        depth_blocks: u64,
+        nearest_snapshot_le_target: Option<u64>,
+        wal_rollback_marker: bool,
+        // CE-4A.3 #13 option (a): the production ResetAndRefold between rollback and run 2.
+        unsealed_1341_before_reseal: bool,
+        resealed_epoch_after_refold: u64,
+    }
+
+    /// CE-4A.3-R2 (#13): a CONTROLLED within-k durable rollback + refold through the CE-4A production loop is
+    /// byte-identical to the uninterrupted run. Ratified mechanism (§1a): NOT a natural fork-switch. The
+    /// harness induces the rollback through the PRODUCTION rollback primitives only —
+    /// `accumulator_admit_and_clear_for_rollback` (the `admit_rollback` k-guard + accumulator pre-clear;
+    /// target MUST be on the pre-rollback canonical chain, depth <= k) then `apply_chain_event`
+    /// (`materialize_rolled_back_state` = replay-reconstruct P as harness setup input -> `commit_rollback`
+    /// -> `WalEntry::RollBack` marker) — exactly the `run_node_sync` rollback sequence (5246-5278). It then
+    /// re-feeds the SAME canonical blocks (P, 1342] and lets the NORMAL reconcile path
+    /// (`advance_ledger_state_to_durable_tip` -> reset-if-ahead + recover-admit -> refold) re-derive the
+    /// authority. Any divergence (EpochView / admission / authority hash / checkpoint / frozen leadership /
+    /// forbidden path) FAILS-LOUD as the ratified hard stop — never patched inside #13.
+    #[allow(clippy::too_many_lines)]
+    async fn drive_rollback_proof(
+        seed_dir: &Path,
+        corpus_dir: &Path,
+        work: &Path,
+        tag: &str,
+    ) -> Result<(Ce4aAuthorityFp, Ce4aAuthorityFp, Ce4aRollbackTrace), String> {
+        // ---- setup: identical to drive_restart_proof (isolate, warm_start, prep-refold, refresh, assemble) ----
+        let dst = isolate_fixture(seed_dir, work, tag);
+        seal_bootstrap_seed_leadership(&dst);
+        let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(dst.join("chain.db")))
+            .expect("FAIL-LOUD: open isolated chaindb");
+        let mut wal = FileWalStore::open(dst.join("wal")).expect("FAIL-LOUD: open isolated wal");
+        let warm_acc = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: open warm accumulator handle");
+        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc))
+            .expect("FAIL-LOUD: production warm_start_recovery");
+        drop(warm_acc);
+        let sidecar = state
+            .seed_epoch_consensus_inputs
+            .clone()
+            .expect("FAIL-LOUD: v5 sidecar (SeedEpochConsensusInputs) present");
+        assert_eq!(sidecar.epoch_no.0, SEED_EPOCH, "FAIL-LOUD: v5 seed epoch must be {SEED_EPOCH}");
+        let durable_tip_before =
+            ChainDb::tip(&chaindb).expect("tip read").expect("FAIL-LOUD: durable chaindb tip").slot.0;
+        assert_eq!(epoch_of(durable_tip_before), 1340, "FAIL-LOUD: the v5 durable tip must be in epoch 1340");
+
+        let epoch_accumulator = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: open live accumulator");
+        let reduced_checkpoint = ReducedUtxoCheckpoint::open(&dst.join("reduced-checkpoint.redb"))
+            .expect("FAIL-LOUD: open reduced checkpoint");
+
+        // FIXTURE PREP (disclosed artifact — identical to CE-4A.1/4A.2/#12).
+        if epoch_accumulator
+            .promotion_leadership_authority_for_epoch(EpochNo(1341))
+            .is_err()
+        {
+            eprintln!("CE-4A.3-R2 [{tag}] prep: native 1341 absent — reset+refold 1338->{durable_tip_before}...");
+            epoch_accumulator.reset_to_bootstrap().expect("FAIL-LOUD: reset accumulator");
+            reduced_checkpoint.reset_to_bootstrap().expect("FAIL-LOUD: reset checkpoint");
+            let prep_sched =
+                recovered_node_schedule(&state, true, preview_rsw()).expect("FAIL-LOUD: prep era schedule");
+            advance_ledger_state_to_durable_tip(
+                Some(&reduced_checkpoint),
+                Some(&epoch_accumulator),
+                &chaindb,
+                &prep_sched,
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .expect("FAIL-LOUD: prep refold 1338->durable-tip");
+        }
+        assert!(
+            epoch_accumulator.promotion_leadership_authority_for_epoch(EpochNo(1341)).is_ok(),
+            "FAIL-LOUD (hard stop): native frozen leadership 1341 required"
+        );
+
+        // CE-4A.3-R1 fixture-lineage refresh (harness-local; see drive_restart_proof). Done BEFORE `state` moves.
+        wal = refresh_prep_eview_records(
+            wal,
+            &dst,
+            &epoch_accumulator,
+            &sidecar,
+            state.chain_dep.epoch_nonce.0.clone(),
+            epoch_of(durable_tip_before),
+        );
+
+        let (seed_view, era_schedule, eview_inputs, mut fwd) =
+            assemble_production_inputs(state, &sidecar, &dst, &chaindb, &epoch_accumulator);
+
+        // ---- run 1: fold to 1342 (cross both boundaries) through the production loop ----
+        eprintln!("CE-4A.3-R2 [{tag}] run 1: fold ({durable_tip_before}, {EPOCH_1342_FIRST_SLOT}] — cross 1340->1341->1342");
+        {
+            let feed = load_corpus_feed(corpus_dir, durable_tip_before, EPOCH_1342_FIRST_SLOT);
+            assert!(!feed.is_empty(), "FAIL-LOUD: run-1 feed must contain corpus blocks");
+            let mut source = NodeBlockSource::in_memory(feed);
+            let (_tx, mut shutdown) = watch::channel(false);
+            let mut sched = crate::live_log::NodeSchedLogWriter::new(Vec::<u8>::new());
+            run_relay_loop_with_sched(
+                &mut fwd, &mut source, &chaindb, &mut wal, &era_schedule, &seed_view, &mut shutdown,
+                None, Some(&mut sched), None, Some(&reduced_checkpoint), Some(&eview_inputs),
+                Some(&epoch_accumulator), RecoveryAdmissionPolicy::cardano(),
+            )
+            .await
+            .map_err(|e| format!("CE-4A.3-R2 HARD STOP (run-1 production loop failed): {e:?}"))?;
+        }
+        let tip_after_run1 =
+            ChainDb::tip(&chaindb).expect("tip read").expect("FAIL-LOUD: durable tip after run 1");
+        assert_eq!(epoch_of(tip_after_run1.slot.0), 1342, "FAIL-LOUD: run 1 must land the tip in epoch 1342");
+
+        // The uninterrupted reference IS run 1's result on THIS fixture (captured BEFORE the rollback) — the
+        // same-fixture control that isolates the rollback+refold as the only variable. `capture_authority_fp`
+        // returns OWNED data (hashes + maps), so the subsequent rollback+refold cannot invalidate it.
+        let uninterrupted_fp = capture_authority_fp(&chaindb, &epoch_accumulator, &reduced_checkpoint);
+
+        // ---- pick P: a REAL canonical corpus point ROLLBACK_DEPTH_BLOCKS below the tip (depth <= k=432) ----
+        // ROLLBACK_DEPTH_BLOCKS spans the 1341->1342 boundary so the rollback UN-crosses it and the refold
+        // re-crosses it (a strong within-k proof). P_SLOT_BAND covers > depth blocks at ~0.05 density.
+        const ROLLBACK_DEPTH_BLOCKS: usize = 200;
+        const P_SLOT_BAND: u64 = 12_000;
+        let mut band: Vec<Point> = Vec::new();
+        for item in chaindb
+            .iter_from_slot(SlotNo(tip_after_run1.slot.0.saturating_sub(P_SLOT_BAND)))
+            .expect("FAIL-LOUD: iter_from_slot for the rollback band")
+        {
+            let b = item.expect("FAIL-LOUD: stored block in the rollback band");
+            band.push(Point { slot: b.slot, hash: b.hash });
+        }
+        assert!(
+            band.len() > ROLLBACK_DEPTH_BLOCKS + 1,
+            "FAIL-LOUD: the rollback band must hold > {ROLLBACK_DEPTH_BLOCKS} canonical blocks; got {}",
+            band.len()
+        );
+        let p = band[band.len() - 1 - ROLLBACK_DEPTH_BLOCKS].clone();
+        let depth = ROLLBACK_DEPTH_BLOCKS as u64;
+        assert!(depth <= 432, "FAIL-LOUD: the rollback depth must be within k=432 blocks");
+        eprintln!(
+            "CE-4A.3-R2 [{tag}]: rollback tip slot {} (epoch {}) -> P slot {} (epoch {}), depth {} blocks, k=432",
+            tip_after_run1.slot.0,
+            epoch_of(tip_after_run1.slot.0),
+            p.slot.0,
+            epoch_of(p.slot.0),
+            depth
+        );
+        let nearest_snapshot_le_target = {
+            use ade_ledger::rollback::SnapshotReader;
+            let cache = PersistentSnapshotCache::new(&chaindb);
+            let near = cache.nearest_le(p.slot).map(|(s, _, _)| s.0);
+            eprintln!("CE-4A.3-R2 [{tag}]: nearest durable snapshot <= P({}) = {near:?} (materialize floor)", p.slot.0);
+            near
+        };
+
+        // ---- THE CONTROLLED ROLLBACK (production primitives ONLY — the run_node_sync 5246-5278 sequence) ----
+        // (1) admit_rollback k-guard + accumulator pre-clear. Target on the PRE-rollback canonical chain,
+        //     depth <= k, target >= bootstrap seed. A fault here is the ratified HARD STOP (admission mismatch).
+        accumulator_admit_and_clear_for_rollback(
+            Some(&epoch_accumulator),
+            &chaindb,
+            &p,
+            &RecoveryAdmissionPolicy::cardano(),
+        )
+        .map_err(|e| {
+            format!("CE-4A.3-R2 HARD STOP (production admit_rollback k-guard rejected the within-k canonical rollback): {e:?}")
+        })?;
+        // (2) apply_chain_event: materialize_rolled_back_state (replay-reconstruct P) -> commit_rollback ->
+        //     WalEntry::RollBack -> reconcile (DC-NODE-26). ledger_view = the frozen-authority view.
+        let event = ChainEvent::RolledBack { to_point: p.clone(), depth: BlockDistance(depth) };
+        apply_chain_event(
+            &mut fwd,
+            &chaindb,
+            &mut wal,
+            &NoCheckpointSink,
+            &event,
+            RollbackReason::PeerRollBackward,
+            None,
+            &era_schedule,
+            &seed_view,
+        )
+        .map_err(|e| format!("CE-4A.3-R2 HARD STOP (production rollback-apply failed): {e:?}"))?;
+
+        // The durable rollback landed at P (DC-NODE-26 reconcile is enforced inside apply_chain_event).
+        let tip_after_rb =
+            ChainDb::tip(&chaindb).expect("tip read").expect("FAIL-LOUD: durable tip after rollback");
+        if tip_after_rb.slot != p.slot || tip_after_rb.hash != p.hash {
+            return Err(format!(
+                "CE-4A.3-R2 HARD STOP (checkpoint mismatch: durable tip after rollback {} != P {})",
+                tip_after_rb.slot.0, p.slot.0
+            ));
+        }
+        let wal_rollback_marker = wal
+            .read_all()
+            .expect("FAIL-LOUD: wal read after rollback")
+            .iter()
+            .any(|e| matches!(e, WalEntry::RollBack { .. }));
+        assert!(
+            wal_rollback_marker,
+            "FAIL-LOUD: a real WalEntry::RollBack marker must be durable after the production rollback"
+        );
+
+        // CE-4A.3 #13 (option a — harness-faithful to the CONTINUOUS rollback+refold; user-ratified). The
+        // CE-4A single-producer harness must use TWO run_relay_loop_with_sched calls (run_node_sync rejects
+        // source rollbacks), so run 2 would RE-RUN the startup eview recovery on the post-rollback, pre-refold
+        // accumulator — where 1341's frozen leadership is not yet resealed (the fold to 1342 moved past it) ->
+        // RecoveryEpochUnsealed. The CONTINUOUS production loop NEVER restarts between commit_rollback and
+        // ResetAndRefold; its next advance reconciles. So invoke the PRODUCTION ResetAndRefold HERE
+        // (advance_ledger_state_to_durable_tip -> accumulator_recover_admit -> reset_to_bootstrap + refold to
+        // P) BEFORE run 2 — the SAME reconcile the continuous loop's next advance does, NEVER a manual reseal
+        // / WAL edit. It reseals the CURRENT-lineage epoch-1341 authority so run 2's recovery is consistent.
+        // (The warm-restart-in-the-crash-window gap this models away is REAL but SEPARATE -> CE-4A.3-R4; #13
+        // claims ONLY controlled rollback + production ResetAndRefold == uninterrupted, NEVER crash-window
+        // restart safety.)
+        assert_eq!(epoch_of(tip_after_rb.slot.0), 1341, "FAIL-LOUD: the rollback target P must be in epoch 1341");
+        let unsealed_1341_before_reseal = epoch_accumulator
+            .promotion_leadership_authority_for_epoch(EpochNo(1341))
+            .is_err();
+        advance_ledger_state_to_durable_tip(
+            Some(&reduced_checkpoint),
+            Some(&epoch_accumulator),
+            &chaindb,
+            &era_schedule,
+            &RecoveryAdmissionPolicy::cardano(),
+        )
+        .map_err(|e| format!("CE-4A.3-R2 HARD STOP (production ResetAndRefold after rollback failed): {e:?}"))?;
+        // The PRODUCTION reset+refold (NOT a manual seal) resealed epoch 1341's current-lineage authority.
+        epoch_accumulator
+            .promotion_leadership_authority_for_epoch(EpochNo(1341))
+            .map_err(|e| format!("CE-4A.3-R2 HARD STOP (ResetAndRefold did not reseal epoch 1341: {e:?})"))?;
+        eprintln!(
+            "CE-4A.3-R2 [{tag}]: production ResetAndRefold resealed epoch 1341 (unsealed_before={unsealed_1341_before_reseal}) — run 2 recovery now consistent"
+        );
+
+        // ---- run 2: re-feed the SAME canonical blocks (P, 1342]; the NORMAL reconcile path refolds ----
+        eprintln!("CE-4A.3-R2 [{tag}] run 2: refold ({}, {EPOCH_1342_FIRST_SLOT}] — re-cross 1341->1342 through the production loop", p.slot.0);
+        {
+            let feed = load_corpus_feed(corpus_dir, p.slot.0, EPOCH_1342_FIRST_SLOT);
+            assert!(!feed.is_empty(), "FAIL-LOUD: the refold feed must contain corpus blocks");
+            let mut source = NodeBlockSource::in_memory(feed);
+            let (_tx, mut shutdown) = watch::channel(false);
+            let mut sched = crate::live_log::NodeSchedLogWriter::new(Vec::<u8>::new());
+            run_relay_loop_with_sched(
+                &mut fwd, &mut source, &chaindb, &mut wal, &era_schedule, &seed_view, &mut shutdown,
+                None, Some(&mut sched), None, Some(&reduced_checkpoint), Some(&eview_inputs),
+                Some(&epoch_accumulator), RecoveryAdmissionPolicy::cardano(),
+            )
+            .await
+            .map_err(|e| format!("CE-4A.3-R2 HARD STOP (refold loop failed): {e:?}"))?;
+        }
+        let tip_after_run2 =
+            ChainDb::tip(&chaindb).expect("tip read").expect("FAIL-LOUD: durable tip after refold");
+        assert_eq!(
+            epoch_of(tip_after_run2.slot.0),
+            1342,
+            "FAIL-LOUD: the refold must re-land the tip in epoch 1342"
+        );
+
+        let fp = capture_authority_fp(&chaindb, &epoch_accumulator, &reduced_checkpoint);
+        let trace = Ce4aRollbackTrace {
+            rollback_from_tip: tip_after_run1.slot.0,
+            rollback_target_slot: p.slot.0,
+            depth_blocks: depth,
+            nearest_snapshot_le_target,
+            wal_rollback_marker,
+            unsealed_1341_before_reseal,
+            resealed_epoch_after_refold: 1341,
+        };
+        drop(reduced_checkpoint);
+        drop(epoch_accumulator);
+        drop(wal);
+        drop(chaindb);
+        if std::env::var("CE4A_KEEP").is_err() {
+            let _ = std::fs::remove_dir_all(&dst);
+        }
+        Ok((uninterrupted_fp, fp, trace))
+    }
+
+    /// CE-4A.3-R2 (#13): a controlled within-k durable rollback + refold through the CE-4A production loop is
+    /// byte-identical to the uninterrupted run on the self-derived authority fingerprint. The rollback uses
+    /// ONLY the production primitives (admit_rollback k-guard + apply_chain_event = materialize +
+    /// commit_rollback + WalEntry::RollBack), then the NORMAL reconcile path refolds the SAME canonical
+    /// blocks. Green here => CE-4A.3 is complete (restart-only #12 + rollback/refold #13). A hard stop =>
+    /// a real gap (a sealed-fix decision, like CE-4A.3-R1) — NEVER patched inside #13.
+    #[tokio::test]
+    #[ignore = "CE-4A.3-R2 rollback/refold: a controlled within-k durable rollback + refold == uninterrupted run, self-derived authority fingerprint (env S5_SEED_STORES / CE3D_CORPUS / CE3D_WORK); SLOW ~hours"]
+    async fn ce4a_3_r2_rollback_refold_equivalence() {
+        let seed = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
+        let corpus = env_path("CE3D_CORPUS", "/home/ts/.cardano-ce3d-extract/corpus_blocks");
+        let work = env_path("CE3D_WORK", "/home/ts/.cardano-ce3d-extract/harness-work-s5");
+
+        // INDEPENDENT uninterrupted reference (a SEPARATE fixture folded to 1342 — the #12 uninterrupted
+        // path). A DETERMINISM cross-check against the in-drive uninterrupted fingerprint. Env-gated
+        // (CE4A_R2_INDEPENDENT_REF) — the in-drive uninterrupted (run 1 on the same fixture, before the
+        // rollback) is the PRIMARY same-fixture control; the independent ref roughly doubles wall-clock.
+        let uninterrupted_ref = if std::env::var("CE4A_R2_INDEPENDENT_REF").is_ok() {
+            Some(
+                drive_restart_proof(&seed, &corpus, &work, "r2-uninterrupted", false)
+                    .await
+                    .expect("FAIL-LOUD: the independent uninterrupted reference run must complete"),
+            )
+        } else {
+            None
+        };
+        // Controlled within-k rollback + refold through the production loop. Returns BOTH the in-drive
+        // uninterrupted fingerprint (run 1's result on the SAME fixture, captured BEFORE the rollback — the
+        // same-fixture control) AND the rolled-back+refolded fingerprint.
+        let (uninterrupted, rolled_back, trace) =
+            match drive_rollback_proof(&seed, &corpus, &work, "r2-rollback").await {
+                Ok(v) => v,
+                Err(finding) => panic!(
+                    "FAIL-LOUD — first-class finding (NOT to be patched around; this is the sealed-fix \
+                     decision): {finding}"
+                ),
+            };
+
+        // ---- evidence bundle (written BEFORE the asserts) — carries the ratified proof condition (§1a) ----
+        let fp_json = |fp: &Ce4aAuthorityFp| {
+            serde_json::json!({
+                "final_tip": fp.final_tip,
+                "acc_hash": hex32(&fp.acc_hash),
+                "checkpoint_commitment": hex32(&fp.checkpoint_commitment),
+                "leadership_hashes": fp.leadership_hashes.iter()
+                    .map(|(e, h)| (e.to_string(), hex32(h))).collect::<std::collections::BTreeMap<_, _>>(),
+                "promotion_certified": fp.promotion_certified.iter()
+                    .map(|(e, b)| (e.to_string(), *b)).collect::<std::collections::BTreeMap<_, _>>(),
+                "forbidden_paths_clean": fp.forbidden_paths_clean,
+            })
+        };
+        let bundle = serde_json::json!({
+            "slice": "CE-4A.3-R2 (#13, rollback/refold)",
+            "claim": "a controlled within-k durable rollback + refold through the CE-4A production loop is replay-equivalent to the uninterrupted run",
+            // ratified proof condition (§1a) — the honest mechanism, not a natural fork-switch.
+            "rollback_trigger": "controlled_commit_rollback_to_canonical_within_k_point",
+            "natural_fork_switch": false,
+            "same_block_refold": true,
+            "production_commit_rollback_used": true,
+            "production_admit_rollback_used": true,
+            "reset_and_refold_used": true,
+            // CE-4A.3 #13 option (a) — the controlled rollback commits BEFORE the refold, and the refold's
+            // reseal goes through the PRODUCTION ResetAndRefold (not a manual seal / WAL edit); the CE-4A
+            // two-call harness's startup recovery is made consistent by that reseal, not skipped or faked.
+            "rollback_committed_before_refold": true,
+            "startup_recovery_between_rollback_and_refold": false,
+            "run2_started_after_reset_and_refold": true,
+            "resealed_epoch_after_refold": trace.resealed_epoch_after_refold,
+            "epoch_1341_unsealed_before_reseal": trace.unsealed_1341_before_reseal,
+            "recovery_epoch_unsealed_avoided_by": "production_reset_and_refold_not_manual_seal",
+            "rollback_from_tip": trace.rollback_from_tip,
+            "rollback_target_slot": trace.rollback_target_slot,
+            "rollback_target_epoch": epoch_of(trace.rollback_target_slot),
+            "depth_blocks": trace.depth_blocks,
+            "nearest_snapshot_le_target": trace.nearest_snapshot_le_target,
+            "wal_rollback_marker": trace.wal_rollback_marker,
+            "uninterrupted": fp_json(&uninterrupted),
+            "uninterrupted_independent_ref": uninterrupted_ref.as_ref().map(|f| fp_json(f)),
+            "rolled_back": fp_json(&rolled_back),
+        });
+        let bundle_str = serde_json::to_string_pretty(&bundle).expect("serialize evidence bundle");
+        eprintln!("\n===== CE-4A.3-R2 ROLLBACK/REFOLD EVIDENCE =====\n{bundle_str}\n===============================================");
+        let out = env_path("CE4A3_R2_EVIDENCE_OUT", "/home/ts/.cardano-ce3d-extract/ce4a-3-r2-evidence.json");
+        std::fs::write(&out, &bundle_str)
+            .unwrap_or_else(|e| panic!("write evidence bundle {}: {e:?}", out.display()));
+
+        // ---- HARD ASSERTS: rolled-back+refolded == uninterrupted on the self-derived authority fingerprint ----
+        assert_eq!(rolled_back.final_tip, uninterrupted.final_tip, "FAIL-LOUD: same final selected tip");
+        assert_eq!(rolled_back.acc_hash, uninterrupted.acc_hash, "FAIL-LOUD: same accumulator canonical hash");
+        assert_eq!(
+            rolled_back.checkpoint_commitment, uninterrupted.checkpoint_commitment,
+            "FAIL-LOUD: same reduced checkpoint commitment"
+        );
+        assert_eq!(
+            rolled_back.leadership_hashes, uninterrupted.leadership_hashes,
+            "FAIL-LOUD: same frozen leadership hashes"
+        );
+        assert_eq!(
+            rolled_back.promotion_certified, uninterrupted.promotion_certified,
+            "FAIL-LOUD: same promotion-certified authority availability"
+        );
+        assert!(
+            rolled_back.forbidden_paths_clean && uninterrupted.forbidden_paths_clean,
+            "FAIL-LOUD: forbidden_paths must be false (clean) on both runs"
+        );
+        // the rollback genuinely went through the production primitives (ratified §1a).
+        assert!(trace.wal_rollback_marker, "FAIL-LOUD: a real WalEntry::RollBack marker must be durable");
+        assert!(trace.depth_blocks <= 432, "FAIL-LOUD: the rollback depth must be within k=432 blocks");
+        // DETERMINISM cross-check (only when the independent reference ran): the in-drive uninterrupted (run
+        // 1 on the rollback fixture) is byte-identical to the INDEPENDENT uninterrupted reference (a separate
+        // fixture). Proves the in-drive uninterrupted is a legitimate reference, not a same-fixture artifact.
+        if let Some(ref_fp) = uninterrupted_ref.as_ref() {
+            assert_eq!(
+                uninterrupted.acc_hash, ref_fp.acc_hash,
+                "FAIL-LOUD: in-drive uninterrupted acc_hash == independent reference (determinism)"
+            );
+            assert_eq!(
+                uninterrupted.checkpoint_commitment, ref_fp.checkpoint_commitment,
+                "FAIL-LOUD: in-drive uninterrupted checkpoint == independent reference (determinism)"
+            );
+            assert_eq!(
+                uninterrupted.leadership_hashes, ref_fp.leadership_hashes,
+                "FAIL-LOUD: in-drive uninterrupted leadership == independent reference (determinism)"
+            );
+            assert_eq!(
+                uninterrupted.final_tip, ref_fp.final_tip,
+                "FAIL-LOUD: in-drive uninterrupted tip == independent reference (determinism)"
+            );
+        }
+        // sanity: the run genuinely crossed to 1342 and sealed frozen leadership 1342 AND 1343.
+        assert!(
+            uninterrupted.leadership_hashes.contains_key(&1342)
+                && uninterrupted.leadership_hashes.contains_key(&1343),
+            "FAIL-LOUD: the run must seal frozen leadership 1342 AND 1343"
+        );
+        assert_eq!(epoch_of(uninterrupted.final_tip), 1342, "FAIL-LOUD: the run must land the durable tip in epoch 1342");
     }
 
     /// CE-4A.3-R1 DIAGNOSTIC (step 3): PROVE the v5 fixture's seed+2 (1340) durable eview activation record

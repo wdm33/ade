@@ -58,53 +58,63 @@ write-side superseding marker — the `WalEntry::RollBack` already IS the semant
 
 ---
 
-## 4. The required rule (position-aware, NOT "latest rollback slot"-aware)
+## 4. The required rule (position-aware + EPOCH-keyed)
 
-> An eview activation record is invalid if a later `RollBack` entry rolls the selected chain back below that
-> activation record's `transition_point`.
+> **CORRECTION (found during the #13 rerun — the first slot-based impl did NOT unblock it).** An eview
+> activation record's `transition_point` is the FREEZE source slot (`frozen.source_slot`, an EARLIER
+> boundary — where the leadership was frozen, `activation_record_for` sets `transition_point =
+> view.source_point`), NOT the boundary INTO `target_epoch`. So "rollback below `transition_point`" does NOT
+> test whether the rollback un-crossed the activation's epoch (for the 1342 record the freeze source is ≤ P).
+> The correct un-cross key is the **EPOCH**.
 
-Concretely:
+> An eview activation for `target_epoch = C` is invalid if a later `RollBack` rolls the selected chain back
+> into an epoch BELOW `C` (the boundary into `C` was un-crossed).
+
+Concretely (position + epoch aware):
 
 ```
-Activation(record at wal_pos=A, transition_slot=S) is superseded iff
-  exists RollBack at wal_pos=R where R > A  AND  rollback_target_slot < S
+Activation(record at wal_pos=A, target_epoch=C) is superseded iff
+  exists RollBack at wal_pos=R where R > A  AND  epoch_of(rollback_target_slot) < C
 ```
 
 A fresh post-rollback activation MUST still be valid:
 
 ```
-RollBack to P  ->  refold  ->  new Activation(record') AFTER the RollBack
-=> record' is valid if no LATER RollBack removes it
+RollBack into epoch 1341  ->  refold  ->  new Activation(1342) AFTER the RollBack
+=> record' is valid if no LATER RollBack un-crosses it
 ```
 
-That is why the resolver must be **position-aware**, not merely "latest rollback slot"-aware.
+That is why the resolver must be **position-aware** (a fresh re-activation after the rollback survives) AND
+**epoch-keyed** (`epoch_of(rollback_target) < target_epoch`, not a `transition_point` slot compare).
 
-### Durable-tip sanity (final selected-chain check)
+### Durable-tip-epoch sanity (final selected-chain check)
 
-Even with rollback-aware scanning, add a final check on the selected activation:
+Even with rollback-aware scanning, the finally selected activation's `target_epoch` MUST be on the recovered
+selected chain:
 
 ```
-selected activation.transition_point.slot <= durable_tip.slot
+selected activation.target_epoch <= epoch_of(durable_tip)
 ```
 
-If an activation points ABOVE the recovered durable tip -> terminal structured failure (a new
-`EpochViewActivationError` variant) or no active activation. Do NOT silently select it. Do NOT infer
-selected-chain validity from `target_epoch` alone.
+A future-epoch activation with no rollback explanation -> terminal structured
+`EpochViewActivationError::ActivationAboveDurableTip { target_epoch, durable_tip_epoch }`. Do NOT silently
+select it. Do NOT infer selected-chain validity from `target_epoch` alone (the tip epoch is the bound).
 
 ---
 
 ## 5. Required implementation
 
-- `resolve_activation_record(entries)` scans the WAL **in order**, tracks activation records with their WAL
-  position; on a later `RollBack(target)` it invalidates prior activations whose `transition_point.slot >
-  target.slot`; an activation becomes a candidate if not superseded by a later rollback; after the scan it
-  chooses the highest valid `target_epoch` / latest valid activation as the current authority. Signature
-  unchanged (`&[WalEntry] -> Result<Option<WalEntry>, EpochViewActivationError>`); rollback-awareness is
-  additive (a WAL with no `RollBack` is byte-identical to today).
-- A tip-checked wrapper `resolve_active_activation_at_tip(entries, durable_tip_slot)` calls the resolver and
-  asserts `selected.transition_point.slot <= durable_tip_slot`, else a structured `ActivationAboveDurableTip`
-  terminal. The startup recovery caller (`node_lifecycle.rs:2393`) uses it (the durable tip is already read
-  there for `recovered_tip_epoch`).
+- `resolve_activation_record(entries)` stays the PURE conflict resolver (UNCHANGED from pre-R3) — a WAL with
+  no `RollBack` resolves byte-identically. The harness callers keep using it.
+- `resolve_active_activation_at_tip(entries, durable_tip_epoch, epoch_of_slot)` (the recovery caller uses it)
+  scans in WAL order, tracks positions; an activation for `target_epoch = C` is superseded iff a LATER
+  `RollBack` lands in an epoch `< C` (`epoch_of_slot(rollback_target) < C`); after the scan it selects the
+  highest valid `target_epoch`; then bounds it by `selected.target_epoch <= durable_tip_epoch` (else the
+  `ActivationAboveDurableTip` terminal). `epoch_of_slot` is derived from the caller's era schedule (extended
+  to the tip); `durable_tip_epoch = None` applies no bound.
+- The startup recovery caller (`node_lifecycle.rs`) builds the era schedule ONCE (extended to the tip),
+  derives `recovered_tip_epoch` + the `epoch_of_slot` closure from it, and passes both — so the resolver and
+  the R1 nonce-epoch derivation agree on the same selected-chain tip.
 - Do NOT infer selected-chain validity from `target_epoch` alone.
 
 ---

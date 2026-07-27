@@ -98,6 +98,11 @@ pub enum EpochViewActivationError {
     /// DC-EPOCH-18: the recovered bootstrap reward update is bound to a different seed epoch than the
     /// authority being derived ⇒ terminal halt.
     BootstrapRewardUpdateEpochMismatch { bound: EpochNo, seed: EpochNo },
+    /// CE-4A.3-R3 (DC-EPOCH-06): the resolved active activation's `target_epoch` is ABOVE the recovered
+    /// durable tip's epoch — an activation for a future epoch the selected chain has not (re-)reached.
+    /// Terminal; NEVER a silent select. (Rollback-aware resolution should already drop a rolled-back
+    /// activation; this is the final selected-chain bound against `target_epoch`-only inference.)
+    ActivationAboveDurableTip { target_epoch: u64, durable_tip_epoch: u64 },
 }
 
 /// EPOCH-CONTINUITY-ACTIVATION ECA-3 (DC-EPOCH-14, criterion #9): why an authoritative decision is
@@ -494,9 +499,12 @@ pub fn recover_active_view(
 pub fn resolve_activation_record(
     entries: &[WalEntry],
 ) -> Result<Option<WalEntry>, EpochViewActivationError> {
-    // Fold by target epoch (NOT by position), so a same-epoch conflict is surfaced
-    // regardless of interleaving with other-epoch records -- the fail-closed property does
-    // not rely on the caller's ordering. Deterministic (BTreeMap, keyed by EpochNo).
+    // Fold by target epoch (NOT by position): repeated records for the same target epoch are idempotent
+    // iff byte-identical, else a TERMINAL conflict; the active view is the LATEST (max target epoch)
+    // activation. Deterministic (BTreeMap, keyed by EpochNo). This pure resolver is UNCHANGED from pre-R3;
+    // rollback/tip awareness lives in `resolve_active_activation_at_tip` (the recovery caller uses it),
+    // because the un-cross test is keyed by EPOCH, not by the record's `transition_point` -- which is the
+    // FREEZE source slot (`frozen.source_slot`, an EARLIER boundary), not the boundary INTO `target_epoch`.
     let mut by_epoch: BTreeMap<EpochNo, &WalEntry> = BTreeMap::new();
     for entry in entries {
         let target_epoch = match entry {
@@ -518,9 +526,75 @@ pub fn resolve_activation_record(
             }
         }
     }
-    // The active view is the LATEST (max target epoch) activation; earlier epochs are
-    // superseded in deterministic epoch order.
+    // The active view is the LATEST (max target epoch) activation; earlier epochs supersede in order.
     Ok(by_epoch.into_iter().next_back().map(|(_, v)| v.clone()))
+}
+
+/// CE-4A.3-R3: the ACTIVE activation record on the recovered selected chain — rollback-aware AND
+/// tip-bounded, keyed by EPOCH (the correct un-cross test). An eview record's `transition_point` is the
+/// FREEZE source slot (`frozen.source_slot`, an earlier boundary), NOT the boundary INTO `target_epoch`, so
+/// a rollback that un-crosses `target_epoch` CANNOT be detected by a `transition_point` slot compare.
+/// Instead:
+///
+/// - **Rollback supersession (position + epoch aware):** an activation for `target_epoch = C` is superseded
+///   iff a LATER `RollBack` (higher WAL position) lands in an epoch `< C` (`epoch_of(rollback_target) < C`)
+///   — the boundary into `C` was rolled back. A fresh re-activation appended AFTER every such rollback stays
+///   valid (position-aware).
+/// - **Durable-tip-epoch bound:** the finally selected activation's `target_epoch` MUST be `<= durable tip
+///   epoch`. A future-epoch record with no rollback explanation is a structured
+///   [`EpochViewActivationError::ActivationAboveDurableTip`] terminal — NEVER a silent select; selected-chain
+///   validity is NEVER inferred from `target_epoch` alone.
+///
+/// `durable_tip_epoch = None` applies no tip bound (rollback supersession still runs). `epoch_of_slot` maps
+/// a WAL rollback target slot to its protocol epoch (the caller's era schedule, extended to the tip).
+pub fn resolve_active_activation_at_tip(
+    entries: &[WalEntry],
+    durable_tip_epoch: Option<u64>,
+    epoch_of_slot: impl Fn(u64) -> u64,
+) -> Result<Option<WalEntry>, EpochViewActivationError> {
+    let mut by_epoch: BTreeMap<EpochNo, &WalEntry> = BTreeMap::new();
+    for (pos, entry) in entries.iter().enumerate() {
+        let target_epoch = match entry {
+            WalEntry::EpochConsensusViewActivated { target_epoch, .. } => *target_epoch,
+            _ => continue,
+        };
+        // Superseded iff a LATER rollback lands in an epoch below this activation's target epoch (the
+        // boundary into target_epoch was un-crossed). A fresh re-activation after every such rollback
+        // (higher position) is NOT superseded.
+        let superseded = entries[pos + 1..].iter().any(|e| match e {
+            WalEntry::RollBack { to_point, .. } => epoch_of_slot(to_point.slot.0) < target_epoch.0,
+            _ => false,
+        });
+        if superseded {
+            continue;
+        }
+        match by_epoch.get(&target_epoch) {
+            Some(existing) => match activation_replay_outcome(existing, entry) {
+                Some(ActivationReplayOutcome::Conflict) => {
+                    return Err(EpochViewActivationError::EpochViewActivationConflict)
+                }
+                Some(ActivationReplayOutcome::Idempotent) | None => {}
+            },
+            None => {
+                by_epoch.insert(target_epoch, entry);
+            }
+        }
+    }
+    let selected = by_epoch.into_iter().next_back().map(|(_, v)| v.clone());
+    // Durable-tip-epoch bound: the selected activation must be on the recovered selected chain.
+    if let (
+        Some(WalEntry::EpochConsensusViewActivated { target_epoch, .. }),
+        Some(tip_epoch),
+    ) = (selected.as_ref(), durable_tip_epoch)
+    {
+        if target_epoch.0 > tip_epoch {
+            return Err(EpochViewActivationError::ActivationAboveDurableTip {
+                target_epoch: target_epoch.0,
+                durable_tip_epoch: tip_epoch,
+            });
+        }
+    }
+    Ok(selected)
 }
 
 #[cfg(test)]
@@ -935,6 +1009,161 @@ mod tests {
         assert_eq!(
             resolve_activation_record(&[sample_admit(), record_with(577, 0xe5)]),
             Ok(Some(record_with(577, 0xe5)))
+        );
+    }
+
+    // ---- CE-4A.3-R3: rollback-aware eview activation resolution ----
+
+    // record_with with a caller-chosen transition_point slot (the FREEZE source; supersession is by EPOCH,
+    // via `test_epoch_of`, NOT by this slot -- see resolve_active_activation_at_tip).
+    fn record_at(epoch: u64, view_hash: u8, transition_slot: u64) -> WalEntry {
+        match record_with(epoch, view_hash) {
+            WalEntry::EpochConsensusViewActivated {
+                target_epoch,
+                network_magic,
+                era,
+                source_checkpoint_commitment,
+                snapshot_phase,
+                nonce_commitment,
+                stake_view_canonical_hash,
+                view_canonical_hash,
+                ..
+            } => WalEntry::EpochConsensusViewActivated {
+                target_epoch,
+                network_magic,
+                era,
+                transition_point: Point { slot: SlotNo(transition_slot), hash: Hash32([0xaa; 32]) },
+                source_checkpoint_commitment,
+                snapshot_phase,
+                nonce_commitment,
+                stake_view_canonical_hash,
+                view_canonical_hash,
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    fn rollback_to(target_slot: u64) -> WalEntry {
+        let rp = |s: u64| ade_ledger::wal::event::RollbackPoint {
+            slot: SlotNo(s),
+            hash: Hash32([0x99; 32]),
+            block_no: ade_types::BlockNo(0),
+        };
+        WalEntry::RollBack {
+            to_point: rp(target_slot),
+            reason: ade_ledger::wal::event::RollbackReason::PeerRollBackward,
+            prior_tip: rp(target_slot + 1_000),
+            selected_tip: rp(target_slot),
+        }
+    }
+
+    // Maps the test slots to protocol epochs (boundaries: 1340->1341 @ 115862416, 1341->1342 @ 115948834).
+    // This is the `epoch_of_slot` the recovery caller derives from its era schedule.
+    fn test_epoch_of(slot: u64) -> u64 {
+        if slot >= 115_948_834 {
+            1342
+        } else if slot >= 115_862_416 {
+            1341
+        } else {
+            1340
+        }
+    }
+
+    // R3 test 1: an activation whose epoch a later rollback UN-crossed is superseded (not selected).
+    #[test]
+    fn r3_activation_above_rollback_is_superseded() {
+        // Activation(1342) then RollBack(to P @ 115942640, epoch 1341): epoch_of(P)=1341 < 1342 -> the
+        // boundary INTO 1342 was un-crossed -> the 1342 activation is superseded -> nothing selected.
+        let entries = vec![record_at(1342, 0xa1, 115_948_834), rollback_to(115_942_640)];
+        assert_eq!(
+            resolve_active_activation_at_tip(&entries, Some(1341), test_epoch_of),
+            Ok(None)
+        );
+    }
+
+    // R3 test 2: an activation whose epoch the rollback did NOT un-cross survives.
+    #[test]
+    fn r3_activation_below_rollback_survives() {
+        // Activation(1341) then RollBack(to P @ 115942640, epoch 1341): epoch_of(P)=1341, NOT < 1341 ->
+        // not superseded -> 1341 remains selected (and 1341 <= tip epoch 1341).
+        let entries = vec![record_at(1341, 0x41, 115_862_416), rollback_to(115_942_640)];
+        assert_eq!(
+            resolve_active_activation_at_tip(&entries, Some(1341), test_epoch_of),
+            Ok(Some(record_at(1341, 0x41, 115_862_416)))
+        );
+    }
+
+    // R3 test 3: a FRESH activation appended AFTER the rollback survives (position-aware), even when
+    // byte-different from the superseded pre-rollback record of the same epoch (NOT a conflict).
+    #[test]
+    fn r3_fresh_activation_after_rollback_survives() {
+        let entries = vec![
+            record_at(1342, 0xa1, 115_948_834), // old 1342 (pre-rollback)
+            rollback_to(115_942_640),           // rollback to epoch 1341
+            record_at(1342, 0xb2, 115_948_834), // fresh 1342 (post-rollback, byte-different)
+        ];
+        // old 1342 superseded (later rollback in epoch 1341 < 1342); fresh 1342 has NO later rollback ->
+        // selected. The superseded old record is dropped BEFORE the same-epoch conflict check. Tip epoch
+        // 1342 (refolded back to 1342): the selected 1342 <= 1342.
+        assert_eq!(
+            resolve_active_activation_at_tip(&entries, Some(1342), test_epoch_of),
+            Ok(Some(record_at(1342, 0xb2, 115_948_834)))
+        );
+    }
+
+    // R3 test 4: durable-tip-epoch sanity -- a future-epoch activation with no rollback explanation is a
+    // structured terminal (never a silent select).
+    #[test]
+    fn r3_activation_above_durable_tip_is_terminal() {
+        let entries = vec![record_at(1342, 0xa1, 115_948_834)]; // no rollback
+        // tip epoch 1341, selected 1342 > 1341 -> terminal.
+        assert_eq!(
+            resolve_active_activation_at_tip(&entries, Some(1341), test_epoch_of),
+            Err(EpochViewActivationError::ActivationAboveDurableTip {
+                target_epoch: 1342,
+                durable_tip_epoch: 1341,
+            })
+        );
+        // tip epoch 1342 -> selected 1342 <= 1342 -> ok.
+        assert_eq!(
+            resolve_active_activation_at_tip(&entries, Some(1342), test_epoch_of),
+            Ok(Some(record_at(1342, 0xa1, 115_948_834)))
+        );
+        // no durable tip epoch -> no tip bound (rollback supersession still applies).
+        assert_eq!(
+            resolve_active_activation_at_tip(&entries, None, test_epoch_of),
+            Ok(Some(record_at(1342, 0xa1, 115_948_834)))
+        );
+    }
+
+    // R3 test 5 (the #13 regression): the rolled-back 1342 record no longer wins over the 1341 tip, so the
+    // recovery targets 1341 (matching the rolled-back tip) instead of tripping RecoveryNonceEpochMismatch.
+    #[test]
+    fn r3_rolled_back_1342_not_selected_over_1341_tip() {
+        let entries = vec![
+            record_at(1341, 0x41, 115_862_416), // 1340->1341 boundary
+            record_at(1342, 0x42, 115_948_834), // 1341->1342 boundary
+            rollback_to(115_942_640),           // rollback to P (epoch 1341)
+        ];
+        // epoch-aware: 1342 superseded (rollback epoch 1341 < 1342); 1341 survives. Tip epoch 1341: the
+        // selected 1341 <= 1341 -> OK. (Pre-R3 this returned the stale 1342 -> recovery targeted 1342 while
+        // the tip was 1341 -> RecoveryNonceEpochMismatch. R3 selects 1341, matching the rolled-back tip.)
+        assert_eq!(
+            resolve_active_activation_at_tip(&entries, Some(1341), test_epoch_of),
+            Ok(Some(record_at(1341, 0x41, 115_862_416)))
+        );
+    }
+
+    // R3 test 6 (user-required boundary): a rollback WITHIN the activation's own epoch does NOT invalidate
+    // it -- only a rollback into a LOWER epoch un-crosses the boundary into C.
+    #[test]
+    fn r3_rollback_within_epoch_does_not_invalidate() {
+        // Activation(1342) then RollBack(to a point still IN epoch 1342, slot 115960000): epoch_of=1342,
+        // NOT < 1342 -> 1342 is NOT superseded. Tip epoch 1342: 1342 <= 1342 -> selected.
+        let entries = vec![record_at(1342, 0xa1, 115_948_834), rollback_to(115_960_000)];
+        assert_eq!(
+            resolve_active_activation_at_tip(&entries, Some(1342), test_epoch_of),
+            Ok(Some(record_at(1342, 0xa1, 115_948_834)))
         );
     }
 
