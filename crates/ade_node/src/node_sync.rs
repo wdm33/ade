@@ -554,6 +554,43 @@ impl SyncOutcome {
     }
 }
 
+/// LIVE-1b: capture a recovery checkpoint at most once per this many slots (slot-based cadence, NOT
+/// per-pass) -- so a live follow does not write a ~600 MB full-ledger snapshot per tip block. ALSO the
+/// worst-case warm-start / rollback forward-replay distance from the nearest retained snapshot. ~2000
+/// preview slots ~= 100 blocks (~a few seconds of replay).
+const RECOVERY_CHECKPOINT_CADENCE_SLOTS: u64 = 2000;
+
+/// LIVE-1b: how many of the LATEST recovery checkpoints to retain, beyond the oldest (bootstrap-anchor)
+/// snapshot. `RETAIN_LATEST * CADENCE_SLOTS` must span the rollback bound `k` (in slots) so any k-deep
+/// rollback finds a retained snapshot `<= target` (preview k=432 blocks ~= 8640 slots; 8*2000=16000 >= that
+/// with margin). The oldest snapshot is ALSO kept as an always-`<=` `nearest_le` fallback, so `materialize`
+/// never regresses to `RollbackTooDeep` for a deeper (e.g. mainnet) target -- it just replays further from
+/// the anchor.
+const RECOVERY_CHECKPOINT_RETAIN_LATEST: usize = 8;
+
+/// LIVE-1b: bound the durable recovery-checkpoint set (chain.db `SNAPSHOTS_BY_SLOT`). Keep the OLDEST
+/// snapshot (the bootstrap anchor) plus the LATEST `RECOVERY_CHECKPOINT_RETAIN_LATEST`; `delete_snapshot`
+/// the middle. Best-effort (a delete error is non-fatal -- the checkpoint set is a replay ACCELERATOR, not
+/// admission authority; the WAL is). NO block / ledger / chain_dep / WAL mutation -- pure GREEN eviction the
+/// PHASE4-N-K sketch deferred. Without this the E4 capture below accumulates ~600 MB per cadence-tick
+/// forever -> ENOSPC (LIVE-1 sustained-follow failure).
+fn prune_recovery_checkpoints<D: SnapshotStore + ?Sized>(chaindb: &D) {
+    let Ok(slots) = chaindb.list_snapshot_slots() else {
+        return;
+    };
+    // slots is ascending (SnapshotStore contract). Keep [0] (oldest/anchor) + the last RETAIN_LATEST.
+    if slots.len() <= RECOVERY_CHECKPOINT_RETAIN_LATEST + 1 {
+        return;
+    }
+    let keep_from = slots.len() - RECOVERY_CHECKPOINT_RETAIN_LATEST;
+    for (i, slot) in slots.iter().enumerate() {
+        if i == 0 || i >= keep_from {
+            continue;
+        }
+        let _ = chaindb.delete_snapshot(*slot);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_node_sync<D>(
     source: &mut NodeBlockSource,
@@ -753,6 +790,9 @@ where
                 PersistentSnapshotCache::new(chaindb)
                     .capture(tip.slot, &state.receive.ledger, &state.receive.chain_dep)
                     .map_err(|e| NodeSyncError::Capture(format!("{e:?}")))?;
+                // LIVE-1b: the boundary checkpoint stays UNCONDITIONAL (once per epoch; the boundary
+                // chain-dep tick must be durable) but is pruned into the bounded retained set.
+                prune_recovery_checkpoints(chaindb);
             }
             return Ok(SyncOutcome::BoundaryPromoted {
                 from_epoch,
@@ -763,13 +803,30 @@ where
         }
     }
 
-    // E4: capture the recovery checkpoint AT the selected tip, via the same
-    // PersistentSnapshotCache path warm-start recovery reads. The captured
-    // state is the post-apply ledger + chain_dep.
+    // E4: capture the recovery checkpoint at the selected tip, via the same PersistentSnapshotCache path
+    // warm-start recovery reads. LIVE-1b: CADENCE-GATED (was per-pass) so a live follow does not write a
+    // ~600 MB full-ledger snapshot per tip block; then PRUNED so the durable set stays bounded. The WAL is
+    // the admission authority -- a sparser checkpoint set only lengthens the warm-start/rollback forward
+    // replay over the durable ChainDb (unchanged), and R4c (5e83aaaa) makes that replay's candidate-nonce
+    // freeze correct. Without the gate+prune, chain.db grows unboundedly -> ENOSPC.
     if let Some(tip) = &selected_tip {
-        PersistentSnapshotCache::new(chaindb)
-            .capture(tip.slot, &state.receive.ledger, &state.receive.chain_dep)
-            .map_err(|e| NodeSyncError::Capture(format!("{e:?}")))?;
+        let last_snapshot = chaindb
+            .list_snapshot_slots()
+            .ok()
+            .and_then(|v| v.last().copied());
+        // Slot-based cadence: capture when there is NO snapshot yet (so warm-start always has one to
+        // materialize from) OR the tip has advanced >= CADENCE_SLOTS past the newest snapshot. This bounds
+        // the write rate (no per-block ~600 MB snapshot) while guaranteeing a recent recovery checkpoint.
+        let should_capture = match last_snapshot {
+            None => true,
+            Some(last) => tip.slot.0 >= last.0.saturating_add(RECOVERY_CHECKPOINT_CADENCE_SLOTS),
+        };
+        if should_capture {
+            PersistentSnapshotCache::new(chaindb)
+                .capture(tip.slot, &state.receive.ledger, &state.receive.chain_dep)
+                .map_err(|e| NodeSyncError::Capture(format!("{e:?}")))?;
+            prune_recovery_checkpoints(chaindb);
+        }
     }
 
     Ok(SyncOutcome::SourceEnded { selected_tip })
@@ -1933,6 +1990,42 @@ mod tests {
 
     fn block(b: u8) -> Vec<u8> {
         vec![b; 4]
+    }
+
+    /// LIVE-1b: the recovery-checkpoint retention keeps the OLDEST (bootstrap-anchor) snapshot plus the
+    /// LATEST `RECOVERY_CHECKPOINT_RETAIN_LATEST`, prunes the middle, and is idempotent — so chain.db's
+    /// snapshot set stays bounded while every k-deep rollback / warm-start target still finds a snapshot
+    /// `<= target` (the oldest is an always-`<=` fallback; the latest-M span k).
+    #[test]
+    fn prune_recovery_checkpoints_keeps_oldest_plus_latest_m() {
+        use ade_runtime::chaindb::{InMemoryChainDb, SnapshotStore};
+        let db = InMemoryChainDb::new();
+        for i in 1..=20u64 {
+            db.put_snapshot(SlotNo(i * 100), &[i as u8]).expect("put");
+        }
+        prune_recovery_checkpoints(&db);
+        let kept = db.list_snapshot_slots().expect("list");
+        assert_eq!(
+            kept.len(),
+            1 + RECOVERY_CHECKPOINT_RETAIN_LATEST,
+            "keep oldest + latest M"
+        );
+        assert_eq!(kept.first(), Some(&SlotNo(100)), "oldest (bootstrap anchor) retained");
+        assert_eq!(kept.last(), Some(&SlotNo(2000)), "latest retained");
+        // the latest-M window is the newest RETAIN_LATEST slots; everything between (except the oldest)
+        // is pruned.
+        let first_latest = 2000 - (RECOVERY_CHECKPOINT_RETAIN_LATEST as u64 - 1) * 100;
+        assert!(kept.contains(&SlotNo(first_latest)), "newest RETAIN_LATEST retained");
+        assert!(
+            !kept.contains(&SlotNo(first_latest - 100)),
+            "the slot just below the latest-M window is pruned"
+        );
+        // idempotent: pruning an already-bounded set is a no-op.
+        prune_recovery_checkpoints(&db);
+        assert_eq!(
+            db.list_snapshot_slots().expect("list").len(),
+            1 + RECOVERY_CHECKPOINT_RETAIN_LATEST
+        );
     }
 
     fn tip_update(peer: &str) -> AdmissionPeerEvent {
