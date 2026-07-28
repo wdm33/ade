@@ -207,7 +207,7 @@ pub fn replay_from_anchor(
 ///
 /// Rollback-to-anchor (an empty active stack at the target) is out of
 /// scope for AI-S1 and fails closed (`RollbackTargetNotInChain`).
-pub(crate) fn compute_superseded(entries: &[WalEntry]) -> Result<Vec<bool>, WalError> {
+pub fn compute_superseded(entries: &[WalEntry]) -> Result<Vec<bool>, WalError> {
     let mut superseded = vec![false; entries.len()];
     // Stack of active (effective) AdmitBlock (entry_index, slot).
     let mut active: Vec<(usize, u64)> = Vec::new();

@@ -1,15 +1,28 @@
 # CE-4A.3-R4 — warm restart after rollback-before-refold handles pending-refold state safely
 
-> **Status: OPEN + PARKED (implementation reverted, NOT committed). HARDENING — NOT a #13/CE-4A.3 blocker.**
-> Surfaced by the CE-4A.3-R2 (#13) rollback+refold proof after R3 landed; a warm-RESTART concern, separate
-> from #13's CONTINUOUS rollback+refold path. The R4 proof (`drive_rollback_then_restart_proof`) drove the
-> real warm-restart-after-rollback and surfaced a CHAIN of sub-gaps (§1a): R4a + R4b were fixed and
-> validated past their seams, but **R4c (a deeper VRF/nonce reconstruction gap) is still RED**, so R4 is
-> NOT end-to-end green. Per the invariant-slice rule (a sealed slice must be replay-verifiable end-to-end),
-> the R4 implementation MUST NOT land partially — fixes (a)+(b) are parked (off-repo patch, §1a), NOT
-> committed. **Return to R4c BEFORE any live / bounty failure-recovery certification** (a hard precondition
-> there; NOT a precondition for CE-4B's longer continuous-operation proof, which may NOT claim crash-window
-> recovery closure).
+> **Status: GREEN / COMPLETE (R4a + R4b + R4c land together; e2e byte-identical).** Surfaced by the
+> CE-4A.3-R2 (#13) rollback+refold proof after R3 landed; a warm-RESTART concern, separate from #13's
+> CONTINUOUS rollback+refold path. The R4 proof (`drive_rollback_then_restart_proof` /
+> `ce4a_3_r4_warmstart_crash_window_equivalence`) drives the real warm-restart-after-rollback and closed a
+> CHAIN of three sub-gaps (§1a): R4a (block-bytes vs RollBack), R4b (reconcile-before-eview-recovery), and
+> **R4c (candidate-nonce over-track — now FIXED)**. The proof is GREEN: the post-crash warm-restart refolds
+> **byte-identical** to the uninterrupted run (acc_hash `02c016df…`, checkpoint `576591ce…`, final_tip
+> 115948834, leadership 1342=`014f96d3…`/1343=`d1ba2eb2…`, promotion-certified 1341/1342/1343;
+> `crash_window_state_proven: true`; `forbidden_paths_clean: true`). Warm-restart crash-window recovery is
+> now a claimable failure-recovery property (the live/bounty recovery precondition).
+>
+> **R4c root cause + fix (DC-EPOCH-16).** `warm_start_recovery` built its materialize-replay era-schedule
+> with `RSW=None`, which `header_validate` maps to `CANDIDATE_FREEZE_INERT = u64::MAX` — the Praos candidate
+> nonce NEVER freezes during the seed→tip replay. A rollback+warm-restart lands the durable tip mid-epoch,
+> PAST that epoch's candidate-freeze slot (`firstSlotNextEpoch − ceil(4k/f)`), so the candidate OVER-TRACKS
+> (includes blocks cardano excluded) → wrong `eta0(N+1)` → the NEXT boundary's header VRF fails closed
+> (`VrfCert`). The consistent (non-rollback) restart at the v5 tip is BEFORE the freeze slot, so it was
+> unaffected — which is why #12/#13/CE-4A/CE-4B stayed green and this only bit the rollback-mid-epoch case.
+> **Fix (scoped):** thread the venue `rsw` into `warm_start_recovery` so its replay freezes the candidate at
+> the SAME slot the live loop does (the loop's `recovered_node_schedule` already takes the `--network` RSW).
+> The production caller passes `rsw_for_cli(cli)`. **Deferred follow-up (documented, NOT this slice):**
+> persist the RSW/securityParam in the sidecar (v5→v6) so warm-start is fully self-describing (durable store,
+> not `--network`, as the sole replay authority) — a broad fixture/blast-radius change, filed separately.
 
 **Cluster:** LIVE-LEDGER-EPOCH-TRANSITION. **Related:** CE-4A.3-R1 (`7266f90c`, the frozen-recovery seam +
 `RecoveryEpochUnsealed`), CE-4A.3-R3 (rollback-aware eview resolution), CE-4A.3-R2/#13 (the proof that
@@ -61,18 +74,23 @@ proved rollback replay-equivalence behind `co_advance`, never through `warm_star
   recovery — no-op ForwardFold for a consistent warm-start, reseal for a pending one. VALIDATED: the rerun
   resealed 1341 and ran the post-restart refold (crash-window state `1341 unsealed at restart = true`).
 
-- **R4c (OPEN, RED — the blocker) — VRF/nonce reconstruction after warm-restart-after-rollback.** With
-  R4a+R4b, the refold's FIRST re-fed 1341 block (P+1 = 115942674) fails header validation:
-  `Pump(Receive(Validity(Header(VrfCert(VerificationFailed)))))`. The warm-restart-after-rollback
-  reconstructs a subtly-WRONG epoch nonce (eta0) / leader schedule for validating 1341 headers (a CONSISTENT
-  warm-start — #12 — reconstructs a valid authority; the rollback-pending reconstruction does not). This is
-  a DEEPER class than R4a/R4b (consensus-state reconstruction, not marker-honoring): it needs investigation
-  of how `warm_start_recovery` rebuilds `chain_dep.epoch_nonce` / the leader schedule from a rolled-back WAL
-  + a trimmed ChainDb + a nearest-snapshot forward-replay.
+- **R4c (FIXED) — candidate-nonce over-track in the warm-restart materialize replay (DC-EPOCH-16).** With
+  R4a+R4b, the refold admitted the mid-1341 blocks but failed header validation
+  (`Pump(Receive(Validity(Header(VrfCert(VerificationFailed)))))`) at the **1341→1342 boundary** — NOT at
+  P+1. The empirical split (`eta0(1341)` epoch-nonce equal; frozen(1341) view byte-identical to run 1; the
+  authority correctly promoted to 1341) ruled out the epoch nonce AND the leader schedule, and isolated the
+  fault to the **candidate** nonce: `warm_start_recovery`'s materialize schedule used `RSW=None`
+  (`CANDIDATE_FREEZE_INERT`), so the candidate never froze during the seed→tip replay and over-tracked past
+  1342's freeze slot → wrong `eta0(1342)` at the crossing. A CONSISTENT warm-start (#12) has its tip BEFORE
+  the freeze slot, so its candidate is trivially correct — the discriminator. **FIX:** thread the venue
+  `rsw` into `warm_start_recovery` (the SAME `--network` RSW the loop's `recovered_node_schedule` uses), so
+  the replay freezes the candidate at the correct slot. VALIDATED: the refold is byte-identical to the
+  uninterrupted run (see the Status evidence bundle). This was pre-diagnosed 13 days earlier
+  (`b4-warmstart-rsw`); the fix matches that note's mechanism.
 
-**Parked artifact:** the exact R4a/R4b fixes + the `drive_rollback_then_restart_proof` harness are saved
-off-repo at `~/.cardano-ce3d-extract/ce4a-3-r4-parked-fixes-ab-and-harness.patch` (NOT committed — R4 is not
-end-to-end green). The working tree is reverted. Resume R4c from that patch.
+**Landed together (this slice):** R4a (`compute_superseded` made `pub` + the warm-start block-bytes skip),
+R4b (reconcile-before-eview-recovery), R4c (the `rsw` thread), and the `drive_rollback_then_restart_proof`
+harness — all in ONE commit, since a sealed slice lands only when e2e green.
 
 ---
 

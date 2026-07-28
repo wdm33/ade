@@ -2520,7 +2520,7 @@ mod tests {
         // --- Phase 2: reopen + recover through the REAL recovery path. ---
         let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
         let wal = FileWalStore::open(&wal_dir).unwrap();
-        let recovered = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal, Some(&seal_sync_leadership(&chaindb, &chaindb_path)))
+        let recovered = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal, Some(&seal_sync_leadership(&chaindb, &chaindb_path)), None)
             .expect("warm-start recovers after sync");
 
         let recovered_tip = recovered.tip.expect("recovered a tip");
@@ -3107,7 +3107,7 @@ mod tests {
         // L3 warm-start recovery — it must recover the same tip.
         let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
         let wal = FileWalStore::open(&wal_dir).unwrap();
-        let recovered = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal, Some(&seal_sync_leadership(&chaindb, &chaindb_path)))
+        let recovered = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal, Some(&seal_sync_leadership(&chaindb, &chaindb_path)), None)
             .expect("warm-start recovers");
 
         assert_eq!(
@@ -3253,7 +3253,7 @@ mod tests {
         let chaindb =
             PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
         let wal2 = FileWalStore::open(&wal_dir).unwrap();
-        let warm = match crate::node_lifecycle::warm_start_recovery(&chaindb, &wal2, Some(&seal_sync_leadership(&chaindb, &chaindb_path))) {
+        let warm = match crate::node_lifecycle::warm_start_recovery(&chaindb, &wal2, Some(&seal_sync_leadership(&chaindb, &chaindb_path)), None) {
             Ok(rec) => Ok(rec.tip.map(|t| (t.slot, t.hash))),
             Err(e) => Err(format!("{e:?}")),
         };
@@ -3955,7 +3955,7 @@ mod tests {
         // forward-replays from the slot-0 snapshot over the durable WAL block.
         let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
         let wal = FileWalStore::open(&wal_dir).unwrap();
-        let state = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal, Some(&seal_sync_leadership(&chaindb, &chaindb_path)))
+        let state = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal, Some(&seal_sync_leadership(&chaindb, &chaindb_path)), None)
             .expect("warm-start forward-replays the forged tip");
         let tip = state.tip.expect("recovered a tip");
         assert_eq!(
@@ -4180,7 +4180,7 @@ mod tests {
         // if it recovers block 1, the C2 tip-successor durability boundary is clean.
         let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
         let wal = FileWalStore::open(&wal_dir).unwrap();
-        let state = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal, Some(&seal_sync_leadership(&chaindb, &chaindb_path)))
+        let state = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal, Some(&seal_sync_leadership(&chaindb, &chaindb_path)), None)
             .expect("warm-start forward-replays the tip-successor chain without ChainBreak");
         let tip = state.tip.expect("recovered a tip");
         assert_eq!(
@@ -4415,7 +4415,7 @@ mod tests {
         // extend-own-spine seams).
         let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
         let wal = FileWalStore::open(&wal_dir).unwrap();
-        let state = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal, Some(&seal_sync_leadership(&chaindb, &chaindb_path)))
+        let state = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal, Some(&seal_sync_leadership(&chaindb, &chaindb_path)), None)
             .expect("warm-start forward-replays the 3-block own spine without ChainBreak");
         let tip = state.tip.expect("recovered a tip");
         assert_eq!(
@@ -7383,7 +7383,7 @@ mod tests {
         let chaindb2 =
             PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
         let wal2 = FileWalStore::open(&wal_dir).unwrap();
-        let recovered = crate::node_lifecycle::warm_start_recovery(&chaindb2, &wal2, Some(&seal_sync_leadership(&chaindb2, &chaindb_path)))
+        let recovered = crate::node_lifecycle::warm_start_recovery(&chaindb2, &wal2, Some(&seal_sync_leadership(&chaindb2, &chaindb_path)), None)
             .expect("warm-start forward-replays the post-EOF chain without ChainBreak");
         let post_tip = ChainDbServedSource::new(&chaindb2).tip();
         let post_fp = ade_ledger::fingerprint::fingerprint(&recovered.ledger);
@@ -7533,7 +7533,7 @@ mod tests {
         let chaindb2 =
             PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
         let wal2 = FileWalStore::open(&wal_dir).unwrap();
-        let recovered = crate::node_lifecycle::warm_start_recovery(&chaindb2, &wal2, Some(&seal_sync_leadership(&chaindb2, &chaindb_path)))
+        let recovered = crate::node_lifecycle::warm_start_recovery(&chaindb2, &wal2, Some(&seal_sync_leadership(&chaindb2, &chaindb_path)), None)
             .expect("warm-start forward-replays the local-spine chain without ChainBreak");
         let post_tip = ChainDbServedSource::new(&chaindb2).tip();
         let post_fp = ade_ledger::fingerprint::fingerprint(&recovered.ledger);

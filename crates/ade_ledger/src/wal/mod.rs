@@ -27,5 +27,5 @@ pub use event::{
     decode_wal_entry, encode_wal_entry, BlockVerdictTag, RollbackPoint, RollbackReason, WalEntry,
     TAG_ADMIT_BLOCK, TAG_ROLLBACK, TAG_SEED_EPOCH_CONSENSUS_INPUTS_IMPORTED,
 };
-pub use replay::{replay_from_anchor, RecoveredBootstrapProvenance, ReplayOutcome};
+pub use replay::{compute_superseded, replay_from_anchor, RecoveredBootstrapProvenance, ReplayOutcome};
 pub use store_trait::WalStore;

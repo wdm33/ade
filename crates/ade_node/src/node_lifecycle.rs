@@ -601,7 +601,7 @@ async fn run_node_lifecycle_inner(
     };
     let state = match start {
         NodeStart::FirstRun => first_run_mithril_bootstrap(cli, &chaindb, &mut wal)?,
-        NodeStart::WarmStart => warm_start_recovery(&chaindb, &wal, warm_accumulator.as_ref())?,
+        NodeStart::WarmStart => warm_start_recovery(&chaindb, &wal, warm_accumulator.as_ref(), rsw_for_cli(cli))?,
     };
     drop(warm_accumulator);
 
@@ -2380,6 +2380,34 @@ pub async fn run_relay_loop_with_sched(
         ),
         None => crate::epoch_activation::ActiveEpochAuthority::seed(seed_view),
     };
+    // CE-4A.3-R4 (warm-start recovery ordering): reconcile the durable accumulator to the ChainDb tip via
+    // the PRODUCTION ResetAndRefold (`advance_ledger_state_to_durable_tip` -> `accumulator_recover_admit`,
+    // gated by `recovery_policy`) with a tip-extended schedule, BEFORE the eview recovery below — so recovery
+    // reads a RESEALED accumulator, not a rollback-pending / lagging one. A crash in the rollback->refold
+    // window leaves the tip epoch's frozen leadership unsealed; without this the eview recovery fails closed
+    // `RecoveryEpochUnsealed` before the loop's post-admit advance (`:2847`) could reseal it. No-op
+    // (ForwardFold) for a consistent warm-start -> byte-identical to the pre-R4 proven paths; fail-closed on
+    // an uncertified / inadmissible accumulator (the `recovery_policy` integrity exception) -> NEVER a reseal
+    // of a genuinely-corrupt store (the reconcile reseals ONLY from the durable ChainDb, the sole authority).
+    if let Some(acc) = epoch_accumulator {
+        let reconcile_sched = {
+            let mut s = era_schedule.clone();
+            if let Some(tip) = ChainDb::tip(chaindb).ok().flatten() {
+                s.extend_to_slot(tip.slot);
+            }
+            s
+        };
+        advance_ledger_state_to_durable_tip(
+            reduced_checkpoint,
+            Some(acc),
+            chaindb,
+            &reconcile_sched,
+            &recovery_policy,
+        )
+        .map_err(|e| {
+            NodeLifecycleError::RelaySync(format!("R4 warm-start reconcile-before-recovery: {e:?}"))
+        })?;
+    }
     // Phase 4 (ECA-4, DC-EPOCH-06 recovery exactness): BEFORE the loop, if a durable activation record
     // exists, recover the promoted authority from the VERIFIED record (re-derive via the SAME window
     // replay + reject-non-recomputable) — so a restart AFTER a promotion starts from the recorded N+1
@@ -3405,6 +3433,13 @@ pub(crate) fn warm_start_recovery(
     chaindb: &PersistentChainDb,
     wal: &FileWalStore,
     epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
+    // CE-4A.3-R4c (DC-EPOCH-16): the venue RSW (`ceil(4k/f)`) for the materialize replay's candidate-nonce
+    // freeze. The SAME value the live loop's `recovered_node_schedule` already supplies from `--network`, so
+    // the warm-start replay freezes the candidate IDENTICALLY to the loop. Without it the replay's freeze is
+    // inert (`RSW=None -> CANDIDATE_FREEZE_INERT`) and a warm-restart whose durable tip is PAST an epoch's
+    // candidate-freeze slot OVER-TRACKS the candidate -> wrong `eta0(N+1)` -> the next boundary's header VRF
+    // fails closed. `None` keeps the pre-R4c behavior (correct only when the tip is BEFORE the freeze slot).
+    rsw: Option<u32>,
 ) -> Result<BootstrapState, NodeLifecycleError> {
     // 1. W2 discovery: the independent anchor lineage(s) from the sidecar
     //    table key. Discovery ONLY — the verify chain below is the authority.
@@ -3432,12 +3467,24 @@ pub(crate) fn warm_start_recovery(
     let entries = wal
         .read_all()
         .map_err(|e| NodeLifecycleError::WarmStartWalReplay(format!("{e:?}")))?;
+    // CE-4A.3-R4: an AdmitBlock SUPERSEDED by a later `WalEntry::RollBack` (its block was trimmed from the
+    // ChainDb by the rollback's `commit_rollback`) is ABANDONED — `replay_from_anchor` skips it and does NOT
+    // require its bytes (its own `compute_superseded` pre-pass). The pre-load below must apply the SAME
+    // supersession, else a legitimate warm-restart-after-rollback fails closed `DurableBlockBytesMissing` on
+    // a rolled-back block. A NON-superseded AdmitBlock with absent bytes is still corrupt durable state ->
+    // fail closed (the invariant is preserved for the live / no-rollback path).
+    let superseded = ade_ledger::wal::compute_superseded(&entries)
+        .map_err(|e| NodeLifecycleError::WarmStartWalReplay(format!("{e:?}")))?;
     let mut block_bytes: BTreeMap<Hash32, Vec<u8>> = BTreeMap::new();
     for (entry_index, entry) in entries.iter().enumerate() {
         // Only `AdmitBlock` entries reference preserved block bytes;
         // `SeedEpochConsensusInputsImported` (A3a) entries carry no block
         // hash and are skipped.
         if let ade_ledger::wal::WalEntry::AdmitBlock { block_hash, .. } = entry {
+            // CE-4A.3-R4: a rollback-superseded AdmitBlock's bytes are not required (it is abandoned).
+            if superseded[entry_index] {
+                continue;
+            }
             // DURABLE-ADMISSION-BYTES: a WAL `AdmitBlock` whose bytes are absent
             // from the ChainDb is corrupted durable state, NOT block absence.
             // Fail closed — never the prior silent skip (which masked the
@@ -3500,15 +3547,17 @@ pub(crate) fn warm_start_recovery(
     // 432000, ...), NOT re-derived as epoch_no * a hardcoded length. This is the
     // SAME geometry the import used, so forward-replay is venue-correct and
     // replay-equivalent (the recovered store, not a restart CLI, is authority).
-    // RSW None: the durable sidecar carries no k (DC-CINPUT-05 sidecar authority),
-    // so the warm-start candidate freeze is inert until B4 persists it. The live
-    // forge-OFF relay (recovered_node_schedule) supplies it from --network for the
-    // within-run gate.
+    // CE-4A.3-R4c (DC-EPOCH-16): the materialize replay below re-validates the durable blocks up to the
+    // (reconciled) tip, which may be PAST an epoch's candidate-freeze slot (a rollback+warm-restart lands the
+    // tip mid-epoch, after the freeze). The replay MUST freeze the candidate nonce at the SAME slot the live
+    // loop does, so `eta0(N+1)` reconstructs correctly at the next boundary. So the replay schedule carries
+    // the venue `rsw` the caller supplied (the SAME `--network` source `recovered_node_schedule` uses for the
+    // loop). `None` leaves the freeze inert -- correct ONLY when the tip is before the freeze slot.
     let era_schedule = make_node_schedule(
         sidecar.epoch_start_slot,
         sidecar.epoch_no,
         sidecar.epoch_length_slots,
-        None,
+        rsw,
     );
 
     // 4. PHASE4-N-U S2 (DC-WAL-04 no-orphan): reconcile the chaindb to the WAL
@@ -7232,7 +7281,7 @@ mod tests {
         }
 
         let (chaindb, wal) = open_warm_stores(&d);
-        let state = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record))).expect("warm-start recovers");
+        let state = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)), None).expect("warm-start recovers");
 
         let recovered = state
             .seed_epoch_consensus_inputs
@@ -7267,7 +7316,7 @@ mod tests {
         }
 
         let (chaindb, wal) = open_warm_stores(&d);
-        let err = warm_start_recovery(&chaindb, &wal, None)
+        let err = warm_start_recovery(&chaindb, &wal, None, None)
             .expect_err("a pre-v4 sidecar must fail closed on the warm-start path");
         assert!(
             matches!(
@@ -7319,7 +7368,7 @@ mod tests {
         }
 
         let (chaindb, wal) = open_warm_stores(&d);
-        let state = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record))).expect("bare-anchor warm-start recovers");
+        let state = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)), None).expect("bare-anchor warm-start recovers");
 
         // The live-follow start tip is the persisted anchor (slot + REAL hash),
         // NOT None — the durable restart authority is the store, not the CLI.
@@ -7388,7 +7437,7 @@ mod tests {
             put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let r = warm_start_recovery(&chaindb, &wal, None);
+        let r = warm_start_recovery(&chaindb, &wal, None, None);
         assert!(
             matches!(r, Err(NodeLifecycleError::WarmStartNoAnchorLineage)),
             "missing sidecar must fail closed, got {r:?}"
@@ -7411,7 +7460,7 @@ mod tests {
             // No append_seed_epoch_provenance.
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let r = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)));
+        let r = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)), None);
         assert!(
             matches!(r, Err(NodeLifecycleError::WarmStartNoProvenance)),
             "missing WAL provenance must fail closed, got {r:?}"
@@ -7441,7 +7490,7 @@ mod tests {
             put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let r = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)));
+        let r = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)), None);
         match r {
             Err(NodeLifecycleError::WarmStartBootstrap(d)) => {
                 assert!(
@@ -7474,7 +7523,7 @@ mod tests {
             put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let r = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)));
+        let r = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)), None);
         match r {
             Err(NodeLifecycleError::WarmStartWalReplay(d)) => {
                 assert!(
@@ -7503,7 +7552,7 @@ mod tests {
             put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let r = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)));
+        let r = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)), None);
         match r {
             Err(NodeLifecycleError::WarmStartWalReplay(d)) => {
                 assert!(
@@ -7539,7 +7588,7 @@ mod tests {
             put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let r = warm_start_recovery(&chaindb, &wal, None);
+        let r = warm_start_recovery(&chaindb, &wal, None, None);
         assert!(
             matches!(
                 r,
@@ -7575,7 +7624,7 @@ mod tests {
         }
 
         let (chaindb, wal) = open_warm_stores(&d);
-        let state = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)))
+        let state = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)), None)
             .expect("warm-start recovers from the persisted admission store (no mock)");
         assert_eq!(
             state.tip.map(|t| t.slot.0),
@@ -7624,7 +7673,7 @@ mod tests {
             .unwrap();
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let r = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)));
+        let r = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)), None);
         match r {
             Err(NodeLifecycleError::DurableBlockBytesMissing {
                 block_hash,
@@ -7750,7 +7799,7 @@ mod tests {
                 .unwrap();
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let state = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)))
+        let state = warm_start_recovery(&chaindb, &wal, Some(&seal_warm_leadership(&d, &record)), None)
             .expect("warm-start recovers, reconciling the orphan away");
         // The recovered tip is the WAL-tail tip, NOT the un-WAL'd orphan above it.
         assert_eq!(
@@ -8151,7 +8200,7 @@ mod ce4a_continuous_self_sufficiency {
         // --- production warm-start recovery (NOT a hand-built state) ---
         let warm_acc = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
             .expect("FAIL-LOUD: open warm accumulator handle");
-        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc))
+        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc), preview_rsw())
             .expect("FAIL-LOUD: production warm_start_recovery");
         drop(warm_acc);
 
@@ -8926,7 +8975,7 @@ mod ce4a_continuous_self_sufficiency {
         let mut wal = FileWalStore::open(dst.join("wal")).expect("FAIL-LOUD: open isolated wal");
         let warm_acc = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
             .expect("FAIL-LOUD: open warm accumulator handle");
-        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc))
+        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc), preview_rsw())
             .expect("FAIL-LOUD: production warm_start_recovery");
         drop(warm_acc);
 
@@ -9468,7 +9517,7 @@ mod ce4a_continuous_self_sufficiency {
         let mut wal = FileWalStore::open(dst.join("wal")).expect("FAIL-LOUD: open isolated wal");
         let warm_acc = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
             .expect("FAIL-LOUD: open warm accumulator handle");
-        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc))
+        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc), preview_rsw())
             .expect("FAIL-LOUD: production warm_start_recovery");
         drop(warm_acc);
 
@@ -9601,7 +9650,7 @@ mod ce4a_continuous_self_sufficiency {
         let mut wal = FileWalStore::open(dst.join("wal")).expect("FAIL-LOUD: reopen wal after restart");
         let warm_acc = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
             .expect("FAIL-LOUD: reopen warm accumulator after restart");
-        let state2 = warm_start_recovery(&chaindb, &wal, Some(&warm_acc))
+        let state2 = warm_start_recovery(&chaindb, &wal, Some(&warm_acc), preview_rsw())
             .expect("FAIL-LOUD: warm_start_recovery after restart (the genuine restart path)");
         drop(warm_acc);
         let sidecar2 = state2
@@ -9848,7 +9897,7 @@ mod ce4a_continuous_self_sufficiency {
         let mut wal = FileWalStore::open(dst.join("wal")).expect("FAIL-LOUD: open isolated wal");
         let warm_acc = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
             .expect("FAIL-LOUD: open warm accumulator handle");
-        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc))
+        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc), preview_rsw())
             .expect("FAIL-LOUD: production warm_start_recovery");
         drop(warm_acc);
         let sidecar = state
@@ -10087,6 +10136,240 @@ mod ce4a_continuous_self_sufficiency {
         Ok((uninterrupted_fp, fp, trace))
     }
 
+    /// CE-4A.3-R4 (targeted proof): a warm RESTART in the crash window AFTER a controlled rollback but
+    /// BEFORE the ResetAndRefold reseals — durable state `tip = P (epoch 1341), 1341 frozen leadership
+    /// unsealed, latest lineage = RollBack`. The R4 reconcile-before-recovery (in run_relay_loop_with_sched,
+    /// before the eview recovery) reseals 1341 via the PRODUCTION ResetAndRefold, so recovery + refold
+    /// reproduce the uninterrupted authority byte-for-byte. WITHOUT R4 this hits RecoveryEpochUnsealed{1341}
+    /// (the exact #13 pre-option-(a) failure). Returns (uninterrupted fp, rolled-back+restart+refold fp,
+    /// `unsealed_1341_at_restart` — proving the crash-window state was real).
+    #[allow(clippy::too_many_lines)]
+    async fn drive_rollback_then_restart_proof(
+        seed_dir: &Path,
+        corpus_dir: &Path,
+        work: &Path,
+        tag: &str,
+    ) -> Result<(Ce4aAuthorityFp, Ce4aAuthorityFp, bool), String> {
+        // ---- setup: identical to drive_rollback_proof ----
+        let dst = isolate_fixture(seed_dir, work, tag);
+        seal_bootstrap_seed_leadership(&dst);
+        let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(dst.join("chain.db")))
+            .expect("FAIL-LOUD: open isolated chaindb");
+        let mut wal = FileWalStore::open(dst.join("wal")).expect("FAIL-LOUD: open isolated wal");
+        let warm_acc = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: open warm accumulator handle");
+        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc), preview_rsw())
+            .expect("FAIL-LOUD: production warm_start_recovery");
+        drop(warm_acc);
+        let sidecar = state
+            .seed_epoch_consensus_inputs
+            .clone()
+            .expect("FAIL-LOUD: v5 sidecar present");
+        assert_eq!(sidecar.epoch_no.0, SEED_EPOCH, "FAIL-LOUD: v5 seed epoch must be {SEED_EPOCH}");
+        let durable_tip_before =
+            ChainDb::tip(&chaindb).expect("tip read").expect("FAIL-LOUD: durable chaindb tip").slot.0;
+        assert_eq!(epoch_of(durable_tip_before), 1340, "FAIL-LOUD: the v5 durable tip must be in epoch 1340");
+        let epoch_accumulator = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: open live accumulator");
+        let reduced_checkpoint = ReducedUtxoCheckpoint::open(&dst.join("reduced-checkpoint.redb"))
+            .expect("FAIL-LOUD: open reduced checkpoint");
+        if epoch_accumulator.promotion_leadership_authority_for_epoch(EpochNo(1341)).is_err() {
+            eprintln!("CE-4A.3-R4 [{tag}] prep: native 1341 absent — reset+refold 1338->{durable_tip_before}...");
+            epoch_accumulator.reset_to_bootstrap().expect("FAIL-LOUD: reset accumulator");
+            reduced_checkpoint.reset_to_bootstrap().expect("FAIL-LOUD: reset checkpoint");
+            let prep_sched =
+                recovered_node_schedule(&state, true, preview_rsw()).expect("FAIL-LOUD: prep era schedule");
+            advance_ledger_state_to_durable_tip(
+                Some(&reduced_checkpoint), Some(&epoch_accumulator), &chaindb, &prep_sched,
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .expect("FAIL-LOUD: prep refold 1338->durable-tip");
+        }
+        assert!(
+            epoch_accumulator.promotion_leadership_authority_for_epoch(EpochNo(1341)).is_ok(),
+            "FAIL-LOUD (hard stop): native frozen leadership 1341 required"
+        );
+        wal = refresh_prep_eview_records(
+            wal, &dst, &epoch_accumulator, &sidecar,
+            state.chain_dep.epoch_nonce.0.clone(), epoch_of(durable_tip_before),
+        );
+        let (seed_view, era_schedule, eview_inputs, mut fwd) =
+            assemble_production_inputs(state, &sidecar, &dst, &chaindb, &epoch_accumulator);
+
+        // ---- run 1: fold to 1342 ----
+        eprintln!("CE-4A.3-R4 [{tag}] run 1: fold ({durable_tip_before}, {EPOCH_1342_FIRST_SLOT}] — cross 1340->1341->1342");
+        {
+            let feed = load_corpus_feed(corpus_dir, durable_tip_before, EPOCH_1342_FIRST_SLOT);
+            assert!(!feed.is_empty(), "FAIL-LOUD: run-1 feed must contain corpus blocks");
+            let mut source = NodeBlockSource::in_memory(feed);
+            let (_tx, mut shutdown) = watch::channel(false);
+            let mut sched = crate::live_log::NodeSchedLogWriter::new(Vec::<u8>::new());
+            run_relay_loop_with_sched(
+                &mut fwd, &mut source, &chaindb, &mut wal, &era_schedule, &seed_view, &mut shutdown,
+                None, Some(&mut sched), None, Some(&reduced_checkpoint), Some(&eview_inputs),
+                Some(&epoch_accumulator), RecoveryAdmissionPolicy::cardano(),
+            )
+            .await
+            .map_err(|e| format!("CE-4A.3-R4 HARD STOP (run-1 loop failed): {e:?}"))?;
+        }
+        let tip_after_run1 =
+            ChainDb::tip(&chaindb).expect("tip read").expect("FAIL-LOUD: durable tip after run 1");
+        assert_eq!(epoch_of(tip_after_run1.slot.0), 1342, "FAIL-LOUD: run 1 must land the tip in epoch 1342");
+        let uninterrupted_fp = capture_authority_fp(&chaindb, &epoch_accumulator, &reduced_checkpoint);
+
+        // ---- pick P (epoch 1341, within k) ----
+        const ROLLBACK_DEPTH_BLOCKS: usize = 200;
+        const P_SLOT_BAND: u64 = 12_000;
+        let mut band: Vec<Point> = Vec::new();
+        for item in chaindb
+            .iter_from_slot(SlotNo(tip_after_run1.slot.0.saturating_sub(P_SLOT_BAND)))
+            .expect("FAIL-LOUD: iter_from_slot")
+        {
+            let b = item.expect("FAIL-LOUD: stored block");
+            band.push(Point { slot: b.slot, hash: b.hash });
+        }
+        assert!(band.len() > ROLLBACK_DEPTH_BLOCKS + 1, "FAIL-LOUD: band too short: {}", band.len());
+        let p = band[band.len() - 1 - ROLLBACK_DEPTH_BLOCKS].clone();
+        let depth = ROLLBACK_DEPTH_BLOCKS as u64;
+        assert!(depth <= 432, "FAIL-LOUD: depth within k");
+        assert_eq!(epoch_of(p.slot.0), 1341, "FAIL-LOUD: P must be in epoch 1341");
+        eprintln!("CE-4A.3-R4 [{tag}]: rollback tip {} (1342) -> P {} (1341), depth {} <= k=432", tip_after_run1.slot.0, p.slot.0, depth);
+
+        // ---- THE CONTROLLED ROLLBACK (production primitives) — then CRASH (NO reconcile: the crash window) ----
+        accumulator_admit_and_clear_for_rollback(
+            Some(&epoch_accumulator), &chaindb, &p, &RecoveryAdmissionPolicy::cardano(),
+        )
+        .map_err(|e| format!("CE-4A.3-R4 HARD STOP (admit_rollback k-guard rejected P): {e:?}"))?;
+        let event = ChainEvent::RolledBack { to_point: p.clone(), depth: BlockDistance(depth) };
+        apply_chain_event(
+            &mut fwd, &chaindb, &mut wal, &NoCheckpointSink, &event,
+            RollbackReason::PeerRollBackward, None, &era_schedule, &seed_view,
+        )
+        .map_err(|e| format!("CE-4A.3-R4 HARD STOP (rollback-apply failed): {e:?}"))?;
+        let tip_after_rb =
+            ChainDb::tip(&chaindb).expect("tip read").expect("FAIL-LOUD: tip after rollback");
+        if tip_after_rb.slot != p.slot {
+            return Err(format!("CE-4A.3-R4 HARD STOP (tip after rollback {} != P {})", tip_after_rb.slot.0, p.slot.0));
+        }
+
+        // ---- CRASH in the rollback->refold window: drop every handle + fwd, NO reconcile ----
+        eprintln!("CE-4A.3-R4 [{tag}] CRASH in the rollback->refold window: drop handles (NO reconcile)");
+        drop(fwd);
+        drop(seed_view);
+        drop(era_schedule);
+        drop(eview_inputs);
+        drop(reduced_checkpoint);
+        drop(epoch_accumulator);
+        drop(wal);
+        drop(chaindb);
+
+        // ---- WARM RESTART: reopen from durable, warm_start_recovery, reassemble ----
+        eprintln!("CE-4A.3-R4 [{tag}] WARM RESTART from durable state (reopen, warm_start_recovery, reassemble)");
+        let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(dst.join("chain.db")))
+            .expect("FAIL-LOUD: reopen chaindb after crash");
+        let mut wal = FileWalStore::open(dst.join("wal")).expect("FAIL-LOUD: reopen wal after crash");
+        let warm_acc = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: reopen warm accumulator after crash");
+        let state2 = warm_start_recovery(&chaindb, &wal, Some(&warm_acc), preview_rsw())
+            .map_err(|e| format!("CE-4A.3-R4 HARD STOP (warm_start_recovery after crash-in-window failed): {e:?}"))?;
+        drop(warm_acc);
+        let sidecar2 = state2.seed_epoch_consensus_inputs.clone().expect("FAIL-LOUD: sidecar after crash");
+        let restart_tip = ChainDb::tip(&chaindb).expect("tip read").expect("durable tip").slot.0;
+        assert_eq!(epoch_of(restart_tip), 1341, "FAIL-LOUD: post-crash durable tip must be in epoch 1341 (rolled back); got slot {restart_tip}");
+        let epoch_accumulator = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
+            .expect("FAIL-LOUD: reopen accumulator after crash");
+        let reduced_checkpoint = ReducedUtxoCheckpoint::open(&dst.join("reduced-checkpoint.redb"))
+            .expect("FAIL-LOUD: reopen checkpoint after crash");
+        // PROVE the crash-window state: 1341's frozen leadership is UNSEALED at restart (the fold to 1342
+        // pruned it; the rollback cleared the anchor; the ResetAndRefold has NOT run). EXACTLY the state
+        // that hit RecoveryEpochUnsealed{1341} pre-R4.
+        let unsealed_1341_at_restart = epoch_accumulator
+            .promotion_leadership_authority_for_epoch(EpochNo(1341))
+            .is_err();
+        eprintln!("CE-4A.3-R4 [{tag}]: crash-window state -> 1341 unsealed at restart = {unsealed_1341_at_restart}");
+        let (seed_view, era_schedule, eview_inputs, mut fwd) =
+            assemble_production_inputs(state2, &sidecar2, &dst, &chaindb, &epoch_accumulator);
+
+        // ---- run 2 (post-restart): refold (P, 1342] — R4's reconcile-before-recovery reseals 1341 ----
+        eprintln!("CE-4A.3-R4 [{tag}] post-restart refold ({restart_tip}, {EPOCH_1342_FIRST_SLOT}] — R4 reseal-then-recover-then-refold");
+        {
+            let feed = load_corpus_feed(corpus_dir, restart_tip, EPOCH_1342_FIRST_SLOT);
+            assert!(!feed.is_empty(), "FAIL-LOUD: the post-restart feed must contain corpus blocks");
+            let mut source = NodeBlockSource::in_memory(feed);
+            let (_tx, mut shutdown) = watch::channel(false);
+            let mut sched = crate::live_log::NodeSchedLogWriter::new(Vec::<u8>::new());
+            run_relay_loop_with_sched(
+                &mut fwd, &mut source, &chaindb, &mut wal, &era_schedule, &seed_view, &mut shutdown,
+                None, Some(&mut sched), None, Some(&reduced_checkpoint), Some(&eview_inputs),
+                Some(&epoch_accumulator), RecoveryAdmissionPolicy::cardano(),
+            )
+            .await
+            .map_err(|e| format!("CE-4A.3-R4 HARD STOP (post-restart refold loop failed — R4 gap): {e:?}"))?;
+        }
+        let tip_after_run2 =
+            ChainDb::tip(&chaindb).expect("tip read").expect("FAIL-LOUD: durable tip after refold");
+        assert_eq!(epoch_of(tip_after_run2.slot.0), 1342, "FAIL-LOUD: the refold must re-land the tip in epoch 1342");
+        let restarted_fp = capture_authority_fp(&chaindb, &epoch_accumulator, &reduced_checkpoint);
+        drop(reduced_checkpoint);
+        drop(epoch_accumulator);
+        drop(wal);
+        drop(chaindb);
+        if std::env::var("CE4A_KEEP").is_err() {
+            let _ = std::fs::remove_dir_all(&dst);
+        }
+        Ok((uninterrupted_fp, restarted_fp, unsealed_1341_at_restart))
+    }
+
+    /// CE-4A.3-R4: a warm restart in the crash window after rollback but before refold recovers correctly
+    /// (R4 reconcile-before-recovery) and refolds byte-identical to the uninterrupted run. Green here closes
+    /// the warm-restart crash-window seam (bounty-readiness: recovery from failure is not optional).
+    #[tokio::test]
+    #[ignore = "CE-4A.3-R4 warm-restart-in-crash-window: rollback -> crash -> warm-restart -> reseal+recover+refold == uninterrupted (env S5_SEED_STORES / CE3D_CORPUS / CE3D_WORK); SLOW ~hours"]
+    async fn ce4a_3_r4_warmstart_crash_window_equivalence() {
+        let seed = env_path("S5_SEED_STORES", "/home/ts/.cardano-ce3d-s1seed-v5");
+        let corpus = env_path("CE3D_CORPUS", "/home/ts/.cardano-ce3d-extract/corpus_blocks");
+        let work = env_path("CE3D_WORK", "/home/ts/.cardano-ce3d-extract/harness-work-s5");
+        let (uninterrupted, restarted, unsealed_at_restart) =
+            match drive_rollback_then_restart_proof(&seed, &corpus, &work, "r4-crash-window").await {
+                Ok(v) => v,
+                Err(finding) => panic!("FAIL-LOUD — R4 first-class finding (do NOT patch around): {finding}"),
+            };
+        let fp_json = |fp: &Ce4aAuthorityFp| {
+            serde_json::json!({
+                "final_tip": fp.final_tip, "acc_hash": hex32(&fp.acc_hash),
+                "checkpoint_commitment": hex32(&fp.checkpoint_commitment),
+                "leadership_hashes": fp.leadership_hashes.iter().map(|(e, h)| (e.to_string(), hex32(h))).collect::<std::collections::BTreeMap<_, _>>(),
+                "promotion_certified": fp.promotion_certified.iter().map(|(e, b)| (e.to_string(), *b)).collect::<std::collections::BTreeMap<_, _>>(),
+                "forbidden_paths_clean": fp.forbidden_paths_clean,
+            })
+        };
+        let bundle = serde_json::json!({
+            "slice": "CE-4A.3-R4 (warm-restart in the rollback->refold crash window)",
+            "claim": "a warm restart in the crash window after rollback but before refold reseals via the production ResetAndRefold (before the eview recovery) and refolds byte-identical to the uninterrupted run",
+            "crash_window_state_proven": unsealed_at_restart,
+            "recovery_reseal_via": "production_reset_and_refold_before_eview_recovery_not_manual_seal",
+            "uninterrupted": fp_json(&uninterrupted),
+            "restarted": fp_json(&restarted),
+        });
+        let bundle_str = serde_json::to_string_pretty(&bundle).expect("serialize");
+        eprintln!("\n===== CE-4A.3-R4 EVIDENCE =====\n{bundle_str}\n===============================");
+        let out = env_path("CE4A3_R4_EVIDENCE_OUT", "/home/ts/.cardano-ce3d-extract/ce4a-3-r4-evidence.json");
+        std::fs::write(&out, &bundle_str).unwrap_or_else(|e| panic!("write evidence {}: {e:?}", out.display()));
+        // the crash-window state must have been real (1341 unsealed at restart) — else the test is vacuous.
+        assert!(
+            unsealed_at_restart,
+            "FAIL-LOUD: 1341 must be UNSEALED at restart (the crash-window state) — else R4 is not exercised"
+        );
+        // hard asserts: restarted == uninterrupted.
+        assert_eq!(restarted.final_tip, uninterrupted.final_tip, "FAIL-LOUD: same final tip");
+        assert_eq!(restarted.acc_hash, uninterrupted.acc_hash, "FAIL-LOUD: same accumulator hash");
+        assert_eq!(restarted.checkpoint_commitment, uninterrupted.checkpoint_commitment, "FAIL-LOUD: same checkpoint");
+        assert_eq!(restarted.leadership_hashes, uninterrupted.leadership_hashes, "FAIL-LOUD: same frozen leadership");
+        assert_eq!(restarted.promotion_certified, uninterrupted.promotion_certified, "FAIL-LOUD: same promotion-certified");
+        assert!(restarted.forbidden_paths_clean && uninterrupted.forbidden_paths_clean, "FAIL-LOUD: forbidden_paths clean");
+        assert_eq!(epoch_of(uninterrupted.final_tip), 1342, "FAIL-LOUD: run lands in 1342");
+    }
+
     /// CE-4A.3-R2 (#13): a controlled within-k durable rollback + refold through the CE-4A production loop is
     /// byte-identical to the uninterrupted run on the self-derived authority fingerprint. The rollback uses
     /// ONLY the production primitives (admit_rollback k-guard + apply_chain_event = materialize +
@@ -10254,7 +10537,7 @@ mod ce4a_continuous_self_sufficiency {
         let mut wal = FileWalStore::open(dst.join("wal")).expect("FAIL-LOUD: open isolated wal");
         let warm_acc = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
             .expect("FAIL-LOUD: open warm accumulator handle");
-        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc))
+        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc), preview_rsw())
             .expect("FAIL-LOUD: production warm_start_recovery");
         drop(warm_acc);
         let sidecar = state
@@ -10418,7 +10701,7 @@ mod ce4a_continuous_self_sufficiency {
         let wal = FileWalStore::open(dst.join("wal")).expect("FAIL-LOUD: wal");
         let warm_acc = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
             .expect("FAIL-LOUD: warm acc");
-        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc)).expect("FAIL-LOUD: warm start");
+        let state = warm_start_recovery(&chaindb, &wal, Some(&warm_acc), preview_rsw()).expect("FAIL-LOUD: warm start");
         drop(warm_acc);
         let sidecar = state.seed_epoch_consensus_inputs.clone().expect("FAIL-LOUD: sidecar");
         let epoch_accumulator = EpochAccumulatorStore::open(&dst.join("epoch-accumulator.redb"))
