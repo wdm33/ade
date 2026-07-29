@@ -32,9 +32,15 @@ forward-evolution before signing.
    `pool1gv25n0c5znsdf22mnl0ve0nq7essnluts86s9d3gk2u0xfhlnrh`; wait ~2 epochs; verify
    `cardano-cli query stake-snapshot --stake-pool-id <pool> --testnet-magic 2` shows `stakeSet` >> 0
    (≈1e12 lovelace / ~1M ADA gives σ≈3e-4 -> ~1.4 leader slots/epoch, as in June).
-2. **Operator keys current** — `~/Code/rust/ade-ops/preview/ade-pool/keys/{cold.skey,kes.skey,vrf.skey,node.opcert}`.
-   The KES VK fingerprint (Ade prints it at load) MUST match the opcert; if the KES period advanced past the
-   opcert range (preview KES period ≈ 1.5 d, Sum6KES lifetime 64 periods), re-issue the opcert / regenerate KES.
+2. **Operator keys current — VERIFIED VALID (2026-07-28).** `~/Code/rust/ade-ops/preview/ade-pool/keys/{cold.skey,kes.skey,vrf.skey,node.opcert}`.
+   `cardano-cli query kes-period-info` (authoritative): opcert start period **885**, current period **915**,
+   end interval **947** (genesis `maxKESEvolutions` 62 → valid window [885, 946]), **"✓ within the correct KES
+   period interval"**, **expires 2026-09-14T12:00Z** (~32 evolutions / ~47 days of headroom). The opcert KES VK
+   is `8a6cdd3e…`, matching the key Ade prints at load. Counter 0 (pool never minted; on-chain counter `null`)
+   → the first forge issues under counter 0. The ~2-epoch stake activation lands ~period 916, deep inside the
+   window — **no re-issue needed before the forge**. (Preview KES period = 129600 slots ≈ 1.5 d; re-issue only
+   if the forge is deferred past ~2026-09-14. Runtime note: Ade forward-evolves the KES key in-memory (N-AC)
+   from evolution 0 → period 915 = 30 evolutions before signing; well within the 62-evolution lifetime.)
 3. **A recovered Conway tip** — mithril bootstrap (LIVE-1 flow) OR warm-start an existing `--data-dir`; never
    from genesis (live-path-fidelity).
 
