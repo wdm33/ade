@@ -237,6 +237,15 @@ fn validate_and_lift(
     let security_param = raw
         .security_param
         .ok_or(LiveConsensusInputsImportError::MissingField { field: "security_param" })?;
+    // LIVE-FORGE-HARDENING cluster-close: k == 0 is a degenerate freeze window (RSW = ceil(0/f) = 0 ->
+    // the candidate freezes only at the boundary, not RSW slots before it). Reject at ingress, symmetric
+    // with the numer == 0 guard, so the durable store never carries an undefined freeze authority. k comes
+    // from the genesis securityParam, so this is only reachable via a tampered bundle (defense-in-depth).
+    if security_param == 0 {
+        return Err(LiveConsensusInputsImportError::BadField {
+            field: "security_param",
+        });
+    }
     Ok(LiveConsensusInputsRaw {
         network_magic: raw.network_magic,
         genesis_hash,
@@ -401,6 +410,23 @@ mod tests {
                 }
             ),
             "numer==0 must fail closed as BadField, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn zero_security_param_fails_closed() {
+        // Cluster-close hygiene: k==0 is a degenerate freeze window; reject at ingress (symmetric with
+        // numer==0) so the durable store never carries an undefined candidate-freeze authority.
+        let bad = replace(MINIMAL, "\"security_param\": 2160", "\"security_param\": 0");
+        let err = import_live_consensus_inputs_raw_from_bytes(bad.as_bytes()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                LiveConsensusInputsImportError::BadField {
+                    field: "security_param"
+                }
+            ),
+            "security_param==0 must fail closed as BadField, got {err:?}"
         );
     }
 

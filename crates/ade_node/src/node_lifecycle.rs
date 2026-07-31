@@ -8452,7 +8452,7 @@ mod ce4a_continuous_self_sufficiency {
         // --- production input assembly (a mirror of the ForgeIntent::Off arm) ---
         let seed_view = leadership_view_from_frozen_authority(Some(&epoch_accumulator), &sidecar)
             .expect("FAIL-LOUD: recovered leadership view from the frozen authority");
-        // RSW = ceil(4k/f) for preview (k=2160, f=1/20), the SAME source of truth rsw_for_cli uses.
+        // RSW = ceil(4k/f) for preview (k=432, f=1/20), the SAME source of truth rsw_for_cli uses.
         let rsw = preview_rsw(); // preview k=432 (NOT 2160) — see preview_rsw()
         let era_schedule = recovered_node_schedule(&state, true, rsw)
             .expect("FAIL-LOUD: recovered era schedule from the durable sidecar geometry");
