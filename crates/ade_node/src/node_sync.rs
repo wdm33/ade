@@ -508,6 +508,10 @@ where
         None,
         // S4-L2: run_node_sync_no_eview does no epoch promotion (no EVIEW inputs), so no frozen authority.
         None,
+        // LIVE-FORGE-HARDENING S1: test shim -- mainnet k, no forge fence (a keyless-follower shim never
+        // forges; the follow/rollback tests supply the rollback scenario).
+        ade_core::consensus::events::SecurityParam(2160),
+        None,
     )
     .await?
     {
@@ -605,6 +609,12 @@ pub async fn run_node_sync<D>(
     // S4-L2: the epoch-indexed frozen leadership authority — the SOLE promotion source for candidate epochs
     // beyond the bootstrap bridge (>= seed+2). Threaded to `prepare_authority_for_candidate_slot`.
     epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
+    // LIVE-FORGE-HARDENING S1: the rollback k-guard bound (durable/config authority, never peer-supplied)
+    // + the DC-NODE-28 forge fence -- so the forge path FOLLOWS a legal within-k within-epoch live
+    // rollback through the shared `resolve_and_apply_peer_rollback` authority instead of failing closed.
+    // `pending_reselection` is `None` for a keyless follower (no forge to fence).
+    security_param: ade_core::consensus::events::SecurityParam,
+    mut pending_reselection: Option<&mut bool>,
 ) -> Result<SyncOutcome, NodeSyncError>
 where
     D: ChainDb + SnapshotStore,
@@ -631,14 +641,43 @@ where
             // S1 (DC-NODE-34): peer is provenance-only on this path -- ignored,
             // never a single-producer admission/forge/rollback decision input.
             NodeSyncItem::Block { bytes, .. } => bytes,
-            NodeSyncItem::RollBack { point, .. } => match (&state.recovered_anchor, &point) {
-                (Some(anchor), Point::Block { slot, hash })
-                    if *slot == anchor.slot && *hash == anchor.hash =>
-                {
-                    continue;
+            NodeSyncItem::RollBack { point, .. } => {
+                // LIVE-FORGE-HARDENING S1 (INV-FH-1/2/3): the forge path FOLLOWS a legal live rollback
+                // through the shared `resolve_and_apply_peer_rollback` authority instead of failing closed
+                // (the DC-NODE-33 recovered-anchor no-op is subsumed by the helper). INV-FH-4 within-epoch
+                // guard: a target below the in-memory promoted authority's epoch fails closed --
+                // cross-boundary authority-rewind is deferred; durable state is protected regardless by the
+                // BLUE admit/materialize k-guards. Every illegal rollback keeps its exact typed halt.
+                if let (Point::Block { slot, .. }, Some(auth)) = (&point, authority.as_deref()) {
+                    let target_epoch = era_schedule
+                        .locate(*slot)
+                        .map_err(|e| NodeSyncError::Pump(format!("rollback epoch locate: {e:?}")))?
+                        .epoch;
+                    if target_epoch < auth.epoch() {
+                        return Err(NodeSyncError::UnexpectedRollback);
+                    }
                 }
-                _ => return Err(NodeSyncError::UnexpectedRollback),
-            },
+                let view: &dyn LedgerView = match authority.as_deref() {
+                    Some(auth) => auth.ledger_view(),
+                    None => ledger_view.ok_or_else(|| {
+                        NodeSyncError::Pump("rollback: neither authority nor ledger_view supplied".into())
+                    })?,
+                };
+                let mut scratch = false;
+                let fence = pending_reselection.as_deref_mut().unwrap_or(&mut scratch);
+                crate::node_lifecycle::resolve_and_apply_peer_rollback(
+                    state,
+                    chaindb,
+                    wal,
+                    &*era_schedule,
+                    view,
+                    epoch_accumulator,
+                    security_param,
+                    point,
+                    fence,
+                )?;
+                continue;
+            }
         };
         // The SOLE tip-advancing call on the lifecycle sync path. Its
         // internal cadence checkpoint marker is a no-op here

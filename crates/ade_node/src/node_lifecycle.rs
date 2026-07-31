@@ -2830,6 +2830,16 @@ pub async fn run_relay_loop_with_sched(
                         act.pending_reselection = false;
                     }
                 } else {
+                    // LIVE-FORGE-HARDENING S1: the single-producer / keyless-follower path now FOLLOWS a
+                    // legal live rollback via run_node_sync. Source the rollback k-guard bound from the
+                    // forge activation (default k for a keyless follower). The DC-NODE-28 fence is `None`:
+                    // SyncOnce and ForgeTick are mutually-exclusive loop steps, so no ForgeTick observes the
+                    // fence during run_node_sync's synchronous rollback apply (the helper sets+clears it in
+                    // the one call); unlike the participant path there is no cross-iteration pending state.
+                    let forge_k = forge
+                        .as_deref()
+                        .map(|a| a.security_param)
+                        .unwrap_or_else(|| RecoveryAdmissionPolicy::cardano().security_param);
                     let sync_outcome = run_node_sync(
                         source,
                         state,
@@ -2843,6 +2853,8 @@ pub async fn run_relay_loop_with_sched(
                         // S4-L2: the frozen leadership authority — the SOLE promotion source for candidate
                         // epochs >= seed+2 (prepare_authority_for_candidate_slot fails closed without it).
                         epoch_accumulator,
+                        forge_k,
+                        None,
                     )
                         .await
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
@@ -5104,6 +5116,102 @@ where
     }
 }
 
+/// LIVE-FORGE-HARDENING S1 — the shared peer-`RollBackward` resolve+apply authority for BOTH live
+/// loops (`run_participant_sync` and the `--mode node` forge path `run_node_sync`). Extracted verbatim
+/// from the participant `RollBack` arm: DC-NODE-29 (canonical STORED slot+hash point is the sole
+/// authority), DC-NODE-33 (recovered-anchor exact-slot-and-hash is an idempotent no-op), the k-guard
+/// via `accumulator_admit_and_clear_for_rollback`, and DC-NODE-28 (fence set BEFORE apply, cleared
+/// after). Reuses the BLUE `materialize_rolled_back_state` / `commit_rollback` (through
+/// `apply_chain_event`) UNCHANGED — no new authority, no new `WalEntry` variant. `Ok(())` means both
+/// the anchor no-op and a successfully-applied rollback (the caller keeps following); every illegal
+/// rollback keeps its exact typed halt (Origin / unknown-hash → `UnexpectedRollback`, peer-slot ≠
+/// stored-slot → `RollbackPointSlotMismatch`, beyond-k / below-seed / off-chain → the accumulator fault).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_and_apply_peer_rollback<D>(
+    state: &mut ForwardSyncState,
+    chaindb: &D,
+    wal: &mut dyn WalStore,
+    era_schedule: &EraSchedule,
+    ledger_view: &dyn LedgerView,
+    epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
+    security_param: SecurityParam,
+    wire_point: ade_network::codec::chain_sync::Point,
+    pending_reselection: &mut bool,
+) -> Result<(), NodeSyncError>
+where
+    D: ChainDb + SnapshotStore,
+{
+    let (slot, hash) = match wire_point {
+        ade_network::codec::chain_sync::Point::Block { slot, hash } => (slot, hash),
+        ade_network::codec::chain_sync::Point::Origin => {
+            return Err(NodeSyncError::UnexpectedRollback);
+        }
+    };
+    // DC-NODE-33: the recovered bootstrap anchor (a recovery snapshot boundary, NOT a stored servable
+    // block) bound on BOTH slot and hash is an idempotent no-op -- evaluated BEFORE get_block_by_hash
+    // (which would otherwise fail closed on the un-stored anchor). No durable mutation.
+    if let Some(anchor) = &state.recovered_anchor {
+        if slot == anchor.slot && hash == anchor.hash {
+            return Ok(());
+        }
+    }
+    // DC-NODE-29: resolve the wire hash against the durable ChainDb; the STORED point is the sole
+    // authority (peer slot never constructs `to_point`). Unknown hash or peer-slot != stored-slot
+    // fails closed HERE -- before apply_chain_event / commit_rollback / any durable mutation.
+    let stored = match chaindb
+        .get_block_by_hash(&hash)
+        .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?
+    {
+        Some(s) => s,
+        None => return Err(NodeSyncError::UnexpectedRollback),
+    };
+    if slot != stored.slot {
+        return Err(NodeSyncError::RollbackPointSlotMismatch {
+            peer_slot: slot,
+            stored_slot: stored.slot,
+            hash,
+        });
+    }
+    let target = Point {
+        slot: stored.slot,
+        hash,
+    };
+    // S5 (2b): pre-clear the durable accumulator's certified anchor (k-guard via admit_rollback) BEFORE
+    // commit_rollback trims the ChainDb. A typed RecoveryAdmission fault is terminal; an incidental
+    // store/read fault -> Pump.
+    accumulator_admit_and_clear_for_rollback(
+        epoch_accumulator,
+        chaindb,
+        &target,
+        &RecoveryAdmissionPolicy { security_param },
+    )
+    .map_err(|e| match e {
+        NodeLifecycleError::RecoveryAdmission(f) => NodeSyncError::RecoveryAdmission(f),
+        other => NodeSyncError::Pump(format!("accumulator rollback pre-clear: {other:?}")),
+    })?;
+    let event = ChainEvent::RolledBack {
+        to_point: target,
+        depth: BlockDistance(0),
+    };
+    // DC-NODE-28: set pending BEFORE apply; clear ONLY after apply returns (reconcile/failure handling
+    // complete) -- no forge may slip through between rollback start and durable settlement.
+    *pending_reselection = true;
+    let applied = apply_chain_event(
+        state,
+        chaindb,
+        wal,
+        &NoCheckpointSink,
+        &event,
+        RollbackReason::PeerRollBackward,
+        None,
+        era_schedule,
+        ledger_view,
+    );
+    *pending_reselection = false;
+    applied.map_err(|e| NodeSyncError::Pump(format!("apply_chain_event: {e:?}")))?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_participant_sync<D>(
     source: &mut NodeBlockSource,
@@ -5255,93 +5363,20 @@ where
                 }
             }
             NodeSyncItem::RollBack { point: wire_point, .. } => {
-                // Verify the rollback point is in the durable chain -- no fabricated
-                // block_no, no Origin (AI-S4a already fails Origin at the wire).
-                let (slot, hash) = match wire_point {
-                    ade_network::codec::chain_sync::Point::Block { slot, hash } => (slot, hash),
-                    ade_network::codec::chain_sync::Point::Origin => {
-                        return Err(NodeSyncError::UnexpectedRollback);
-                    }
-                };
-                // DC-NODE-33 (PHASE4-N-AL) -- the participant mirror of DC-NODE-32.
-                // The recovered bootstrap anchor (DC-NODE-31 / state.recovered_anchor,
-                // set in the forge-ON arm at :563) is an authoritative local boundary
-                // point: the relay's standard post-IntersectFound RollBackward(anchor)
-                // (exact slot AND hash) is an idempotent no-op -- the node is already at
-                // the anchor, a recovery snapshot boundary that is NOT a stored servable
-                // block, so the DC-NODE-29 resolution below would otherwise fail closed
-                // (get_block_by_hash(anchor) -> None) before the first forward admit.
-                // Evaluated BEFORE get_block_by_hash; every non-anchor rollback still
-                // falls through to the unchanged DC-NODE-29 stored-block authority, and
-                // Origin already failed closed above (AI-S4a). No durable mutation, no
-                // pending_reselection; never re-read from the store.
-                if let Some(anchor) = &state.recovered_anchor {
-                    if slot == anchor.slot && hash == anchor.hash {
-                        continue;
-                    }
-                }
-                // AI-S6 (DC-NODE-29): resolve the wire hash against the durable
-                // ChainDb and use the STORED chain point as the sole authority. The
-                // peer-supplied slot MUST equal the stored slot for the hash; an
-                // unknown hash or a slot mismatch fails closed HERE -- before
-                // apply_chain_event, i.e. before commit_rollback / WalEntry::RollBack
-                // / any durable mutation. The peer slot never constructs `to_point`
-                // (a target built from peer slot + local hash is mixed authority).
-                let stored = match chaindb
-                    .get_block_by_hash(&hash)
-                    .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?
-                {
-                    Some(s) => s,
-                    None => return Err(NodeSyncError::UnexpectedRollback),
-                };
-                if slot != stored.slot {
-                    return Err(NodeSyncError::RollbackPointSlotMismatch {
-                        peer_slot: slot,
-                        stored_slot: stored.slot,
-                        hash,
-                    });
-                }
-                let target = Point {
-                    slot: stored.slot,
-                    hash,
-                };
-                // LIVE-LEDGER-EPOCH-TRANSITION S5 (2b): a chain-selection-admitted rollback -- bring the
-                // durable accumulator into lockstep by pre-clearing its certified anchor (after admitting
-                // the rollback) BEFORE commit_rollback trims the ChainDB. A typed RecoveryAdmission fault is
-                // terminal; an incidental store/read fault -> Pump.
-                accumulator_admit_and_clear_for_rollback(
-                    epoch_accumulator,
-                    chaindb,
-                    &target,
-                    &RecoveryAdmissionPolicy { security_param },
-                )
-                .map_err(|e| match e {
-                    NodeLifecycleError::RecoveryAdmission(f) => NodeSyncError::RecoveryAdmission(f),
-                    other => {
-                        NodeSyncError::Pump(format!("accumulator rollback pre-clear: {other:?}"))
-                    }
-                })?;
-                let event = ChainEvent::RolledBack {
-                    to_point: target,
-                    depth: BlockDistance(0),
-                };
-                // DC-NODE-28: set pending BEFORE apply; clear ONLY after apply
-                // returns (reconcile/failure handling complete) -- no forge may
-                // slip through between rollback start and durable settlement.
-                *pending_reselection = true;
-                let applied = apply_chain_event(
+                // LIVE-FORGE-HARDENING S1: the resolve+apply logic is now the shared
+                // `resolve_and_apply_peer_rollback` authority (identical DC-NODE-29/33/28 logic; also
+                // driven by the run_node_sync forge path). Participant behavior is byte-for-byte unchanged.
+                resolve_and_apply_peer_rollback(
                     state,
                     chaindb,
                     wal,
-                    &NoCheckpointSink,
-                    &event,
-                    RollbackReason::PeerRollBackward,
-                    None,
                     era_schedule,
                     ledger_view,
-                );
-                *pending_reselection = false;
-                applied.map_err(|e| NodeSyncError::Pump(format!("apply_chain_event: {e:?}")))?;
+                    epoch_accumulator,
+                    security_param,
+                    wire_point,
+                    pending_reselection,
+                )?;
             }
         }
     }

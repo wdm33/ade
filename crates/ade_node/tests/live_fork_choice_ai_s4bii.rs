@@ -308,16 +308,106 @@ async fn rollback_slot_hash_mismatch_fails_before_mutation() {
     assert!(!pending);
 }
 
-// ---------- SP/Unknown reject rollback; the forge gate helper ----------
+// ---------- LIVE-FORGE-HARDENING S1: run_node_sync (forge path) FOLLOWS legal rollbacks ----------
+
+#[tokio::test]
+async fn forge_path_rollback_applies_durably() {
+    // INV-FH-1: run_node_sync (the --mode node forge path) now FOLLOWS a legal within-k rollback to a
+    // stored block through the SAME shared `resolve_and_apply_peer_rollback` authority as the participant
+    // path -- durable tip moves back, a WalEntry::RollBack is produced, the DC-NODE-28 fence clears.
+    // (Before S1 this returned UnexpectedRollback and killed the forge on the first live fork.)
+    let db = db_with_fork_and_snapshot();
+    let mut fwd = fwd_at(52);
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(100, 0xF0)]);
+    let out = run_node_sync(
+        &mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()),
+        None, None, None, None, SecurityParam(2160), Some(&mut pending),
+    )
+    .await
+    .expect("the forge path follows a legal rollback");
+    assert!(out.selected_tip().is_none(), "a rollback admits no forward block");
+    let tip = db.tip().unwrap().unwrap();
+    assert_eq!(tip.slot, SlotNo(100));
+    assert_eq!(tip.hash, h(0xF0));
+    assert!(
+        wal.read_all().unwrap().iter().any(|e| matches!(e, WalEntry::RollBack { .. })),
+        "a WalEntry::RollBack was produced (identical to the participant path)"
+    );
+    assert!(!pending, "the DC-NODE-28 fence clears after the apply returns");
+}
+
+#[tokio::test]
+async fn forge_path_rollback_to_unknown_point_fails_closed() {
+    // INV-FH-2: a rollback to a hash NOT in the durable store fails closed with zero mutation -- this is
+    // why the pre-existing empty-store forge tests still fail closed after S1.
+    let db = db_with_fork_and_snapshot();
+    let mut fwd = fwd_at(52);
+    let mut wal = VecWal::default();
+    let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(100, 0x99)]);
+    let err = run_node_sync(
+        &mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()),
+        None, None, None, None, SecurityParam(2160), None,
+    )
+    .await
+    .expect_err("unknown rollback point fails closed");
+    assert!(matches!(err, NodeSyncError::UnexpectedRollback), "got {err:?}");
+    assert_eq!(db.tip().unwrap().unwrap().slot, SlotNo(102), "no durable mutation");
+    assert!(!wal.read_all().unwrap().iter().any(|e| matches!(e, WalEntry::RollBack { .. })));
+}
+
+#[tokio::test]
+async fn forge_path_rollback_beyond_k_fails_closed_clears_pending() {
+    // INV-FH-2: a stored target with NO snapshot -> materialize RollbackTooDeep -> Pump; fence cleared.
+    let db = InMemoryChainDb::new();
+    db.put_block(&stored(100, 0xF0)).unwrap();
+    let mut fwd = fwd_at(52);
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(100, 0xF0)]);
+    let err = run_node_sync(
+        &mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()),
+        None, None, None, None, SecurityParam(2160), Some(&mut pending),
+    )
+    .await
+    .expect_err("no snapshot -> fail closed");
+    assert!(matches!(err, NodeSyncError::Pump(_)), "got {err:?}");
+    assert!(!pending, "the DC-NODE-28 fence cleared on the failure path");
+}
+
+#[tokio::test]
+async fn forge_path_rollback_slot_hash_mismatch_fails_before_mutation() {
+    // INV-FH-2 (DC-NODE-29): a real in-chain hash (0xF0 @ slot 100) named at a DIFFERENT slot (99) is
+    // mixed peer/local authority -> RollbackPointSlotMismatch BEFORE any durable mutation.
+    let db = db_with_fork_and_snapshot();
+    let mut fwd = fwd_at(52);
+    let mut wal = VecWal::default();
+    let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(99, 0xF0)]);
+    let err = run_node_sync(
+        &mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()),
+        None, None, None, None, SecurityParam(2160), None,
+    )
+    .await
+    .expect_err("slot/hash mismatch fails closed");
+    assert!(
+        matches!(err, NodeSyncError::RollbackPointSlotMismatch { .. }),
+        "got {err:?}"
+    );
+    assert_eq!(db.tip().unwrap().unwrap().slot, SlotNo(102), "no durable mutation");
+}
+
+// ---------- forge path rejects ILLEGAL rollbacks (unknown / Origin / no-anchor empty-store) ----------
 
 #[tokio::test]
 async fn singleproducer_rollback_refused_by_run_node_sync() {
     let db = InMemoryChainDb::new();
     let mut fwd = fwd_at(52);
     let mut wal = VecWal::default();
-    // run_node_sync is the SP/Unknown path -- a RollBack item fails closed.
+    // LIVE-FORGE-HARDENING S1: run_node_sync now FOLLOWS a legal STORED rollback (see
+    // forge_path_rollback_applies_durably); an EMPTY store makes 0xF0 unknown -> fails closed (INV-FH-2).
     let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(100, 0xF0)]);
-    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None, None)
+    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None, None, SecurityParam(2160), None)
         .await
         .expect_err("SP/Unknown do not follow peer rollbacks");
     assert!(matches!(err, NodeSyncError::UnexpectedRollback), "got {err:?}");
@@ -344,7 +434,7 @@ async fn ak_s2_rollback_to_recovered_anchor_is_idempotent_noop() {
     let ledger_fp_before = fingerprint(&fwd.receive.ledger).combined;
     let chain_dep_before = fwd.receive.chain_dep.clone();
     let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(188, 0x2e)]);
-    let out = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None, None)
+    let out = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None, None, SecurityParam(2160), None)
         .await
         .expect("rollback-to-recovered-anchor is an accepted no-op");
     assert!(out.selected_tip().is_none(), "a no-op rollback advances no tip");
@@ -364,7 +454,7 @@ async fn ak_s2_rollback_to_origin_fails_closed_even_with_anchor() {
     fwd.recovered_anchor = Some(anchor_tip(188, 0x2e));
     let mut wal = VecWal::default();
     let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::RollBack { peer: "peer-1".to_string(), point: WirePoint::Origin }]);
-    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None, None)
+    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None, None, SecurityParam(2160), None)
         .await
         .expect_err("Origin rollback must fail closed");
     assert!(matches!(err, NodeSyncError::UnexpectedRollback), "got {err:?}");
@@ -386,7 +476,7 @@ async fn ak_s2_non_anchor_rollback_fails_closed_slot_and_hash_bound() {
         fwd.recovered_anchor = Some(anchor.clone());
         let mut wal = VecWal::default();
         let mut src = NodeBlockSource::in_memory_items(vec![item]);
-        let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None, None)
+        let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None, None, SecurityParam(2160), None)
             .await
             .unwrap_err();
         assert!(
@@ -398,14 +488,15 @@ async fn ak_s2_non_anchor_rollback_fails_closed_slot_and_hash_bound() {
 
 #[tokio::test]
 async fn ak_s2_no_recovered_anchor_still_fails_closed() {
-    // CE-AK-S2-6 (preserved): with NO recovered anchor (cold-start / non-recover
-    // caller), ANY rollback still fails closed -- the pre-AK-S2 behavior is exact.
+    // CE-AK-S2-6: with NO recovered anchor AND an EMPTY store, the target hash is unknown -> fails
+    // closed. (LIVE-FORGE-HARDENING S1: with the target STORED, run_node_sync FOLLOWS it -- see
+    // forge_path_rollback_applies_durably.)
     let db = InMemoryChainDb::new();
     let mut fwd = fwd_at(8); // recovered_anchor defaults to None
     assert!(fwd.recovered_anchor.is_none());
     let mut wal = VecWal::default();
     let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(188, 0x2e)]);
-    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None, None)
+    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None, None, SecurityParam(2160), None)
         .await
         .expect_err("no recovered anchor => any rollback fails closed");
     assert!(matches!(err, NodeSyncError::UnexpectedRollback), "got {err:?}");
@@ -426,7 +517,7 @@ async fn ak_s2_after_anchor_noop_forward_block_reaches_pump_block_validation_hol
         rollback_item(188, 0x2e),                          // anchor no-op
         NodeSyncItem::Block { peer: "peer-1".to_string(), bytes: vec![0xDE, 0xAD, 0xBE, 0xEF] }, // malformed -> pump_block rejects
     ]);
-    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None, None)
+    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()), None, None, None, None, SecurityParam(2160), None)
         .await
         .expect_err("the forward block reaches pump_block, which rejects the malformed bytes");
     assert!(
