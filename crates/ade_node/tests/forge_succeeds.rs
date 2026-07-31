@@ -778,6 +778,7 @@ fn feed_header_validates_against_recovered_surface_not_empty_view() {
         epoch_no: epoch,
         epoch_start_slot: SlotNo(epoch.0 * 432_000),
         epoch_length_slots: 432_000,
+        security_param: 2160,
         epoch_nonce: fixture.eta0_holder.epoch_nonce.clone(),
         genesis_hash: Hash32([0x9a; 32]),
         protocol_params_hash: Hash32([0x9b; 32]),

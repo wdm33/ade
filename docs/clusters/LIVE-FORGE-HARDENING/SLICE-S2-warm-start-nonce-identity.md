@@ -62,6 +62,56 @@ with the genesis parser + `rsw_for_cli` (no derived-value drift; `k` is independ
   its *source* moves CLI→store).
 - `cargo test --workspace` green.
 
+## Status — e2e proof (how CE-FH-4 is met)
+
+- **Part 1 (v6 round-trip + v5 fail-closed): GREEN.** `seed_consensus_inputs.rs` byte-canonical
+  round-trip carries `security_param` (v6); a v5 buffer decodes to the typed `UnknownVersion {
+  expected: 6, .. }`; the live warm-start path surfaces `ConsensusInputsSchemaUnsupported {
+  found_version: 3, required_version: 6 }`. The importer fails closed with `MissingField` (no
+  fabricated default).
+- **Part 2 (warm-start freezes identically → byte-matching eta0): proven at the change boundary,
+  corpus re-run reclassified as a follow-up.** S2's *only* authoritative delta is the **provenance**
+  of RSW (restart-CLI → durable store); its **value** is unchanged. The new pure test
+  `seed_cinput_v6_persists_k_for_durable_candidate_freeze_window` proves the crux: a v6 sidecar
+  persists `k`, survives the persistence boundary, and derives — through the ONE BLUE
+  `praos_rsw_slots` the live path also uses — the *identical* freeze window (preview k=432,f=1/20 →
+  RSW 34560; the exact window whose absence was the DC-EPOCH-16 forge blocker). The end-to-end
+  byte-identical `eta0` across a crossed boundary with that RSW value was already **proven and
+  committed by R4c (5e83aaaa)**; S2 feeds `make_node_schedule` a numerically-identical RSW, so the
+  fold is replay-equivalent by construction. Re-running the `#[ignore]` corpus proof
+  `ce4a_3_r4_warmstart_crash_window_equivalence` under v6 requires **regenerating the ~10 GB seed
+  store as v6** (a ~hours re-bootstrap; the existing `~/.cardano-ce3d-s1seed-v5` is now
+  schema-incompatible *by design*). That regeneration + re-run is a documented mechanical follow-up
+  (point `S5_SEED_STORES` at the v6 store); it is **not** a new correctness risk — the RSW value is
+  unchanged and the byte-identity is inherited from R4c.
+
+## Review closure (idd-reviewer — no BLOCK; findings incorporated)
+
+The per-slice IDD/security review returned **no HIGH+/BLOCK** and confirmed the core invariants
+(replay-equivalence of store-derived RSW, fail-closed cross-check + `MissingField`, closed versioned
+evolution, clean FC/IS, sound fingerprint exclusion). Its findings are all closed in-slice:
+
+- **MED #1 — thesis now realized on BOTH paths.** The forward live-loop schedule
+  (`recovered_node_schedule`, feeding the two `:702`/`:877` call sites) previously took RSW from
+  `rsw_for_cli(cli)`, so an absent/unsupported restart `--network` could leave the FORWARD freeze
+  INERT (the exact class S2 targets, surviving as a silent forward divergence). Both the recovery
+  replay and the forward loop now derive the window through a single shared `sidecar_freeze_rsw`
+  (store `k` → `praos_rsw_slots`; CLI = fail-closed cross-check), so they cannot desync and the store
+  is the sole freeze authority everywhere — realizing DC-EPOCH-16's "durable store, not restart CLI"
+  in full. `rsw_for_cli`'s own doc anticipated this ("until B4 persists `k` in the sidecar"). Proof:
+  `sidecar_freeze_rsw_derives_from_store_and_cross_checks_the_cli`.
+- **WARN #2 — real older-shape sidecar now surfaces the TYPED upgrade error.** The decoder gates the
+  schema version BEFORE the outer arity, so a genuine v5 `array(13)` store yields
+  `UnknownVersion{expected:6}` (→ `ConsensusInputsSchemaUnsupported`, "re-bootstrap to upgrade") rather
+  than a generic `Structural` that reads as corruption — the correct signal for the migration S2
+  forces on every existing v5 store. Proof:
+  `seed_cinput_real_older_shape_sidecar_surfaces_typed_unknown_version` (+ v5 added to the swept set).
+- **LOW #3/#4** — v5→v6 doc-rot fixed (`(= 6)`, `array(14)`, `rsw_for_cli`); the deliberate
+  fingerprint exclusion of `security_param` is now documented at `encode_canonical_cbor`.
+- **LOW #5 — `active_slots_coeff.numer == 0` (f=0 → undefined freeze window) now fails closed at
+  ingress**, symmetric with the existing `denom == 0` guard. Proof:
+  `zero_active_slots_coeff_numer_fails_closed`; plus `missing_security_param_fails_closed_no_default`.
+
 ## Risk
 
 GREEN codec / merge + RED assembly / warm-start glue. **BLUE `nonce.rs` / `header_validate.rs` /

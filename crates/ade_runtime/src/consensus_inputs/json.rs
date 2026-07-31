@@ -41,6 +41,12 @@ pub struct RawConsensusInputs {
     pub epoch_end_slot: u64,
     /// Active-slots-coefficient as a fraction.
     pub active_slots_coeff: RawFraction,
+    /// Network security parameter `k`. LIVE-FORGE-HARDENING S2 (DC-EPOCH-16): carried so the durable
+    /// sidecar holds the candidate-freeze-window (RSW = ceil(4k/f)) authority, not a restart CLI.
+    /// `#[serde(default)]` for backward parse-compat; the importer REQUIRES it (fail-closed
+    /// `MissingField`, no fabricated default).
+    #[serde(default)]
+    pub security_param: Option<u64>,
     /// Hex-encoded 32-byte epoch nonce.
     pub epoch_nonce_hex: String,
     /// Pool distribution: hex-encoded 28-byte pool id → entry.

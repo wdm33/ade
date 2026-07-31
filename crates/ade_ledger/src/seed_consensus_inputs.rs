@@ -52,10 +52,15 @@ use crate::consensus_view::PoolEntry;
 /// (`seed_point_slot` / `seed_point_hash`) as durable replay authority: the
 /// recovery's `compute_first_window_bounds` needs the EXACT bootstrap point (in
 /// the seed epoch), and on a restart the durable tip is epochs ahead — a v4
-/// sidecar (no seed point) fails closed (UnknownVersion).
-pub const SEED_CINPUT_SCHEMA_VERSION: u32 = 5;
+/// sidecar (no seed point) fails closed (UnknownVersion). 5 -> 6 by
+/// LIVE-FORGE-HARDENING S2 (DC-EPOCH-16): carries `security_param` (k) so
+/// warm-start derives the candidate-freeze window RSW = ceil(4k/f) from the
+/// durable store (the last consensus-critical input still CLI-sourced), NOT the
+/// restart CLI — a v5 sidecar fails closed (UnknownVersion), a precedented typed
+/// reimport.
+pub const SEED_CINPUT_SCHEMA_VERSION: u32 = 6;
 
-const FIELDS_OUTER: u64 = 13;
+const FIELDS_OUTER: u64 = 14;
 const ASC_FIELDS: u64 = 2;
 const POOL_ENTRY_FIELDS: u64 = 2;
 
@@ -104,6 +109,12 @@ pub struct SeedEpochConsensusInputs {
     /// `seed_point_slot`. Never the recovered tip's hash on a restart.
     pub seed_point_hash: Hash32,
     pub active_slots_coeff: ActiveSlotsCoeff,
+    /// The network security parameter `k` (rollback-depth bound). LIVE-FORGE-HARDENING S2
+    /// (DC-EPOCH-16): durable replay authority for the candidate-freeze window RSW = ceil(4k/f), so
+    /// warm-start reconstruction freezes the candidate nonce IDENTICALLY to the live fold / fresh
+    /// bootstrap, NOT from a restart CLI (which can be absent -> INERT freeze -> over-track). Paired
+    /// with `active_slots_coeff` (f); together they yield RSW via the one BLUE `praos_rsw_slots`.
+    pub security_param: u64,
     pub total_active_stake: u64,
     /// Deterministic `BTreeMap` ordering; `PoolEntry` carries the VRF keyhash,
     /// so there is no separate `pool_vrf_keyhashes` map.
@@ -132,10 +143,10 @@ pub enum SeedConsensusInputsError {
 
 /// Canonical CBOR encode. CN-CINPUT-01: sole pub encoder.
 ///
-/// Wire shape (v5):
+/// Wire shape (v6):
 /// ```text
-/// array(13) [
-///   uint   SEED_CINPUT_SCHEMA_VERSION (= 5),
+/// array(14) [
+///   uint   SEED_CINPUT_SCHEMA_VERSION (= 6),
 ///   bytes(32) anchor_fp,
 ///   uint   epoch_no,
 ///   uint   epoch_start_slot,
@@ -146,6 +157,7 @@ pub enum SeedConsensusInputsError {
 ///   uint   seed_point_slot,                    // warm-start seed bootstrap point
 ///   bytes(32) seed_point_hash,                 // warm-start seed bootstrap point
 ///   array(2) [ uint asc.numer, uint asc.denom ],
+///   uint   security_param,                     // LIVE-FORGE-HARDENING S2 (k for RSW = ceil(4k/f))
 ///   uint   total_active_stake,
 ///   map(K) {                                  // K = pool count, BTreeMap order
 ///     bytes(28) pool_keyhash =>
@@ -178,6 +190,7 @@ pub fn encode_seed_epoch_consensus_inputs(inputs: &SeedEpochConsensusInputs) -> 
     write_uint_canonical(&mut buf, inputs.active_slots_coeff.numer as u64);
     write_uint_canonical(&mut buf, inputs.active_slots_coeff.denom as u64);
 
+    write_uint_canonical(&mut buf, inputs.security_param);
     write_uint_canonical(&mut buf, inputs.total_active_stake);
 
     let pool_count = inputs.pool_distribution.len() as u64;
@@ -207,13 +220,30 @@ pub fn decode_seed_epoch_consensus_inputs(
     bytes: &[u8],
 ) -> Result<SeedEpochConsensusInputs, SeedConsensusInputsError> {
     let mut o = 0usize;
-    expect_definite_array(bytes, &mut o, FIELDS_OUTER, "outer")?;
+    // Gate the schema VERSION (field 0) BEFORE asserting the outer arity: the version is authoritative
+    // over the array shape, so an OLDER-schema sidecar (a real v5 array(13)) surfaces the TYPED
+    // UnknownVersion -- the "re-bootstrap to upgrade" signal -- rather than a generic Structural shape
+    // error that reads as durable corruption. LIVE-FORGE-HARDENING S2 forces exactly this v5->v6
+    // migration for every existing store; the arity is still checked (fail-closed) immediately after.
+    let outer_len = match read_array_header(bytes, &mut o)? {
+        ContainerEncoding::Definite(n, _) => n,
+        ContainerEncoding::Indefinite => {
+            return Err(SeedConsensusInputsError::Structural {
+                reason: "indefinite-length array not allowed in SeedEpochConsensusInputs",
+            })
+        }
+    };
 
     let version = read_u32_field(bytes, &mut o)?;
     if version != SEED_CINPUT_SCHEMA_VERSION {
         return Err(SeedConsensusInputsError::UnknownVersion {
             expected: SEED_CINPUT_SCHEMA_VERSION,
             found: version,
+        });
+    }
+    if outer_len != FIELDS_OUTER {
+        return Err(SeedConsensusInputsError::Structural {
+            reason: "outer array has wrong field count",
         });
     }
 
@@ -232,6 +262,7 @@ pub fn decode_seed_epoch_consensus_inputs(
     let denom = read_u32_field(bytes, &mut o)?;
     let active_slots_coeff = ActiveSlotsCoeff { numer, denom };
 
+    let security_param = read_u64_field(bytes, &mut o)?;
     let total_active_stake = read_u64_field(bytes, &mut o)?;
 
     let pool_distribution = decode_pool_distribution(bytes, &mut o)?;
@@ -253,6 +284,7 @@ pub fn decode_seed_epoch_consensus_inputs(
         seed_point_slot,
         seed_point_hash,
         active_slots_coeff,
+        security_param,
         total_active_stake,
         pool_distribution,
     };
@@ -409,6 +441,7 @@ mod tests {
             epoch_no: EpochNo(576),
             epoch_start_slot: SlotNo(576 * 432_000),
             epoch_length_slots: 432_000,
+            security_param: 2160,
             epoch_nonce: Nonce(Hash32([0x55; 32])),
             genesis_hash: Hash32([0x9a; 32]),
             protocol_params_hash: Hash32([0x9b; 32]),
@@ -429,6 +462,35 @@ mod tests {
         // encode -> decode -> encode = identical bytes.
         let reencoded = encode_seed_epoch_consensus_inputs(&decoded);
         assert_eq!(reencoded, bytes);
+    }
+
+    #[test]
+    fn seed_cinput_v6_persists_k_for_durable_candidate_freeze_window() {
+        // LIVE-FORGE-HARDENING S2 (DC-EPOCH-16): the v6 sidecar persists `k` so a warm-start derives
+        // the candidate-freeze window RSW = ceil(4k/f) from the DURABLE STORE alone -- byte-identical to
+        // the live/CLI freeze the R4c proof used, never the inert (None) freeze that let the candidate
+        // over-track past the freeze slot -> wrong eta0(N+1). The replay-equivalence crux: only RSW's
+        // PROVENANCE moves CLI->store; its VALUE (hence the reconstructed candidate, hence eta0) is
+        // unchanged. Derivation funnels through the ONE BLUE `praos_rsw_slots` the live path also uses.
+        let rsw_of = |s: &SeedEpochConsensusInputs| {
+            ade_core::consensus::era_schedule::praos_rsw_slots(
+                s.security_param,
+                u64::from(s.active_slots_coeff.numer),
+                u64::from(s.active_slots_coeff.denom),
+            )
+        };
+        // k survives the persistence boundary, and the round-tripped store derives the identical window.
+        let s = sample(); // k=2160, f=1/20 (preprod-shaped)
+        let decoded = decode_seed_epoch_consensus_inputs(&encode_seed_epoch_consensus_inputs(&s))
+            .expect("v6 round-trip");
+        assert_eq!(decoded.security_param, s.security_param, "k survives the sidecar round-trip");
+        assert_eq!(rsw_of(&decoded), rsw_of(&s), "the round-tripped store derives the identical freeze window");
+        assert_eq!(rsw_of(&decoded), Some(172_800), "k=2160, f=1/20 -> RSW = ceil(4*2160/(1/20)) = 172800 slots");
+        // The live preview forge venue (k=432): the store derives exactly the 34560-slot window the live
+        // follow loop / rsw_for_cli(--network preview) supplies -- so a warm-start freezes where the live
+        // loop froze, not inert. This is the window whose absence was the DC-EPOCH-16 forge blocker.
+        let preview = SeedEpochConsensusInputs { security_param: 432, ..sample() };
+        assert_eq!(rsw_of(&preview), Some(34_560), "preview k=432, f=1/20 -> RSW = 34560 slots (== the live/CLI window)");
     }
 
     #[test]
@@ -466,15 +528,18 @@ mod tests {
     #[test]
     fn seed_cinput_decode_rejects_unknown_version() {
         // Splice a bad version header in front of an otherwise-valid body.
-        // The outer array header is 1 byte (0x8d for array(13)); the version
-        // (=5) is the next 1 byte (0x05). So the body after the version starts
-        // at index 2. The current version is 5; v1/v2/v3/v4 are old sidecars
+        // The outer array header is 1 byte (0x8e for array(14)); the version
+        // (=6) is the next 1 byte (0x06). So the body after the version starts
+        // at index 2. The current version is 6; v1..v5 are old sidecars
         // (omitting eta0 / venue geometry / the consensus-profile hashes / the
-        // seed bootstrap point) — ALL fail closed at the codec (UnknownVersion);
-        // the bootstrap authority surfaces that as the typed
-        // ConsensusInputsSchemaUnsupported (a reimport requirement, not corruption).
+        // seed bootstrap point / the durable securityParam) — ALL fail closed at
+        // the codec (UnknownVersion); the bootstrap authority surfaces that as the
+        // typed ConsensusInputsSchemaUnsupported (a reimport requirement, not corruption).
+        // (A real older-SHAPE sidecar — e.g. a v5 array(13) — is ALSO rejected as the
+        // typed UnknownVersion because the version gate precedes the arity check; see
+        // seed_cinput_real_older_shape_sidecar_surfaces_typed_unknown_version.)
         let fresh = encode_seed_epoch_consensus_inputs(&sample());
-        for bad_version in [0u64, 1, 2, 3, 4, 99] {
+        for bad_version in [0u64, 1, 2, 3, 4, 5, 99] {
             let mut buf = Vec::new();
             write_array_header(
                 &mut buf,
@@ -483,9 +548,27 @@ mod tests {
             write_uint_canonical(&mut buf, bad_version);
             buf.extend_from_slice(&fresh[2..]);
             match decode_seed_epoch_consensus_inputs(&buf) {
-                Err(SeedConsensusInputsError::UnknownVersion { expected: 5, found })
+                Err(SeedConsensusInputsError::UnknownVersion { expected: 6, found })
                     if found == bad_version as u32 => {}
                 other => panic!("expected UnknownVersion for v{bad_version}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn seed_cinput_real_older_shape_sidecar_surfaces_typed_unknown_version() {
+        // LIVE-FORGE-HARDENING S2: a REAL v5 sidecar is array(13) (v6 minus security_param). The
+        // decoder gates the schema VERSION before the arity, so an older store surfaces the TYPED
+        // UnknownVersion ("re-bootstrap to upgrade") -- NOT a generic Structural shape error that
+        // would read as durable corruption. Only the outer header + the version field are needed:
+        // the decode returns at the version gate before reading any later (absent) field.
+        let mut buf = Vec::new();
+        write_array_header(&mut buf, ContainerEncoding::Definite(13, canonical_width(13)));
+        write_uint_canonical(&mut buf, 5); // a genuine v5 version in a genuine v5 (array(13)) shape
+        match decode_seed_epoch_consensus_inputs(&buf) {
+            Err(SeedConsensusInputsError::UnknownVersion { expected: 6, found: 5 }) => {}
+            other => {
+                panic!("a real v5 array(13) sidecar must fail as the TYPED UnknownVersion, got {other:?}")
             }
         }
     }
@@ -569,6 +652,7 @@ mod tests {
         );
         write_uint_canonical(&mut buf, s.active_slots_coeff.numer as u64);
         write_uint_canonical(&mut buf, s.active_slots_coeff.denom as u64);
+        write_uint_canonical(&mut buf, s.security_param);
         write_uint_canonical(&mut buf, s.total_active_stake);
         let count = entries.len() as u64;
         write_map_header(

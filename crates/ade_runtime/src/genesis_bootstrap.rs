@@ -433,6 +433,7 @@ mod tests {
             epoch_no: EPOCH_576,
             epoch_start_slot: inputs.epoch_start_slot,
             epoch_length_slots: inputs.epoch_length_slots().expect("valid epoch window"),
+            security_param: 2160,
             epoch_nonce: inputs.epoch_nonce.clone(),
             genesis_hash: inputs.genesis_hash.clone(),
             protocol_params_hash: inputs.protocol_params_hash.clone(),

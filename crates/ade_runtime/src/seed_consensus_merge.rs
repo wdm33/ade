@@ -127,6 +127,9 @@ pub fn merge_seed_epoch_consensus_inputs(
         seed_point_slot: canonical.source_tip_slot,
         seed_point_hash: canonical.source_tip_hash.clone(),
         active_slots_coeff: canonical.active_slots_coeff,
+        // LIVE-FORGE-HARDENING S2 (DC-EPOCH-16): persist k so warm-start derives the candidate-freeze
+        // window (RSW = ceil(4k/f)) from the durable store, not a restart CLI.
+        security_param: canonical.security_param,
         total_active_stake,
         pool_distribution,
     })
@@ -162,6 +165,7 @@ pub(crate) fn test_canonical_inputs(
         epoch_start_slot: SlotNo(0),
         epoch_end_slot: SlotNo(432_000),
         active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 20 },
+        security_param: 2160,
         epoch_nonce: Nonce(Hash32([0xCD; 32])),
         pool_distribution,
         pool_vrf_keyhashes,

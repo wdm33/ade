@@ -624,6 +624,7 @@ mod tests {
             epoch_no: EPOCH_576,
             epoch_start_slot: cinputs.epoch_start_slot,
             epoch_length_slots: cinputs.epoch_length_slots().expect("valid epoch window"),
+            security_param: 2160,
             epoch_nonce: cinputs.epoch_nonce.clone(),
             genesis_hash: cinputs.genesis_hash.clone(),
             protocol_params_hash: cinputs.protocol_params_hash.clone(),

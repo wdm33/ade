@@ -91,6 +91,9 @@ pub struct VerifiedManifestBinding {
 pub struct NativeGenesisConstants {
     pub max_lovelace_supply: u64,
     pub active_slots_coeff: ade_core::consensus::vrf_cert::ActiveSlotsCoeff,
+    /// LIVE-FORGE-HARDENING S2 (DC-EPOCH-16): the Shelley-genesis `securityParam` (k), so the durable
+    /// sidecar carries the candidate-freeze window (RSW = ceil(4k/f)) authority, not a restart CLI.
+    pub security_param: u64,
 }
 
 /// The assembled native seed — exactly the four seed inputs the single closed
@@ -239,6 +242,7 @@ fn native_consensus_inputs(
         epoch_start_slot,
         epoch_end_slot,
         active_slots_coeff: genesis.active_slots_coeff,
+        security_param: genesis.security_param,
         epoch_nonce: CoreNonce(Hash32(s1a.praos_nonces.epoch.0)),
         pool_distribution,
         pool_vrf_keyhashes,
@@ -809,6 +813,7 @@ mod tests {
                 numer: 5,
                 denom: 100,
             },
+            security_param: 2160,
         }
     }
 

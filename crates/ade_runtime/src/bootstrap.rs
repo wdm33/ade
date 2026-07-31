@@ -831,6 +831,7 @@ mod tests {
             epoch_no: epoch,
             epoch_start_slot: SlotNo(epoch.0 * 432_000),
             epoch_length_slots: 432_000,
+            security_param: 2160,
             epoch_nonce: Nonce(Hash32([0x99; 32])),
             genesis_hash: Hash32([0x9a; 32]),
             protocol_params_hash: Hash32([0x9b; 32]),
@@ -1227,7 +1228,7 @@ mod tests {
                 err,
                 BootstrapError::ConsensusInputsSchemaUnsupported {
                     found_version: 3,
-                    required_version: 5
+                    required_version: 6
                 }
             ),
             "a pre-v4 sidecar is a typed schema-upgrade requirement, not corruption; got {err:?}"

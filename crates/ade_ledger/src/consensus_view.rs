@@ -291,6 +291,7 @@ mod tests {
             epoch_no: EpochNo(576),
             epoch_start_slot: SlotNo(576 * 432_000),
             epoch_length_slots: 432_000,
+            security_param: 2160,
             epoch_nonce: ade_core::consensus::praos_state::Nonce(Hash32([0x55; 32])),
             genesis_hash: Hash32([0x9a; 32]),
             protocol_params_hash: Hash32([0x9b; 32]),

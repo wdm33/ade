@@ -22,6 +22,7 @@ const PREPROD_TIP_SHAPE: &str = r#"{
     "epoch_start_slot": 86400000,
     "epoch_end_slot": 86832000,
     "active_slots_coeff": {"numer": 1, "denom": 20},
+    "security_param": 2160,
     "epoch_nonce_hex": "00000000000000000000000000000000000000000000000000000000000000bb",
     "pool_distribution": {
         "00000000000000000000000000000000000000000000000000000001": {"active_stake": 123456789}
@@ -48,6 +49,7 @@ const PRIVATE_EPOCH0_SHAPE: &str = r#"{
     "epoch_start_slot": 0,
     "epoch_end_slot": 432000,
     "active_slots_coeff": {"numer": 1, "denom": 2},
+    "security_param": 108,
     "epoch_nonce_hex": "00000000000000000000000000000000000000000000000000000000000000bb",
     "pool_distribution": {
         "00000000000000000000000000000000000000000000000000000001": {"active_stake": 1000000000000}

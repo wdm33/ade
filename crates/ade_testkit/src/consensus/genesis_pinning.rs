@@ -144,6 +144,7 @@ mod tests {
             epoch_no: r.epoch_no,
             epoch_start_slot: SlotNo(r.epoch_no.0 * 432_000),
             epoch_length_slots: 432_000,
+            security_param: 2160,
             epoch_nonce: r.eta0.clone(),
             genesis_hash: Hash32([0x9a; 32]),
             protocol_params_hash: Hash32([0x9b; 32]),

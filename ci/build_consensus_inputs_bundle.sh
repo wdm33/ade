@@ -87,6 +87,7 @@ NODE_VERSION=$(docker exec "$CONTAINER" cardano-node --version 2>&1 | head -1)
 # preprod shelley-genesis; override with ADE_LIVE_SHELLEY_GENESIS.
 SHELLEY_GENESIS="${ADE_LIVE_SHELLEY_GENESIS:-${DEF_CONFIG_DIR}/shelley-genesis.json}"
 EPOCHLEN=$(python3 -c "import json; print(int(json.load(open('${SHELLEY_GENESIS}'))['epochLength']))")
+SECURITYPARAM=$(python3 -c "import json; print(int(json.load(open('${SHELLEY_GENESIS}'))['securityParam']))")
 read -r ASC_NUMER ASC_DENOM < <(python3 -c "
 import json
 from fractions import Fraction
@@ -156,6 +157,7 @@ python3 - "$OUT" \
     "$NODE_VERSION" \
     "$ASC_NUMER" \
     "$ASC_DENOM" \
+    "$SECURITYPARAM" \
     "$NETWORK" \
     "$TMP_DIR/stake_snapshot.json" \
     "$TMP_DIR/pool_state.json" \
@@ -177,6 +179,7 @@ import sys
     node_version,
     asc_numer,
     asc_denom,
+    security_param,
     network,
     stake_snapshot_path,
     pool_state_path,
@@ -231,6 +234,7 @@ bundle = {
     "epoch_start_slot": int(epoch_start),
     "epoch_end_slot": int(epoch_end),
     "active_slots_coeff": {"numer": int(asc_numer), "denom": int(asc_denom)},
+    "security_param": int(security_param),
     "epoch_nonce_hex": epoch_nonce.lower(),
     "pool_distribution": pool_distribution,
     "pool_vrf_keyhashes": pool_vrf_keyhashes,

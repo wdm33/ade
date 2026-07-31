@@ -9,6 +9,7 @@
     "numer": 1,
     "denom": 20
   },
+  "security_param": 2160,
   "epoch_nonce_hex": "eaa4c05eb80164d257548ae14804e21915d9a61d6c59d8635093a9db4231e173",
   "pool_distribution": {
     "005464e159dff5c5f8cc229e3fb31e638d993fb4c3fd9daeac8cc713": {

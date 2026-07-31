@@ -61,6 +61,8 @@ pub struct LiveConsensusInputsCanonical {
     pub epoch_start_slot: SlotNo,
     pub epoch_end_slot: SlotNo,
     pub active_slots_coeff: ActiveSlotsCoeff,
+    /// LIVE-FORGE-HARDENING S2 (DC-EPOCH-16): the network security parameter `k` (durable RSW authority).
+    pub security_param: u64,
     pub epoch_nonce: Nonce,
     pub pool_distribution: BTreeMap<Hash28, PoolEntry>,
     pub pool_vrf_keyhashes: BTreeMap<Hash28, Hash32>,
@@ -109,6 +111,7 @@ pub fn canonical_from_raw(raw: LiveConsensusInputsRaw) -> LiveConsensusInputsCan
         epoch_start_slot: raw.epoch_start_slot,
         epoch_end_slot: raw.epoch_end_slot,
         active_slots_coeff: raw.active_slots_coeff,
+        security_param: raw.security_param,
         epoch_nonce: raw.epoch_nonce,
         pool_distribution: raw.pool_distribution,
         pool_vrf_keyhashes: raw.pool_vrf_keyhashes,
@@ -205,6 +208,14 @@ impl LiveConsensusInputsCanonical {
 ///   12 source_query_command          text
 ///   13 source_tip_hash               bytes(32)
 ///   14 source_tip_slot               uint
+///
+/// NOT fingerprinted (carried on the struct but deliberately EXCLUDED from this
+/// frozen 15-field form): `security_param` (k) and `protocol_params_json`. `k` is
+/// functionally determined by `network_magic` (index 0) — a network fixes its
+/// securityParam — so it adds zero discrimination here; its durable integrity is
+/// the seed sidecar's OWN byte-canonical v6 CBOR + `sidecar_hash`, plus the
+/// warm-start RSW cross-check. Adding it would perturb every pinned bundle
+/// fingerprint for no gain. (LIVE-FORGE-HARDENING S2, DC-EPOCH-16.)
 fn encode_canonical_cbor(raw: &LiveConsensusInputsRaw) -> Vec<u8> {
     let mut buf: Vec<u8> = Vec::new();
     write_map_header(&mut buf, ContainerEncoding::Definite(15, canonical_width(15)));
@@ -283,6 +294,7 @@ mod tests {
         "epoch_start_slot": 86400000,
         "epoch_end_slot": 86832000,
         "active_slots_coeff": {"numer": 1, "denom": 20},
+        "security_param": 2160,
         "epoch_nonce_hex": "00000000000000000000000000000000000000000000000000000000000000bb",
         "pool_distribution": {
             "00000000000000000000000000000000000000000000000000000001": {"active_stake": 123},
@@ -418,6 +430,7 @@ mod tests {
             epoch_start_slot: c.epoch_start_slot,
             epoch_end_slot: c.epoch_end_slot,
             active_slots_coeff: c.active_slots_coeff,
+            security_param: c.security_param,
             epoch_nonce: c.epoch_nonce.clone(),
             pool_distribution: c.pool_distribution.clone(),
             pool_vrf_keyhashes: c.pool_vrf_keyhashes.clone(),

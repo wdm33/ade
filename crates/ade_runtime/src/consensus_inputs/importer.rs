@@ -60,6 +60,9 @@ pub struct LiveConsensusInputsRaw {
     pub epoch_start_slot: SlotNo,
     pub epoch_end_slot: SlotNo,
     pub active_slots_coeff: ActiveSlotsCoeff,
+    /// LIVE-FORGE-HARDENING S2 (DC-EPOCH-16): the network security parameter `k`, so the durable
+    /// sidecar carries the candidate-freeze window (RSW = ceil(4k/f)) authority, not the restart CLI.
+    pub security_param: u64,
     pub epoch_nonce: Nonce,
     pub pool_distribution: BTreeMap<Hash28, PoolEntry>,
     pub pool_vrf_keyhashes: BTreeMap<Hash28, Hash32>,
@@ -190,6 +193,15 @@ fn validate_and_lift(
             field: "active_slots_coeff.denom",
         });
     }
+    // LIVE-FORGE-HARDENING S2 (DC-EPOCH-16): a zero numerator is f = 0 (a
+    // non-block-producing degenerate venue) AND would make `praos_rsw_slots` ->
+    // None -> an INERT candidate freeze on the recovered path. Reject at ingress so
+    // the durable store can never carry a venue whose freeze window is undefined.
+    if raw.active_slots_coeff.numer == 0 {
+        return Err(LiveConsensusInputsImportError::BadField {
+            field: "active_slots_coeff.numer",
+        });
+    }
     let asc = ActiveSlotsCoeff {
         numer: raw.active_slots_coeff.numer,
         denom: raw.active_slots_coeff.denom,
@@ -220,6 +232,11 @@ fn validate_and_lift(
         }
     }
 
+    // LIVE-FORGE-HARDENING S2 (DC-EPOCH-16): k is REQUIRED (no fabricated default) so the durable
+    // sidecar carries the candidate-freeze-window (RSW = ceil(4k/f)) authority, not a restart CLI.
+    let security_param = raw
+        .security_param
+        .ok_or(LiveConsensusInputsImportError::MissingField { field: "security_param" })?;
     Ok(LiveConsensusInputsRaw {
         network_magic: raw.network_magic,
         genesis_hash,
@@ -228,6 +245,7 @@ fn validate_and_lift(
         epoch_start_slot: SlotNo(raw.epoch_start_slot),
         epoch_end_slot: SlotNo(raw.epoch_end_slot),
         active_slots_coeff: asc,
+        security_param,
         epoch_nonce,
         pool_distribution,
         pool_vrf_keyhashes,
@@ -330,6 +348,7 @@ mod tests {
         "epoch_start_slot": 86400000,
         "epoch_end_slot": 86832000,
         "active_slots_coeff": {"numer": 1, "denom": 20},
+        "security_param": 2160,
         "epoch_nonce_hex": "00000000000000000000000000000000000000000000000000000000000000bb",
         "pool_distribution": {
             "00000000000000000000000000000000000000000000000000000001": {"active_stake": 123}
@@ -365,6 +384,42 @@ mod tests {
         assert_eq!(out.pool_distribution.len(), 1);
         assert_eq!(out.pool_vrf_keyhashes.len(), 1);
         assert_eq!(out.source_tip_slot, SlotNo(86_400_500));
+    }
+
+    #[test]
+    fn zero_active_slots_coeff_numer_fails_closed() {
+        // LIVE-FORGE-HARDENING S2 (DC-EPOCH-16): numer == 0 is f = 0 -> praos_rsw_slots None -> an
+        // undefined/inert candidate-freeze window. Reject at ingress (symmetric with the denom == 0
+        // guard) so the durable store never carries a venue whose freeze window is undefined.
+        let bad = replace(MINIMAL, "\"numer\": 1", "\"numer\": 0");
+        let err = import_live_consensus_inputs_raw_from_bytes(bad.as_bytes()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                LiveConsensusInputsImportError::BadField {
+                    field: "active_slots_coeff.numer"
+                }
+            ),
+            "numer==0 must fail closed as BadField, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn missing_security_param_fails_closed_no_default() {
+        // LIVE-FORGE-HARDENING S2 (DC-EPOCH-16): k is REQUIRED. An older bundle WITHOUT
+        // security_param is rejected with the typed MissingField -- never defaulted -- so the durable
+        // sidecar cannot carry a fabricated candidate-freeze-window authority (versioned-field rule).
+        let bad = replace(MINIMAL, "\"security_param\": 2160,", "");
+        let err = import_live_consensus_inputs_raw_from_bytes(bad.as_bytes()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                LiveConsensusInputsImportError::MissingField {
+                    field: "security_param"
+                }
+            ),
+            "a bundle without security_param must fail closed as MissingField, got {err:?}"
+        );
     }
 
     #[test]

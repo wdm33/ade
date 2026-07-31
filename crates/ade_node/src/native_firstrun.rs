@@ -180,6 +180,7 @@ pub fn parse_native_shelley_genesis(
         constants: NativeGenesisConstants {
             max_lovelace_supply,
             active_slots_coeff,
+            security_param,
         },
         epoch_length_slots,
         security_param,

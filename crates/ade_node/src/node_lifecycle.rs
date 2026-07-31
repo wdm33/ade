@@ -3565,11 +3565,19 @@ pub(crate) fn warm_start_recovery(
     // loop does, so `eta0(N+1)` reconstructs correctly at the next boundary. So the replay schedule carries
     // the venue `rsw` the caller supplied (the SAME `--network` source `recovered_node_schedule` uses for the
     // loop). `None` leaves the freeze inert -- correct ONLY when the tip is before the freeze slot.
+    // LIVE-FORGE-HARDENING S2 (DC-EPOCH-16): derive the candidate-freeze window RSW = ceil(4k/f) from
+    // the DURABLE sidecar (v6 persists `security_param`), so warm-start freezes the candidate nonce
+    // IDENTICALLY to the live fold regardless of whether a restart CLI supplies `--network` (an absent
+    // CLI no longer leaves the freeze INERT -> over-track -> DC-EPOCH-16). The store is the sole
+    // authority; the CLI-supplied `rsw` is kept ONLY as a fail-closed cross-check (a mismatch means the
+    // restart CLI disagrees with the durable venue -> terminal, never silently preferred). Mirrors
+    // `assert_restart_genesis_matches_sidecar`.
+    let sidecar_rsw = sidecar_freeze_rsw(&sidecar, rsw)?;
     let era_schedule = make_node_schedule(
         sidecar.epoch_start_slot,
         sidecar.epoch_no,
         sidecar.epoch_length_slots,
-        rsw,
+        sidecar_rsw,
     );
 
     // 4. PHASE4-N-U S2 (DC-WAL-04 no-orphan): reconcile the chaindb to the WAL
@@ -4028,6 +4036,7 @@ fn first_run_native_mithril_bootstrap(
                     numer: p.active_slots_coeff.0,
                     denom: p.active_slots_coeff.1,
                 },
+                security_param: p.security_param,
             },
             epoch_length_slots: p.epoch_length as u32,
             security_param: p.security_param,
@@ -4164,9 +4173,11 @@ fn make_node_schedule(
 /// The Praos randomness-stabilisation window `RSW = ceil(4k/f)` in slots for the
 /// relay loop's venue, resolved from the committed `--network` profile
 /// (`k = securityParam`, `f = active_slots_coeff`). `None` when the network is
-/// unknown (e.g. a bare `--shelley-genesis-path` start with no `--network`): the
-/// candidate freeze then stays INERT and the boundary tick fails closed until B4
-/// persists `k` in the sidecar (DC-EPOCH-16).
+/// unknown (e.g. a bare `--shelley-genesis-path` start with no `--network`).
+/// LIVE-FORGE-HARDENING S2 (DC-EPOCH-16) closed the former inert-freeze gap: the
+/// recovered freeze window now comes from the DURABLE sidecar's `k` via
+/// `sidecar_freeze_rsw`, so this CLI value is ONLY a fail-closed cross-check --
+/// `None` here means "no cross-check available," never an inert candidate freeze.
 fn rsw_for_cli(cli: &Cli) -> Option<u32> {
     let p = crate::bootstrap_export::resolve_network_profile(&cli.network).ok()?;
     let (numer, denom) = p.active_slots_coeff;
@@ -4176,6 +4187,34 @@ fn rsw_for_cli(cli: &Cli) -> Option<u32> {
         u64::from(numer),
         u64::from(denom),
     )
+}
+
+/// LIVE-FORGE-HARDENING S2 (DC-EPOCH-16): the candidate-freeze window `RSW = ceil(4k/f)` for a
+/// RECOVERED venue, sourced from the DURABLE sidecar's persisted `k` -- NOT the restart CLI. Both the
+/// recovery replay (`warm_start_recovery`) and the forward live-loop schedule (`recovered_node_schedule`)
+/// derive the window HERE, so they can never desync: the store is the SOLE freeze authority on both
+/// paths, and an absent/unsupported restart `--network` can no longer leave the freeze INERT (`None`)
+/// -> candidate over-track -> wrong `eta0(N+1)`. The CLI-supplied `cli_rsw` is retained ONLY as a
+/// fail-closed cross-check (a mismatch means the restart CLI disagrees with the durable venue ->
+/// terminal, never silently preferred). Mirrors `assert_restart_genesis_matches_sidecar` (geometry).
+fn sidecar_freeze_rsw(
+    sidecar: &SeedEpochConsensusInputs,
+    cli_rsw: Option<u32>,
+) -> Result<Option<u32>, NodeLifecycleError> {
+    let store_rsw = ade_core::consensus::era_schedule::praos_rsw_slots(
+        sidecar.security_param,
+        u64::from(sidecar.active_slots_coeff.numer),
+        u64::from(sidecar.active_slots_coeff.denom),
+    );
+    if let (Some(cli), Some(store)) = (cli_rsw, store_rsw) {
+        if cli != store {
+            return Err(NodeLifecycleError::NativeFirstRun(format!(
+                "DC-EPOCH-16 RSW cross-check: durable sidecar k={} -> RSW {} != CLI-supplied RSW {}",
+                sidecar.security_param, store, cli
+            )));
+        }
+    }
+    Ok(store_rsw)
 }
 
 /// WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05): build the live-follow / forge
@@ -4188,14 +4227,18 @@ fn rsw_for_cli(cli: &Cli) -> Option<u32> {
 fn recovered_node_schedule(
     state: &BootstrapState,
     live_feed_wired: bool,
-    rsw: Option<u32>,
+    cli_rsw: Option<u32>,
 ) -> Result<EraSchedule, NodeLifecycleError> {
     match state.seed_epoch_consensus_inputs.as_ref() {
+        // LIVE-FORGE-HARDENING S2 (DC-EPOCH-16): the FORWARD live-loop freeze window is the DURABLE
+        // store's authority (identical to the recovery replay via the shared `sidecar_freeze_rsw`), so
+        // an absent/unsupported restart `--network` can no longer leave the candidate freeze INERT on
+        // the forward path -> over-track -> wrong `eta0`. The CLI rsw is only a fail-closed cross-check.
         Some(s) => Ok(make_node_schedule(
             s.epoch_start_slot,
             s.epoch_no,
             s.epoch_length_slots,
-            rsw,
+            sidecar_freeze_rsw(s, cli_rsw)?,
         )),
         None if live_feed_wired => Err(NodeLifecycleError::FeedMissingRecoveredConsensusInputs),
         None => Ok(make_node_schedule(SlotNo(0), EpochNo(0), 1, None)),
@@ -6581,6 +6624,7 @@ mod tests {
                 "epoch_start_slot": {epoch_start_slot},
                 "epoch_end_slot": {},
                 "active_slots_coeff": {{ "numer": 5, "denom": 100 }},
+                "security_param": 2160,
                 "epoch_nonce_hex": "{BLOCK_HASH_HEX}",
                 "pool_distribution": {{}},
                 "pool_vrf_keyhashes": {{}},
@@ -7206,6 +7250,7 @@ mod tests {
             epoch_no: epoch,
             epoch_start_slot: SlotNo(epoch.0 * 432_000),
             epoch_length_slots: 432_000,
+            security_param: 2160,
             epoch_nonce: Nonce(Hash32([0x99; 32])),
             genesis_hash: Hash32([0x9a; 32]),
             protocol_params_hash: Hash32([0x9b; 32]),
@@ -7330,14 +7375,43 @@ mod tests {
     }
 
     #[test]
+    fn sidecar_freeze_rsw_derives_from_store_and_cross_checks_the_cli() {
+        // LIVE-FORGE-HARDENING S2 (DC-EPOCH-16): the recovered freeze window is the DURABLE sidecar's
+        // authority. Preview k=432, f=1/20 -> RSW 34560, derived via the ONE BLUE praos_rsw_slots the
+        // live path uses -- so warm_start_recovery AND the forward recovered_node_schedule freeze the
+        // candidate IDENTICALLY whether the restart CLI agrees or supplies nothing. A CLI that
+        // DISAGREES with the durable venue is terminal (fail-closed cross-check, never silently used).
+        let mut rec = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
+        rec.security_param = 432;
+        rec.active_slots_coeff = ActiveSlotsCoeff { numer: 1, denom: 20 };
+        assert_eq!(
+            sidecar_freeze_rsw(&rec, Some(34_560)).unwrap(),
+            Some(34_560),
+            "CLI agrees -> store-derived window"
+        );
+        assert_eq!(
+            sidecar_freeze_rsw(&rec, None).unwrap(),
+            Some(34_560),
+            "no CLI cross-check -> still the store window (never inert on the forward path)"
+        );
+        assert!(
+            matches!(
+                sidecar_freeze_rsw(&rec, Some(34_559)),
+                Err(NodeLifecycleError::NativeFirstRun(_))
+            ),
+            "a CLI RSW that disagrees with the durable venue is terminal"
+        );
+    }
+
+    #[test]
     fn warm_start_pre_v4_sidecar_is_typed_schema_upgrade_not_corruption() {
         // ECA-2-pre (DC-CINPUT-06): on the LIVE warm-start path, a well-formed
         // pre-v4 sidecar fails closed with the TYPED ConsensusInputsSchemaUnsupported
         // (a reimport requirement), DISTINCT from the generic WarmStartBootstrap
         // (corruption) -- so the live-path diagnostics match the bootstrap authority.
         let d = fresh_warm_dirs();
-        // A valid current-schema (v5) sidecar, with the version uint (index 1; index
-        // 0 is the array(13) header) rewritten 0x05 -> 0x03 so it decodes as an old schema.
+        // A valid current-schema (v6) sidecar, with the version uint (index 1; index
+        // 0 is the array(14) header) rewritten 0x06 -> 0x03 so it decodes as an old schema.
         let mut bytes =
             encode_seed_epoch_consensus_inputs(&warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH));
         bytes[1] = 0x03;
@@ -7358,7 +7432,7 @@ mod tests {
                 err,
                 NodeLifecycleError::ConsensusInputsSchemaUnsupported {
                     found_version: 3,
-                    required_version: 5
+                    required_version: 6
                 }
             ),
             "the live warm-start path must surface the TYPED schema-upgrade error, not generic corruption; got {err:?}"
