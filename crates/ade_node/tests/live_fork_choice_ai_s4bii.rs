@@ -45,6 +45,7 @@ use std::rc::Rc;
 
 use ade_ledger::receive::events::TipPoint;
 use ade_node::convergence_evidence::{ConvergenceEvidence, ConvergenceEvidenceSink};
+use ade_node::epoch_activation::ActiveEpochAuthority;
 
 // ---------- shared helpers ----------
 
@@ -395,6 +396,43 @@ async fn forge_path_rollback_slot_hash_mismatch_fails_before_mutation() {
         "got {err:?}"
     );
     assert_eq!(db.tip().unwrap().unwrap().slot, SlotNo(102), "no durable mutation");
+}
+
+#[tokio::test]
+async fn forge_path_rollback_across_epoch_start_fails_closed() {
+    // INV-FH-4 (DC-NODE-42): a rollback whose target lands in an epoch BELOW the promoted forge
+    // authority's epoch fails closed (UnexpectedRollback) BEFORE any durable mutation. Cross-boundary
+    // authority-rewind is deliberately OUT of S1's scope -- only the routine within-epoch fork flips to
+    // a durable follow; a target under the promoted epoch would rewind the sealed leadership authority.
+    // Durable state is protected regardless by the BLUE admit/materialize k-guards. Here the authority
+    // is promoted to epoch 1 and the rollback targets slot 100 -- epoch 0 under the 432000-slot
+    // schedule -- so target_epoch (0) < auth.epoch() (1), and the guard fires before the shared
+    // resolve_and_apply_peer_rollback runs.
+    let db = db_with_fork_and_snapshot(); // durable tip @ slot 102
+    let mut fwd = fwd_at(52);
+    let mut wal = VecWal::default();
+    // A promoted forge authority keyed to epoch 1 (the seed view's epoch drives auth.epoch()).
+    let auth_view = PoolDistrView::new(
+        EpochNo(1),
+        0,
+        ActiveSlotsCoeff { numer: 1, denom: 1 },
+        BTreeMap::new(),
+    );
+    let mut authority = ActiveEpochAuthority::seed(&auth_view);
+    let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(100, 0xF0)]);
+    let err = run_node_sync(
+        &mut src, &mut fwd, &db, &mut wal, &mut min_schedule(), Some(&view_stub()),
+        Some(&mut authority), None, None, None, SecurityParam(2160), None,
+    )
+    .await
+    .expect_err("a rollback below the promoted authority's epoch fails closed");
+    assert!(matches!(err, NodeSyncError::UnexpectedRollback), "got {err:?}");
+    // The guard fires BEFORE resolve_and_apply_peer_rollback -> zero durable mutation.
+    assert_eq!(db.tip().unwrap().unwrap().slot, SlotNo(102), "no durable rollback");
+    assert!(
+        !wal.read_all().unwrap().iter().any(|e| matches!(e, WalEntry::RollBack { .. })),
+        "no WalEntry::RollBack was produced"
+    );
 }
 
 // ---------- forge path rejects ILLEGAL rollbacks (unknown / Origin / no-anchor empty-store) ----------

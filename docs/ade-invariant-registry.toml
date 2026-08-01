@@ -7868,6 +7868,33 @@ attack_rationale = "The DC-NODE-39 floor is safe (no mis-admit, no silent stall)
 evidence_notes = "Declared at PHASE4-N-AO S14. Motivated by the S12-harness-driven Fault-2 finding: late_bridge_recovers_on_progress admits the late bridge (tip==y_hash) but the un-bridgeable descendant is NEVER admitted (tip!=z_hash), and the dispatch MissingBridge arm issues NO re-fetch -- combined with ChainSync single-delivery, the passive floor cannot converge to a winner-descendant whose bridge was never received (run-1's stall). Enforced at S14 close via 6 hermetic tests (missing_bridge_triggers_range_refetch, refetched_bridge_admits_in_order, short_refetch_keeps_hold, lying_refetch_body_rejected, refetch_failure_structured, bounded_retry) + ci_check_missing_bridge_refetch.sh + a live CE-AO-6 run showing range_refetch_started/completed -> bridge+descendant admitted -> convergence. CN-CONS-03 flips only after the live run."
 
 [[rules]]
+id = "DC-NODE-42"
+tier = "derived"
+statement = """
+LIVE-FORGE-HARDENING S1 within-epoch forge-path rollback guard (INV-FH-4). On the --mode node forge /
+live-follow path (run_node_sync), a peer RollBackward whose target slot LOCATES to an epoch BELOW the
+in-memory promoted forge authority's epoch (ActiveEpochAuthority.epoch()) fails closed with
+UnexpectedRollback BEFORE the shared resolve_and_apply_peer_rollback runs -- zero durable mutation (no
+commit_rollback, no WalEntry::RollBack, no ChainDb / ledger / chain_dep change). S1 flips ONLY the
+routine within-k within-epoch fork to a durable follow; a cross-epoch-start target would rewind the
+sealed epoch-indexed leadership authority (S4-L2 / DC-EPOCH-25), deliberately OUT of S1's scope. The
+guard is INERT when the authority is absent (a keyless follower has no promoted forge authority to
+protect; the within-epoch follow still applies via the shared helper). Durable state is protected
+regardless by the BLUE admit/materialize k-guards (DC-NODE-29 canonical binding + the rollback
+admission k-bound). The target epoch is computed from the era geometry (EraSchedule.locate), NEVER from
+a peer-supplied epoch.
+"""
+source = "docs/clusters/LIVE-FORGE-HARDENING/SLICE-S1-forge-path-rollback-follow.md (INV-FH-4)"
+cross_ref = ["DC-NODE-28", "DC-NODE-29", "DC-NODE-33", "DC-NODE-23", "DC-EPOCH-25"]
+code_locus = "crates/ade_node/src/node_sync.rs (run_node_sync RollBack arm: the INV-FH-4 within-epoch guard `if target_epoch < auth.epoch() { return Err(UnexpectedRollback) }`, evaluated BEFORE resolve_and_apply_peer_rollback; authority = Option<&mut crate::epoch_activation::ActiveEpochAuthority>; target epoch via era_schedule.locate; guard skipped when authority is None)"
+tests = ["forge_path_rollback_across_epoch_start_fails_closed"]
+ci_scripts = []
+status = "enforced"
+introduced_in = "LIVE-FORGE-HARDENING-S1"
+strengthened_in = []
+evidence_notes = "The guard shipped with LIVE-FORGE-HARDENING S1 (node_sync.rs) and was confirmed fail-closed by the per-cluster cross-slice security review (a target below the promoted authority's epoch fails closed before any mutation). Its named proof forge_path_rollback_across_epoch_start_fails_closed was landed post-cluster-close (this rule; TRACEABILITY G1 gap): ActiveEpochAuthority::seed at epoch 1 + a rollback to slot 100 (epoch 0 under the 432000-slot schedule) -> UnexpectedRollback + durable tip unchanged + no WalEntry::RollBack. Sibling to the participant-path DC-NODE-33; distinct from the S1 rollback-FOLLOW strengthening recorded on DC-NODE-28/29."
+
+[[rules]]
 id = "DC-WAL-05"
 tier = "derived"
 statement = """
