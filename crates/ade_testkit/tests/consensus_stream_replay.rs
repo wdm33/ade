@@ -120,6 +120,11 @@ fn genesis_chain_dep() -> PraosChainDepState {
     s.epoch_nonce = Nonce(Hash32([0xCD; 32]));
     s.evolving_nonce = Nonce(Hash32([0xEE; 32]));
     s.candidate_nonce = Nonce(Hash32([0xCD; 32]));
+    // ECA-B1 (DC-EPOCH-16) made the epoch-boundary combine require `last_epoch_block_nonce`
+    // (`epoch_nonce' = candidate ⭒ last_epoch_block_nonce`, fail-closed on an absent operand). A
+    // freshly-seeded B1 chain-dep supplies it (DC-EPOCH-16(b)); seed a fixed synthetic value so the
+    // single boundary in this synthetic session combines rather than halting on MissingLastEpochBlockNonce.
+    s.last_epoch_block_nonce = Some(Nonce(Hash32([0xAB; 32])));
     s
 }
 
@@ -286,11 +291,13 @@ fn replay_session(corpus: &Value) -> ReplayResult {
     let ldg = ledger(vk.clone(), pool.clone());
     let sched = schedule();
 
-    // Build the stream-input list. VRF proofs are computed against the
-    // synthesised epoch_nonce sequence — since `apply_header_contribution`
-    // does not mutate `epoch_nonce` and the EpochBoundary entry in the
-    // corpus is a no-op given a `candidate_nonce` set to the genesis
-    // value, every proof binds to the same `0xCD` epoch nonce.
+    // Build the stream-input list. Every VRF proof binds to the genesis `0xCD` epoch_nonce:
+    // `apply_header_contribution` does not mutate `epoch_nonce`, and after the ECA-B1
+    // (DC-EPOCH-16) reshape the single EpochBoundary is the LAST corpus input (see
+    // synthetic_session.json). Its `epoch_nonce' = candidate ⭒ last_epoch_block_nonce` combine
+    // DOES change `epoch_nonce` (the combine has no identity), but no header follows it, so no
+    // proof needs the post-boundary nonce. (`genesis_chain_dep` seeds `last_epoch_block_nonce`
+    // so the boundary combines rather than halting on MissingLastEpochBlockNonce.)
     let stub_state = genesis_chain_dep();
     let mut inputs: Vec<StreamInput> = Vec::new();
     for input in corpus["inputs"].as_array().unwrap() {
