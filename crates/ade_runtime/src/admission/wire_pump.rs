@@ -139,7 +139,20 @@ pub enum AdmissionWirePumpError {
     /// liveness fault — drop the peer rather than continue on a broken
     /// keep-alive exchange.
     KeepAlive(KeepAliveError),
+    /// LIVE-WIRE-LIVENESS S1 (INV-WL-3): the peer kept delivering
+    /// chain-sync / block-fetch frames while the pump was waiting for
+    /// `events_out` capacity, past `MAX_DEFERRED_PEER_FRAMES`. Since the pump
+    /// issues no new requests while backpressured (INV-WL-4), a well-behaved
+    /// peer quiesces after its in-flight batch; exceeding the cap means
+    /// unbounded buffering would be required, so we fail closed instead.
+    DeferredFrameOverflow,
 }
+
+/// LIVE-WIRE-LIVENESS S1 (INV-WL-3). Cap on inbound peer frames held while the
+/// pump waits for downstream `events_out` capacity. Bounded by the peer's
+/// in-flight batch because no new demand is issued while backpressured
+/// (INV-WL-4); the cap is the fail-closed backstop, not the expected depth.
+const MAX_DEFERRED_PEER_FRAMES: usize = 4096;
 
 /// Keep-alive cadence (DC-PUMP-03 / PHASE4-N-AM). The wire pump sends
 /// `MsgKeepAlive` every `KEEP_ALIVE_CADENCE` during inbound quiescence —
@@ -203,22 +216,66 @@ pub async fn run_admission_wire_pump(
     // The cookie is a monotonic u16 (deterministic — no rand); the BLUE
     // `keep_alive_transition` carries the in-flight cookie and validates the
     // echo. Wire-only: this state never produces an `AdmissionPeerEvent`.
-    let mut keep_alive_state = KeepAliveState::ClientIdle;
-    let mut next_cookie: u16 = 0;
-    let keep_alive_version = KeepAliveVersion::new(negotiated_version);
+    //
+    // LIVE-WIRE-LIVENESS S1: the cadence timer is a LOCAL held disjointly from
+    // `keep_alive`, so a `select!` can borrow the timer while its branch body
+    // borrows the lane. The lane is serviced from the main loop AND from
+    // `emit_cooperative`, which is what makes it immune to a stalled consumer
+    // (INV-WL-1).
+    let mut keep_alive = KeepAliveLane {
+        state: KeepAliveState::ClientIdle,
+        next_cookie: 0,
+        version: KeepAliveVersion::new(negotiated_version),
+    };
     let mut keep_alive_timer = tokio::time::interval(KEEP_ALIVE_CADENCE);
     keep_alive_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // Consume the immediate first tick so the first keep-alive fires after
     // one full cadence, not at startup.
     keep_alive_timer.tick().await;
 
+    // LIVE-WIRE-LIVENESS S1: the single ordered queue of peer frames awaiting
+    // dispatch. Frames decoded from a chunk are appended here rather than
+    // dispatched inline, and `emit_cooperative` appends frames it reads while
+    // parked on backpressure. Because exactly one frame is dispatched per loop
+    // iteration and the queue is drained before any new read, wire order — and
+    // therefore emitted-event order — is unchanged (INV-WL-2).
+    let mut pending_frames: VecDeque<(AcceptedMiniProtocol, Vec<u8>)> = VecDeque::new();
+
     loop {
         // 1. Flush every queued outbound payload first.
         while let Some(out_event) = outbox_payloads.pop_front() {
-            match flush_outbound(&mut state, out_event, &mut transport, &peer_addr).await {
+            match flush_outbound(&mut state, out_event, &transport.outbound, &peer_addr).await {
                 Ok(()) => {}
                 Err(res) => return finalize(&peer_addr, res, &events_out).await,
             }
+        }
+
+        // 1b. Dispatch exactly one already-received frame before reading more.
+        //     Draining to empty before the next read is what bounds
+        //     `pending_frames`: no fresh chain-sync / block-fetch request is
+        //     issued while frames are outstanding, so a well-behaved peer
+        //     quiesces after its in-flight batch (INV-WL-4).
+        if let Some((mini_protocol, payload)) = pending_frames.pop_front() {
+            if let Err(res) = dispatch_peer_frame(
+                mini_protocol,
+                payload,
+                &peer_addr,
+                &events_out,
+                &mut state,
+                &mut transport.inbound,
+                &transport.outbound,
+                &mut keep_alive,
+                &mut keep_alive_timer,
+                &mut pending_frames,
+                &mut outbox_payloads,
+                &mut chain_sync_in_flight,
+                &mut block_fetch_in_flight,
+            )
+            .await
+            {
+                return finalize(&peer_addr, res, &events_out).await;
+            }
+            continue;
         }
 
         // 2. Read the next inbound chunk, OR fire a keep-alive on the
@@ -235,47 +292,18 @@ pub async fn run_admission_wire_pump(
             _ = keep_alive_timer.tick() => {
                 // Cadence fired during a quiescent inbound. Send
                 // `MsgKeepAlive` iff the client holds agency (no keepalive
-                // in flight — respect `ServerHasAgency`). The BLUE
-                // transition advances the state machine and carries the
-                // cookie; enqueue the frame on the EXISTING outbound path
-                // and loop back to flush it. Wire-only — no event emitted.
-                if keep_alive_state == KeepAliveState::ClientIdle {
-                    let cookie = KeepAliveCookie(next_cookie);
-                    next_cookie = next_cookie.wrapping_add(1);
-                    match keep_alive_transition(
-                        keep_alive_state,
-                        KeepAliveAgency::Client,
-                        keep_alive_version,
-                        KeepAliveMessage::KeepAlive(cookie),
-                    ) {
-                        Ok((new_state, _output)) => {
-                            keep_alive_state = new_state;
-                            // Wire-only diagnostic (DC-PUMP-03 / CE-AM-LIVE
-                            // observability): stderr only, no AdmissionPeerEvent.
-                            eprintln!(
-                                "keep_alive: ping cookie={} sent (cadence) peer={peer_addr}",
-                                cookie.0
-                            );
-                            outbox_payloads.push_back(ByteChunkIn::OutboundFrame {
-                                mini_protocol: AcceptedMiniProtocol::KeepAlive,
-                                payload: encode_keep_alive_message(
-                                    &KeepAliveMessage::KeepAlive(cookie),
-                                ),
-                                mode: MuxMode::Initiator,
-                                timestamp: 0,
-                            });
-                        }
-                        Err(e) => {
-                            return finalize(
-                                &peer_addr,
-                                AdmissionWirePumpResult::Error(
-                                    AdmissionWirePumpError::KeepAlive(e),
-                                ),
-                                &events_out,
-                            )
-                            .await;
-                        }
-                    }
+                // in flight — respect `ServerHasAgency`). Wire-only — no
+                // event emitted. Shares `keep_alive_cadence_send` with
+                // `emit_cooperative` so both paths behave identically.
+                if let Err(res) = keep_alive_cadence_send(
+                    &mut keep_alive,
+                    &mut state,
+                    &transport.outbound,
+                    &peer_addr,
+                )
+                .await
+                {
+                    return finalize(&peer_addr, res, &events_out).await;
                 }
                 continue;
             }
@@ -310,103 +338,16 @@ pub async fn run_admission_wire_pump(
                 SessionEffect::DeliverPeerFrame {
                     mini_protocol,
                     payload,
-                } => match mini_protocol {
-                    AcceptedMiniProtocol::ChainSync => {
-                        let msg = match decode_chain_sync_message(&payload) {
-                            Ok(m) => m,
-                            Err(_) => {
-                                return finalize(
-                                    &peer_addr,
-                                    AdmissionWirePumpResult::Error(
-                                        AdmissionWirePumpError::ChainSyncDecode,
-                                    ),
-                                    &events_out,
-                                )
-                                .await;
-                            }
-                        };
-                        match handle_chain_sync(
-                            msg,
-                            &peer_addr,
-                            &events_out,
-                            &mut outbox_payloads,
-                            &mut chain_sync_in_flight,
-                            &mut block_fetch_in_flight,
-                        )
-                        .await
-                        {
-                            Ok(()) => {}
-                            Err(res) => {
-                                return finalize(&peer_addr, res, &events_out).await;
-                            }
-                        }
-                    }
-                    AcceptedMiniProtocol::BlockFetch => {
-                        let msg = match decode_block_fetch_message(&payload) {
-                            Ok(m) => m,
-                            Err(_) => {
-                                return finalize(
-                                    &peer_addr,
-                                    AdmissionWirePumpResult::Error(
-                                        AdmissionWirePumpError::BlockFetchDecode,
-                                    ),
-                                    &events_out,
-                                )
-                                .await;
-                            }
-                        };
-                        match handle_block_fetch(
-                            msg,
-                            &peer_addr,
-                            &events_out,
-                            &mut outbox_payloads,
-                            &mut chain_sync_in_flight,
-                            &mut block_fetch_in_flight,
-                        )
-                        .await
-                        {
-                            Ok(()) => {}
-                            Err(res) => {
-                                return finalize(&peer_addr, res, &events_out).await;
-                            }
-                        }
-                    }
-                    AcceptedMiniProtocol::KeepAlive => {
-                        // DC-PUMP-03 (PHASE4-N-AM): consume the peer's
-                        // `MsgResponseKeepAlive` to advance the BLUE
-                        // keep-alive state machine back to `ClientIdle`,
-                        // validating the echoed cookie. Wire-only — emits
-                        // NO `AdmissionPeerEvent`. A grammar violation
-                        // (cookie mismatch / illegal / undecodable) fails
-                        // closed (drop the peer).
-                        if let Err(e) =
-                            handle_keep_alive(&payload, &mut keep_alive_state, keep_alive_version)
-                        {
-                            return finalize(
-                                &peer_addr,
-                                AdmissionWirePumpResult::Error(
-                                    AdmissionWirePumpError::KeepAlive(e),
-                                ),
-                                &events_out,
-                            )
-                            .await;
-                        }
-                    }
-                    AcceptedMiniProtocol::Handshake
-                    | AcceptedMiniProtocol::TxSubmission
-                    | AcceptedMiniProtocol::LocalChainSync
-                    | AcceptedMiniProtocol::LocalTxSubmission
-                    | AcceptedMiniProtocol::LocalStateQuery
-                    | AcceptedMiniProtocol::LocalTxMonitor
-                    | AcceptedMiniProtocol::PeerSharing => {
-                        // Honest-scope: the admission pump only
-                        // listens for chain-sync + block-fetch (plus
-                        // the keep-alive client above) in this
-                        // cluster. Other accepted mini-protocol
-                        // frames are silently dropped; the runner has
-                        // no consumer for them.
-                    }
-                },
+                } => {
+                    // LIVE-WIRE-LIVENESS S1: enqueue rather than dispatch
+                    // inline. One chunk can carry several frames; dispatching
+                    // them here would let frames deferred by `emit_cooperative`
+                    // (appended to the back) interleave ahead of this chunk's
+                    // remaining frames. Enqueuing keeps a single FIFO, and step
+                    // 1b dispatches exactly one per iteration in wire order
+                    // (INV-WL-2).
+                    pending_frames.push_back((mini_protocol, payload));
+                }
                 SessionEffect::HandshakeComplete { .. } => {
                     // The pump assumes a post-handshake state on
                     // entry; observing this effect here would be
@@ -434,10 +375,15 @@ fn post_handshake_state(version: u16, network_magic: u32) -> SessionState {
     ))
 }
 
+/// LIVE-WIRE-LIVENESS S1: takes `&Sender` rather than `&mut MuxTransportHandle`
+/// (it only ever writes) so a caller can hold `&mut transport.inbound` and
+/// `&transport.outbound` at once as disjoint field borrows — required by
+/// `emit_cooperative`, which must read inbound and write keep-alive frames
+/// while parked on downstream backpressure.
 async fn flush_outbound(
     state: &mut SessionState,
     chunk_in: ByteChunkIn,
-    transport: &mut MuxTransportHandle,
+    outbound: &mpsc::Sender<Vec<u8>>,
     _peer_addr: &str,
 ) -> Result<(), AdmissionWirePumpResult> {
     let effects = match step(state, chunk_in) {
@@ -451,7 +397,7 @@ async fn flush_outbound(
     for effect in effects {
         match effect {
             SessionEffect::SendBytes(bytes) => {
-                if transport.outbound.send(bytes).await.is_err() {
+                if outbound.send(bytes).await.is_err() {
                     return Err(AdmissionWirePumpResult::Error(
                         AdmissionWirePumpError::TransportWrite,
                     ));
@@ -468,17 +414,258 @@ async fn flush_outbound(
     Ok(())
 }
 
-async fn handle_chain_sync(
-    msg: ChainSyncMessage,
+/// LIVE-WIRE-LIVENESS S1 (INV-WL-1): the N2N keep-alive CLIENT lane. Bundled so
+/// the identical cadence logic can run from the main loop AND from
+/// `emit_cooperative` while the pump is parked on downstream backpressure. The
+/// `Interval` is deliberately NOT a field: keeping it a separate local lets a
+/// `select!` borrow the timer while the branch body borrows the lane.
+struct KeepAliveLane {
+    state: KeepAliveState,
+    next_cookie: u16,
+    version: KeepAliveVersion,
+}
+
+/// Send `MsgKeepAlive` iff the client holds agency (no keep-alive in flight —
+/// respect `ServerHasAgency`). The BLUE `keep_alive_transition` advances the
+/// state machine and carries the cookie.
+///
+/// LIVE-WIRE-LIVENESS S1: the frame is flushed IMMEDIATELY rather than queued on
+/// `outbox_payloads`. The outbox is drained only at the top of the pump's outer
+/// loop, so a queued keep-alive would never reach the wire during the very
+/// stall it exists to survive.
+async fn keep_alive_cadence_send(
+    ka: &mut KeepAliveLane,
+    session: &mut SessionState,
+    outbound: &mpsc::Sender<Vec<u8>>,
+    peer_addr: &str,
+) -> Result<(), AdmissionWirePumpResult> {
+    if ka.state != KeepAliveState::ClientIdle {
+        return Ok(());
+    }
+    let cookie = KeepAliveCookie(ka.next_cookie);
+    ka.next_cookie = ka.next_cookie.wrapping_add(1);
+    match keep_alive_transition(
+        ka.state,
+        KeepAliveAgency::Client,
+        ka.version,
+        KeepAliveMessage::KeepAlive(cookie),
+    ) {
+        Ok((new_state, _output)) => {
+            ka.state = new_state;
+            // Wire-only diagnostic (DC-PUMP-03 / CE-AM-LIVE observability):
+            // stderr only, no AdmissionPeerEvent.
+            eprintln!("keep_alive: ping cookie={} sent (cadence) peer={peer_addr}", cookie.0);
+            flush_outbound(
+                session,
+                ByteChunkIn::OutboundFrame {
+                    mini_protocol: AcceptedMiniProtocol::KeepAlive,
+                    payload: encode_keep_alive_message(&KeepAliveMessage::KeepAlive(cookie)),
+                    mode: MuxMode::Initiator,
+                    timestamp: 0,
+                },
+                outbound,
+                peer_addr,
+            )
+            .await
+        }
+        Err(e) => Err(AdmissionWirePumpResult::Error(
+            AdmissionWirePumpError::KeepAlive(e),
+        )),
+    }
+}
+
+/// LIVE-WIRE-LIVENESS S1 (INV-WL-1). Deliver one `AdmissionPeerEvent`
+/// downstream without ever going silent on the wire.
+///
+/// The pre-slice pump awaited `events_out.send(..)` directly. That call sits
+/// OUTSIDE the pump's `select!`, so while the consumer stalled (block
+/// application, epoch-boundary fold, checkpoint capture) the keep-alive cadence
+/// could not fire and the peer shut the connection down with
+/// `ExceededTimeLimit (KeepAlive) ClientHasAgency` — observed live 2026-08-01
+/// at 03:44:11Z, 2m52s after handshake.
+///
+/// Here the wait itself is a `select!`, so during an arbitrarily long stall we
+/// keep the keep-alive protocol live in BOTH directions: fire the cadence, and
+/// consume the peer's echoed `MsgResponseKeepAlive` so the BLUE state returns to
+/// `ClientIdle` and later ticks are not suppressed by the agency guard. Handling
+/// only the timer would send a single ping and then stall in `ClientAwaiting`,
+/// buying ~117s instead of unbounded tolerance.
+///
+/// Non-keep-alive frames read while waiting are appended to `pending_frames` in
+/// wire order (INV-WL-2), under a fixed cap (INV-WL-3). All three `select!`
+/// arms are cancel-safe (`reserve`, `Interval::tick`, `Receiver::recv`).
+#[allow(clippy::too_many_arguments)]
+async fn emit_cooperative(
+    events_out: &mpsc::Sender<AdmissionPeerEvent>,
+    event: AdmissionPeerEvent,
+    session: &mut SessionState,
+    inbound: &mut mpsc::Receiver<Vec<u8>>,
+    outbound: &mpsc::Sender<Vec<u8>>,
+    ka: &mut KeepAliveLane,
+    ka_timer: &mut tokio::time::Interval,
+    pending_frames: &mut VecDeque<(AcceptedMiniProtocol, Vec<u8>)>,
+    peer_addr: &str,
+) -> Result<(), AdmissionWirePumpResult> {
+    let permit = loop {
+        tokio::select! {
+            reserved = events_out.reserve() => match reserved {
+                Ok(p) => break p,
+                Err(_) => return Err(AdmissionWirePumpResult::EventsChannelDropped),
+            },
+            _ = ka_timer.tick() => {
+                keep_alive_cadence_send(ka, session, outbound, peer_addr).await?;
+            }
+            maybe_chunk = inbound.recv() => {
+                let Some(chunk) = maybe_chunk else {
+                    return Err(AdmissionWirePumpResult::Eof);
+                };
+                let effects = step(session, ByteChunkIn::Inbound(chunk)).map_err(|err| {
+                    AdmissionWirePumpResult::Error(AdmissionWirePumpError::Session(err))
+                })?;
+                for effect in effects {
+                    match effect {
+                        SessionEffect::SendBytes(bytes) => {
+                            if outbound.send(bytes).await.is_err() {
+                                return Err(AdmissionWirePumpResult::Error(
+                                    AdmissionWirePumpError::TransportWrite,
+                                ));
+                            }
+                        }
+                        SessionEffect::DeliverPeerFrame { mini_protocol, payload } => {
+                            if mini_protocol == AcceptedMiniProtocol::KeepAlive {
+                                // The whole point: validate the echo NOW so the
+                                // lane returns to `ClientIdle` and the next
+                                // cadence tick is not suppressed.
+                                handle_keep_alive(&payload, &mut ka.state, ka.version).map_err(
+                                    |e| {
+                                        AdmissionWirePumpResult::Error(
+                                            AdmissionWirePumpError::KeepAlive(e),
+                                        )
+                                    },
+                                )?;
+                            } else {
+                                if pending_frames.len() >= MAX_DEFERRED_PEER_FRAMES {
+                                    return Err(AdmissionWirePumpResult::Error(
+                                        AdmissionWirePumpError::DeferredFrameOverflow,
+                                    ));
+                                }
+                                pending_frames.push_back((mini_protocol, payload));
+                            }
+                        }
+                        SessionEffect::HandshakeComplete { .. } => {}
+                    }
+                }
+            }
+        }
+    };
+    permit.send(event);
+    Ok(())
+}
+
+/// LIVE-WIRE-LIVENESS S1: decode + handle exactly one peer frame, then deliver
+/// the events it produced through `emit_cooperative`. Shared by the outer loop's
+/// step 1b so deferred and freshly-read frames take an identical path.
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_peer_frame(
+    mini_protocol: AcceptedMiniProtocol,
+    payload: Vec<u8>,
     peer_addr: &str,
     events_out: &mpsc::Sender<AdmissionPeerEvent>,
+    session: &mut SessionState,
+    inbound: &mut mpsc::Receiver<Vec<u8>>,
+    outbound: &mpsc::Sender<Vec<u8>>,
+    ka: &mut KeepAliveLane,
+    ka_timer: &mut tokio::time::Interval,
+    pending_frames: &mut VecDeque<(AcceptedMiniProtocol, Vec<u8>)>,
+    outbox: &mut VecDeque<ByteChunkIn>,
+    chain_sync_in_flight: &mut bool,
+    block_fetch_in_flight: &mut bool,
+) -> Result<(), AdmissionWirePumpResult> {
+    let mut out_events: VecDeque<AdmissionPeerEvent> = VecDeque::new();
+    match mini_protocol {
+        AcceptedMiniProtocol::ChainSync => {
+            let msg = decode_chain_sync_message(&payload).map_err(|_| {
+                AdmissionWirePumpResult::Error(AdmissionWirePumpError::ChainSyncDecode)
+            })?;
+            handle_chain_sync(
+                msg,
+                peer_addr,
+                &mut out_events,
+                outbox,
+                chain_sync_in_flight,
+                block_fetch_in_flight,
+            )?;
+        }
+        AcceptedMiniProtocol::BlockFetch => {
+            let msg = decode_block_fetch_message(&payload).map_err(|_| {
+                AdmissionWirePumpResult::Error(AdmissionWirePumpError::BlockFetchDecode)
+            })?;
+            handle_block_fetch(
+                msg,
+                peer_addr,
+                &mut out_events,
+                outbox,
+                chain_sync_in_flight,
+                block_fetch_in_flight,
+            )?;
+        }
+        AcceptedMiniProtocol::KeepAlive => {
+            // DC-PUMP-03 (PHASE4-N-AM): consume the peer's
+            // `MsgResponseKeepAlive` to advance the BLUE keep-alive state
+            // machine back to `ClientIdle`, validating the echoed cookie.
+            // Wire-only — emits NO `AdmissionPeerEvent`. A grammar violation
+            // (cookie mismatch / illegal / undecodable) fails closed.
+            handle_keep_alive(&payload, &mut ka.state, ka.version).map_err(|e| {
+                AdmissionWirePumpResult::Error(AdmissionWirePumpError::KeepAlive(e))
+            })?;
+        }
+        AcceptedMiniProtocol::Handshake
+        | AcceptedMiniProtocol::TxSubmission
+        | AcceptedMiniProtocol::LocalChainSync
+        | AcceptedMiniProtocol::LocalTxSubmission
+        | AcceptedMiniProtocol::LocalStateQuery
+        | AcceptedMiniProtocol::LocalTxMonitor
+        | AcceptedMiniProtocol::PeerSharing => {
+            // Honest-scope: the admission pump only listens for chain-sync +
+            // block-fetch (plus the keep-alive client above) in this cluster.
+            // Other accepted mini-protocol frames are silently dropped; the
+            // runner has no consumer for them.
+        }
+    }
+    while let Some(ev) = out_events.pop_front() {
+        emit_cooperative(
+            events_out,
+            ev,
+            session,
+            inbound,
+            outbound,
+            ka,
+            ka_timer,
+            pending_frames,
+            peer_addr,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// LIVE-WIRE-LIVENESS S1: emission is HOISTED out of this handler. It now
+/// appends to `out_events` (order-preserving) instead of awaiting a bounded
+/// `events_out.send`, so the caller can drain them through `emit_cooperative`
+/// with the keep-alive machinery in scope (INV-WL-1/2). Sequencing
+/// (`*_in_flight`, outbox queuing) is unchanged, and events are still appended
+/// BEFORE any request is queued, so the on-wire order is byte-identical.
+fn handle_chain_sync(
+    msg: ChainSyncMessage,
+    peer_addr: &str,
+    out_events: &mut VecDeque<AdmissionPeerEvent>,
     outbox: &mut VecDeque<ByteChunkIn>,
     chain_sync_in_flight: &mut bool,
     block_fetch_in_flight: &mut bool,
 ) -> Result<(), AdmissionWirePumpResult> {
     match msg {
         ChainSyncMessage::IntersectFound { point: _, tip } => {
-            emit(events_out, peer_addr, tip_update(peer_addr, tip.clone())).await?;
+            out_events.push_back(tip_update(peer_addr, tip.clone()));
             *chain_sync_in_flight = false;
             // PHASE4-N-M-FOLLOW: do NOT block-fetch the peer's
             // tip here. Chain-sync starts walking forward FROM
@@ -496,7 +683,7 @@ async fn handle_chain_sync(
             Ok(())
         }
         ChainSyncMessage::IntersectNotFound { tip } => {
-            emit(events_out, peer_addr, tip_update(peer_addr, tip)).await?;
+            out_events.push_back(tip_update(peer_addr, tip));
             *chain_sync_in_flight = false;
             // Producer has nothing for us at the requested
             // intersect — request the next message anyway so the
@@ -506,7 +693,7 @@ async fn handle_chain_sync(
             Ok(())
         }
         ChainSyncMessage::RollForward { header, tip } => {
-            emit(events_out, peer_addr, tip_update(peer_addr, tip)).await?;
+            out_events.push_back(tip_update(peer_addr, tip));
             *chain_sync_in_flight = false;
             // PHASE4-N-M-FOLLOW: extract the rolled-forward
             // block's point from the header envelope, then
@@ -544,16 +731,11 @@ async fn handle_chain_sync(
             // preserves the signal here -- no orchestrator / ChainDb / forge.
             match point {
                 point @ Point::Block { .. } => {
-                    emit(
-                        events_out,
-                        peer_addr,
-                        AdmissionPeerEvent::RollBackward {
-                            peer: peer_addr.to_string(),
-                            point,
-                            tip,
-                        },
-                    )
-                    .await?;
+                    out_events.push_back(AdmissionPeerEvent::RollBackward {
+                        peer: peer_addr.to_string(),
+                        point,
+                        tip,
+                    });
                 }
                 Point::Origin => {
                     return Err(AdmissionWirePumpResult::Error(
@@ -590,10 +772,13 @@ async fn handle_chain_sync(
     }
 }
 
-async fn handle_block_fetch(
+/// LIVE-WIRE-LIVENESS S1: emission hoisted to the caller (see
+/// `handle_chain_sync`). Appends to `out_events` instead of awaiting a bounded
+/// send, so a full downstream channel can never park the pump here.
+fn handle_block_fetch(
     msg: BlockFetchMessage,
     peer_addr: &str,
-    events_out: &mpsc::Sender<AdmissionPeerEvent>,
+    out_events: &mut VecDeque<AdmissionPeerEvent>,
     outbox: &mut VecDeque<ByteChunkIn>,
     _chain_sync_in_flight: &mut bool,
     block_fetch_in_flight: &mut bool,
@@ -618,15 +803,11 @@ async fn handle_block_fetch(
             let bare = decompose_blockfetch_block(&bytes).map_err(|_| {
                 AdmissionWirePumpResult::Error(AdmissionWirePumpError::BlockFetchDecode)
             })?;
-            emit(
-                events_out,
-                peer_addr,
-                AdmissionPeerEvent::Block {
-                    peer: peer_addr.to_string(),
-                    block_bytes: bare.to_vec(),
-                },
-            )
-            .await
+            out_events.push_back(AdmissionPeerEvent::Block {
+                peer: peer_addr.to_string(),
+                block_bytes: bare.to_vec(),
+            });
+            Ok(())
         }
         BlockFetchMessage::BatchDone => {
             *block_fetch_in_flight = false;
@@ -782,18 +963,6 @@ fn tip_update(peer_addr: &str, tip: Tip) -> AdmissionPeerEvent {
     AdmissionPeerEvent::TipUpdate {
         peer: peer_addr.to_string(),
         tip,
-    }
-}
-
-async fn emit(
-    events_out: &mpsc::Sender<AdmissionPeerEvent>,
-    _peer_addr: &str,
-    event: AdmissionPeerEvent,
-) -> Result<(), AdmissionWirePumpResult> {
-    if events_out.send(event).await.is_err() {
-        Err(AdmissionWirePumpResult::EventsChannelDropped)
-    } else {
-        Ok(())
     }
 }
 
@@ -990,7 +1159,7 @@ mod tests {
 
     #[tokio::test]
     async fn wire_pump_rollbackward_block_preserves_point() {
-        let (tx, mut rx) = mpsc::channel::<AdmissionPeerEvent>(8);
+        let mut evs: VecDeque<AdmissionPeerEvent> = VecDeque::new();
         let mut outbox: VecDeque<ByteChunkIn> = VecDeque::new();
         let (mut csf, mut bff) = (false, false);
         let point = Point::Block {
@@ -1004,14 +1173,13 @@ mod tests {
                 tip: tip.clone(),
             },
             "peer",
-            &tx,
+            &mut evs,
             &mut outbox,
             &mut csf,
             &mut bff,
-        )
-        .await;
+        );
         assert!(r.is_ok());
-        match rx.try_recv().expect("a RollBackward event is emitted") {
+        match evs.pop_front().expect("a RollBackward event is emitted") {
             AdmissionPeerEvent::RollBackward {
                 point: got_point,
                 tip: got_tip,
@@ -1026,7 +1194,7 @@ mod tests {
 
     #[tokio::test]
     async fn wire_pump_rollbackward_origin_fails_closed() {
-        let (tx, mut rx) = mpsc::channel::<AdmissionPeerEvent>(8);
+        let mut evs: VecDeque<AdmissionPeerEvent> = VecDeque::new();
         let mut outbox: VecDeque<ByteChunkIn> = VecDeque::new();
         let (mut csf, mut bff) = (false, false);
         let r = handle_chain_sync(
@@ -1035,12 +1203,11 @@ mod tests {
                 tip: fake_tip(105),
             },
             "peer",
-            &tx,
+            &mut evs,
             &mut outbox,
             &mut csf,
             &mut bff,
-        )
-        .await;
+        );
         assert!(
             matches!(
                 r,
@@ -1050,13 +1217,13 @@ mod tests {
             ),
             "rollback-to-Origin fails closed"
         );
-        assert!(rx.try_recv().is_err(), "no event is emitted on Origin fail-closed");
+        assert!(evs.is_empty(), "no event is emitted on Origin fail-closed");
     }
 
     #[tokio::test]
     async fn wire_pump_intersectfound_still_emits_tipupdate_unchanged() {
         // The TipUpdate path is unchanged by AI-S4a (only RollBackward changed).
-        let (tx, mut rx) = mpsc::channel::<AdmissionPeerEvent>(8);
+        let mut evs: VecDeque<AdmissionPeerEvent> = VecDeque::new();
         let mut outbox: VecDeque<ByteChunkIn> = VecDeque::new();
         let (mut csf, mut bff) = (false, false);
         let tip = fake_tip(42);
@@ -1066,14 +1233,13 @@ mod tests {
                 tip: tip.clone(),
             },
             "peer",
-            &tx,
+            &mut evs,
             &mut outbox,
             &mut csf,
             &mut bff,
-        )
-        .await;
+        );
         assert!(r.is_ok());
-        match rx.try_recv().expect("a TipUpdate event") {
+        match evs.pop_front().expect("a TipUpdate event") {
             AdmissionPeerEvent::TipUpdate { tip: got, .. } => assert_eq!(got, tip),
             _ => panic!("expected AdmissionPeerEvent::TipUpdate"),
         }
@@ -1308,6 +1474,240 @@ mod tests {
 
         drop(server_transport);
         let _ = pump_handle.await;
+    }
+
+    // LIVE-WIRE-LIVENESS S1 (INV-WL-1/2/3) — keep-alive under downstream
+    // backpressure. Regression cover for the 2026-08-01 03:44:11Z live preview
+    // shutdown: `ExceededTimeLimit (KeepAlive) ClientHasAgency`, 2m52s after
+    // handshake, because the pump was parked on a bounded `events_out.send`
+    // OUTSIDE its `select!` while the consumer folded an epoch boundary.
+
+    /// CE-WL-1. With `events_out` full and NEVER drained, `emit_cooperative`
+    /// must still send `MsgKeepAlive` on cadence AND consume the echoed
+    /// response, so ping after ping goes out for an unbounded stall.
+    ///
+    /// The strictness is in the COOKIES. Servicing only the cadence timer would
+    /// emit exactly one ping and then wedge in `ClientAwaiting` (the agency
+    /// guard suppresses every later tick) — which buys ~117s and then dies.
+    /// Three pings with strictly increasing cookies can only happen if each
+    /// echoed response was consumed *while parked on a full `events_out`*.
+    ///
+    /// Driven over in-memory channels rather than a loopback socket: under
+    /// `start_paused` the virtual clock auto-advances past real TCP delivery,
+    /// so a socket-based version races. This exercises the same code path.
+    #[tokio::test(start_paused = true)]
+    async fn ce_wl_1_keep_alive_survives_unbounded_downstream_stall() {
+        // Capacity 1, pre-filled, never drained => `reserve()` pends forever.
+        let (events_tx, _events_rx) = mpsc::channel::<AdmissionPeerEvent>(1);
+        events_tx
+            .send(tip_update("peer", fake_tip(1)))
+            .await
+            .expect("prefill to capacity");
+
+        let (in_tx, mut in_rx) = mpsc::channel::<Vec<u8>>(16);
+        let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(64);
+
+        let mut session = post_handshake_state(14, MAINNET_NETWORK_MAGIC);
+        let mut ka = KeepAliveLane {
+            state: KeepAliveState::ClientIdle,
+            next_cookie: 0,
+            version: KeepAliveVersion::new(14),
+        };
+        let mut timer = tokio::time::interval(KEEP_ALIVE_CADENCE);
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        timer.tick().await;
+        let mut pending: VecDeque<(AcceptedMiniProtocol, Vec<u8>)> = VecDeque::new();
+
+        // This never returns: capacity never frees. The timeout ends it.
+        let emit_fut = tokio::time::timeout(
+            Duration::from_secs(600),
+            emit_cooperative(
+                &events_tx,
+                tip_update("peer", fake_tip(2)),
+                &mut session,
+                &mut in_rx,
+                &out_tx,
+                &mut ka,
+                &mut timer,
+                &mut pending,
+                "peer",
+            ),
+        );
+
+        // Peer side: echo every keep-alive so the BLUE lane returns to
+        // `ClientIdle`, exactly as a real relay responder does.
+        let echo_fut = async {
+            let mut cookies: Vec<u16> = Vec::new();
+            while cookies.len() < 3 {
+                let Some(bytes) = out_rx.recv().await else { break };
+                let (frame, _) =
+                    ade_network::mux::frame::decode_frame(&bytes).expect("frame decodes");
+                if frame.header.mini_protocol_id.get() != AcceptedMiniProtocol::KEEP_ALIVE_ID {
+                    continue;
+                }
+                match decode_keep_alive_message(&frame.payload).expect("decode keep-alive") {
+                    KeepAliveMessage::KeepAlive(c) => {
+                        cookies.push(c.0);
+                        let resp =
+                            encode_keep_alive_message(&KeepAliveMessage::ResponseKeepAlive(c));
+                        in_tx
+                            .send(responder_frame(AcceptedMiniProtocol::KEEP_ALIVE_ID, resp))
+                            .await
+                            .expect("peer echoes the keep-alive");
+                    }
+                    other => panic!("expected MsgKeepAlive, got {other:?}"),
+                }
+            }
+            cookies
+        };
+
+        let (_, cookies) = tokio::join!(emit_fut, echo_fut);
+
+        assert_eq!(
+            cookies.len(),
+            3,
+            "keep-alive must keep flowing while parked on a full events_out, got {cookies:?}"
+        );
+        assert!(
+            cookies[0] < cookies[1] && cookies[1] < cookies[2],
+            "cookies must strictly increase ({cookies:?}) — proving each echoed \
+             response was consumed WHILE parked. A send-only fix wedges in \
+             ClientAwaiting after the first ping."
+        );
+    }
+
+    /// CE-WL-2. Backpressure must not reorder the event stream: a slow consumer
+    /// (capacity 1, drained one at a time) sees exactly the same
+    /// `AdmissionPeerEvent` sequence as an unstalled run.
+    #[tokio::test(start_paused = true)]
+    async fn ce_wl_2_backpressure_preserves_event_order() {
+        let (client_stream, server_stream) = loopback_pair().await;
+        let client_transport = spawn_duplex(client_stream, DuplexCapacity::DEFAULT);
+        let mut server_transport = spawn_duplex(server_stream, DuplexCapacity::DEFAULT);
+
+        let (events_tx, mut events_rx) = mpsc::channel::<AdmissionPeerEvent>(1);
+
+        let pump_handle = tokio::spawn(async move {
+            run_admission_wire_pump(
+                client_transport,
+                "127.0.0.1:0".into(),
+                Point::Origin,
+                14,
+                MAINNET_NETWORK_MAGIC,
+                events_tx,
+            )
+            .await
+        });
+
+        let _ = server_transport
+            .inbound
+            .recv()
+            .await
+            .expect("client sent FindIntersect");
+
+        // Push several tip-bearing replies back-to-back so the bounded channel
+        // is saturated and the pump must defer frames.
+        let slots: Vec<u64> = (100..106).collect();
+        for slot in &slots {
+            let payload = encode_chain_sync_message(&ChainSyncMessage::IntersectFound {
+                point: Point::Origin,
+                tip: fake_tip(*slot),
+            });
+            server_transport
+                .outbound
+                .send(responder_frame(AcceptedMiniProtocol::CHAIN_SYNC_ID, payload))
+                .await
+                .expect("server sends IntersectFound");
+        }
+
+        // Drain one at a time — each recv frees exactly one permit.
+        let mut seen: Vec<u64> = Vec::new();
+        while seen.len() < slots.len() {
+            let evt = tokio::time::timeout(Duration::from_secs(120), events_rx.recv())
+                .await
+                .expect("events keep flowing")
+                .expect("channel open");
+            if let AdmissionPeerEvent::TipUpdate { tip, .. } = evt {
+                if let Point::Block { slot, .. } = tip.point {
+                    seen.push(slot.0);
+                }
+            }
+        }
+        assert_eq!(
+            seen, slots,
+            "TipUpdate order under backpressure must match wire order exactly"
+        );
+
+        drop(server_transport);
+        let _ = pump_handle.await;
+    }
+
+    /// CE-WL-3. The deferral queue is bounded: once `MAX_DEFERRED_PEER_FRAMES`
+    /// frames are outstanding, a further deferred frame fails closed rather
+    /// than growing without limit.
+    #[tokio::test(start_paused = true)]
+    async fn ce_wl_3_deferred_frames_are_bounded_and_fail_closed() {
+        // events_out full => `emit_cooperative` parks and takes the defer path.
+        let (events_tx, _events_rx) = mpsc::channel::<AdmissionPeerEvent>(1);
+        events_tx
+            .send(tip_update("peer", fake_tip(1)))
+            .await
+            .expect("prefill to capacity");
+
+        let (in_tx, mut in_rx) = mpsc::channel::<Vec<u8>>(8);
+        let (out_tx, _out_rx) = mpsc::channel::<Vec<u8>>(64);
+
+        let mut session = post_handshake_state(14, MAINNET_NETWORK_MAGIC);
+        let mut ka = KeepAliveLane {
+            state: KeepAliveState::ClientIdle,
+            next_cookie: 0,
+            version: KeepAliveVersion::new(14),
+        };
+        let mut timer = tokio::time::interval(KEEP_ALIVE_CADENCE);
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        timer.tick().await;
+
+        // Pre-fill the queue to the cap, then hand the pump one more frame.
+        let mut pending: VecDeque<(AcceptedMiniProtocol, Vec<u8>)> = VecDeque::new();
+        for _ in 0..MAX_DEFERRED_PEER_FRAMES {
+            pending.push_back((AcceptedMiniProtocol::ChainSync, vec![]));
+        }
+        let payload = encode_chain_sync_message(&ChainSyncMessage::IntersectFound {
+            point: Point::Origin,
+            tip: fake_tip(7),
+        });
+        in_tx
+            .send(responder_frame(AcceptedMiniProtocol::CHAIN_SYNC_ID, payload))
+            .await
+            .expect("queue one more inbound frame");
+
+        let res = emit_cooperative(
+            &events_tx,
+            tip_update("peer", fake_tip(2)),
+            &mut session,
+            &mut in_rx,
+            &out_tx,
+            &mut ka,
+            &mut timer,
+            &mut pending,
+            "peer",
+        )
+        .await;
+
+        assert!(
+            matches!(
+                res,
+                Err(AdmissionWirePumpResult::Error(
+                    AdmissionWirePumpError::DeferredFrameOverflow
+                ))
+            ),
+            "deferral past the cap must fail closed, got {res:?}"
+        );
+        assert_eq!(
+            pending.len(),
+            MAX_DEFERRED_PEER_FRAMES,
+            "the overflowing frame is NOT buffered"
+        );
     }
 
     #[test]
@@ -1621,7 +2021,7 @@ mod tests {
     /// this is its receive-side mirror.)
     #[tokio::test]
     async fn block_fetch_unwraps_tag24_emitting_bare_block() {
-        let (tx, mut rx) = mpsc::channel::<AdmissionPeerEvent>(4);
+        let mut evs: VecDeque<AdmissionPeerEvent> = VecDeque::new();
         let mut outbox: VecDeque<ByteChunkIn> = VecDeque::new();
         let mut cs_in_flight = false;
         let mut bf_in_flight = true;
@@ -1639,15 +2039,14 @@ mod tests {
         handle_block_fetch(
             BlockFetchMessage::Block { bytes: wrapped },
             "127.0.0.1:0",
-            &tx,
+            &mut evs,
             &mut outbox,
             &mut cs_in_flight,
             &mut bf_in_flight,
         )
-        .await
         .expect("a valid tag-24 block-fetch payload unwraps and emits");
 
-        match rx.try_recv().expect("a Block event is emitted") {
+        match evs.pop_front().expect("a Block event is emitted") {
             AdmissionPeerEvent::Block { block_bytes, .. } => assert_eq!(
                 block_bytes, bare,
                 "the emitted block is the tag-24-UNWRAPPED bare [era, block] \
@@ -1663,7 +2062,7 @@ mod tests {
     /// unwrapped-but-not-actually-wrapped bytes, and no `Block` event emitted.
     #[tokio::test]
     async fn block_fetch_fails_closed_on_non_tag24_payload() {
-        let (tx, mut rx) = mpsc::channel::<AdmissionPeerEvent>(4);
+        let mut evs: VecDeque<AdmissionPeerEvent> = VecDeque::new();
         let mut outbox: VecDeque<ByteChunkIn> = VecDeque::new();
         let mut cs_in_flight = false;
         let mut bf_in_flight = true;
@@ -1675,12 +2074,11 @@ mod tests {
         let res = handle_block_fetch(
             BlockFetchMessage::Block { bytes: non_tag24 },
             "127.0.0.1:0",
-            &tx,
+            &mut evs,
             &mut outbox,
             &mut cs_in_flight,
             &mut bf_in_flight,
-        )
-        .await;
+        );
 
         assert!(
             matches!(
@@ -1692,7 +2090,7 @@ mod tests {
             "a non-tag-24 payload must fail closed with BlockFetchDecode, got {res:?}"
         );
         assert!(
-            rx.try_recv().is_err(),
+            evs.is_empty(),
             "no Block event is emitted on a fail-closed unwrap"
         );
     }
