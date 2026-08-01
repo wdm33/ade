@@ -89,6 +89,26 @@ If no block was delivered in the session, the previous start point is reused.
   behaviour is preserved.
 - **CE-WL-8 (live).** A live preview run survives a peer restart and resumes following.
 
+### Live acceptance — CE-WL-5 + CE-WL-8 MET 2026-08-01
+
+Deliberate `docker restart cardano-node-preview` against a run holding the live tip
+(`~/.cardano-live1/ade-1376-s1s2.log`, store `ade-preview-1376`, epoch 1376):
+
+```
+05:51:09.264Z  admission_wire_pump: peer=127.0.0.1:3002 exit=Eof
+05:51:09.264Z  live feed to 127.0.0.1:3002 lost (Ok(Eof)); reconnecting in 1s
+               from Block { slot: SlotNo(118907456), hash: Hash32(90aeea35…) }
+05:51:10 → 05:51:24  re-dial failed (Io(UnexpectedEof)) x4; backoff 1→2→4→8→15s
+05:51:59.358Z  keep_alive: ping cookie=0 sent    <- cookie reset = NEW session
+05:52:57.778Z  follow: tip slot=118907534 behind=1 slots from peer
+05:52:57.855Z  follow: tip slot=118907535 -- AT PEER TIP (caught up, following live)
+```
+
+`exit=Eof` is the exact event that ended the run on 2026-08-01 05:36Z. Total outage-to-tip
+recovery 1m48s. Resume was from the last DELIVERED block (INV-WL-7); no fail-closed, no k-guard
+violation, no rollback error. S1's cadence is healthy on the new session, so both slices are
+observed working together.
+
 ## NOT claimed here
 
 Reconnect does not repair a **deep reorg past the resume point**: if the peer cannot find the
