@@ -7249,11 +7249,11 @@ into block production. Derived tier with a true-tier authority consequence.
 source = "docs/planning/phase4-n-ai-live-fork-choice-invariants.md (I-12)"
 cross_ref = ["DC-NODE-23", "DC-NODE-24", "DC-NODE-20", "DC-NODE-05", "DC-CONS-13"]
 code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_sync.rs (the forge gate -- extend single_producer_forge_decision / the Participant forge-base selection with a pending-resolution fence) + node_lifecycle.rs (the ForgeTick arm respects the pending state)."
-tests = ["pending_reselection_forge_refusal_gate", "participant_rollback_beyond_k_fails_closed_clears_pending", "singleproducer_rollback_refused_by_run_node_sync"]
+tests = ["pending_reselection_forge_refusal_gate", "participant_rollback_beyond_k_fails_closed_clears_pending", "singleproducer_rollback_refused_by_run_node_sync", "forge_path_rollback_applies_durably", "forge_path_rollback_beyond_k_fails_closed_clears_pending"]
 ci_script = "ci/ci_check_live_fork_choice_wiring.sh, ci/ci_check_participant_venue_inert.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AI"
-strengthened_in = ["PHASE4-N-AO", "CN-FOLLOW-01"]
+strengthened_in = ["PHASE4-N-AO", "CN-FOLLOW-01", "LIVE-FORGE-HARDENING-S1"]
 
 [[rules]]
 id = "DC-NODE-29"
@@ -7271,11 +7271,11 @@ hash). Reconciliation (DC-NODE-26) remains the post-apply backstop but is NOT th
 source = "docs/clusters/PHASE4-N-AI/S6-rollback-target-slot-hash-binding.md (H-1 remediation)"
 cross_ref = ["DC-NODE-25", "DC-NODE-26", "DC-NODE-23", "CN-STORE-07", "DC-CONS-20"]
 code_locus = "crates/ade_node/src/node_lifecycle.rs (run_participant_sync RollBack arm) over crates/ade_runtime/src/chaindb get_block_by_hash. RED shell binding; reuses the enforced rollback authorities; no new BLUE."
-tests = ["rollback_slot_hash_mismatch_fails_before_mutation", "participant_rollback_applies_durably", "participant_rollback_to_unknown_point_fails_closed"]
+tests = ["rollback_slot_hash_mismatch_fails_before_mutation", "participant_rollback_applies_durably", "participant_rollback_to_unknown_point_fails_closed", "forge_path_rollback_slot_hash_mismatch_fails_before_mutation", "forge_path_rollback_to_unknown_point_fails_closed"]
 ci_script = "ci/ci_check_rollback_target_canonical_binding.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AI"
-strengthened_in = ["PHASE4-N-AO"]
+strengthened_in = ["PHASE4-N-AO", "LIVE-FORGE-HARDENING-S1"]
 attack_rationale = "Closes H-1 (cluster-close security review): a Byzantine peer's RollBackward naming a real in-chain hash with an arbitrary lower slot would truncate the durable chain to a peer-chosen depth (mixed peer/local authority) and brick the node; reconciliation caught the slot/hash mismatch only AFTER commit_rollback + WalEntry::RollBack had mutated disk. Pre-commit canonical target binding rejects it with a typed error and zero durable mutation."
 
 [[rules]]
