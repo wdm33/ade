@@ -64,7 +64,10 @@ use ade_runtime::bootstrap::{
     bootstrap_initial_state, BootstrapInputs, BootstrapState, SeedEpochConsensusSource,
 };
 use ade_runtime::recovered_anchor::load_recovered_anchor_point;
-use ade_runtime::admission::{dial_for_admission, run_admission_wire_pump, AdmissionPeerEvent};
+use ade_runtime::admission::{
+    dial_for_admission, run_admission_wire_pump, AdmissionPeerEvent, AdmissionWirePumpError,
+    AdmissionWirePumpResult,
+};
 use ade_runtime::chaindb::{
     ChainDb, ChainTip, PersistentChainDb, PersistentChainDbOptions, SnapshotStore,
 };
@@ -1271,6 +1274,46 @@ fn wire_pump_start_point(recovered_tip: Option<&ChainTip>) -> ade_network::codec
     }
 }
 
+/// LIVE-WIRE-LIVENESS S2 (INV-WL-10): bounded, deterministic reconnect backoff.
+/// A fixed escalating schedule capped at 30s — no randomness (a wall-clock RED
+/// transport concern that never reaches the BLUE core), so a relay that is down
+/// for a while is retried patiently rather than hot-looped.
+const RECONNECT_BACKOFF_SECS: &[u64] = &[1, 2, 4, 8, 15, 30];
+
+fn reconnect_backoff_secs(attempt: usize) -> u64 {
+    let last = RECONNECT_BACKOFF_SECS.len() - 1;
+    RECONNECT_BACKOFF_SECS[attempt.min(last)]
+}
+
+/// LIVE-WIRE-LIVENESS S2 (INV-WL-9): the closed reconnect policy over the wire
+/// pump's outcome sum. Named + total so the decision is one testable authority
+/// rather than an inline `matches!`.
+///
+/// TRANSPORT-level loss reconnects. A peer PROTOCOL / GRAMMAR violation keeps
+/// the pre-slice fail-closed drop — a systematically bad peer must not be
+/// retried into a livelock — and `EventsChannelDropped` means the consumer is
+/// gone, so there is nobody to reconnect for.
+///
+/// This never sees a consensus outcome: admission, rollback k-guard, boundary
+/// promotion and the forge fence all live in the consumer and keep their own
+/// typed halts (INV-WL-6).
+fn should_reconnect_after(outcome: &AdmissionWirePumpResult) -> bool {
+    match outcome {
+        AdmissionWirePumpResult::Eof => true,
+        AdmissionWirePumpResult::Error(e) => match e {
+            AdmissionWirePumpError::TransportRead | AdmissionWirePumpError::TransportWrite => true,
+            AdmissionWirePumpError::Session(_)
+            | AdmissionWirePumpError::ChainSyncDecode
+            | AdmissionWirePumpError::BlockFetchDecode
+            | AdmissionWirePumpError::UnexpectedProtocolMessage { .. }
+            | AdmissionWirePumpError::UnsupportedRollbackPoint
+            | AdmissionWirePumpError::KeepAlive(_)
+            | AdmissionWirePumpError::DeferredFrameOverflow => false,
+        },
+        AdmissionWirePumpResult::EventsChannelDropped => false,
+    }
+}
+
 fn spawn_live_wire_pump_source(
     peer_addrs: &[String],
     network_magic: u32,
@@ -1302,17 +1345,115 @@ fn spawn_live_wire_pump_source(
         let pump_versions = our_versions.clone();
         let start = start_point.clone();
         let label = raw_addr.clone();
+        // LIVE-WIRE-LIVENESS S2: per-peer SUPERVISOR (was a one-shot dial+pump).
+        // A transport-level loss of an ESTABLISHED session is recovered instead
+        // of ending the run (observed live 2026-08-01: `exit=Eof` ->
+        // `relay run loop exited`). Recovery is transport-only: every consensus
+        // decision stays in the consumer with its existing typed halt
+        // (INV-WL-6).
         tokio::spawn(async move {
-            let (transport, version) = match dial_for_admission(addr, pump_versions).await {
-                Ok(pair) => pair,
-                Err(e) => {
-                    eprintln!("ade_node --mode node: dial-for-admission failed for {label}: {e:?}");
+            let mut start = start;
+            let mut established = false;
+            let mut attempt: usize = 0;
+            // Most recent block delivered downstream; decoded ONLY on reconnect
+            // to derive the resume point (INV-WL-7), never per block.
+            let mut last_block_bytes: Option<Vec<u8>> = None;
+
+            loop {
+                let (transport, version) =
+                    match dial_for_admission(addr, pump_versions.clone()).await {
+                        Ok(pair) => pair,
+                        Err(e) => {
+                            if !established {
+                                // INV-WL-8: startup semantics UNCHANGED — an
+                                // unreachable peer is logged-and-dropped, never
+                                // an infinite boot spin.
+                                eprintln!(
+                                    "ade_node --mode node: dial-for-admission failed for {label}: {e:?}"
+                                );
+                                return;
+                            }
+                            let backoff = reconnect_backoff_secs(attempt);
+                            attempt = attempt.saturating_add(1);
+                            eprintln!(
+                                "ade_node --mode node: re-dial {label} failed ({e:?}); \
+                                 retrying in {backoff}s"
+                            );
+                            tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                            continue;
+                        }
+                    };
+                established = true;
+                attempt = 0;
+
+                // Interpose so the per-SESSION `Disconnected` is not surfaced as
+                // a feed end, and so the resume point is observable. Forwarding
+                // is 1:1 with `send().await`, preserving DC-PUMP-04 per-peer
+                // self-backpressure.
+                let (inner_tx, mut inner_rx) =
+                    mpsc::channel::<AdmissionPeerEvent>(PER_PEER_LANE_CAP);
+                let pump = tokio::spawn(run_admission_wire_pump(
+                    transport,
+                    label.clone(),
+                    start.clone(),
+                    version,
+                    network_magic,
+                    inner_tx,
+                ));
+                let mut consumer_gone = false;
+                while let Some(ev) = inner_rx.recv().await {
+                    if matches!(ev, AdmissionPeerEvent::Disconnected { .. }) {
+                        // Per-SESSION artifact. Surfacing it would latch the
+                        // consumer's feed-end flag (node_sync `disconnected`),
+                        // ending the feed permanently even though we reconnect.
+                        continue;
+                    }
+                    if let AdmissionPeerEvent::Block { block_bytes, .. } = &ev {
+                        last_block_bytes = Some(block_bytes.clone());
+                    }
+                    if lane_tx.send(ev).await.is_err() {
+                        consumer_gone = true;
+                        break;
+                    }
+                }
+                let outcome = pump.await;
+                if consumer_gone {
                     return;
                 }
-            };
-            let _ =
-                run_admission_wire_pump(transport, label, start, version, network_magic, lane_tx)
-                    .await;
+                // INV-WL-9: transport-level outcomes reconnect; a peer protocol /
+                // grammar violation keeps today's fail-closed drop, and a dropped
+                // consumer channel means the runner is gone.
+                // A pump task that panicked or was cancelled (`Err`) is NOT a
+                // transport loss — do not retry into it.
+                let reconnect = outcome.as_ref().is_ok_and(should_reconnect_after);
+                if !reconnect {
+                    eprintln!(
+                        "ade_node --mode node: live feed to {label} ended ({outcome:?}); \
+                         not reconnecting"
+                    );
+                    return;
+                }
+                // INV-WL-7: resume from the last block actually delivered. Events
+                // already buffered in the lane are still delivered and are ORDERED
+                // BEFORE the new session's, so by the time the consumer sees the
+                // new session's rollback-to-intersection, that point is already
+                // durable and within k.
+                if let Some(bytes) = &last_block_bytes {
+                    if let Ok(decoded) = decode_block(bytes) {
+                        start = ade_network::codec::chain_sync::Point::Block {
+                            slot: decoded.header_input.slot,
+                            hash: decoded.block_hash.clone(),
+                        };
+                    }
+                }
+                let backoff = reconnect_backoff_secs(attempt);
+                attempt = attempt.saturating_add(1);
+                eprintln!(
+                    "ade_node --mode node: live feed to {label} lost ({outcome:?}); \
+                     reconnecting in {backoff}s from {start:?}"
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+            }
         });
     }
     // RED fair-merge: round-robin the per-peer lanes into the single merged feed.
@@ -6539,6 +6680,87 @@ mod tests {
             bad.next_item().await.is_none(),
             "an unparseable --peer must be skipped, yielding an ended feed (never fatal)"
         );
+    }
+
+    // LIVE-WIRE-LIVENESS S2 — reconnect an ESTABLISHED live feed.
+
+    /// CE-WL-7 / INV-WL-8: a `--peer` that PARSES but refuses the connection is
+    /// a first-dial failure, so no session was ever established. Startup
+    /// semantics are unchanged — logged-and-dropped, feed ends — and the
+    /// supervisor must NOT turn an unreachable peer into an infinite boot spin.
+    #[tokio::test]
+    async fn first_dial_failure_still_ends_the_feed_no_boot_spin() {
+        // Port 1 on loopback: parses fine, refuses (or is unreachable).
+        let mut src = spawn_live_wire_pump_source(&["127.0.0.1:1".to_string()], 1, None);
+        let ended = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                if src.next_item().await.is_none() && !src.has_work_ready() {
+                    return true;
+                }
+            }
+        })
+        .await;
+        assert!(
+            ended.is_ok(),
+            "a first-dial failure must end the feed, never retry forever at boot"
+        );
+    }
+
+    /// INV-WL-10: the backoff schedule is deterministic, monotone
+    /// non-decreasing, and capped — no randomness, no unbounded growth.
+    #[test]
+    fn reconnect_backoff_is_deterministic_monotone_and_capped() {
+        let seq: Vec<u64> = (0..12).map(reconnect_backoff_secs).collect();
+        assert_eq!(seq, (0..12).map(reconnect_backoff_secs).collect::<Vec<_>>());
+        for w in seq.windows(2) {
+            assert!(w[1] >= w[0], "backoff must not decrease: {seq:?}");
+        }
+        let cap = *RECONNECT_BACKOFF_SECS
+            .last()
+            .expect("schedule is non-empty");
+        assert!(
+            seq.iter().all(|s| *s <= cap),
+            "backoff must stay capped at {cap}s: {seq:?}"
+        );
+        assert_eq!(seq[11], cap, "it saturates at the cap rather than growing");
+    }
+
+    /// CE-WL-5 policy / INV-WL-9: exhaustive over the wire pump's closed outcome
+    /// sum. Transport loss reconnects; a peer protocol/grammar violation keeps
+    /// the pre-slice fail-closed drop; a dropped consumer channel exits.
+    #[test]
+    fn reconnect_policy_is_transport_only() {
+        use ade_network::session::SessionError;
+
+        assert!(should_reconnect_after(&AdmissionWirePumpResult::Eof));
+        assert!(should_reconnect_after(&AdmissionWirePumpResult::Error(
+            AdmissionWirePumpError::TransportRead
+        )));
+        assert!(should_reconnect_after(&AdmissionWirePumpResult::Error(
+            AdmissionWirePumpError::TransportWrite
+        )));
+
+        // The consumer is gone — nobody to reconnect for.
+        assert!(!should_reconnect_after(
+            &AdmissionWirePumpResult::EventsChannelDropped
+        ));
+
+        // Peer faults: unchanged fail-closed drop, never a retry livelock.
+        for e in [
+            AdmissionWirePumpError::ChainSyncDecode,
+            AdmissionWirePumpError::BlockFetchDecode,
+            AdmissionWirePumpError::UnexpectedProtocolMessage {
+                protocol: "chain_sync",
+            },
+            AdmissionWirePumpError::UnsupportedRollbackPoint,
+            AdmissionWirePumpError::DeferredFrameOverflow,
+            AdmissionWirePumpError::Session(SessionError::UnknownMiniProtocolId { id: 99 }),
+        ] {
+            assert!(
+                !should_reconnect_after(&AdmissionWirePumpResult::Error(e)),
+                "a peer protocol/grammar fault must not be retried"
+            );
+        }
     }
 
     // ===== L1: pure classifier =====
