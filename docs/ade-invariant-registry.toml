@@ -7583,7 +7583,7 @@ ci_scripts = ["ci/ci_check_keep_alive_wire_only.sh"]
 status = "enforced"
 open_obligation = "ENFORCED at PHASE4-N-AM /cluster-close (2026-06-11). The prior blocked_until_operator_sustain_pass obligation is DISCHARGED -- CE-AM-LIVE (the operator sustain pass) PASSED. Live evidence (FROZEN c2-testnet relay 127.0.0.1:38061, magic 42; transcript OUTSIDE-REPO at ~/.cardano-ceai6/am-camlive/, scrubbed note only): a fresh bare-anchor recover @ slot 202 caught up admitting 5 blocks (slots 209,210,221,237,241) -> agreement_verdict{agreed} @ slot 241 with our_hash == peer_hash (7d4278c4..., EXACT match) -> then IDLE at the frozen tip while the keep-alive client SUSTAINED the link 152s (vs the prior ~96s EOF): 7 MsgKeepAlive on the ~20s cadence (cookies 0..6), 7 MsgResponseKeepAlive cookies VALIDATED, 0 keep-alive grammar failures, 0 idle-EOF / ShutdownPeer(KeepAlive) (the relay held Ade a hot peer the full run; its only disconnect was BearerClosed from the timeout-kill, NOT ExceededTimeLimit(KeepAlive)). Transcript sha256 = b96b842afed7d5d33bcb9279552864689708636764d045775da401ebdd558702; convergence sha256 = a86f764cb31c582818003eeb44fc40896ce729dfe957b4ba521799158c4a94a6. NOT a CE-AI-6 claim -- NO reorg / NO slot regression occurred (CE-AI-6 is a SEPARATE partition->heal reorg pass on a bridge venue). Hermetic backing: CE-AM-1 wire_pump_sends_keep_alive_on_quiescent_cadence (start_paused virtual-time -- the production run_admission_wire_pump select! emits a real proto-8 MsgKeepAlive over a loopback mux during inbound quiescence, no AdmissionPeerEvent), CE-AM-2 wire_pump_keep_alive_response_validates_cookie_no_event, CE-AM-3 wire_pump_keep_alive_cookie_mismatch_fails_closed (cookie mismatch + unsolicited-ClientIdle response + undecodable payload all -> AdmissionWirePumpError::KeepAlive fail-closed), CE-AM-4 ci_check_keep_alive_wire_only.sh GREEN (reuse-not-redefine + wire-only fence), CE-AM-5 existing pump tests unperturbed (13/13 wire_pump). Both close-gate reviews CLEAN (IDD 0 BLOCK; security 0 HIGH/MEDIUM, 1 INFO = a Byzantine bad-cookie forces a self-inflicted peer disconnect, acceptable under fail-closed). Separate (NOT N-AM): a warm-start from a caught-up store hit ReplayFailedAt slot 209 VrfCert VerificationFailed -- a BLUE recover-follow/WAL-replay concern (keep-alive is wire-only, touches no WAL/replay), deferred to its own investigation. Repo gate sweep at close = 156/159 (3 PRE-EXISTING reds byte-unrelated to N-AM: admission_wire_pump_closure / lifecycle_owner_uses_bootstrap_initial_state / node_path_fidelity, deferred to a separate stale-gate hygiene triage) + the new ci_check_keep_alive_wire_only.sh PASSES."
 introduced_in = "PHASE4-N-AM"
-strengthened_in = []
+strengthened_in = ["LIVE-WIRE-LIVENESS-S1"]
 
 [[rules]]
 id = "DC-PUMP-04"
@@ -7613,6 +7613,133 @@ status = "enforced"
 attack_rationale = "Without per-peer fairness, a single continuously-producing peer monopolises the shared bounded mpsc and starves every other peer's pump -- so a competing peer's branch never reaches the participant dispatch and live multi-candidate SELECT cannot fire (the S7 live retry CE-AO-6 observed: 46 blocks all from one peer, 0 from the other, despite both connected). A Byzantine/hot peer could thereby SUPPRESS a competing honest branch from fork-choice purely by out-producing into the shared feed -- a liveness/eclipse-flavoured denial of the SELECT input, NOT a safety break (the node still fails closed, never adopts an unvalidated chain). Per-peer bounded lanes + a deterministic fair merge close it: each peer self-backpressures, no peer is starved, and the RED merge order never touches the BLUE arrival-order-independent selector."
 evidence_notes = "Declared at PHASE4-N-AO S8 (the gap the S7 live retry CE-AO-6 surfaced; docs/planning/phase4-n-ao-ce-ao-6-live-gap.md S7-retry section). Enforced at S8 close (CE-AO-9) via ci_check_wire_pump_fairness.sh + 6 hermetic fair-merge tests (hot-peer-no-starve, per-peer-backpressure-not-global, peer-identity-through-merge, deterministic-peer-order-from-config, closed-lane-removed-without-reorder, single-peer-unchanged). The FULL live multi-peer SELECT assertions (both branches observed -> NeedsForkChoice -> S7 LCA walk -> select winner -> RequestRange -> prevalidate -> ForkChoiceWin -> agreement agreed -> 0 diverged) stay on the CE-AO-6 live retry -- synthetic fairness tests do NOT pretend to prove live two-producer fork-choice convergence. CN-CONS-03 flips ONLY when CE-AO-6 actually observes both branches AND SELECT fires."
 introduced_in = "PHASE4-N-AO"
+strengthened_in = []
+
+
+[[rules]]
+id = "DC-PUMP-05"
+tier = "derived"
+statement = """
+Cooperative keep-alive liveness under downstream backpressure. No stall of the downstream consumer -- of ANY
+duration or cause (block application, epoch-boundary fold, recovery-checkpoint capture) -- may prevent the wire
+pump from sending MsgKeepAlive on the DC-PUMP-03 cadence AND consuming the peer's echoed MsgResponseKeepAlive.
+The wait for downstream capacity is itself a select! (emit_cooperative: events_out.reserve() vs the cadence timer
+vs inbound), so the cadence is REACHABLE while parked. Servicing only the timer is INSUFFICIENT: the BLUE agency
+guard suppresses every later tick once the lane is ClientAwaiting, giving ~117s of tolerance against an unbounded
+stall. MUST NOT: await a bounded events_out.send outside the cooperative wait; make the frame handlers async
+(they could park on such a send); queue the cadence frame on outbox_payloads (drained only by the outer loop, so
+it would never reach the wire during the very stall it exists to survive).
+"""
+source = "docs/clusters/LIVE-WIRE-LIVENESS/SLICE-S1-keepalive-under-backpressure.md + docs/clusters/LIVE-WIRE-LIVENESS/SLICE-S2-live-feed-reconnect.md (INV-WL-1)"
+cross_ref = ["DC-PUMP-01", "DC-PUMP-03", "CN-PUMP-01", "DC-PUMP-06", "DC-PUMP-07"]
+code_locus = "crates/ade_runtime/src/admission/wire_pump.rs (emit_cooperative, keep_alive_cadence_send, KeepAliveLane; handle_chain_sync / handle_block_fetch made synchronous so emission is hoisted to the loop). Gate ci/ci_check_wire_liveness.sh."
+tests = ["ce_wl_1_keep_alive_survives_unbounded_downstream_stall"]
+ci_scripts = ["ci/ci_check_wire_liveness.sh"]
+status = "enforced"
+evidence_notes = "RED shell only -- the BLUE keep_alive_transition state machine and the session reducer are reused UNCHANGED (no BLUE edit). Closes the defect that ended a live preview run 2026-08-01 03:44:11Z: the peer logged ExceededTimeLimit (KeepAlive) ClientHasAgency because the pump was parked on a bounded send OUTSIDE its select!. SUPPORTING live evidence only (never the reason for enforcement): a sustained preview run 2026-08-01 (~/.cardano-live1/ade-1376-s1s2.log) held the live tip for 8h+ with 1400 consecutive keep-alive round trips, max observed inter-line stall 20.0s (the cadence itself) against the peers ~97s limit, and recovered a deliberate docker restart of cardano-node-preview in 1m48s. Enforcement rests on the named tests + ci/ci_check_wire_liveness.sh, not on this run."
+introduced_in = ["LIVE-WIRE-LIVENESS-S1", "LIVE-WIRE-LIVENESS-S2"]
+strengthened_in = []
+
+[[rules]]
+id = "DC-PUMP-06"
+tier = "derived"
+statement = """
+Ordered pump progression under backpressure. The sequence of AdmissionPeerEvents delivered to events_out is
+identical to the unstalled pump for the same peer input: backpressure may DELAY delivery, never REORDER it.
+Frames decoded from an inbound chunk are appended to ONE ordered pending_frames FIFO and dispatched exactly one
+per loop iteration; frames read while parked in emit_cooperative are appended to the SAME FIFO. Dispatching
+inline would let a deferred frame interleave ahead of a chunk's remaining frames. Keep-alive remains wire-only
+and emits no event (the DC-PUMP-01 emit-set stays unwidened), so replay-equivalence is preserved.
+"""
+source = "docs/clusters/LIVE-WIRE-LIVENESS/SLICE-S1-keepalive-under-backpressure.md + docs/clusters/LIVE-WIRE-LIVENESS/SLICE-S2-live-feed-reconnect.md (INV-WL-2)"
+cross_ref = ["DC-PUMP-01", "DC-PUMP-05", "T-DET-01"]
+code_locus = "crates/ade_runtime/src/admission/wire_pump.rs (pending_frames FIFO; push_back on decode, pop_front on dispatch; emit_cooperative appends to the same FIFO). Gate ci/ci_check_wire_liveness.sh."
+tests = ["ce_wl_2_backpressure_preserves_event_order"]
+ci_scripts = ["ci/ci_check_wire_liveness.sh"]
+status = "enforced"
+evidence_notes = "Replay-equivalence is preserved by construction: only the SCHEDULING of delivery changes, never the content or order. SUPPORTING live evidence only (never the reason for enforcement): a sustained preview run 2026-08-01 (~/.cardano-live1/ade-1376-s1s2.log) held the live tip for 8h+ with 1400 consecutive keep-alive round trips, max observed inter-line stall 20.0s (the cadence itself) against the peers ~97s limit, and recovered a deliberate docker restart of cardano-node-preview in 1m48s. Enforcement rests on the named tests + ci/ci_check_wire_liveness.sh, not on this run."
+introduced_in = ["LIVE-WIRE-LIVENESS-S1", "LIVE-WIRE-LIVENESS-S2"]
+strengthened_in = []
+
+[[rules]]
+id = "DC-PUMP-07"
+tier = "derived"
+statement = """
+Bounded deferral, fail closed. Peer frames held while the pump waits for downstream capacity are bounded by the
+fixed, closed, non-configurable MAX_DEFERRED_PEER_FRAMES; exceeding it fails closed with the typed
+AdmissionWirePumpError::DeferredFrameOverflow. Deferral is never unbounded buffering. The bound HOLDS because the
+pump issues no new chain-sync RequestNext / block-fetch RequestRange while backpressured (outbox_payloads is
+drained only by the outer loop, which is not running), so a well-behaved peer quiesces after its in-flight batch
+and only keep-alive traffic continues.
+"""
+source = "docs/clusters/LIVE-WIRE-LIVENESS/SLICE-S1-keepalive-under-backpressure.md + docs/clusters/LIVE-WIRE-LIVENESS/SLICE-S2-live-feed-reconnect.md (INV-WL-3)"
+cross_ref = ["DC-LIVEMEM-01", "DC-SERVEMEM-01", "CN-SESS-04", "DC-PUMP-05"]
+code_locus = "crates/ade_runtime/src/admission/wire_pump.rs (MAX_DEFERRED_PEER_FRAMES; the emit_cooperative defer path and its cap check). Gate ci/ci_check_wire_liveness.sh."
+tests = ["ce_wl_3_deferred_frames_are_bounded_and_fail_closed"]
+ci_scripts = ["ci/ci_check_wire_liveness.sh"]
+status = "enforced"
+evidence_notes = "The no-new-demand-while-backpressured mechanism (INV-WL-4) is the REASON the bound holds and is asserted structurally by the gate; it is not separately claimed as an independently tested invariant. SUPPORTING live evidence only (never the reason for enforcement): a sustained preview run 2026-08-01 (~/.cardano-live1/ade-1376-s1s2.log) held the live tip for 8h+ with 1400 consecutive keep-alive round trips, max observed inter-line stall 20.0s (the cadence itself) against the peers ~97s limit, and recovered a deliberate docker restart of cardano-node-preview in 1m48s. Enforcement rests on the named tests + ci/ci_check_wire_liveness.sh, not on this run."
+introduced_in = ["LIVE-WIRE-LIVENESS-S1", "LIVE-WIRE-LIVENESS-S2"]
+strengthened_in = []
+
+[[rules]]
+id = "DC-PUMP-08"
+tier = "derived"
+statement = """
+Reconnect policy is transport-only and TOTAL. should_reconnect_after is the single named authority classifying
+the wire pump's closed outcome sum: TRANSPORT loss (Eof / TransportRead / TransportWrite) reconnects an
+ESTABLISHED session; a peer PROTOCOL or GRAMMAR violation (Session, ChainSyncDecode, BlockFetchDecode,
+UnexpectedProtocolMessage, UnsupportedRollbackPoint, KeepAlive, DeferredFrameOverflow) keeps the pre-slice
+fail-closed drop so a systematically bad peer is never retried into a livelock; EventsChannelDropped means the
+consumer is gone. Reconnect re-establishes ONLY the wire session: admission, the rollback k-guard, boundary
+promotion and the forge fence all remain in the consumer with their existing typed halts, so reconnect can never
+convert a fail-closed AUTHORITY outcome into a retry.
+"""
+source = "docs/clusters/LIVE-WIRE-LIVENESS/SLICE-S1-keepalive-under-backpressure.md + docs/clusters/LIVE-WIRE-LIVENESS/SLICE-S2-live-feed-reconnect.md (INV-WL-6)"
+cross_ref = ["DC-PUMP-01", "CN-PUMP-01", "DC-NODE-43"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (should_reconnect_after; the per-peer supervisor in spawn_live_wire_pump_source). Gate ci/ci_check_wire_liveness.sh asserts the policy names EVERY AdmissionWirePumpError variant."
+tests = ["reconnect_policy_is_transport_only"]
+ci_scripts = ["ci/ci_check_wire_liveness.sh"]
+status = "enforced"
+evidence_notes = "The gate has teeth: adding an AdmissionWirePumpError variant without classifying it fails ci_check_wire_liveness.sh (verified by negative test at registration). SUPPORTING live evidence only (never the reason for enforcement): a sustained preview run 2026-08-01 (~/.cardano-live1/ade-1376-s1s2.log) held the live tip for 8h+ with 1400 consecutive keep-alive round trips, max observed inter-line stall 20.0s (the cadence itself) against the peers ~97s limit, and recovered a deliberate docker restart of cardano-node-preview in 1m48s. Enforcement rests on the named tests + ci/ci_check_wire_liveness.sh, not on this run."
+introduced_in = ["LIVE-WIRE-LIVENESS-S1", "LIVE-WIRE-LIVENESS-S2"]
+strengthened_in = []
+
+[[rules]]
+id = "DC-PUMP-09"
+tier = "derived"
+statement = """
+No bootstrap spin. Reconnect applies ONLY to a session that was established and then lost. An unparseable
+--peer, or a FIRST dial that fails, keeps the pre-slice semantics exactly: logged-and-dropped, the lane ends, the
+feed ends, the relay loop halts clean. An unreachable peer must never become an infinite boot retry.
+"""
+source = "docs/clusters/LIVE-WIRE-LIVENESS/SLICE-S1-keepalive-under-backpressure.md + docs/clusters/LIVE-WIRE-LIVENESS/SLICE-S2-live-feed-reconnect.md (INV-WL-8)"
+cross_ref = ["DC-PUMP-08", "DC-NODE-13"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (the supervisor's `established` gate: a dial failure returns while false, backs off only once true). Gate ci/ci_check_wire_liveness.sh."
+tests = ["first_dial_failure_still_ends_the_feed_no_boot_spin", "spawn_live_wire_pump_source_with_no_usable_peer_yields_ended_feed"]
+ci_scripts = ["ci/ci_check_wire_liveness.sh"]
+status = "enforced"
+evidence_notes = "Preserves the pre-slice C3 honest-scope behaviour (an unusable peer is never fatal and never a fabricated address) while adding recovery for established sessions only. SUPPORTING live evidence only (never the reason for enforcement): a sustained preview run 2026-08-01 (~/.cardano-live1/ade-1376-s1s2.log) held the live tip for 8h+ with 1400 consecutive keep-alive round trips, max observed inter-line stall 20.0s (the cadence itself) against the peers ~97s limit, and recovered a deliberate docker restart of cardano-node-preview in 1m48s. Enforcement rests on the named tests + ci/ci_check_wire_liveness.sh, not on this run."
+introduced_in = ["LIVE-WIRE-LIVENESS-S1", "LIVE-WIRE-LIVENESS-S2"]
+strengthened_in = []
+
+[[rules]]
+id = "DC-PUMP-10"
+tier = "derived"
+statement = """
+Deterministic, bounded reconnect backoff. Re-dial pacing follows a fixed const escalating schedule
+(RECONNECT_BACKOFF_SECS) that is monotone non-decreasing and saturates at a cap; it is deterministic -- no
+randomness, no wall-clock-derived jitter -- and the wall-clock delay is a RED transport concern that never
+reaches the BLUE core.
+"""
+source = "docs/clusters/LIVE-WIRE-LIVENESS/SLICE-S1-keepalive-under-backpressure.md + docs/clusters/LIVE-WIRE-LIVENESS/SLICE-S2-live-feed-reconnect.md (INV-WL-10)"
+cross_ref = ["DC-PUMP-08", "T-DET-01"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (RECONNECT_BACKOFF_SECS, reconnect_backoff_secs). Gate ci/ci_check_wire_liveness.sh additionally forbids rand:: / thread_rng / random() in the reconnect path."
+tests = ["reconnect_backoff_is_deterministic_monotone_and_capped"]
+ci_scripts = ["ci/ci_check_wire_liveness.sh"]
+status = "enforced"
+evidence_notes = "Determinism here is a discipline property (Part V tripwires) rather than a replay-authority one: the pacing never enters canonical input. SUPPORTING live evidence only (never the reason for enforcement): a sustained preview run 2026-08-01 (~/.cardano-live1/ade-1376-s1s2.log) held the live tip for 8h+ with 1400 consecutive keep-alive round trips, max observed inter-line stall 20.0s (the cadence itself) against the peers ~97s limit, and recovered a deliberate docker restart of cardano-node-preview in 1m48s. Enforcement rests on the named tests + ci/ci_check_wire_liveness.sh, not on this run."
+introduced_in = ["LIVE-WIRE-LIVENESS-S1", "LIVE-WIRE-LIVENESS-S2"]
 strengthened_in = []
 
 [[rules]]
@@ -7893,6 +8020,29 @@ status = "enforced"
 introduced_in = "LIVE-FORGE-HARDENING-S1"
 strengthened_in = []
 evidence_notes = "The guard shipped with LIVE-FORGE-HARDENING S1 (node_sync.rs) and was confirmed fail-closed by the per-cluster cross-slice security review (a target below the promoted authority's epoch fails closed before any mutation). Its named proof forge_path_rollback_across_epoch_start_fails_closed was landed post-cluster-close (this rule; TRACEABILITY G1 gap): ActiveEpochAuthority::seed at epoch 1 + a rollback to slot 100 (epoch 0 under the 432000-slot schedule) -> UnexpectedRollback + durable tip unchanged + no WalEntry::RollBack. Sibling to the participant-path DC-NODE-33; distinct from the S1 rollback-FOLLOW strengthening recorded on DC-NODE-28/29."
+
+
+[[rules]]
+id = "DC-NODE-43"
+tier = "derived"
+statement = """
+Gap-free resume of a reconnected live feed. A reconnected per-peer session resumes chain-sync from the last
+block actually DELIVERED downstream, never from the original boot anchor. Resuming from the boot anchor is
+WRONG, not merely slow: once the node has advanced more than k past it, the peer's rollback to that anchor
+exceeds the BLUE rollback k-guard and fails closed. Safety of the delivered-block resume point rests on lane
+ordering -- the per-peer lane is FIFO and is never dropped across a reconnect, so events buffered from the old
+session are delivered BEFORE the new session's; by the time the consumer processes the new session's
+rollback-to-intersection, that point is already durable and within k.
+"""
+source = "docs/clusters/LIVE-WIRE-LIVENESS/SLICE-S1-keepalive-under-backpressure.md + docs/clusters/LIVE-WIRE-LIVENESS/SLICE-S2-live-feed-reconnect.md (INV-WL-7)"
+cross_ref = ["DC-PUMP-08", "DC-NODE-16", "DC-NODE-23", "DC-NODE-28", "DC-NODE-29"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (the supervisor's last_block_bytes, decoded only on reconnect to derive the FindIntersect point; the interposer that keeps lane_tx alive across sessions)."
+tests = []
+ci_scripts = []
+status = "declared"
+evidence_notes = "DECLARED, NOT ENFORCED: there is no mechanical test for the gap-free property -- proving it needs a synthetic N2N peer that drops and resumes while asserting no block is skipped, which would couple the test to the serve path. The argument above plus the 2026-08-01 live observation (resume from block 118907456 after a real peer restart, no k-guard violation, no rollback error) is EVIDENCE, not enforcement. Enforcement is owed. SUPPORTING live evidence only (never the reason for enforcement): a sustained preview run 2026-08-01 (~/.cardano-live1/ade-1376-s1s2.log) held the live tip for 8h+ with 1400 consecutive keep-alive round trips, max observed inter-line stall 20.0s (the cadence itself) against the peers ~97s limit, and recovered a deliberate docker restart of cardano-node-preview in 1m48s. Enforcement rests on the named tests + ci/ci_check_wire_liveness.sh, not on this run."
+introduced_in = ["LIVE-WIRE-LIVENESS-S1", "LIVE-WIRE-LIVENESS-S2"]
+strengthened_in = []
 
 [[rules]]
 id = "DC-WAL-05"
