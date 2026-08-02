@@ -95,7 +95,7 @@ use ade_runtime::producer::producer_shell::ProducerShell;
 use ade_runtime::rollback::{ChainDbBlockSource, PersistentSnapshotCache, SnapshotCadence};
 use ade_ledger::rollback::{
     admit_rollback, commit_rollback, materialize_rolled_back_state, reconcile_recovery,
-    CommitRollbackError, MaterializeError, RecoveryAction, RollbackAdmissionError,
+    CommitRollbackError, MaterializeError, RecoveryAction, ResetReason, RollbackAdmissionError,
     RollbackPoint as CanonicalPoint, TargetPoint,
 };
 use ade_core::consensus::events::{BlockDistance, ChainEvent, Point, SecurityParam};
@@ -2084,6 +2084,13 @@ fn accumulator_recover_admit(
         hash: a.header_hash.clone(),
     });
 
+    let anchor_before = trace_anchor_parts(
+        anchor
+            .as_ref()
+            .map(|a| (a.slot.0, a.block_no.0, &a.header_hash)),
+    );
+    let durable_tip = trace_pt(Some(&tip_pt));
+
     let action = reconcile_recovery(
         anchor_pt.as_ref(),
         durable_at_anchor.as_ref(),
@@ -2098,20 +2105,183 @@ fn accumulator_recover_admit(
         },
     )
     .map_err(|e| {
+        // EMIT-ONLY: a fail-closed recovery is traced before it propagates, so a terminal halt is not
+        // the FIRST thing an operator learns about the anchor state.
+        let reason = match &e {
+            RollbackAdmissionError::LineageMismatch { .. } => {
+                RecoveryTraceReason::CanonicalHashMismatch
+            }
+            RollbackAdmissionError::TargetNotOnCanonicalChain { .. } => {
+                RecoveryTraceReason::MissingCanonicalBlock
+            }
+            _ => RecoveryTraceReason::CanonicalHashMismatch,
+        };
+        emit_recovery_trace(
+            RecoveryTracePath::RecoveryAdmit,
+            "error",
+            reason,
+            &anchor_before,
+            &durable_tip,
+            "none",
+            &anchor_before,
+        );
         NodeLifecycleError::RecoveryAdmission(RecoveryAdmissionFault::from_admission(e))
     })?;
 
     match action {
-        RecoveryAction::ForwardFold => Ok(()),
-        RecoveryAction::ResetAndRefold => {
+        RecoveryAction::ForwardFold => {
+            emit_recovery_trace(
+                RecoveryTracePath::RecoveryAdmit,
+                "forward_fold",
+                RecoveryTraceReason::ForwardFoldNoReset,
+                &anchor_before,
+                &durable_tip,
+                "none",
+                &anchor_before,
+            );
+            Ok(())
+        }
+        RecoveryAction::ResetAndRefold { reason } => {
             // Reset to the sealed seed; the co-advancer re-folds from the canonical prefix and re-writes a
             // fresh 2a lineage anchor on each advance. A reset fault here is a store failure, not observe-only.
             store.reset_to_bootstrap().map_err(|e| {
                 NodeLifecycleError::RelaySync(format!("accumulator recovery reset: {e:?}"))
             })?;
+            // anchor AFTER the reset -- this is what answers "does the reset clear the anchor and thereby
+            // guarantee the next pass resets again?"
+            let after = store.last_advanced_point().ok().flatten();
+            let anchor_after = trace_anchor_parts(
+                after
+                    .as_ref()
+                    .map(|a| (a.slot.0, a.block_no.0, &a.header_hash)),
+            );
+            emit_recovery_trace(
+                RecoveryTracePath::RecoveryAdmit,
+                "reset_and_refold",
+                RecoveryTraceReason::from_reset(reason),
+                &anchor_before,
+                &durable_tip,
+                "none",
+                &anchor_after,
+            );
             Ok(())
         }
     }
+}
+
+/// EMIT-ONLY recovery/refold trace (RED shell). Answers the questions 8h of logs could not: WHO asked for
+/// an accumulator reset, WHY, what anchor/tip state caused it, and whether the refold restored the anchor.
+///
+/// Strictly diagnostic. It changes no scheduling, no retry/backoff, no anchor lifecycle, no rollback
+/// admission and no refold decision — it serialises decisions already made. BLUE returns the structured
+/// [`RecoveryAction`] / [`ResetReason`]; this shell projects and emits it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryTracePath {
+    /// `accumulator_recover_admit` — runs at the top of EVERY advance pass.
+    RecoveryAdmit,
+    /// `accumulator_admit_and_clear_for_rollback` — the peer-rollback pre-clear.
+    RollbackAdmit,
+}
+
+impl RecoveryTracePath {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RecoveryAdmit => "recovery_admit",
+            Self::RollbackAdmit => "rollback_admit",
+        }
+    }
+}
+
+/// Closed reset/trace reason. No free-form string, no catch-all: a new cause is a compile error at the
+/// projection until it is named here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryTraceReason {
+    /// BLUE `ResetReason::AnchorAbsent` — no lineage anchor (including the state a PREVIOUS reset left).
+    AnchorAbsent,
+    /// BLUE `ResetReason::DurableTipBehindAnchor` — the durable chain shortened below the anchor.
+    DurableTipBehindAnchor,
+    /// The peer-rollback pre-clear path reset the accumulator for an admitted rollback.
+    RollbackAdmission,
+    /// Recovery fail-closed: the anchor's slot carries a DIFFERENT canonical hash.
+    CanonicalHashMismatch,
+    /// Recovery fail-closed: no canonical block at the anchor's slot.
+    MissingCanonicalBlock,
+    /// Forward-fold — no reset at all (emitted so a quiet pass is still observable).
+    ForwardFoldNoReset,
+}
+
+impl RecoveryTraceReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::AnchorAbsent => "anchor_absent",
+            Self::DurableTipBehindAnchor => "durable_tip_behind_anchor",
+            Self::RollbackAdmission => "rollback_admission",
+            Self::CanonicalHashMismatch => "canonical_hash_mismatch",
+            Self::MissingCanonicalBlock => "missing_canonical_block",
+            Self::ForwardFoldNoReset => "forward_fold_no_reset",
+        }
+    }
+
+    /// TOTAL projection of the BLUE decision. Compile-enforced: a new `ResetReason` variant breaks here
+    /// until it is traced, which is the point of putting the reason in the BLUE type rather than
+    /// re-deriving it in the shell.
+    fn from_reset(reason: ResetReason) -> Self {
+        match reason {
+            ResetReason::AnchorAbsent => Self::AnchorAbsent,
+            ResetReason::DurableTipBehindAnchor => Self::DurableTipBehindAnchor,
+        }
+    }
+}
+
+/// Render an optional lineage point as a stable `slot/block_no/hash8` triple (or `absent`).
+fn trace_pt(p: Option<&CanonicalPoint>) -> String {
+    match p {
+        None => "absent".to_string(),
+        Some(p) => format!(
+            "{}/{}/{}",
+            p.slot.0,
+            p.block_no.0,
+            hex_prefix8(&p.hash)
+        ),
+    }
+}
+
+/// Takes the PARTS rather than the store's point type, so the trace does not depend on a
+/// module path that is not re-exported.
+fn trace_anchor_parts(a: Option<(u64, u64, &Hash32)>) -> String {
+    match a {
+        None => "absent".to_string(),
+        Some((slot, block_no, hash)) => format!("{}/{}/{}", slot, block_no, hex_prefix8(hash)),
+    }
+}
+
+fn hex_prefix8(h: &Hash32) -> String {
+    h.0.iter().take(4).map(|b| format!("{b:02x}")).collect()
+}
+
+/// Emit ONE structured line per recovery/reset decision. Field set is fixed so the stream is parseable:
+/// `path`, `action`, `reason`, `anchor_before`, `durable_tip`, `rollback_target`, `anchor_after`.
+#[allow(clippy::too_many_arguments)]
+fn emit_recovery_trace(
+    path: RecoveryTracePath,
+    action: &'static str,
+    reason: RecoveryTraceReason,
+    anchor_before: &str,
+    durable_tip: &str,
+    rollback_target: &str,
+    anchor_after: &str,
+) {
+    crate::node_log!(
+        "recovery-trace: path={} action={} reason={} anchor_before={} durable_tip={} \
+         rollback_target={} anchor_after={}",
+        path.as_str(),
+        action,
+        reason.as_str(),
+        anchor_before,
+        durable_tip,
+        rollback_target,
+        anchor_after
+    );
 }
 
 /// Resolve the canonical point `(slot, block_no, header_hash)` of the durable block at `slot`, or `None` if
@@ -2216,9 +2386,39 @@ fn accumulator_admit_and_clear_for_rollback(
     // ACCUMULATOR-REFOLD-BOUND S1: rewind to the SETTLED point when one is admissible, else to the
     // bootstrap baseline exactly as before. Both leave the store uncertified; only the amount of
     // canonical chain the next advance must re-derive differs.
+    let rb_anchor_before = {
+        let a = store.last_advanced_point().ok().flatten();
+        trace_anchor_parts(
+            a.as_ref()
+                .map(|a| (a.slot.0, a.block_no.0, &a.header_hash)),
+        )
+    };
+    let rb_target = format!("{}/{}/{}", target.slot.0, target_at.block_no.0, hex_prefix8(&target.hash));
+    let rb_tip = {
+        let t = ChainDb::tip(chaindb).ok().flatten();
+        match t.and_then(|t| resolve_canonical_point(chaindb, t.slot).ok().flatten()) {
+            Some(p) => trace_pt(Some(&p)),
+            None => "absent".to_string(),
+        }
+    };
     if settled_rewind_admissible(store, chaindb, target, policy.security_param.0) {
         match store.reset_to_settled() {
-            Ok(true) => return Ok(()),
+            Ok(true) => {
+                let a = store.last_advanced_point().ok().flatten();
+                emit_recovery_trace(
+                    RecoveryTracePath::RollbackAdmit,
+                    "reset_to_settled",
+                    RecoveryTraceReason::RollbackAdmission,
+                    &rb_anchor_before,
+                    &rb_tip,
+                    &rb_target,
+                    &trace_anchor_parts(
+                        a.as_ref()
+                            .map(|a| (a.slot.0, a.block_no.0, &a.header_hash)),
+                    ),
+                );
+                return Ok(());
+            }
             // No settled point recorded (older store / just reset) -> bootstrap.
             Ok(false) => {}
             Err(e) => {
@@ -2233,6 +2433,19 @@ fn accumulator_admit_and_clear_for_rollback(
     store.reset_to_bootstrap().map_err(|e| {
         NodeLifecycleError::RelaySync(format!("accumulator rollback pre-clear: {e:?}"))
     })?;
+    let a = store.last_advanced_point().ok().flatten();
+    emit_recovery_trace(
+        RecoveryTracePath::RollbackAdmit,
+        "reset_to_bootstrap",
+        RecoveryTraceReason::RollbackAdmission,
+        &rb_anchor_before,
+        &rb_tip,
+        &rb_target,
+        &trace_anchor_parts(
+            a.as_ref()
+                .map(|a| (a.slot.0, a.block_no.0, &a.header_hash)),
+        ),
+    );
     Ok(())
 }
 
@@ -5550,6 +5763,8 @@ where
         NodeLifecycleError::RecoveryAdmission(f) => NodeSyncError::RecoveryAdmission(f),
         other => NodeSyncError::Pump(format!("accumulator rollback pre-clear: {other:?}")),
     })?;
+    let (target_slot_for_trace, target_hash_for_trace) =
+        (target.slot.0, hex_prefix8(&target.hash));
     let event = ChainEvent::RolledBack {
         to_point: target,
         depth: BlockDistance(0),
@@ -5570,6 +5785,14 @@ where
     );
     *pending_reselection = false;
     applied.map_err(|e| NodeSyncError::Pump(format!("apply_chain_event: {e:?}")))?;
+    // EMIT-ONLY: a followed rollback was previously SILENT, so the `follow:` tip log (which is
+    // throttled) was the only hint one had happened -- and it undercounts badly. Without this an
+    // operator cannot tell a rollback-driven accumulator reset from a recovery-driven one.
+    crate::node_log!(
+        "rollback-followed: to_slot={} to_hash={}",
+        target_slot_for_trace,
+        target_hash_for_trace
+    );
     Ok(())
 }
 
@@ -6344,6 +6567,42 @@ mod tests {
         // No typed refusal recorded -> None. This is NOT "no reason": it positively
         // rules out the DC-NODE-15 gate and points at the KES window instead.
         assert_eq!(forge_skip_reason(None), None);
+    }
+
+    /// Every BLUE `RecoveryAction` branch projects to a typed trace reason, and the reasons are
+    /// distinct. The projection is TOTAL by construction (a new `ResetReason` breaks
+    /// `from_reset` at compile time); this pins that the mapping is also injective, so a trace
+    /// cannot conflate an absent anchor with an over-advanced accumulator — the two have
+    /// different fixes and that ambiguity is exactly what cost us 8h of unreadable logs.
+    #[test]
+    fn every_recovery_branch_projects_to_a_distinct_trace_reason() {
+        assert_eq!(
+            RecoveryTraceReason::from_reset(ResetReason::AnchorAbsent),
+            RecoveryTraceReason::AnchorAbsent
+        );
+        assert_eq!(
+            RecoveryTraceReason::from_reset(ResetReason::DurableTipBehindAnchor),
+            RecoveryTraceReason::DurableTipBehindAnchor
+        );
+        // Discriminators are stable AND pairwise distinct across the whole closed set.
+        let all = [
+            RecoveryTraceReason::AnchorAbsent,
+            RecoveryTraceReason::DurableTipBehindAnchor,
+            RecoveryTraceReason::RollbackAdmission,
+            RecoveryTraceReason::CanonicalHashMismatch,
+            RecoveryTraceReason::MissingCanonicalBlock,
+            RecoveryTraceReason::ForwardFoldNoReset,
+        ];
+        let mut seen: Vec<&str> = all.iter().map(|r| r.as_str()).collect();
+        let n = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), n, "trace reason discriminators must be distinct");
+        assert_eq!(
+            RecoveryTracePath::RecoveryAdmit.as_str(),
+            "recovery_admit"
+        );
+        assert_eq!(RecoveryTracePath::RollbackAdmit.as_str(), "rollback_admit");
     }
 
     /// CN-NODE-04: a tip refusal carries BOTH tips, so `tip_mismatch` says WHERE.

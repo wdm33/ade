@@ -131,7 +131,25 @@ pub enum RecoveryAction {
     /// a certified accumulator that over-advanced past an admissibly-shortened durable chain. The shell then
     /// re-folds from canonical blocks (fail-closed on a missing / non-contiguous span) and re-writes a fresh
     /// `LastAdvancedPoint` on success.
-    ResetAndRefold,
+    ///
+    /// Carries WHY. The reason rides the variant so every construction site must name it and the shell's
+    /// diagnostic projection is compile-enforced total — the shell must never re-derive the decision from
+    /// the same inputs (that is the reimplementation this crate forbids). BLUE returns the structured
+    /// decision; the shell emits it. This enum has no logging side effect of its own.
+    ResetAndRefold { reason: ResetReason },
+}
+
+/// WHY recovery decided to reset and refold (S5 step 2b). Closed, no catch-all: a third reason must be a
+/// compile error at every projection until it is named and traced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResetReason {
+    /// No lineage anchor at all — a legacy pre-anchor store, or the transitional state a PREVIOUS reset
+    /// left behind (both reset paths clear `LastAdvancedPoint`). Height is not trusted; refold from
+    /// canonical blocks.
+    AnchorAbsent,
+    /// The anchor is present and on-lineage, but the durable chain shortened below it — the accumulator
+    /// over-advanced past an admissibly-rolled-back tip.
+    DurableTipBehindAnchor,
 }
 
 /// BLUE, pure, total. Decide how recovery reconciles the persisted accumulator to the durable canonical
@@ -160,7 +178,9 @@ where
     let Some(anchor) = anchor else {
         // Uncertified (legacy pre-anchor store, or the transitional state after reset_to_bootstrap): recovery
         // does NOT trust height — reset + re-fold from canonical blocks.
-        return Ok(RecoveryAction::ResetAndRefold);
+        return Ok(RecoveryAction::ResetAndRefold {
+            reason: ResetReason::AnchorAbsent,
+        });
     };
     // The accumulator's committed point MUST still be the canonical block at that slot.
     match durable_at_anchor {
@@ -175,7 +195,9 @@ where
             } else {
                 // The durable chain shortened below the accumulator -> admit the bounded rollback to the tip.
                 admit_rollback(anchor, tip, seed, k, canonical_hash_at)?;
-                Ok(RecoveryAction::ResetAndRefold)
+                Ok(RecoveryAction::ResetAndRefold {
+                    reason: ResetReason::DurableTipBehindAnchor,
+                })
             }
         }
         // Present but contradicted by the canonical chain -> fail closed (never a silent reset of a
@@ -315,7 +337,11 @@ mod tests {
         let tip = pt(80, 8, 0x08);
         assert_eq!(
             reconcile_recovery(None, None, &tip, &anchor(), K, canonical),
-            Ok(RecoveryAction::ResetAndRefold)
+            // The reason is asserted, not just the action: an absent anchor and an
+            // over-advanced accumulator are different faults with different fixes.
+            Ok(RecoveryAction::ResetAndRefold {
+                reason: ResetReason::AnchorAbsent
+            })
         );
     }
 
@@ -337,7 +363,9 @@ mod tests {
         let dtip = pt(40, 4, 0x04);
         assert_eq!(
             reconcile_recovery(Some(&anc), Some(&anc), &dtip, &anchor(), K, canonical),
-            Ok(RecoveryAction::ResetAndRefold)
+            Ok(RecoveryAction::ResetAndRefold {
+                reason: ResetReason::DurableTipBehindAnchor
+            })
         );
     }
 

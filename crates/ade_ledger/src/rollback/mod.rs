@@ -27,7 +27,7 @@ pub mod materialize;
 pub mod traits;
 
 pub use admission::{
-    admit_rollback, reconcile_recovery, RecoveryAction, RollbackAdmissionError, RollbackPoint,
+    admit_rollback, reconcile_recovery, RecoveryAction, ResetReason, RollbackAdmissionError, RollbackPoint,
 };
 pub use commit::commit_rollback;
 pub use error::{CommitRollbackError, MaterializeError};
