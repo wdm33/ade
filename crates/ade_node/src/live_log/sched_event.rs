@@ -114,6 +114,56 @@ impl ForgeOutcome {
     }
 }
 
+/// Closed reason a forge tick did NOT reach a leader check (`CN-NODE-04`,
+/// operational tier only — never an acceptance signal).
+///
+/// `ForgeOutcome::NoTipAvailable` is a CATCH-ALL: the DC-NODE-15 catch-up gate, a
+/// fence refusal and a KES-period failure all collapse into it. (An absent selected
+/// tip needs no variant of its own: with no durable tip, DC-NODE-15 already refuses
+/// with `NoDurableServableTip`.) The distinguishing value was already computed as a typed `ForgeRefused` and
+/// then discarded (`last_forge_refused` was written in 8 places and read in none), so
+/// an operator could not tell WHY a tick skipped. Those causes have completely
+/// different fixes, and at a real leader slot that ambiguity is expensive.
+///
+/// This is the projection of that typed refusal onto a closed, comparable set. Emit
+/// only — it never alters scheduling or control flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForgeSkipReason {
+    /// DC-NODE-15: no followed peer tip has been observed yet.
+    NoFollowedPeerTip,
+    /// DC-NODE-15: no durable servable tip exists to build on.
+    NoDurableServableTip,
+    /// DC-NODE-15: both tips present but unequal (hash and/or block_no) — the node
+    /// is not caught up to the tip it would have to build on.
+    TipMismatch,
+    /// DC-NODE-18: the single-producer extend-own-spine fence refused.
+    SingleProducerFence,
+    /// DC-NODE-28: a fork-choice re-selection is unresolved; the producer refuses to
+    /// forge on the stale pre-resolution tip.
+    ReselectionPending,
+    /// CN-FOLLOW-01: the Participant extend-on-selected-head fence refused.
+    ParticipantFence,
+    /// CN-FOLLOW-01: the durable head advanced between the forge decision and the
+    /// sign, so the base changed underneath and the forge refused rather than sign a
+    /// stale block.
+    ForgeBaseChangedBeforeSign,
+}
+
+impl ForgeSkipReason {
+    /// Stable discriminator emitted as the JSON `skip_reason` field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NoFollowedPeerTip => "no_followed_peer_tip",
+            Self::NoDurableServableTip => "no_durable_servable_tip",
+            Self::TipMismatch => "tip_mismatch",
+            Self::SingleProducerFence => "single_producer_fence",
+            Self::ReselectionPending => "reselection_pending",
+            Self::ParticipantFence => "participant_fence",
+            Self::ForgeBaseChangedBeforeSign => "forge_base_changed_before_sign",
+        }
+    }
+}
+
 /// Closed forge-base source (`CN-NODE-04` / DC-NODE-20 evidence): WHERE the forge base
 /// came from. In rung-1 single-producer mode the base is always the local selected
 /// durable tip (`ChainDb::tip`); the closed set has no peer-tip / cert source — those
@@ -205,6 +255,11 @@ pub enum NodeSchedEvent {
         outcome: ForgeOutcome,
         self_admit_via_pump_block: bool,
         entered_forge_mode: ForgeModeKind,
+        /// WHY the tick did not reach a leader check, when it did not. `None` for a
+        /// tick that DID reach one (succeeded / not_leader / failed), and also for a
+        /// skip with no typed refusal recorded -- which is itself informative: it
+        /// rules the DC-NODE-15 gate OUT and points at the KES window instead.
+        skip_reason: Option<ForgeSkipReason>,
     },
 }
 
@@ -285,6 +340,7 @@ mod tests {
             NodeSchedEvent::ForgeResult {
                 outcome: ForgeOutcome::Succeeded,
                 self_admit_via_pump_block: true,
+                skip_reason: None,
                 entered_forge_mode: ForgeModeKind::SingleProducerExtendOwnDurableSpine,
             },
         ];

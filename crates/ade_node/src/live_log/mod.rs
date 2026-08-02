@@ -17,7 +17,6 @@ pub use event::{
     LiveLogEvent, ModeTag, PeerDialFailureKind, WireOnlyShutdownReason,
 };
 pub use sched_event::{
-    FeedReason, ForgeBaseSource, ForgeModeKind, ForgeOutcome, NodeSchedEvent,
-};
+    FeedReason, ForgeBaseSource, ForgeModeKind, ForgeOutcome, NodeSchedEvent, ForgeSkipReason,};
 pub use sched_writer::{NodeSchedLogWriter, NodeSchedSink};
 pub use writer::LiveLogWriter;

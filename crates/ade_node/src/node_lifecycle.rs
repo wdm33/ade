@@ -1837,6 +1837,31 @@ fn dc_node_15_refusal(
     }
 }
 
+/// CN-NODE-04 diagnostic projection (emit-only): the typed `ForgeRefused` onto the
+/// closed `ForgeSkipReason` set, so an operator can tell WHY a forge tick skipped.
+/// Before this, every cause collapsed into `outcome: no_tip_available` and the typed
+/// refusal was computed and discarded. `None` means no typed refusal was recorded and
+/// a selected tip WAS available -- which rules the DC-NODE-15 gate out and points at
+/// the KES window instead. Never reads back into scheduling or control flow.
+fn forge_skip_reason(refused: Option<&ForgeRefused>) -> Option<crate::live_log::ForgeSkipReason> {
+    use crate::live_log::ForgeSkipReason as R;
+    use crate::node_sync::NotCaughtUpReason as N;
+    match refused {
+        Some(ForgeRefused::NotCaughtUp { reason, .. }) => Some(match reason {
+            N::NoFollowedPeerTip => R::NoFollowedPeerTip,
+            N::NoDurableServableTip => R::NoDurableServableTip,
+            N::TipMismatch => R::TipMismatch,
+        }),
+        Some(ForgeRefused::SingleProducerFenceViolation { .. }) => Some(R::SingleProducerFence),
+        Some(ForgeRefused::ReselectionPending) => Some(R::ReselectionPending),
+        Some(ForgeRefused::ParticipantFenceViolation { .. }) => Some(R::ParticipantFence),
+        Some(ForgeRefused::ParticipantForgeBaseChangedBeforeSign { .. }) => {
+            Some(R::ForgeBaseChangedBeforeSign)
+        }
+        None => None,
+    }
+}
+
 /// S2: derive the forge's current `protocol_version` + `pparams` from the
 /// recovered ledger's `protocol_params` (installed by S2a) — the single truthful
 /// source, consumed here, never a fabricated default / genesis-initial value.
@@ -3583,6 +3608,8 @@ pub async fn run_relay_loop_with_sched(
                                         outcome: forge_outcome,
                                         self_admit_via_pump_block: admitted,
                                         entered_forge_mode: forge_mode_kind(&act.forge_mode),
+                                        // Reached a leader check -- nothing was skipped.
+                                        skip_reason: None,
                                     });
                                 }
                             }
@@ -3597,6 +3624,7 @@ pub async fn run_relay_loop_with_sched(
                             outcome: crate::live_log::ForgeOutcome::NoTipAvailable,
                             self_admit_via_pump_block: false,
                             entered_forge_mode: forge_mode_kind(&act.forge_mode),
+                            skip_reason: forge_skip_reason(act.last_forge_refused.as_ref()),
                         });
                     }
                 }
@@ -6256,7 +6284,44 @@ mod tests {
             .unwrap();
         }
 
-        /// ACCUMULATOR-REFOLD-BOUND S1 — CE-AR-2 / INV-AR-1 and CE-AR-3 / INV-AR-2.
+        /// CN-NODE-04: the forge skip-reason projection is TOTAL over the typed refusal set.
+    ///
+    /// `outcome: no_tip_available` is a catch-all; before this the distinguishing typed
+    /// refusal was computed and discarded, so an operator could not tell a tip mismatch
+    /// from a fence refusal from a KES-window failure — three different fixes. Each
+    /// refusal must map to its own discriminator, and `None` (no typed refusal) must
+    /// stay distinguishable, since that is what rules the DC-NODE-15 gate OUT.
+    #[test]
+    fn forge_skip_reason_projects_every_typed_refusal() {
+        use crate::live_log::ForgeSkipReason as R;
+        use crate::node_sync::NotCaughtUpReason as N;
+
+        let tips = || (None, None);
+        for (reason, expect) in [
+            (N::NoFollowedPeerTip, R::NoFollowedPeerTip),
+            (N::NoDurableServableTip, R::NoDurableServableTip),
+            (N::TipMismatch, R::TipMismatch),
+        ] {
+            let (local_servable_tip, followed_peer_tip) = tips();
+            let refused = ForgeRefused::NotCaughtUp {
+                local_servable_tip,
+                followed_peer_tip,
+                reason,
+            };
+            assert_eq!(forge_skip_reason(Some(&refused)), Some(expect));
+        }
+
+        assert_eq!(
+            forge_skip_reason(Some(&ForgeRefused::ReselectionPending)),
+            Some(R::ReselectionPending)
+        );
+
+        // No typed refusal recorded -> None. This is NOT "no reason": it positively
+        // rules out the DC-NODE-15 gate and points at the KES window instead.
+        assert_eq!(forge_skip_reason(None), None);
+    }
+
+    /// ACCUMULATOR-REFOLD-BOUND S1 — CE-AR-2 / INV-AR-1 and CE-AR-3 / INV-AR-2.
         ///
         /// `settled_rewind_admissible` is the gate on the bounded rewind. Two independent reasons
         /// to refuse, each checked in isolation: a point still inside the reorg window (an

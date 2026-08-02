@@ -107,6 +107,7 @@ fn encode_event(event: &NodeSchedEvent, out: &mut String) {
             outcome,
             self_admit_via_pump_block,
             entered_forge_mode,
+            skip_reason,
         } => {
             out.push(',');
             push_key_str(out, "outcome", outcome.as_str());
@@ -114,6 +115,13 @@ fn encode_event(event: &NodeSchedEvent, out: &mut String) {
             push_key_bool(out, "self_admit_via_pump_block", *self_admit_via_pump_block);
             out.push(',');
             push_key_str(out, "entered_forge_mode", entered_forge_mode.as_str());
+            out.push(',');
+            match skip_reason {
+                Some(r) => push_key_str(out, "skip_reason", r.as_str()),
+                None => {
+                    out.push_str("\"skip_reason\":null");
+                }
+            }
         }
     }
     out.push('}');
@@ -227,6 +235,7 @@ mod tests {
             NodeSchedEvent::ForgeResult {
                 outcome: ForgeOutcome::Succeeded,
                 self_admit_via_pump_block: true,
+                skip_reason: None,
                 entered_forge_mode: ForgeModeKind::SingleProducerExtendOwnDurableSpine,
             },
         ];
@@ -265,6 +274,7 @@ mod tests {
             NodeSchedEvent::ForgeResult {
                 outcome: ForgeOutcome::NotLeader,
                 self_admit_via_pump_block: false,
+                skip_reason: None,
                 entered_forge_mode: ForgeModeKind::CaughtUpToPeerTip,
             },
         ];
