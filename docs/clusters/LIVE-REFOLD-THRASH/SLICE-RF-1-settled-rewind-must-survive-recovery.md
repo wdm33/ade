@@ -217,8 +217,21 @@ expected.
   rollback commit still leaves an anchor-absent store that refolds from canonical. Must be pinned
   as a test, since this slice is precisely where it could be eroded.
 - **CE-RF-5** — live: **CE-AR-6 discharged for real** — a sustained run showing post-rollback refold
-  cost bounded and not growing with uptime. The 2026-08-02 baseline to beat: 153,565 slots / ~27 min
-  per refold, twice inside 40 minutes.
+  cost bounded and **not growing with uptime**.
+
+  **Measured baseline to beat (2026-08-02 preview, two independent stores):**
+
+  | time | refold distance | how the rollback resolved |
+  |---|---|---|
+  | 18:41 | 153,565 slots | `reset_to_settled` → anchor absent → bootstrap refold |
+  | 19:18 | 155,796 slots | same |
+  | 21:55 | **165,210 slots** | `reset_to_bootstrap` **directly** — no settled point existed to try |
+
+  ~11,600 slots of growth in ~3 hours, ~27 min per refold. Both arms of the loop are now observed
+  live: the settled rewind being *discarded* (18:41, 19:18) and, once `reset_to_bootstrap` had
+  deleted the settled triple, no bounded target existing *at all* on the next rollback (21:55).
+  This is precisely the unbounded growth `DC-EPOCH-30` claims to bound, so it is also the concrete
+  evidence that **CE-AR-6 failed rather than went unobserved**.
 
 - **CE-RF-6** — settled-triple integrity (see the hard gate above): the triple is fingerprinted when
   staged and verified before restore; mismatch → `reset_to_bootstrap`. **Lands first, or in the same
