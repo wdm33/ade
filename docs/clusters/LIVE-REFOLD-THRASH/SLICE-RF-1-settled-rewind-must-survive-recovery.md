@@ -1,9 +1,28 @@
 # SLICE RF-1 — a bounded settled rewind must survive the recovery pass that follows it
 
 > **OPENED 2026-08-02 from the EVIEW-R2 live run.** Investigation complete; implementation is held
-> until R2 closes (CE-R2-5). This is a **liveness/performance** defect. EVIEW-R2 closed the
-> correctness half of the same causal chain — a refold is now harmless, but it is still ruinously
-> expensive and self-reinforcing.
+> until R2 closes (CE-R2-5). EVIEW-R2 closed the correctness half of the same causal chain — a
+> refold is now harmless, but it is still ruinously expensive and self-reinforcing.
+>
+> **SEVERITY RAISED 2026-08-02 23:41Z — this is a FORGE BLOCKER, demonstrated, not a performance
+> defect.** On the CE-R2-5 store the refold outgrew the inter-rollback interval and the node stopped
+> converging entirely:
+>
+> | | |
+> |---|---|
+> | refold distance | 165,210 → 169,209 → **171,449** slots, monotonic |
+> | refold duration | ~30 min each (~96 slots/s) |
+> | last rollback interval | ~20 min — **shorter than one refold** |
+> | rollbacks resolved via `reset_to_settled` | **0 of 3** — the settled point never exists to try |
+> | time holding tip after 23:00Z | **none**, 40+ min of continuous refolding |
+>
+> It was still mid-refold when the live 1377→1378 boundary arrived, so it could **not promote
+> leadership at that boundary**. That is verbatim the failure `DC-EPOCH-30` claims to prevent:
+> *"a refold that outgrows the inter-reorg interval means leadership can never be promoted at a
+> boundary, i.e. the node cannot forge."* Measured on the shipped binary.
+>
+> Consequence for sequencing: RF-1 is a **precondition for any preprod forge attempt**, not a
+> follow-up tidy-up. A node that cannot hold the tip cannot forge regardless of stake.
 
 ## The finding — the bounded rewind is applied, then discarded one pass later
 
