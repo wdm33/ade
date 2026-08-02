@@ -848,6 +848,49 @@ pub fn try_recover_at_boundary(
 /// NO new WAL write on recovery -- the durable record is already authoritative; every failure mode is a
 /// TERMINAL `Err`, NEVER a fallback to the seed view or a different epoch.
 #[allow(clippy::too_many_arguments)]
+/// EMIT-ONLY (EVIEW-R1): render the activation record vs re-derived candidate comparison.
+/// Shell-side; the pure diff lives in `epoch_activation::activation_record_mismatch_fields`.
+fn emit_activation_mismatch_trace(record: &WalEntry, candidate: &EpochConsensusView) {
+    let fields = crate::epoch_activation::activation_record_mismatch_fields(record, candidate);
+    let differing: Vec<&str> = fields.iter().map(|f| f.as_str()).collect();
+    let h8 = |h: &Hash32| -> String { h.0.iter().take(4).map(|b| format!("{b:02x}")).collect() };
+    if let WalEntry::EpochConsensusViewActivated {
+        target_epoch,
+        transition_point,
+        source_checkpoint_commitment,
+        nonce_commitment,
+        stake_view_canonical_hash,
+        view_canonical_hash,
+        ..
+    } = record
+    {
+        crate::node_log!(
+            "eview-mismatch: differing=[{}] record.target_epoch={} record.transition_point={}/{} \
+             record.checkpoint={} record.nonce={} record.stake_view_hash={} record.view_hash={} \
+             cand.epoch={} cand.source_point={}/{} cand.checkpoint={} cand.nonce={} \
+             cand.stake_view_hash={} cand.view_hash={} cand.self_hash_ok={}",
+            differing.join(","),
+            target_epoch.0,
+            transition_point.slot.0,
+            h8(&transition_point.hash),
+            h8(source_checkpoint_commitment),
+            h8(nonce_commitment),
+            h8(stake_view_canonical_hash),
+            h8(view_canonical_hash),
+            candidate.epoch.0,
+            candidate.source_point.slot.0,
+            h8(&candidate.source_point.hash),
+            h8(&candidate.checkpoint_commitment),
+            h8(&candidate.nonce),
+            h8(&candidate.stake_view_canonical_hash()),
+            h8(&candidate.canonical_hash()),
+            candidate.verify_canonical_hash()
+        );
+    } else {
+        crate::node_log!("eview-mismatch: differing=[not_an_activation_record]");
+    }
+}
+
 pub fn maybe_recover_promoted_authority(
     record: Option<&WalEntry>,
     seed_epoch: EpochNo,
@@ -896,7 +939,15 @@ pub fn maybe_recover_promoted_authority(
             });
         }
         let (source, projected) = bind_bridge_view(bridge, network_magic)?;
-        match recover_active_view(Some(record), Some(&source)).map_err(ActivationError::Activate)? {
+        // EMIT-ONLY (EVIEW-R1): on a mismatch, report WHICH of the ten compared fields differ and
+        // both sides' values. The terminal outcome is unchanged -- this only serialises a difference
+        // already decided. Without it `EpochViewPostPromotionMismatch` says only THAT they differ,
+        // which is exactly the unactionable state that cost this investigation three wrong theories.
+        let recovered = recover_active_view(Some(record), Some(&source));
+        if recovered.is_err() {
+            emit_activation_mismatch_trace(record, &source);
+        }
+        match recovered.map_err(ActivationError::Activate)? {
             ActiveEpochView::Promoted(v) => active_view
                 .promote(v, projected)
                 .map_err(ActivationError::Activate)?,
@@ -965,7 +1016,15 @@ pub fn maybe_recover_promoted_authority(
         // write. `recover_active_view` fails closed `EpochViewPostPromotionMismatch` if the durable record's
         // committed identity diverges from the reconstructed `source` -- the record/source hash guard stays
         // terminal. A present record that yields NO promoted view (Seed) is likewise a contradiction.
-        match recover_active_view(Some(record), Some(&source)).map_err(ActivationError::Activate)? {
+        // EMIT-ONLY (EVIEW-R1): on a mismatch, report WHICH of the ten compared fields differ and
+        // both sides' values. The terminal outcome is unchanged -- this only serialises a difference
+        // already decided. Without it `EpochViewPostPromotionMismatch` says only THAT they differ,
+        // which is exactly the unactionable state that cost this investigation three wrong theories.
+        let recovered = recover_active_view(Some(record), Some(&source));
+        if recovered.is_err() {
+            emit_activation_mismatch_trace(record, &source);
+        }
+        match recovered.map_err(ActivationError::Activate)? {
             ActiveEpochView::Promoted(v) => active_view
                 .promote(v, projected)
                 .map_err(ActivationError::Activate)?,

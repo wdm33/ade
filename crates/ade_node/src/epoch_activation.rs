@@ -457,6 +457,106 @@ fn activation_record_matches(record: &WalEntry, candidate: &EpochConsensusView) 
     }
 }
 
+/// Closed set of the fields [`activation_record_matches`] compares. Diagnostic only — no
+/// catch-all, so a new compared field is a compile error here until it is named.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivationField {
+    /// The candidate's own canonical hash does not verify (self-inconsistent).
+    CandidateSelfHash,
+    TargetEpoch,
+    NetworkMagic,
+    Era,
+    TransitionPoint,
+    CheckpointCommitment,
+    SnapshotPhase,
+    NonceCommitment,
+    StakeViewCanonicalHash,
+    ViewCanonicalHash,
+    /// The durable record is not an activation record at all.
+    NotAnActivationRecord,
+}
+
+impl ActivationField {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CandidateSelfHash => "candidate_self_hash",
+            Self::TargetEpoch => "target_epoch",
+            Self::NetworkMagic => "network_magic",
+            Self::Era => "era",
+            Self::TransitionPoint => "transition_point",
+            Self::CheckpointCommitment => "checkpoint_commitment",
+            Self::SnapshotPhase => "snapshot_phase",
+            Self::NonceCommitment => "nonce_commitment",
+            Self::StakeViewCanonicalHash => "stake_view_canonical_hash",
+            Self::ViewCanonicalHash => "view_canonical_hash",
+            Self::NotAnActivationRecord => "not_an_activation_record",
+        }
+    }
+}
+
+/// EMIT-ONLY diagnostic: WHICH compared fields differ between a durable activation record and a
+/// re-derived candidate.
+///
+/// `EpochViewPostPromotionMismatch` is terminal and says only THAT they differ. Ten fields are
+/// compared and they fail identically, so an operator cannot tell a nonce bound to the wrong
+/// epoch from a stale checkpoint commitment from a genuinely divergent view — different faults
+/// with different fixes.
+///
+/// PURE. This does not alter [`activation_record_matches`], the comparison, or the terminal
+/// outcome; it only reports the difference already decided. Mirrors the match arm-for-arm — if
+/// the two ever drift, the census test catches it.
+pub fn activation_record_mismatch_fields(
+    record: &WalEntry,
+    candidate: &EpochConsensusView,
+) -> Vec<ActivationField> {
+    let WalEntry::EpochConsensusViewActivated {
+        target_epoch,
+        network_magic,
+        era,
+        transition_point,
+        source_checkpoint_commitment,
+        snapshot_phase,
+        nonce_commitment,
+        stake_view_canonical_hash,
+        view_canonical_hash,
+    } = record
+    else {
+        return vec![ActivationField::NotAnActivationRecord];
+    };
+    let mut out = Vec::new();
+    if !candidate.verify_canonical_hash() {
+        out.push(ActivationField::CandidateSelfHash);
+    }
+    if candidate.epoch != *target_epoch {
+        out.push(ActivationField::TargetEpoch);
+    }
+    if candidate.network_magic != *network_magic {
+        out.push(ActivationField::NetworkMagic);
+    }
+    if candidate.era != *era {
+        out.push(ActivationField::Era);
+    }
+    if candidate.source_point != *transition_point {
+        out.push(ActivationField::TransitionPoint);
+    }
+    if candidate.checkpoint_commitment != *source_checkpoint_commitment {
+        out.push(ActivationField::CheckpointCommitment);
+    }
+    if candidate.snapshot_phase != *snapshot_phase {
+        out.push(ActivationField::SnapshotPhase);
+    }
+    if candidate.nonce != *nonce_commitment {
+        out.push(ActivationField::NonceCommitment);
+    }
+    if candidate.stake_view_canonical_hash() != *stake_view_canonical_hash {
+        out.push(ActivationField::StakeViewCanonicalHash);
+    }
+    if candidate.canonical_hash() != *view_canonical_hash {
+        out.push(ActivationField::ViewCanonicalHash);
+    }
+    out
+}
+
 /// Durable-before-visible (DC-EPOCH-06): publish the active view ONLY after the activation
 /// WAL record is durable. A failed write is a TERMINAL `EpochViewActivationFailed` (halt
 /// before promotion), NEVER a publish on a non-durable record.
@@ -599,6 +699,64 @@ pub fn resolve_active_activation_at_tip(
 
 #[cfg(test)]
 mod tests {
+
+    /// EVIEW-R1: the emit-only diff must agree with the authoritative match, arm for arm.
+    ///
+    /// `activation_record_mismatch_fields` mirrors `activation_record_matches` by hand, so drift
+    /// is possible. This pins the contract that matters: EMPTY diff iff the match accepts. A diff
+    /// that reported no differing field while the node halted -- or fields while it accepted --
+    /// would be worse than no instrumentation, because it would be believed.
+    #[test]
+    fn mismatch_fields_agree_with_the_authoritative_match() {
+        let v = view(1000);
+        let rec = activation_record_for(&v);
+
+        // Accepting case: match says yes, diff must be EMPTY.
+        assert!(activation_record_matches(&rec, &v));
+        assert!(
+            activation_record_mismatch_fields(&rec, &v).is_empty(),
+            "an accepted record must produce no differing fields"
+        );
+
+        // Rejecting case: `view(n)` varies the STAKE, so the diff must name exactly the two
+        // hashes a stake change moves -- and nothing else. This is the property that makes the
+        // trace worth reading: it points at the field that actually differs, not merely "they
+        // differ".
+        let other = view(2000);
+        assert!(!activation_record_matches(&rec, &other));
+        let diff = activation_record_mismatch_fields(&rec, &other);
+        assert!(!diff.is_empty(), "a rejected record must name >=1 differing field");
+        assert!(
+            diff.contains(&ActivationField::StakeViewCanonicalHash)
+                && diff.contains(&ActivationField::ViewCanonicalHash),
+            "a stake-only difference must be pinpointed to the stake-view + view hashes, got {diff:?}"
+        );
+        assert!(
+            !diff.contains(&ActivationField::TargetEpoch)
+                && !diff.contains(&ActivationField::NonceCommitment),
+            "fields that did NOT change must not be reported, got {diff:?}"
+        );
+
+        // Discriminators are pairwise distinct across the closed set.
+        let all = [
+            ActivationField::CandidateSelfHash,
+            ActivationField::TargetEpoch,
+            ActivationField::NetworkMagic,
+            ActivationField::Era,
+            ActivationField::TransitionPoint,
+            ActivationField::CheckpointCommitment,
+            ActivationField::SnapshotPhase,
+            ActivationField::NonceCommitment,
+            ActivationField::StakeViewCanonicalHash,
+            ActivationField::ViewCanonicalHash,
+            ActivationField::NotAnActivationRecord,
+        ];
+        let mut d: Vec<&str> = all.iter().map(|f| f.as_str()).collect();
+        let n = d.len();
+        d.sort_unstable();
+        d.dedup();
+        assert_eq!(d.len(), n, "field discriminators must be distinct");
+    }
     use super::*;
     use ade_ledger::reduced_snapshot::SnapshotPhase;
     use ade_types::primitives::SlotNo;
