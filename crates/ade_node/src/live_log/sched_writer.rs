@@ -108,6 +108,7 @@ fn encode_event(event: &NodeSchedEvent, out: &mut String) {
             self_admit_via_pump_block,
             entered_forge_mode,
             skip_reason,
+            compared_tips,
         } => {
             out.push(',');
             push_key_str(out, "outcome", outcome.as_str());
@@ -121,6 +122,20 @@ fn encode_event(event: &NodeSchedEvent, out: &mut String) {
                 None => {
                     out.push_str("\"skip_reason\":null");
                 }
+            }
+            if let Some(t) = compared_tips {
+                out.push(',');
+                push_key_opt_u64(out, "local_tip_slot", t.local_slot);
+                out.push(',');
+                push_key_opt_u64(out, "local_tip_block_no", t.local_block_no);
+                out.push(',');
+                push_key_opt_hash(out, "local_tip_hash", &t.local_hash);
+                out.push(',');
+                push_key_opt_u64(out, "peer_tip_slot", t.peer_slot);
+                out.push(',');
+                push_key_opt_u64(out, "peer_tip_block_no", t.peer_block_no);
+                out.push(',');
+                push_key_opt_hash(out, "peer_tip_hash", &t.peer_hash);
             }
         }
     }
@@ -236,6 +251,7 @@ mod tests {
                 outcome: ForgeOutcome::Succeeded,
                 self_admit_via_pump_block: true,
                 skip_reason: None,
+                compared_tips: None,
                 entered_forge_mode: ForgeModeKind::SingleProducerExtendOwnDurableSpine,
             },
         ];
@@ -275,6 +291,7 @@ mod tests {
                 outcome: ForgeOutcome::NotLeader,
                 self_admit_via_pump_block: false,
                 skip_reason: None,
+                compared_tips: None,
                 entered_forge_mode: ForgeModeKind::CaughtUpToPeerTip,
             },
         ];

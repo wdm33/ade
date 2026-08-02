@@ -164,6 +164,30 @@ impl ForgeSkipReason {
     }
 }
 
+/// The two tips the DC-NODE-15 gate compared, emitted on a refusal (`CN-NODE-04`,
+/// operational tier only).
+///
+/// `tip_mismatch` says the tips disagree but not WHERE. The gate requires equality on
+/// BOTH `hash` and `block_no`, so "they differ" has materially different meanings: a
+/// serve projection lagging the durable tip by a block, a systematic `block_no`
+/// disagreement, and a hash difference (a different chain than we believe) all present
+/// identically. Emitting both tips turns "they differ" into "they differ HERE".
+///
+/// Each field is optional because either tip may be absent — that absence is itself one
+/// of the named refusals (`no_durable_servable_tip` / `no_followed_peer_tip`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComparedTips {
+    /// Ade's durable SERVABLE tip — what a peer would see, and what the forge would
+    /// build on. NOT the recovered snapshot anchor.
+    pub local_slot: Option<u64>,
+    pub local_block_no: Option<u64>,
+    pub local_hash: Option<Hash32>,
+    /// The peer tip the follow observed on the wire.
+    pub peer_slot: Option<u64>,
+    pub peer_block_no: Option<u64>,
+    pub peer_hash: Option<Hash32>,
+}
+
 /// Closed forge-base source (`CN-NODE-04` / DC-NODE-20 evidence): WHERE the forge base
 /// came from. In rung-1 single-producer mode the base is always the local selected
 /// durable tip (`ChainDb::tip`); the closed set has no peer-tip / cert source — those
@@ -260,6 +284,9 @@ pub enum NodeSchedEvent {
         /// skip with no typed refusal recorded -- which is itself informative: it
         /// rules the DC-NODE-15 gate OUT and points at the KES window instead.
         skip_reason: Option<ForgeSkipReason>,
+        /// The two tips the DC-NODE-15 gate compared, when it refused on them.
+        /// `None` for any other outcome.
+        compared_tips: Option<ComparedTips>,
     },
 }
 
@@ -341,6 +368,7 @@ mod tests {
                 outcome: ForgeOutcome::Succeeded,
                 self_admit_via_pump_block: true,
                 skip_reason: None,
+                compared_tips: None,
                 entered_forge_mode: ForgeModeKind::SingleProducerExtendOwnDurableSpine,
             },
         ];

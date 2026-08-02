@@ -1843,6 +1843,29 @@ fn dc_node_15_refusal(
 /// refusal was computed and discarded. `None` means no typed refusal was recorded and
 /// a selected tip WAS available -- which rules the DC-NODE-15 gate out and points at
 /// the KES window instead. Never reads back into scheduling or control flow.
+/// CN-NODE-04 diagnostic projection (emit-only): the two tips the DC-NODE-15 gate
+/// compared, when it refused on them. `tip_mismatch` says they disagree but not WHERE,
+/// and the gate requires equality on BOTH `hash` and `block_no` -- so a lagging serve
+/// projection, a systematic block_no disagreement, and a hash difference (a different
+/// chain than we believe) are indistinguishable without these. Never read back.
+fn forge_compared_tips(refused: Option<&ForgeRefused>) -> Option<crate::live_log::ComparedTips> {
+    match refused {
+        Some(ForgeRefused::NotCaughtUp {
+            local_servable_tip,
+            followed_peer_tip,
+            ..
+        }) => Some(crate::live_log::ComparedTips {
+            local_slot: local_servable_tip.as_ref().map(|t| t.slot.0),
+            local_block_no: local_servable_tip.as_ref().map(|t| t.block_no),
+            local_hash: local_servable_tip.as_ref().map(|t| t.hash.clone()),
+            peer_slot: followed_peer_tip.as_ref().map(|t| t.slot.0),
+            peer_block_no: followed_peer_tip.as_ref().map(|t| t.block_no),
+            peer_hash: followed_peer_tip.as_ref().map(|t| t.hash.clone()),
+        }),
+        _ => None,
+    }
+}
+
 fn forge_skip_reason(refused: Option<&ForgeRefused>) -> Option<crate::live_log::ForgeSkipReason> {
     use crate::live_log::ForgeSkipReason as R;
     use crate::node_sync::NotCaughtUpReason as N;
@@ -3610,6 +3633,7 @@ pub async fn run_relay_loop_with_sched(
                                         entered_forge_mode: forge_mode_kind(&act.forge_mode),
                                         // Reached a leader check -- nothing was skipped.
                                         skip_reason: None,
+                                        compared_tips: None,
                                     });
                                 }
                             }
@@ -3625,6 +3649,7 @@ pub async fn run_relay_loop_with_sched(
                             self_admit_via_pump_block: false,
                             entered_forge_mode: forge_mode_kind(&act.forge_mode),
                             skip_reason: forge_skip_reason(act.last_forge_refused.as_ref()),
+                            compared_tips: forge_compared_tips(act.last_forge_refused.as_ref()),
                         });
                     }
                 }
@@ -6319,6 +6344,53 @@ mod tests {
         // No typed refusal recorded -> None. This is NOT "no reason": it positively
         // rules out the DC-NODE-15 gate and points at the KES window instead.
         assert_eq!(forge_skip_reason(None), None);
+    }
+
+    /// CN-NODE-04: a tip refusal carries BOTH tips, so `tip_mismatch` says WHERE.
+    ///
+    /// The gate requires equality on both `hash` and `block_no`. Without the tips, a
+    /// serve projection lagging by one block, a systematic block_no disagreement, and a
+    /// hash difference all emit identically — and the live rehearsal showed 100% of
+    /// steady-state ticks refusing with `tip_mismatch`, which is unactionable on its own.
+    #[test]
+    fn tip_refusal_carries_both_compared_tips() {
+        let local = TipPoint {
+            slot: SlotNo(100),
+            hash: Hash32([0xAA; 32]),
+            block_no: 10,
+        };
+        let peer = TipPoint {
+            slot: SlotNo(101),
+            hash: Hash32([0xBB; 32]),
+            block_no: 11,
+        };
+        let refused = ForgeRefused::NotCaughtUp {
+            local_servable_tip: Some(local),
+            followed_peer_tip: Some(peer),
+            reason: crate::node_sync::NotCaughtUpReason::TipMismatch,
+        };
+        let t = forge_compared_tips(Some(&refused)).expect("tips emitted on a tip refusal");
+        assert_eq!(t.local_slot, Some(100));
+        assert_eq!(t.local_block_no, Some(10));
+        assert_eq!(t.local_hash, Some(Hash32([0xAA; 32])));
+        assert_eq!(t.peer_slot, Some(101));
+        assert_eq!(t.peer_block_no, Some(11));
+        assert_eq!(t.peer_hash, Some(Hash32([0xBB; 32])));
+
+        // An ABSENT tip is preserved as None rather than fabricated -- absence is itself
+        // one of the named refusals.
+        let half = ForgeRefused::NotCaughtUp {
+            local_servable_tip: None,
+            followed_peer_tip: None,
+            reason: crate::node_sync::NotCaughtUpReason::NoDurableServableTip,
+        };
+        let t2 = forge_compared_tips(Some(&half)).expect("still emitted");
+        assert_eq!(t2.local_slot, None);
+        assert_eq!(t2.peer_hash, None);
+
+        // A non-tip refusal carries no tips (nothing to compare).
+        assert!(forge_compared_tips(Some(&ForgeRefused::ReselectionPending)).is_none());
+        assert!(forge_compared_tips(None).is_none());
     }
 
     /// ACCUMULATOR-REFOLD-BOUND S1 — CE-AR-2 / INV-AR-1 and CE-AR-3 / INV-AR-2.
