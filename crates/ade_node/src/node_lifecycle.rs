@@ -2189,6 +2189,20 @@ fn accumulator_admit_and_clear_for_rollback(
 /// Regardless of the accumulator outcome the checkpoint is GUARANTEED to reach the durable tip (EVIEW
 /// currency: `maybe_activate_epoch_boundary` reads it there). With `epoch_accumulator = None` this reduces
 /// to the pre-S3 reduced-checkpoint-reset-then-advance-to-tip (byte-identical).
+/// Is an accumulator boundary crossing a post-rollback REFOLD rather than a fresh crossing?
+///
+/// Both are real crossings. `accumulator_admit_and_clear_for_rollback` calls
+/// `reset_to_bootstrap()` on every admitted rollback (S5 pre-clear), so the next advance
+/// genuinely re-derives every boundary since the bootstrap anchor. This only labels which
+/// case the operator is looking at; it never changes behaviour.
+///
+/// Stateless and exact: on a FRESH crossing the durable tip is in `to_epoch` (we just crossed
+/// into the epoch we are following). On a REFOLD the tip is already in a LATER epoch. An
+/// unknown tip epoch degrades to "fresh" — the unlabelled, pre-existing line.
+fn crossing_is_refold(tip_epoch: Option<EpochNo>, to_epoch: EpochNo) -> bool {
+    tip_epoch.is_some_and(|te| te.0 > to_epoch.0)
+}
+
 fn advance_ledger_state_to_durable_tip(
     reduced_checkpoint: Option<&ade_runtime::chaindb::ReducedUtxoCheckpoint>,
     epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
@@ -2207,6 +2221,11 @@ fn advance_ledger_state_to_durable_tip(
     else {
         return Ok(());
     };
+
+    // The durable tip's epoch -- used ONLY to label a boundary crossing as fresh vs a
+    // post-rollback refold in the observability below. Observe-only: a locate fault degrades
+    // to the unlabelled (fresh) log line, never to a halt.
+    let tip_epoch = era_schedule.locate(tip.slot).ok().map(|l| l.epoch);
 
     // Hoist the reorg reset for BOTH stores so the segmented walk below is purely forward.
     reduced_checkpoint_reset_if_ahead(reduced_checkpoint, &tip)?;
@@ -2324,15 +2343,44 @@ fn advance_ledger_state_to_durable_tip(
                                 slot,
                             }) => {
                                 let _ = store.clear_boundary_mark();
-                                // Observable proof of self-derived ledger continuity across a boundary
-                                // (CE-3c): the mark was captured at the boundary point s_prev, not the tip.
-                                crate::node_log!(
-                                    "epoch-accumulator: CROSSED boundary {} -> {} at slot {} (mark from s_prev {})",
-                                    from_epoch.0,
-                                    to_epoch.0,
-                                    slot.0,
-                                    s_prev.0
-                                );
+                                // Distinguish a FRESH crossing from a post-rollback REFOLD. Both are real
+                                // crossings -- `accumulator_admit_and_clear_for_rollback` calls
+                                // `reset_to_bootstrap()` on every admitted rollback (S5 pre-clear: a crash
+                                // in the rollback window must not leave a certified-but-wrong store), so the
+                                // next advance genuinely re-derives every boundary since the bootstrap
+                                // anchor. Reporting a refold as a fresh boundary is misleading (observed
+                                // live 2026-08-01: 14 identical "CROSSED 1375 -> 1376" lines over 18h, one
+                                // per reorg), and simply silencing it would HIDE the re-derivation cost --
+                                // which grows the further the tip is from the anchor. So say which it is.
+                                //
+                                // Discriminator is stateless and exact: on a fresh crossing the durable tip
+                                // is in `to_epoch`; on a refold the tip is already in a LATER epoch.
+                                let refolding = crossing_is_refold(tip_epoch, to_epoch);
+                                if refolding {
+                                    crate::node_log!(
+                                        "epoch-accumulator: REFOLD re-crossed boundary {} -> {} at slot {} \
+                                         (mark from s_prev {}) -- re-derived after a rollback reset; durable \
+                                         tip is already in epoch {}, {} slots left to refold",
+                                        from_epoch.0,
+                                        to_epoch.0,
+                                        slot.0,
+                                        s_prev.0,
+                                        tip_epoch.map_or(0, |e| e.0),
+                                        tip.slot.0.saturating_sub(slot.0)
+                                    );
+                                } else {
+                                    // Observable proof of self-derived ledger continuity across a boundary
+                                    // (CE-3c): the mark was captured at the boundary point s_prev, not the
+                                    // tip. Byte-identical to the pre-fix line -- CE-3c / CE-4 evidence
+                                    // quotes this verbatim.
+                                    crate::node_log!(
+                                        "epoch-accumulator: CROSSED boundary {} -> {} at slot {} (mark from s_prev {})",
+                                        from_epoch.0,
+                                        to_epoch.0,
+                                        slot.0,
+                                        s_prev.0
+                                    );
+                                }
                                 // Loop: resume the within-epoch fold in the new epoch (s_bb+1 onward).
                             }
                             Ok(AccumulatorBoundaryOutcome::AlreadyCrossed { .. }) => {
@@ -6680,6 +6728,27 @@ mod tests {
             bad.next_item().await.is_none(),
             "an unparseable --peer must be skipped, yielding an ended feed (never fatal)"
         );
+    }
+
+    /// A boundary crossing is a post-rollback REFOLD iff the durable tip is already in a later
+    /// epoch than the one just crossed into. Regression cover for the 2026-08-01 live run, which
+    /// logged 14 identical "CROSSED 1375 -> 1376" lines over 18h (one per reorg, each a genuine
+    /// re-derivation after `reset_to_bootstrap`) that read as 14 fresh boundaries.
+    #[test]
+    fn refold_is_distinguished_from_a_fresh_boundary_crossing() {
+        // Fresh: we just crossed into 1377 and the tip is in 1377.
+        assert!(!crossing_is_refold(Some(EpochNo(1377)), EpochNo(1377)));
+        // Crossing INTO the epoch the tip is in is fresh, whichever epoch that is.
+        assert!(!crossing_is_refold(Some(EpochNo(1376)), EpochNo(1376)));
+        // Refold: re-crossing the 1375->1376 boundary while the tip has moved on.
+        assert!(crossing_is_refold(Some(EpochNo(1377)), EpochNo(1376)));
+        assert!(crossing_is_refold(Some(EpochNo(1400)), EpochNo(1376)));
+        // Unknown tip epoch degrades to the unlabelled (fresh) line -- never a halt, never a
+        // misleading REFOLD claim.
+        assert!(!crossing_is_refold(None, EpochNo(1376)));
+        // A tip BEHIND the crossed epoch cannot happen (the cross advances to it), and must not
+        // be reported as a refold either.
+        assert!(!crossing_is_refold(Some(EpochNo(1375)), EpochNo(1376)));
     }
 
     // LIVE-WIRE-LIVENESS S2 — reconnect an ESTABLISHED live feed.
