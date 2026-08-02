@@ -2007,6 +2007,100 @@ fn reduced_checkpoint_reset_if_ahead(
     Ok(())
 }
 
+/// EVIEW-RECOVERY-LINEAGE R2 (DC-EPOCH-32): where the reduced checkpoint ended up relative to a
+/// requested boundary point. A CLOSED sum returned in place of `Ok(())` so a caller can never again
+/// mistake "left far past the target" for "sitting on the target" -- the silent-success shape that
+/// let a refold seal a boundary mark read at the durable tip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckpointPositioning {
+    /// The cursor was already exactly on the boundary point.
+    AlreadyAt,
+    /// The cursor was behind it and was folded forward onto it (the fresh catch-up case).
+    AdvancedForward,
+    /// The cursor was PAST it: re-materialized to the sealed bootstrap baseline and replayed
+    /// forward onto it. This is the REFOLD case the slice exists for.
+    RewoundAndReplayed,
+    /// The cursor could NOT be brought onto it. NOTHING may be sealed from the checkpoint here.
+    Unreachable { advanced: u64, seed: u64 },
+}
+
+/// EVIEW-RECOVERY-LINEAGE R2 (DC-EPOCH-32 / INV-ER-2): bring the reduced checkpoint to EXACTLY the
+/// boundary point `s_prev` before the boundary mark and the checkpoint commitment are read off it.
+///
+/// `advance_reduced_checkpoint_forward_to` is purely FORWARD: `from = cursor + 1`, and the walk
+/// breaks on the first block past the target -- so a cursor ALREADY past the target returns
+/// `Ok(())` having moved nothing and signalled nothing. That is harmless on a fresh catch-up, where
+/// the cursor is always behind. It is wrong on a REFOLD: the co-advancer drives the checkpoint to
+/// the durable tip at the end of every pass, an accumulator reset does not rewind it (the tip-only
+/// `reduced_checkpoint_reset_if_ahead` does not fire on a same-chain refold), and the accumulator
+/// then re-crosses a boundary far behind the cursor. Mark and `finalize()` are then taken at the
+/// TIP, the re-sealed frozen leadership carries a different `source_checkpoint_commitment` and
+/// stake view than the crossing that wrote the durable eview activation record, and the divergence
+/// stays LATENT until a restart compares them and halts on `EpochViewPostPromotionMismatch`.
+///
+/// So: rewind when ahead (`reset_to_bootstrap` -- the reduced delta is NOT invertible, so
+/// re-materializing from the sealed seed is the only way back), advance forward, then VERIFY the
+/// cursor landed exactly on the boundary point rather than assuming it. Re-derivation is
+/// byte-identical because the original crossing folded the same `(seed, s_prev]` prefix in the same
+/// order, and that prefix is immutable: `s_prev` belongs to a boundary already deeper than `k`, and
+/// rollback admission refuses anything deeper than `k`.
+///
+/// Store faults propagate exactly as the bare forward advance did. `Unreachable` does not -- the
+/// caller stalls observe-only instead, which is strictly safer than sealing a wrong object.
+fn position_reduced_checkpoint_at_boundary(
+    cp: &ade_runtime::chaindb::ReducedUtxoCheckpoint,
+    chaindb: &dyn ChainDb,
+    boundary_slot: SlotNo,
+) -> Result<CheckpointPositioning, NodeLifecycleError> {
+    let seed = cp
+        .seed_slot()
+        .map_err(|e| NodeLifecycleError::RelaySync(format!("reduced-checkpoint seed slot: {e:?}")))?
+        .ok_or_else(|| {
+            NodeLifecycleError::RelaySync(
+                "reduced checkpoint has no sealed bootstrap baseline (malformed)".to_string(),
+            )
+        })?;
+    let cursor = cp
+        .last_advanced_slot()
+        .map_err(|e| NodeLifecycleError::RelaySync(format!("reduced-checkpoint slot: {e:?}")))?
+        .unwrap_or(seed);
+    if cursor.0 == boundary_slot.0 {
+        return Ok(CheckpointPositioning::AlreadyAt);
+    }
+    // A boundary BEFORE the sealed seed can never be re-derived -- the pre-seed deltas are not held.
+    if boundary_slot.0 < seed.0 {
+        return Ok(CheckpointPositioning::Unreachable {
+            advanced: cursor.0,
+            seed: seed.0,
+        });
+    }
+    let rewound = cursor.0 > boundary_slot.0;
+    if rewound {
+        cp.reset_to_bootstrap().map_err(|e| {
+            NodeLifecycleError::RelaySync(format!("reduced-checkpoint re-materialize: {e:?}"))
+        })?;
+    }
+    advance_reduced_checkpoint_forward_to(Some(cp), chaindb, boundary_slot)?;
+    // VERIFY, never assume: exactly on the boundary point, on the expected seed lineage.
+    // `verify_ready_at` is the same EXACT-at-slot gate the DERIVE path already fails closed on --
+    // the seal path simply never asked, which is the asymmetry this slice closes.
+    if cp.verify_ready_at(boundary_slot, seed).is_ok() {
+        return Ok(if rewound {
+            CheckpointPositioning::RewoundAndReplayed
+        } else {
+            CheckpointPositioning::AdvancedForward
+        });
+    }
+    let advanced = cp
+        .last_advanced_slot()
+        .map_err(|e| NodeLifecycleError::RelaySync(format!("reduced-checkpoint slot: {e:?}")))?
+        .unwrap_or(seed);
+    Ok(CheckpointPositioning::Unreachable {
+        advanced: advanced.0,
+        seed: seed.0,
+    })
+}
+
 /// LIVE-LEDGER-EPOCH-TRANSITION S5 (step 2b): the recovery-admission POLICY — the single Cardano-derived
 /// bound the recovery layer is allowed to hold. Constructed ONCE at the lifecycle entry from the validated
 /// network/genesis settings and threaded explicitly downward (NEVER reached sideways from ambient config),
@@ -2606,8 +2700,33 @@ fn advance_ledger_state_to_durable_tip(
                             break;
                         };
                         // FAIL-CLOSED (EVIEW): bring the checkpoint EXACTLY to the boundary point so the mark
-                        // is the end-of-epoch stake, before the new epoch's first block.
-                        advance_reduced_checkpoint_forward_to(Some(cp), chaindb, s_prev)?;
+                        // is the end-of-epoch stake, before the new epoch's first block. EVIEW-R2
+                        // (DC-EPOCH-32): "exactly" is now VERIFIED, and a cursor left PAST the boundary point
+                        // is rewound onto it rather than silently accepted -- a refold used to seal its mark
+                        // and commitment at the durable tip, producing frozen leadership that disagreed with
+                        // the durable activation record and halted the NEXT restart.
+                        match position_reduced_checkpoint_at_boundary(cp, chaindb, s_prev)? {
+                            CheckpointPositioning::AlreadyAt
+                            | CheckpointPositioning::AdvancedForward => {}
+                            CheckpointPositioning::RewoundAndReplayed => {
+                                crate::node_log!(
+                                    "epoch-accumulator: reduced checkpoint REWOUND onto boundary point {} \
+                                     before sealing (it sat past it -- DC-EPOCH-32)",
+                                    s_prev.0
+                                );
+                            }
+                            CheckpointPositioning::Unreachable { advanced, seed } => {
+                                crate::node_log!(
+                                    "epoch-accumulator: boundary point {} unreachable for the reduced \
+                                     checkpoint (cursor {}, seed {}) -> observe-only stall; NOTHING sealed \
+                                     (DC-EPOCH-32)",
+                                    s_prev.0,
+                                    advanced,
+                                    seed
+                                );
+                                break;
+                            }
+                        }
                         // Capture the per-credential SNAP mark at s_prev (observe-only on a sum fault).
                         let mark = match cp.sum_base_credential_stake() {
                             Ok(m) => m,
@@ -6757,6 +6876,211 @@ mod tests {
             assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(43_086_000)));
             // The boundary-mark binding was consumed + cleared by the cross.
             assert_eq!(store.boundary_mark_binding().unwrap(), None);
+        }
+
+        // ===== EVIEW-RECOVERY-LINEAGE R2: a refold must re-seal frozen leadership byte-identically =====
+        //
+        // The defect these pin: the co-advancer leaves the reduced checkpoint at the durable TIP at the
+        // end of every pass, an accumulator reset does not rewind it, and the forward-only advance
+        // SILENTLY no-ops when asked to go back to a boundary point. A refold therefore read its
+        // boundary mark and `finalize()` commitment at the tip and re-sealed frozen leadership that
+        // disagreed with the durable eview activation record -- latently, only halting on the NEXT
+        // restart with `EpochViewPostPromotionMismatch`.
+
+        /// A produced entry the ChainDB does NOT hold, so "checkpoint left where it sat" and "checkpoint
+        /// rewound onto the boundary point" are DISTINGUISHABLE states. Every block in these fixtures is
+        /// the same raw Conway block, and re-applying it is idempotent, so without this the checkpoint's
+        /// content at `s_prev` and at the tip would be equal and the tests would pass either way.
+        fn off_chain_produced() -> Vec<(TxIn, Coin, ReducedStakeRef)> {
+            vec![(
+                TxIn {
+                    tx_hash: Hash32([0xAB; 32]),
+                    index: 0,
+                },
+                Coin(9_000_000),
+                ReducedStakeRef::Base(cred(0x33)),
+            )]
+        }
+
+        /// CE-R2-1 (DC-EPOCH-32 / INV-ER-2): positioning is EXACT. A checkpoint left PAST a boundary
+        /// point is rewound onto it and reproduces, byte for byte, the commitment and mark it held when
+        /// it first passed through -- which is precisely what makes a refold's re-seal identical.
+        #[test]
+        fn positioning_rewinds_a_checkpoint_that_sits_past_the_boundary_point() {
+            let tmp = TempDir::new().unwrap();
+            let cp = sealed_checkpoint(&tmp, SlotNo(42_000_000));
+            let db = InMemoryChainDb::new();
+            put_raw(&db, 43_000_000); // the boundary point s_prev
+            put_raw(&db, 43_100_000); // a later block
+
+            // What the ORIGINAL crossing saw at the boundary point.
+            assert_eq!(
+                position_reduced_checkpoint_at_boundary(&cp, &db, SlotNo(43_000_000)).unwrap(),
+                CheckpointPositioning::AdvancedForward
+            );
+            let ref_commitment = cp.finalize().unwrap();
+            let ref_mark = cp.sum_base_credential_stake().unwrap();
+
+            // The co-advancer drives the checkpoint on past the boundary, absorbing later state.
+            cp.advance_block(SlotNo(43_100_000), &[], &off_chain_produced())
+                .unwrap();
+            assert_ne!(
+                cp.finalize().unwrap(),
+                ref_commitment,
+                "the fixture must genuinely move the checkpoint, or this test proves nothing"
+            );
+            assert_ne!(cp.sum_base_credential_stake().unwrap(), ref_mark);
+
+            // A refold re-crosses the SAME boundary with the cursor left at the tip.
+            assert_eq!(
+                position_reduced_checkpoint_at_boundary(&cp, &db, SlotNo(43_000_000)).unwrap(),
+                CheckpointPositioning::RewoundAndReplayed
+            );
+            assert_eq!(
+                cp.last_advanced_slot().unwrap(),
+                Some(SlotNo(43_000_000)),
+                "positioned EXACTLY on the boundary point"
+            );
+            assert_eq!(
+                cp.finalize().unwrap(),
+                ref_commitment,
+                "the re-derived commitment must be byte-identical -- this is the field that differed \
+                 live (record cbb12da0 vs candidate de32979c)"
+            );
+            assert_eq!(
+                cp.sum_base_credential_stake().unwrap(),
+                ref_mark,
+                "the re-derived boundary mark must be byte-identical -- the stake view that differed live"
+            );
+
+            // Idempotent: positioning an already-positioned checkpoint moves nothing.
+            assert_eq!(
+                position_reduced_checkpoint_at_boundary(&cp, &db, SlotNo(43_000_000)).unwrap(),
+                CheckpointPositioning::AlreadyAt
+            );
+            assert_eq!(cp.finalize().unwrap(), ref_commitment);
+        }
+
+        /// CE-R2-2: the primitive the seal path used to call is purely FORWARD -- asked to go BACKWARD
+        /// it reports success and moves nothing. Pinned as a NEGATIVE so the seal path can never regress
+        /// to calling it directly; this exact shape is what let a refold read its mark at the tip.
+        #[test]
+        fn a_bare_forward_advance_asked_to_go_backward_silently_moves_nothing() {
+            let tmp = TempDir::new().unwrap();
+            let cp = sealed_checkpoint(&tmp, SlotNo(42_000_000));
+            let db = InMemoryChainDb::new();
+            put_raw(&db, 43_000_000);
+            put_raw(&db, 43_100_000);
+
+            advance_reduced_checkpoint_forward_to(Some(&cp), &db, SlotNo(43_100_000)).unwrap();
+            assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(43_100_000)));
+
+            // Ok(()), cursor UNCHANGED, no signal of any kind.
+            advance_reduced_checkpoint_forward_to(Some(&cp), &db, SlotNo(43_000_000)).unwrap();
+            assert_eq!(
+                cp.last_advanced_slot().unwrap(),
+                Some(SlotNo(43_100_000)),
+                "silently left 100k slots past the requested point -- why the seal path must go through \
+                 position_reduced_checkpoint_at_boundary"
+            );
+
+            // The positioning helper, handed the same state, refuses to leave it there.
+            assert_eq!(
+                position_reduced_checkpoint_at_boundary(&cp, &db, SlotNo(43_000_000)).unwrap(),
+                CheckpointPositioning::RewoundAndReplayed
+            );
+            assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(43_000_000)));
+        }
+
+        /// A boundary point BEFORE the checkpoint's sealed seed can never be re-derived -- the pre-seed
+        /// deltas are not held. It must report `Unreachable` so the caller STALLS rather than sealing
+        /// from whatever state the checkpoint happens to hold, and must not damage the checkpoint on the
+        /// way to saying so.
+        #[test]
+        fn a_boundary_point_before_the_sealed_seed_is_unreachable() {
+            let tmp = TempDir::new().unwrap();
+            let cp = sealed_checkpoint(&tmp, SlotNo(42_000_000));
+            let db = InMemoryChainDb::new();
+            put_raw(&db, 43_000_000);
+            advance_reduced_checkpoint_forward_to(Some(&cp), &db, SlotNo(43_000_000)).unwrap();
+
+            match position_reduced_checkpoint_at_boundary(&cp, &db, SlotNo(41_000_000)).unwrap() {
+                CheckpointPositioning::Unreachable { advanced, seed } => {
+                    assert_eq!(seed, 42_000_000);
+                    assert_eq!(advanced, 43_000_000);
+                }
+                other => panic!("a pre-seed boundary point must be Unreachable, got {other:?}"),
+            }
+            assert_eq!(
+                cp.last_advanced_slot().unwrap(),
+                Some(SlotNo(43_000_000)),
+                "refusing must not rewind or otherwise disturb the checkpoint"
+            );
+        }
+
+        /// CE-R2-3 (DC-EPOCH-33 / INV-ER-2) -- the PRODUCTION seam. A refold that re-crosses a boundary
+        /// re-seals frozen leadership BYTE-IDENTICALLY to the original crossing: source point,
+        /// `source_checkpoint_commitment`, and the whole pool map. This is the property whose violation
+        /// left the durable eview activation record unreproducible and halted the next restart.
+        #[test]
+        fn a_refold_reseals_frozen_leadership_byte_identically() {
+            use ade_ledger::frozen_leadership::FrozenLeadershipPoolDistr;
+
+            fn sealed_leadership(
+                store: &EpochAccumulatorStore,
+            ) -> Vec<(u64, FrozenLeadershipPoolDistr)> {
+                (500..=504)
+                    .filter_map(|e| {
+                        store
+                            .frozen_leadership_for_epoch(EpochNo(e))
+                            .unwrap()
+                            .map(|d| (e, d))
+                    })
+                    .collect()
+            }
+
+            let tmp = TempDir::new().unwrap();
+            let cp = sealed_checkpoint(&tmp, SlotNo(42_000_000));
+            let store = sealed_store_at_epoch_500(&tmp, SlotNo(42_000_000));
+            let db = InMemoryChainDb::new();
+            put_raw(&db, 43_000_000); // epoch 500, within-epoch -> s_prev, the mark source
+            put_raw(&db, 43_086_000); // epoch 501, the boundary block
+            put_raw(&db, 43_100_000); // epoch 501, the durable tip
+            let sched = schedule_86k();
+            let policy = RecoveryAdmissionPolicy::cardano();
+
+            // The ORIGINAL crossing.
+            advance_ledger_state_to_durable_tip(Some(&cp), Some(&store), &db, &sched, &policy)
+                .unwrap();
+            let original = sealed_leadership(&store);
+            assert!(
+                !original.is_empty(),
+                "the original crossing must seal leadership, or this test proves nothing"
+            );
+            assert_eq!(
+                cp.last_advanced_slot().unwrap(),
+                Some(SlotNo(43_100_000)),
+                "the co-advancer leaves the checkpoint at the durable TIP -- the precondition for the defect"
+            );
+
+            // Force the refold exactly as an admitted rollback / ResetAndRefold does: the accumulator is
+            // rewound to bootstrap and the reduced checkpoint is NOT rewound with it. The extra produced
+            // entry sits AT the tip slot, so `reduced_checkpoint_reset_if_ahead` does not fire either --
+            // which is the live condition.
+            store.reset_to_bootstrap().unwrap();
+            cp.advance_block(SlotNo(43_100_000), &[], &off_chain_produced())
+                .unwrap();
+
+            // The REFOLD.
+            advance_ledger_state_to_durable_tip(Some(&cp), Some(&store), &db, &sched, &policy)
+                .unwrap();
+
+            assert_eq!(
+                sealed_leadership(&store),
+                original,
+                "a refold must re-seal byte-identical frozen leadership -- source point, \
+                 source_checkpoint_commitment and the full pool map"
+            );
         }
 
         /// EVIEW-preservation: with NO accumulator the co-advancer reduces to the pre-S3 reduced-checkpoint

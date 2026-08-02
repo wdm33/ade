@@ -9953,3 +9953,48 @@ status = "enforced"
 evidence_notes = "The proof folds one chain twice -- straight through, and via a promoted settled point plus rewind plus refold -- and asserts the resulting EpochAccumulator is equal; it also asserts both paths agree BEFORE any rewind so a harness that folded nothing would fail rather than pass vacuously. SUPPORTING live evidence only (never the reason for enforcement): the 2026-08-01 sustained preview run measured the UNBOUNDED pre-slice behaviour -- refold 225s at 25,838 slots from the bootstrap anchor rising to 1595s (26.6 min) at 85,690, per-slot cost climbing 0.009->0.019 s/slot, over 14 reorgs in 18h. CE-AR-6 (a live run showing refold no longer grows with uptime) is still OUTSTANDING. Enforcement rests on the named tests + ci/ci_check_accumulator_refold_bound.sh."
 introduced_in = "ACCUMULATOR-REFOLD-BOUND-S1"
 strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-32"
+tier = "derived"
+statement = """
+Boundary seal reads a POSITIONED checkpoint. The boundary mark and the reduced-checkpoint commitment
+sealed into a frozen-leadership object are captured with the checkpoint positioned EXACTLY at the
+boundary point s_prev -- verified, never assumed. A checkpoint sitting PAST s_prev is rewound onto it
+(re-materialize from the sealed seed, then replay forward; the reduced delta is not invertible); a
+boundary point that cannot be reached stalls the crossing observe-only and seals NOTHING. The
+forward-only advance alone does not satisfy this: asked to go backward it returns Ok(()) having moved
+nothing, so the mark and commitment would be read at whatever slot the cursor happened to hold.
+"""
+source = "docs/clusters/EVIEW-RECOVERY-LINEAGE/SLICE-R2-refold-reseals-frozen-leadership-byte-identically.md (INV-ER-2)"
+cross_ref = ["DC-EPOCH-11", "DC-EPOCH-22", "DC-EPOCH-33"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (position_reduced_checkpoint_at_boundary + the StalledAt boundary arm of advance_ledger_state_to_durable_tip) + crates/ade_runtime/src/chaindb/reduced_utxo_checkpoint.rs (verify_ready_at exact-at-slot semantics). Gate ci/ci_check_eview_refold_reseal.sh."
+tests = ["positioning_rewinds_a_checkpoint_that_sits_past_the_boundary_point", "a_bare_forward_advance_asked_to_go_backward_silently_moves_nothing", "a_boundary_point_before_the_sealed_seed_is_unreachable"]
+ci_scripts = ["ci/ci_check_eview_refold_reseal.sh"]
+status = "enforced"
+evidence_notes = "The proof positions a checkpoint at a boundary point, records its commitment and mark, drives it past that point with state the ChainDB does not hold, then re-positions and asserts BOTH are reproduced byte for byte -- and asserts the drive genuinely moved the checkpoint first, so it cannot pass vacuously (every block in the fixture is the same raw Conway block and re-application is idempotent). A companion NEGATIVE test pins the bare forward advance's silent no-op so the seal path cannot regress to calling it. The gate additionally asserts ORDERING (positioning precedes both the mark capture and the finalize), which no compiler check covers. Enforcement rests on the named tests + ci/ci_check_eview_refold_reseal.sh."
+introduced_in = "EVIEW-RECOVERY-LINEAGE-R2"
+strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-33"
+tier = "derived"
+statement = """
+Refold re-seal identity. Re-deriving an epoch boundary the node has already crossed re-seals a
+frozen-leadership object byte-identical to the one the original crossing sealed -- target epoch,
+source point, source_checkpoint_commitment, and the whole pool map. Re-derivation is byte-identical
+because the original crossing folded the same (seed, s_prev] prefix in the same order and that prefix
+is immutable: s_prev belongs to a boundary already deeper than k, and rollback admission refuses
+anything deeper than k. Without this a refold leaves the durable eview activation record
+UNREPRODUCIBLE -- latently, since a running node never compares -- and the next restart halts
+terminally on EpochViewPostPromotionMismatch.
+"""
+source = "docs/clusters/EVIEW-RECOVERY-LINEAGE/SLICE-R2-refold-reseals-frozen-leadership-byte-identically.md (INV-ER-2)"
+cross_ref = ["DC-EPOCH-32", "DC-EPOCH-31", "DC-EPOCH-20", "T-DET-01"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (advance_ledger_state_to_durable_tip boundary seal) + crates/ade_ledger/src/epoch_accumulator.rs (cross_epoch_boundary_with_effect, whose documented contract is that the run loop advances the checkpoint to s_prev before calling it). Gate ci/ci_check_eview_refold_reseal.sh."
+tests = ["a_refold_reseals_frozen_leadership_byte_identically"]
+ci_scripts = ["ci/ci_check_eview_refold_reseal.sh"]
+status = "enforced"
+evidence_notes = "The proof crosses a boundary through the PRODUCTION co-advancer, captures the sealed leadership set, then forces the live refold shape -- accumulator reset to bootstrap, reduced checkpoint left at the durable tip (and deliberately not ahead of it, so the tip-only reset does not fire) -- and asserts the re-sealed set is equal. It was verified to DISCRIMINATE: with the seal path reverted to the bare forward advance it fails on exactly the field the live node halted on. SUPPORTING live evidence only (never the reason for enforcement): the 2026-08-02 70-second preview reproducer halted with differing=[checkpoint_commitment, stake_view_canonical_hash, view_canonical_hash] while target_epoch, transition_point and the eta0 nonce all matched -- every accumulator-derived field agreeing and every checkpoint-derived field disagreeing. CE-R2-4 (a store that crosses, refolds and restarts under the fixed binary) and CE-R2-5 (live preview boundary + restart) are OUTSTANDING. Enforcement rests on the named test + ci/ci_check_eview_refold_reseal.sh."
+introduced_in = "EVIEW-RECOVERY-LINEAGE-R2"
+strengthened_in = []
