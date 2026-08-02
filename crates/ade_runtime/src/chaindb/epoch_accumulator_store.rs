@@ -76,6 +76,73 @@ const LAST_ADVANCED_POINT_KEY: &str = "last_advanced_point";
 /// codec is UNCHANGED (still v4-decodable), so the non-authority observe-only follow still reads existing
 /// stores; ONLY the leadership authority read (`leadership_authority_for_epoch`) gates on this marker + object.
 const LEADERSHIP_SCHEMA_KEY: &str = "leadership_schema_version";
+
+/// ACCUMULATOR-REFOLD-BOUND S1: the SETTLED rewind point — a rolling snapshot of the accumulator at
+/// a point the chain can no longer retract (older than `k`). A reorg rewinds HERE instead of to the
+/// bootstrap baseline, bounding the refold to ~`k` slots rather than "everything since bootstrap"
+/// (which grew without bound with node uptime: measured 26.6 min at 85,690 slots out, and rising).
+///
+/// Three keys move together in one commit and are only ever read together. Absent on an older store
+/// => the rewind falls back to `reset_to_bootstrap`, i.e. exactly the pre-slice behaviour, so this
+/// addition cannot regress an existing deployment.
+/// A DOUBLE BUFFER is required, not a single snapshot. The accumulator's current state tracks the
+/// tip, so it is never itself settled; a single snapshot refreshed from `current` would be unusable
+/// at steady state, and one refreshed only while catching up would age without bound. So the current
+/// state is STAGED as `pending`, PROMOTED to `settled` once the tip has advanced `k` blocks past it,
+/// and a fresh `pending` staged. `settled` is then always between `k` and `2k` blocks old: always
+/// usable, and the refold it implies is bounded by `2k` regardless of uptime.
+const SETTLED_BLOB_KEY: &str = "settled_blob";
+const SETTLED_POINT_KEY: &str = "settled_point";
+const SETTLED_LEADERSHIP_KEY: &str = "settled_leadership";
+const PENDING_BLOB_KEY: &str = "pending_settled_blob";
+const PENDING_POINT_KEY: &str = "pending_settled_point";
+const PENDING_LEADERSHIP_KEY: &str = "pending_settled_leadership";
+
+/// Deterministic length-prefixed encoding of the epoch-indexed leadership table:
+/// `count(4 BE) ++ [epoch(8 BE) ++ len(4 BE) ++ blob]*`. Entries are written in redb's ascending
+/// key order, so the encoding is canonical for a given table.
+fn encode_leadership_entries(entries: &[(u64, Vec<u8>)]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + entries.len() * 48);
+    out.extend_from_slice(&(entries.len() as u32).to_be_bytes());
+    for (epoch, blob) in entries {
+        out.extend_from_slice(&epoch.to_be_bytes());
+        out.extend_from_slice(&(blob.len() as u32).to_be_bytes());
+        out.extend_from_slice(blob);
+    }
+    out
+}
+
+fn decode_leadership_entries(
+    raw: &[u8],
+) -> Result<Vec<(u64, Vec<u8>)>, EpochAccumulatorStoreError> {
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    let bad = || EpochAccumulatorStoreError::Decode("settled leadership table".to_string());
+    if raw.len() < 4 {
+        return Err(bad());
+    }
+    let count = u32::from_be_bytes(raw[0..4].try_into().map_err(|_| bad())?) as usize;
+    let mut out = Vec::with_capacity(count);
+    let mut off = 4usize;
+    for _ in 0..count {
+        if off + 12 > raw.len() {
+            return Err(bad());
+        }
+        let epoch = u64::from_be_bytes(raw[off..off + 8].try_into().map_err(|_| bad())?);
+        let len = u32::from_be_bytes(raw[off + 8..off + 12].try_into().map_err(|_| bad())?) as usize;
+        off += 12;
+        if off + len > raw.len() {
+            return Err(bad());
+        }
+        out.push((epoch, raw[off..off + len].to_vec()));
+        off += len;
+    }
+    if off != raw.len() {
+        return Err(bad());
+    }
+    Ok(out)
+}
 /// LIVE-LEDGER-EPOCH-TRANSITION S4-0: the CURRENT leadership authority, EPOCH-INDEXED — `target_leadership_epoch`
 /// (u64) -> canonically-encoded `FrozenLeadershipPoolDistr`. Production reads leadership for an EXACT epoch
 /// (`leadership_authority_for_epoch`), NEVER "the current object": a boundary freeze produces `nesPd_{target+1}`,
@@ -482,6 +549,15 @@ impl EpochAccumulatorStore {
             // DC-EPOCH-22: a reorg reset invalidates any pending boundary-mark binding (its lineage no longer
             // holds) — drop it so the rematerialized chain re-binds at its OWN boundary point.
             let _ = meta.remove(PENDING_BOUNDARY_MARK_KEY).map_err(rerr)?;
+            // ACCUMULATOR-REFOLD-BOUND S1: a bootstrap reset discards BOTH rewind buffers -- the
+            // staged one (abandoned chain) and the settled one (we are going further back than it
+            // anyway), so nothing survives a bootstrap reset as a rewind target.
+            let _ = meta.remove(PENDING_BLOB_KEY).map_err(rerr)?;
+            let _ = meta.remove(PENDING_POINT_KEY).map_err(rerr)?;
+            let _ = meta.remove(PENDING_LEADERSHIP_KEY).map_err(rerr)?;
+            let _ = meta.remove(SETTLED_BLOB_KEY).map_err(rerr)?;
+            let _ = meta.remove(SETTLED_POINT_KEY).map_err(rerr)?;
+            let _ = meta.remove(SETTLED_LEADERSHIP_KEY).map_err(rerr)?;
             // S5: a reset leaves the accumulator at the seed baseline but NOT lineage-certified — clear the
             // anchor. Recovery treats the cleared store as uncertified until a successful canonical re-fold
             // re-writes a fresh LastAdvancedPoint; it never trusts a reset store as lineage authority.
@@ -523,6 +599,215 @@ impl EpochAccumulatorStore {
         }
         txn.commit().map_err(rerr)?;
         Ok(())
+    }
+
+    /// ACCUMULATOR-REFOLD-BOUND S1: snapshot the CURRENT accumulator as the SETTLED rewind point.
+    ///
+    /// The caller refreshes this only once the current state is at least `k` behind the durable tip
+    /// (INV-AR-1) — this method does not know the tip and does not police settledness; it records
+    /// what the caller certifies as settled.
+    ///
+    /// Only a lineage-CERTIFIED current state may become a rewind target: an uncertified store is
+    /// exactly what a prior reset leaves behind, and promoting one would launder an unverified state
+    /// into a trusted baseline. Returns `false` (a no-op) when unsealed or uncertified.
+    ///
+    /// The leadership table is snapshotted WITH the blob so a later rewind can restore the exact
+    /// pair (INV-AR-3). Leadership only ever changes at a boundary crossing
+    /// (`advance_with_current_leadership`, the single recurrent writer), so this snapshot is simply
+    /// whatever the last boundary at-or-before the point left.
+    /// `tip_block_no` is the durable tip's height and `security_param` is `k` in BLOCKS — both in
+    /// block units, so this needs no active-slot-coefficient assumption (comparing slots would).
+    pub fn roll_settled_rewind_point(
+        &self,
+        tip_block_no: BlockNo,
+        security_param: u64,
+    ) -> Result<bool, EpochAccumulatorStoreError> {
+        if !self.is_complete()? {
+            return Ok(false);
+        }
+        let Some(point) = self.last_advanced_point()? else {
+            return Ok(false);
+        };
+        // PROMOTE first: a staged point that the tip has now outrun by >= k is settled — no
+        // admissible reorg can reach it — so it becomes the rewind target. Then stage the current
+        // state in its place.
+        let staged = {
+            let txn = self.db.begin_read().map_err(rerr)?;
+            let meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            match meta.get(PENDING_POINT_KEY).map_err(rerr)? {
+                Some(v) => Some(LastAdvancedPoint::decode(&v.value().to_vec())?),
+                None => None,
+            }
+        };
+        let promote = staged
+            .as_ref()
+            .is_some_and(|p| p.block_no.0.saturating_add(security_param) <= tip_block_no.0);
+        // Nothing to do until the staged point has aged past k (it is re-staged only on promotion,
+        // so `settled` ends up between k and 2k old).
+        if staged.is_some() && !promote {
+            return Ok(false);
+        }
+        let txn = self.db.begin_write().map_err(rerr)?;
+        if promote {
+            let (b, p, l) = {
+                let meta = txn.open_table(META_TABLE).map_err(rerr)?;
+                let b = meta
+                    .get(PENDING_BLOB_KEY)
+                    .map_err(rerr)?
+                    .map(|v| v.value().to_vec());
+                let p = meta
+                    .get(PENDING_POINT_KEY)
+                    .map_err(rerr)?
+                    .map(|v| v.value().to_vec());
+                let l = meta
+                    .get(PENDING_LEADERSHIP_KEY)
+                    .map_err(rerr)?
+                    .map(|v| v.value().to_vec())
+                    .unwrap_or_default();
+                (b, p, l)
+            };
+            if let (Some(b), Some(p)) = (b, p) {
+                let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+                meta.insert(SETTLED_BLOB_KEY, b.as_slice()).map_err(rerr)?;
+                meta.insert(SETTLED_POINT_KEY, p.as_slice()).map_err(rerr)?;
+                meta.insert(SETTLED_LEADERSHIP_KEY, l.as_slice())
+                    .map_err(rerr)?;
+            }
+        }
+        {
+            let cur_blob = {
+                let meta = txn.open_table(META_TABLE).map_err(rerr)?;
+                let got = meta
+                    .get(CURRENT_BLOB_KEY)
+                    .map_err(rerr)?
+                    .map(|v| v.value().to_vec());
+                got.ok_or(EpochAccumulatorStoreError::Missing(CURRENT_BLOB_KEY))?
+            };
+            let lead: Vec<(u64, Vec<u8>)> = {
+                let cur = txn.open_table(CURRENT_LEADERSHIP_BY_EPOCH).map_err(rerr)?;
+                let mut v = Vec::new();
+                for r in cur.iter().map_err(rerr)? {
+                    let (k, val) = r.map_err(rerr)?;
+                    v.push((k.value(), val.value().to_vec()));
+                }
+                v
+            };
+            let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            meta.insert(PENDING_BLOB_KEY, cur_blob.as_slice())
+                .map_err(rerr)?;
+            meta.insert(PENDING_POINT_KEY, point.encode().as_slice())
+                .map_err(rerr)?;
+            meta.insert(
+                PENDING_LEADERSHIP_KEY,
+                encode_leadership_entries(&lead).as_slice(),
+            )
+            .map_err(rerr)?;
+        }
+        txn.commit().map_err(rerr)?;
+        Ok(promote)
+    }
+
+    /// ACCUMULATOR-REFOLD-BOUND S1: the persisted SETTLED rewind point, if any. The caller checks
+    /// settledness (`slot + k <= tip`) and lineage (the hash still resolves canonically) BEFORE
+    /// calling [`Self::reset_to_settled`] — INV-AR-1 / INV-AR-2.
+    pub fn settled_rewind_point(
+        &self,
+    ) -> Result<Option<LastAdvancedPoint>, EpochAccumulatorStoreError> {
+        let txn = self.db.begin_read().map_err(rerr)?;
+        let meta = txn.open_table(META_TABLE).map_err(rerr)?;
+        let raw = match meta.get(SETTLED_POINT_KEY).map_err(rerr)? {
+            None => return Ok(None),
+            Some(v) => v.value().to_vec(),
+        };
+        Ok(Some(LastAdvancedPoint::decode(&raw)?))
+    }
+
+    /// ACCUMULATOR-REFOLD-BOUND S1: reorg reset to the SETTLED rewind point instead of the bootstrap
+    /// baseline, bounding the post-rollback refold to ~`k` slots instead of "everything since
+    /// bootstrap" (INV-AR-5).
+    ///
+    /// Identical in kind to [`Self::reset_to_bootstrap`] — same three guarantees, different baseline:
+    ///   * `CURRENT := SETTLED` (blob + slot),
+    ///   * the pending boundary-mark binding is dropped (its lineage no longer holds, DC-EPOCH-22),
+    ///   * `LAST_ADVANCED_POINT` is cleared, so the store is UNCERTIFIED until a canonical re-fold
+    ///     rewrites it (INV-AR-4 — a rewound store is never lineage authority),
+    ///   * `CURRENT_LEADERSHIP := SETTLED_LEADERSHIP`, so no sealed leadership object can outrun the
+    ///     refolded accumulator (INV-AR-3 — the `reset_to_bootstrap` guarantee, generalised).
+    ///
+    /// Returns `false` (store untouched) when no settled point is recorded, so the caller falls back
+    /// to `reset_to_bootstrap` and an older store simply behaves as it did pre-slice.
+    pub fn reset_to_settled(&self) -> Result<bool, EpochAccumulatorStoreError> {
+        if !self.is_complete()? {
+            return Err(EpochAccumulatorStoreError::NotSealed);
+        }
+        // Read the settled triple first: absent => no-op, so the caller can fall back cleanly.
+        let (blob, point, lead) = {
+            let txn = self.db.begin_read().map_err(rerr)?;
+            let meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            let Some(blob) = meta
+                .get(SETTLED_BLOB_KEY)
+                .map_err(rerr)?
+                .map(|v| v.value().to_vec())
+            else {
+                return Ok(false);
+            };
+            let Some(praw) = meta
+                .get(SETTLED_POINT_KEY)
+                .map_err(rerr)?
+                .map(|v| v.value().to_vec())
+            else {
+                return Ok(false);
+            };
+            let lraw = meta
+                .get(SETTLED_LEADERSHIP_KEY)
+                .map_err(rerr)?
+                .map(|v| v.value().to_vec())
+                .unwrap_or_default();
+            (
+                blob,
+                LastAdvancedPoint::decode(&praw)?,
+                decode_leadership_entries(&lraw)?,
+            )
+        };
+
+        let txn = self.db.begin_write().map_err(rerr)?;
+        {
+            let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            meta.insert(CURRENT_BLOB_KEY, blob.as_slice())
+                .map_err(rerr)?;
+            meta.insert(LAST_SLOT_KEY, point.slot.0.to_be_bytes().as_slice())
+                .map_err(rerr)?;
+            let _ = meta.remove(PENDING_BOUNDARY_MARK_KEY).map_err(rerr)?;
+            let _ = meta.remove(LAST_ADVANCED_POINT_KEY).map_err(rerr)?;
+            // ACCUMULATOR-REFOLD-BOUND S1: the STAGED point was taken on the chain we are
+            // abandoning -- drop it so it can never be promoted into a rewind target. The
+            // already-SETTLED point is >= k old and is deliberately kept (INV-AR-1: no admissible
+            // reorg reaches it), so a second rollback still has a bounded target.
+            let _ = meta.remove(PENDING_BLOB_KEY).map_err(rerr)?;
+            let _ = meta.remove(PENDING_POINT_KEY).map_err(rerr)?;
+            let _ = meta.remove(PENDING_LEADERSHIP_KEY).map_err(rerr)?;
+            {
+                let mut cur = txn.open_table(CURRENT_LEADERSHIP_BY_EPOCH).map_err(rerr)?;
+                let cur_keys: Vec<u64> = {
+                    let mut ks = Vec::new();
+                    for r in cur.iter().map_err(rerr)? {
+                        ks.push(r.map_err(rerr)?.0.value());
+                    }
+                    ks
+                };
+                for k in cur_keys {
+                    let _ = cur.remove(k).map_err(rerr)?;
+                }
+                for (e, b) in &lead {
+                    cur.insert(*e, b.as_slice()).map_err(rerr)?;
+                }
+            }
+            if lead.is_empty() {
+                let _ = meta.remove(LEADERSHIP_SCHEMA_KEY).map_err(rerr)?;
+            }
+        }
+        txn.commit().map_err(rerr)?;
+        Ok(true)
     }
 
     /// DC-EPOCH-22 (BOUNDARY-ALIGNED-MARK-CAPTURE): durably BIND the boundary-mark witness — the canonical
@@ -1306,6 +1591,130 @@ mod tests {
             }
         }
         txn.commit().unwrap();
+    }
+
+    // ACCUMULATOR-REFOLD-BOUND S1 — the bounded settled rewind point.
+
+    /// CE-AR-2 / INV-AR-1: a staged point is NOT a rewind target until the tip has outrun it by
+    /// `k` blocks. Promoting earlier would expose a point an admissible reorg could still reach.
+    #[test]
+    fn settled_point_is_only_promoted_once_k_blocks_settled() {
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        const K: u64 = 10;
+        s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+        s.advance_with_current_leadership(
+            &acc_advanced(),
+            SlotNo(200),
+            BlockNo(20),
+            Hash32([0xA1; 32]),
+            &distr_at(576),
+        )
+        .unwrap();
+
+        // First roll STAGES the current point; nothing is settled yet.
+        assert!(!s.roll_settled_rewind_point(BlockNo(20), K).unwrap());
+        assert!(s.settled_rewind_point().unwrap().is_none());
+
+        // Tip only 5 blocks past the staged point -> still not settled.
+        assert!(!s.roll_settled_rewind_point(BlockNo(25), K).unwrap());
+        assert!(s.settled_rewind_point().unwrap().is_none());
+
+        // Tip k blocks past -> promote. The rewind target is the STAGED point (block 20).
+        assert!(s.roll_settled_rewind_point(BlockNo(30), K).unwrap());
+        let sp = s.settled_rewind_point().unwrap().expect("promoted");
+        assert_eq!(sp.slot, SlotNo(200));
+        assert_eq!(sp.block_no, BlockNo(20));
+        assert_eq!(sp.header_hash, Hash32([0xA1; 32]));
+    }
+
+    /// CE-AR-1 / INV-AR-3 / INV-AR-4: rewinding to the settled point restores the accumulator AND
+    /// its leadership pair, and leaves the store UNCERTIFIED (no lineage anchor) exactly as a
+    /// bootstrap reset does.
+    #[test]
+    fn reset_to_settled_restores_pair_and_leaves_store_uncertified() {
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        const K: u64 = 10;
+        s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+        s.advance_with_current_leadership(
+            &acc_advanced(),
+            SlotNo(200),
+            BlockNo(20),
+            Hash32([0xA1; 32]),
+            &distr_at(576),
+        )
+        .unwrap();
+        assert!(!s.roll_settled_rewind_point(BlockNo(20), K).unwrap());
+        assert!(s.roll_settled_rewind_point(BlockNo(30), K).unwrap());
+
+        // Move on: a LATER boundary seals leadership for a further epoch.
+        s.advance_with_current_leadership(
+            &acc_advanced(),
+            SlotNo(400),
+            BlockNo(40),
+            Hash32([0xB2; 32]),
+            &distr_at(577),
+        )
+        .unwrap();
+        assert!(s.frozen_leadership_for_epoch(EpochNo(577)).unwrap().is_some());
+
+        assert!(s.reset_to_settled().unwrap());
+
+        // Accumulator is back at the settled slot...
+        let (slot, _) = s.load_current().unwrap().expect("sealed");
+        assert_eq!(slot, SlotNo(200));
+        // ...the store is UNCERTIFIED (INV-AR-4)...
+        assert!(s.last_advanced_point().unwrap().is_none());
+        // ...and no leadership object outruns the rewound accumulator (INV-AR-3): epoch 577 was
+        // sealed AFTER the settled point and must not survive.
+        assert!(s.frozen_leadership_for_epoch(EpochNo(576)).unwrap().is_some());
+        assert!(s.frozen_leadership_for_epoch(EpochNo(577)).unwrap().is_none());
+    }
+
+    /// A bootstrap reset discards BOTH rewind buffers -- nothing survives it as a rewind target.
+    #[test]
+    fn bootstrap_reset_discards_the_settled_rewind_point() {
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        const K: u64 = 10;
+        s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+        s.advance_with_current_leadership(
+            &acc_advanced(),
+            SlotNo(200),
+            BlockNo(20),
+            Hash32([0xA1; 32]),
+            &distr_at(576),
+        )
+        .unwrap();
+        assert!(!s.roll_settled_rewind_point(BlockNo(20), K).unwrap());
+        assert!(s.roll_settled_rewind_point(BlockNo(30), K).unwrap());
+        assert!(s.settled_rewind_point().unwrap().is_some());
+
+        s.reset_to_bootstrap().unwrap();
+        assert!(s.settled_rewind_point().unwrap().is_none());
+        // And with no settled point, a settled rewind is a no-op -> the caller falls back.
+        assert!(!s.reset_to_settled().unwrap());
+    }
+
+    /// The leadership snapshot rides the rewind buffer verbatim; a torn/short blob fails closed
+    /// rather than silently yielding a partial leadership table.
+    #[test]
+    fn settled_leadership_encoding_roundtrips_and_fails_closed_when_torn() {
+        let entries = vec![
+            (576u64, vec![1u8, 2, 3]),
+            (577u64, vec![]),
+            (578u64, vec![9u8; 40]),
+        ];
+        let raw = encode_leadership_entries(&entries);
+        assert_eq!(decode_leadership_entries(&raw).unwrap(), entries);
+        assert_eq!(decode_leadership_entries(&[]).unwrap(), Vec::new());
+        // Truncated mid-entry -> Decode fault, never a partial table.
+        assert!(decode_leadership_entries(&raw[..raw.len() - 3]).is_err());
+        // Trailing garbage -> also refused (the encoding is exact).
+        let mut extra = raw.clone();
+        extra.push(0xFF);
+        assert!(decode_leadership_entries(&extra).is_err());
     }
 
     #[test]

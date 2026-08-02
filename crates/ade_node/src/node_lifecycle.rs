@@ -2164,10 +2164,72 @@ fn accumulator_admit_and_clear_for_rollback(
     .map_err(|e| NodeLifecycleError::RecoveryAdmission(RecoveryAdmissionFault::from_admission(e)))?;
     // Admissible: durably CLEAR the lineage anchor BEFORE the caller commits the ChainDB rollback, so a crash
     // in the window leaves an anchor-absent (uncertified) store that the next advance refolds from canonical.
+    //
+    // ACCUMULATOR-REFOLD-BOUND S1: rewind to the SETTLED point when one is admissible, else to the
+    // bootstrap baseline exactly as before. Both leave the store uncertified; only the amount of
+    // canonical chain the next advance must re-derive differs.
+    if settled_rewind_admissible(store, chaindb, target, policy.security_param.0) {
+        match store.reset_to_settled() {
+            Ok(true) => return Ok(()),
+            // No settled point recorded (older store / just reset) -> bootstrap.
+            Ok(false) => {}
+            Err(e) => {
+                // Observe-only: a settled-rewind fault costs refold time, never safety, because the
+                // bootstrap fallback below is the unchanged pre-slice behaviour.
+                crate::node_log!(
+                    "epoch-accumulator: settled rewind failed ({e:?}); falling back to bootstrap"
+                );
+            }
+        }
+    }
     store.reset_to_bootstrap().map_err(|e| {
         NodeLifecycleError::RelaySync(format!("accumulator rollback pre-clear: {e:?}"))
     })?;
     Ok(())
+}
+
+/// ACCUMULATOR-REFOLD-BOUND S1: may the accumulator be rewound to its SETTLED point for this
+/// rollback, instead of all the way to the bootstrap baseline?
+///
+/// Three conditions, ALL required; any failure (including any I/O fault) answers `false` and the
+/// caller falls back to `reset_to_bootstrap`, which is the unchanged pre-slice behaviour. The
+/// fallback is always safe, so this predicate can only ever cost refold time.
+///
+///  1. **Settled** (INV-AR-1) — the point is at least `k` BLOCKS behind the durable tip, so no
+///     admissible reorg can reach it. Compared in BLOCK units, so no active-slot-coefficient
+///     assumption is needed (a slot comparison would need one, and would be wrong if `f` differed).
+///  2. **Not ahead of the target** (INV-AR-2) — never rewind FORWARD past the rollback target.
+///     Implied by (1) since the target is within `k` of the tip, but asserted rather than inferred.
+///  3. **Lineage intact** (INV-AR-2) — the point's header hash still resolves canonically at its
+///     slot. A point the chain has abandoned is refused.
+fn settled_rewind_admissible(
+    store: &ade_runtime::chaindb::EpochAccumulatorStore,
+    chaindb: &dyn ChainDb,
+    target: &Point,
+    security_param: u64,
+) -> bool {
+    let Ok(Some(sp)) = store.settled_rewind_point() else {
+        return false;
+    };
+    let Ok(Some(tip)) = chaindb.tip() else {
+        return false;
+    };
+    let Ok(Some(tip_pt)) = resolve_canonical_point(chaindb, tip.slot) else {
+        return false;
+    };
+    // (1) settled: k blocks of separation from the tip.
+    if sp.block_no.0.saturating_add(security_param) > tip_pt.block_no.0 {
+        return false;
+    }
+    // (2) never forward of the rollback target.
+    if sp.slot.0 > target.slot.0 {
+        return false;
+    }
+    // (3) lineage still canonical at that slot.
+    matches!(
+        resolve_canonical_point(chaindb, sp.slot),
+        Ok(Some(p)) if p.hash == sp.header_hash
+    )
 }
 
 /// LIVE-LEDGER-EPOCH-TRANSITION S3 (DC-EPOCH-22, BOUNDARY-ALIGNED-MARK-CAPTURE): the co-advancer called
@@ -2245,7 +2307,21 @@ fn advance_ledger_state_to_durable_tip(
                     seed_slot,
                     tip.slot,
                 ) {
-                    Ok(AccumulatorChaindbOutcome::ReachedTip { .. }) => break,
+                    Ok(AccumulatorChaindbOutcome::ReachedTip { .. }) => {
+                        // ACCUMULATOR-REFOLD-BOUND S1: roll the bounded rewind buffer now that the
+                        // accumulator is current. Observe-only -- a fault here only means the next
+                        // rollback refolds from bootstrap as it did pre-slice.
+                        if let Ok(Some(tip_pt)) = resolve_canonical_point(chaindb, tip.slot) {
+                            if let Err(e) = store
+                                .roll_settled_rewind_point(tip_pt.block_no, policy.security_param.0)
+                            {
+                                crate::node_log!(
+                                    "epoch-accumulator: settled-rewind roll failed (observe-only): {e:?}"
+                                );
+                            }
+                        }
+                        break;
+                    }
                     Ok(AccumulatorChaindbOutcome::StalledAt { slot: s_bb, reason }) => {
                         // s_prev: the accumulator's cursor after the within-epoch fold -- the boundary point
                         // (the last within-epoch block of the closing epoch).
