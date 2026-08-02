@@ -1,0 +1,12 @@
+19:23:28.504Z ade_node: cardano-cli kes.skey loaded; KES VK fingerprint = 8a6cdd3edff2cfaf2b226dc4e03d1617ef70e96c7c26c8aa3e287d26fee9d778 — verify this matches your opcert before block production.
+19:24:11.049Z keep_alive: ping cookie=0 sent (cadence) peer=127.0.0.1:3002
+19:24:11.050Z keep_alive: pong cookie=0 validated
+19:24:31.049Z keep_alive: ping cookie=1 sent (cadence) peer=127.0.0.1:3002
+19:24:31.050Z keep_alive: pong cookie=1 validated
+19:24:35.988Z recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=118908160/4529489/97183a57 durable_tip=119042209/4534276/bbef2f74 rollback_target=none anchor_after=118908160/4529489/97183a57
+19:24:51.049Z keep_alive: ping cookie=2 sent (cadence) peer=127.0.0.1:3002
+19:24:51.051Z keep_alive: pong cookie=2 validated
+19:25:11.048Z keep_alive: ping cookie=3 sent (cadence) peer=127.0.0.1:3002
+19:25:11.049Z keep_alive: pong cookie=3 validated
+19:25:31.049Z keep_alive: ping cookie=4 sent (cadence) peer=127.0.0.1:3002
+19:25:31.050Z keep_alive: pong cookie=4 validated

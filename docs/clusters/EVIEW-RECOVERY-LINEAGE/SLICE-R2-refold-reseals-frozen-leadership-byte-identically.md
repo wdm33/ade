@@ -165,6 +165,68 @@ Registry: `DC-EPOCH-32` (positioning is exact-or-fail-closed), `DC-EPOCH-33` (re
 identity). Registered as `enforced` only once CE-R2-1..3 exist as tests **and** the CI gate lands;
 the live run is supporting evidence, never the reason.
 
+## RESULT 2026-08-02 — CE-R2-1..4 MET
+
+Fix landed in `1dc48e74`. CE-R2-1/2/3 are the four tests plus
+`ci/ci_check_eview_refold_reseal.sh`; CE-R2-3 was verified to DISCRIMINATE (reverting the seal path
+makes it fail on exactly the field the live node halted on), and the gate was mutated three ways
+(bare forward advance / dropped verification / seal-anyway-when-unreachable) and caught each.
+
+### CE-R2-4 — live, on a fresh store, under the fixed binary
+
+Store `~/.cardano-live1/ade-r2-live`, preview, same Mithril 1376 snapshot / peer / keys as the
+poisoned one. Catch-up crossed 1375→1376 (`s_prev` 118886384) and 1376→1377, writing activation
+records. Then a genuine peer rollback produced the exact poisoning condition:
+
+```
+18:38:29.823Z rollback_admit  action=reset_to_settled   reason=rollback_admission
+                              rollback_target=119039873/4534207/e98682f7  anchor_after=absent
+18:39:50.958Z recovery_admit  action=reset_and_refold   reason=anchor_absent
+                              durable_tip=119039978/4534210/ddce5472
+18:40:59.578Z reduced checkpoint REWOUND onto boundary point 118886384 before sealing
+                              (it sat past it -- DC-EPOCH-32)
+18:41:01.654Z REFOLD re-crossed boundary 1375 -> 1376 at slot 118886413 (mark from s_prev 118886384)
+                              -- durable tip is already in epoch 1377, 153565 slots left to refold
+```
+
+The refold re-crossed the boundary with the checkpoint **153,565 slots ahead of it, in a later
+epoch** — pre-fix, exactly the moment epoch 1377's leadership was re-sealed wrong. A second refold
+at 19:18:23 repeated it. Then the node was **SIGKILLed mid-refold** and restarted:
+
+```
+19:24:35.988Z recovery_admit  action=forward_fold  anchor_before=118908160/4529489/97183a57
+                                                   durable_tip=119042209/4534276/bbef2f74
+   ... ran past 200s with NO EpochViewPostPromotionMismatch and no halt
+```
+
+**Positive control — the pass is not vacuous.** `maybe_recover_promoted_authority` returns `Ok`
+silently when no record exists (`None => Seed`), so a clean restart proves nothing unless a record
+is present. This store's WAL contains an activation record binding **every** field the poisoned
+store's record bound, and **none** of the corrupted ones:
+
+| field | poisoned store's RECORD | fresh WAL | corrupted value | fresh WAL |
+|---|---|---|---|---|
+| checkpoint_commitment | `cbb12da0` | present | `de32979c` | **absent** |
+| nonce | `88c236d6` | present | — | — |
+| stake_view_canonical_hash | `b35be7b6` | present | `42681f92` | **absent** |
+| view_canonical_hash | `091b1881` | present | `18892c1b` | **absent** |
+
+So recovery took `(Some(rec), Some(cand)) if matches => Promoted`. This also **independently
+confirms which side was correct**: a completely separate bootstrap reproduced `cbb12da0` /
+`b35be7b6` / `091b1881` byte for byte, so those were the true values and `de32979c` / `42681f92` /
+`18892c1b` were the corruption.
+
+**Negative control.** The preserved poisoned store, run under the SAME fixed binary at 17:50Z,
+**still halts identically** (exit 43, same field diff). The fix stops a store *becoming* poisoned;
+it does not repair one already divergent, and the terminal was not weakened.
+
+**Incidental confirmation of the cost claim.** No second `REWOUND` fired for the 1376→1377
+re-crossing in the same pass: after the first rewind the checkpoint sits *behind* the next boundary
+point and simply advances forward onto it. One re-materialisation per refold, not per boundary —
+observed, not merely argued.
+
+CE-R2-5 (a live boundary crossing plus restart) remains open; the node is still following.
+
 ## Not claimed
 
 - No claim that all refold defects are fixed. The refold **thrash** (accumulator resetting
