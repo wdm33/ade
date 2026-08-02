@@ -1,0 +1,4 @@
+follow: tip slot=115676735 behind=844280 slots from peer
+epoch-boundary yield: 1338 -> 1339 (eta0 Hash32(911cc60d2a8e97216aa6d1768677b24ff3d67b07f20586c155006e769966fe00))
+epoch-accumulator: CROSSED boundary 1338 -> 1339 at slot 115689630 (mark from s_prev 115689595)
+follow: tip slot=115689734 behind=831803 slots from peer

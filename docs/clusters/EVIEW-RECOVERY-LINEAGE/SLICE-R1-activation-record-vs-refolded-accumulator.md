@@ -2,7 +2,7 @@
 
 > **SEALED — DIAGNOSED, NOT FIXED.** Opened 2026-08-02 from a live preview rehearsal halt.
 > A deterministic reproducer is preserved off-repo at
-> `~/.cardano-live1/EVIEW-R1-reproducer/` (see its `README.md`). **Do not patch this while
+> `~/.cardano-live1/KEEP-eview-r1-reproducer/` (see its `README.md`). **Do not patch this while
 > racing a forge window** — it is consensus-adjacent and needs a real proof.
 
 ## RESOLVED MECHANISM 2026-08-02 (supersedes BOTH statements below)

@@ -1,0 +1,67 @@
+
+=== Ade native Mithril bootstrap receipt ===
+network / profile      : preview (magic 2)
+shelley genesis hash   : Hash32(363498d1024f84bb39d3fa9593ce391483cb40d479b87233f868d6e57c3a400d)
+certified anchor point : slot 115676685 / block Hash32(2e0ac2d3de8e1cf06861471eb6d7d0e2c08c43c57c9e473be0a8ae95263e99db)
+seed artifact commit   : Hash32(69778fc63576def428b62d8c4022e30982ea1c2b0e1eebf4b3863b6172023bbd)
+UTxO commitment        : Hash32(56422c7c91c24a7ead154f62eb2fb132ced1f7e7c3acded49562ad5132b2e7fd)
+durable ledger lineage : Hash32(68fedf51a66f6fdffccfe23d01e77670ce548bffda2ecdd9ef43195464831586)
+reduced checkpoint     : built (/home/ts/.cardano-ce3d-s1seed-v3/reduced-checkpoint.redb)
+ChainSync              : starting against 1 peer(s)
+============================================
+follow: tip slot=115676735 behind=1125164 slots from peer
+follow: tip slot=115676735 behind=1125164 slots from peer
+keep_alive: ping cookie=0 sent (cadence) peer=127.0.0.1:3002
+keep_alive: pong cookie=0 validated
+keep_alive: ping cookie=1 sent (cadence) peer=127.0.0.1:3002
+keep_alive: pong cookie=1 validated
+epoch-boundary yield: 1338 -> 1339 (eta0 Hash32(911cc60d2a8e97216aa6d1768677b24ff3d67b07f20586c155006e769966fe00))
+epoch-boundary yield: 1338 -> 1339 (eta0 Hash32(911cc60d2a8e97216aa6d1768677b24ff3d67b07f20586c155006e769966fe00))
+  [epoch_boundary] protocol_major=11 total_stake=37103550203325423 active_stake=1669339628385152 pool_pot=0 go_pools=626 cert_pools=703
+epoch-accumulator: CROSSED boundary 1338 -> 1339 at slot 115689630 (mark from s_prev 115689595)
+epoch-accumulator: CROSSED boundary 1338 -> 1339 at slot 115689630 (mark from s_prev 115689595)
+follow: tip slot=115689734 behind=1112220 slots from peer
+follow: tip slot=115689734 behind=1112220 slots from peer
+keep_alive: ping cookie=2 sent (cadence) peer=127.0.0.1:3002
+admission_wire_pump: peer=127.0.0.1:3002 exit=Eof
+ade_node --mode node: relay run loop exited (recovered/bootstrapped epoch=Some(1338), tip slot=Some(115676685); forge OFF — no operator keys supplied; followed the live peer until shutdown / feed-end). NO block produced.
+follow: tip slot=115692433 behind=1109812 slots from peer
+follow: tip slot=115692433 behind=1109812 slots from peer
+keep_alive: ping cookie=0 sent (cadence) peer=127.0.0.1:3002
+keep_alive: pong cookie=0 validated
+keep_alive: ping cookie=1 sent (cadence) peer=127.0.0.1:3002
+keep_alive: pong cookie=1 validated
+follow: tip slot=115709884 behind=1092411 slots from peer
+follow: tip slot=115709884 behind=1092411 slots from peer
+keep_alive: ping cookie=2 sent (cadence) peer=127.0.0.1:3002
+keep_alive: pong cookie=2 validated
+keep_alive: ping cookie=3 sent (cadence) peer=127.0.0.1:3002
+keep_alive: pong cookie=3 validated
+follow: tip slot=115726426 behind=1075869 slots from peer
+follow: tip slot=115726426 behind=1075869 slots from peer
+keep_alive: ping cookie=4 sent (cadence) peer=127.0.0.1:3002
+keep_alive: pong cookie=4 validated
+keep_alive: ping cookie=5 sent (cadence) peer=127.0.0.1:3002
+keep_alive: pong cookie=5 validated
+follow: tip slot=115743150 behind=1059145 slots from peer
+follow: tip slot=115743150 behind=1059145 slots from peer
+keep_alive: ping cookie=6 sent (cadence) peer=127.0.0.1:3002
+keep_alive: pong cookie=6 validated
+keep_alive: ping cookie=7 sent (cadence) peer=127.0.0.1:3002
+keep_alive: pong cookie=7 validated
+follow: tip slot=115759551 behind=1042890 slots from peer
+follow: tip slot=115759551 behind=1042890 slots from peer
+keep_alive: ping cookie=8 sent (cadence) peer=127.0.0.1:3002
+keep_alive: pong cookie=8 validated
+follow: tip slot=115775736 behind=1026705 slots from peer
+follow: tip slot=115775736 behind=1026705 slots from peer
+epoch-boundary yield: 1339 -> 1340 (eta0 Hash32(5299da6e848ef87a2386b737e42816f12b9c0756ea7bebddf71ac4ed98bf94e4))
+epoch-boundary yield: 1339 -> 1340 (eta0 Hash32(5299da6e848ef87a2386b737e42816f12b9c0756ea7bebddf71ac4ed98bf94e4))
+  [epoch_boundary] protocol_major=11 total_stake=37106659098825071 active_stake=1673156012313198 pool_pot=10793108905988 go_pools=627 cert_pools=704
+epoch-accumulator: CROSSED boundary 1339 -> 1340 at slot 115776011 (mark from s_prev 115775977)
+epoch-accumulator: CROSSED boundary 1339 -> 1340 at slot 115776011 (mark from s_prev 115775977)
+follow: tip slot=115776014 behind=1026427 slots from peer
+follow: tip slot=115776014 behind=1026427 slots from peer
+keep_alive: ping cookie=9 sent (cadence) peer=127.0.0.1:3002
+admission_wire_pump: peer=127.0.0.1:3002 exit=Eof
+ade_node --mode node: relay run loop exited (recovered/bootstrapped epoch=Some(1338), tip slot=Some(115692427); forge OFF — no operator keys supplied; followed the live peer until shutdown / feed-end). NO block produced.

@@ -1,0 +1,18 @@
+follow: tip slot=115676735 behind=384683 slots from peer
+epoch-boundary yield: 1338 -> 1339 (eta0 Hash32(911cc60d2a8e97216aa6d1768677b24ff3d67b07f20586c155006e769966fe00))
+epoch-accumulator: CROSSED boundary 1338 -> 1339 at slot 115689630 (mark from s_prev 115689595)
+follow: tip slot=115689734 behind=371684 slots from peer
+follow: tip slot=115692433 behind=369648 slots from peer
+follow: tip slot=115709884 behind=352256 slots from peer
+follow: tip slot=115726426 behind=335735 slots from peer
+follow: tip slot=115743150 behind=319030 slots from peer
+follow: tip slot=115759551 behind=302676 slots from peer
+follow: tip slot=115775736 behind=286491 slots from peer
+epoch-boundary yield: 1339 -> 1340 (eta0 Hash32(5299da6e848ef87a2386b737e42816f12b9c0756ea7bebddf71ac4ed98bf94e4))
+epoch-accumulator: CROSSED boundary 1339 -> 1340 at slot 115776011 (mark from s_prev 115775977)
+follow: tip slot=115776014 behind=286213 slots from peer
+follow: tip slot=115778794 behind=284227 slots from peer
+follow: tip slot=115796303 behind=266775 slots from peer
+follow: tip slot=115813282 behind=249796 slots from peer
+follow: tip slot=115830530 behind=232635 slots from peer
+follow: tip slot=115846632 behind=216533 slots from peer

@@ -1,0 +1,14 @@
+follow: tip slot=115676735 behind=844280 slots from peer
+epoch-boundary yield: 1338 -> 1339 (eta0 Hash32(911cc60d2a8e97216aa6d1768677b24ff3d67b07f20586c155006e769966fe00))
+epoch-accumulator: CROSSED boundary 1338 -> 1339 at slot 115689630 (mark from s_prev 115689595)
+follow: tip slot=115689734 behind=831803 slots from peer
+follow: tip slot=115692331 behind=849215 slots from peer
+follow: tip slot=115709710 behind=831877 slots from peer
+follow: tip slot=115726337 behind=815306 slots from peer
+follow: tip slot=115743129 behind=798550 slots from peer
+follow: tip slot=115759510 behind=782232 slots from peer
+follow: tip slot=115775678 behind=766078 slots from peer
+epoch-boundary yield: 1339 -> 1340 (eta0 Hash32(5299da6e848ef87a2386b737e42816f12b9c0756ea7bebddf71ac4ed98bf94e4))
+epoch-accumulator: boundary cross stalled at 115703481 (observe-only): CertApply(ValidationEnvironment(MissingDRepActivityParam))
+follow: tip slot=115776014 behind=765742 slots from peer
+epoch-accumulator: boundary cross stalled at 115703481 (observe-only): CertApply(ValidationEnvironment(MissingDRepActivityParam))
