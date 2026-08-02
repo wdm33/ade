@@ -6256,6 +6256,77 @@ mod tests {
             .unwrap();
         }
 
+        /// ACCUMULATOR-REFOLD-BOUND S1 — CE-AR-2 / INV-AR-1 and CE-AR-3 / INV-AR-2.
+        ///
+        /// `settled_rewind_admissible` is the gate on the bounded rewind. Two independent reasons
+        /// to refuse, each checked in isolation: a point still inside the reorg window (an
+        /// admissible reorg could still reach it), and a point the chain has ABANDONED (its hash no
+        /// longer resolves canonically at that slot). Either refusal sends the caller to
+        /// `reset_to_bootstrap`, i.e. the unchanged pre-slice behaviour — so a refusal costs refold
+        /// time and nothing else.
+        #[test]
+        fn settled_rewind_admission_requires_settled_depth_and_intact_lineage() {
+            use ade_runtime::chaindb::advance_accumulator_over_chaindb;
+            let tmp = TempDir::new().unwrap();
+            let s = sealed_store_at_epoch_500(&tmp, SlotNo(42_000_000));
+            let db = InMemoryChainDb::new();
+            put_raw(&db, 43_000_000);
+            advance_accumulator_over_chaindb(
+                &s,
+                &db,
+                &schedule_86k(),
+                SlotNo(42_000_000),
+                SlotNo(43_500_000),
+            )
+            .unwrap();
+
+            // Promote the folded point to SETTLED. The synthetic fixture reuses one raw block, so
+            // every block decodes to the same height; k=0 here isolates the two conditions under
+            // test from the height arithmetic.
+            let bn = s
+                .last_advanced_point()
+                .unwrap()
+                .expect("certified after fold")
+                .block_no;
+            assert!(!s.roll_settled_rewind_point(bn, 0).unwrap());
+            assert!(s.roll_settled_rewind_point(bn, 0).unwrap());
+            let sp = s.settled_rewind_point().unwrap().expect("promoted");
+            assert_eq!(sp.slot, SlotNo(43_000_000));
+
+            let target = Point {
+                slot: SlotNo(43_000_000),
+                hash: sp.header_hash.clone(),
+            };
+
+            // Baseline: settled (k = 0) AND lineage intact -> admissible.
+            assert!(
+                settled_rewind_admissible(&s, &db, &target, 0),
+                "a settled, lineage-intact point must be usable"
+            );
+
+            // CE-AR-2 / INV-AR-1: the same point is REFUSED once k puts it inside the reorg window.
+            assert!(
+                !settled_rewind_admissible(&s, &db, &target, 1_000_000),
+                "a point within k of the tip is not settled and must be refused"
+            );
+
+            // CE-AR-3 / INV-AR-2: a chain carrying a DIFFERENT block at that slot -> the point was
+            // abandoned. Refused even though the depth condition still holds.
+            let diverged = InMemoryChainDb::new();
+            diverged
+                .put_block(&StoredBlock {
+                    hash: Hash32([0xEE; 32]),
+                    slot: SlotNo(43_000_000),
+                    bytes: RAW_CONWAY_BLOCK.to_vec(),
+                })
+                .unwrap();
+            assert_ne!(sp.header_hash, Hash32([0xEE; 32]));
+            assert!(
+                !settled_rewind_admissible(&s, &diverged, &target, 0),
+                "a rewind point the chain has abandoned must never be trusted as a baseline"
+            );
+        }
+
         /// CE-3c hermetic prerequisite: the co-advancer crosses ONE epoch boundary -- it captures the mark
         /// at the boundary point `s_prev`, binds the witness, crosses the accumulator into the new epoch,
         /// and leaves the reduced checkpoint at the durable tip with the binding consumed + cleared.

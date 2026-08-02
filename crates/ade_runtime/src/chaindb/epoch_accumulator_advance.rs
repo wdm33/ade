@@ -622,6 +622,72 @@ mod tests {
         assert_eq!(s.last_advanced_slot().unwrap(), Some(SlotNo(43_000_000)));
     }
 
+    /// ACCUMULATOR-REFOLD-BOUND S1 — CE-AR-5 / INV-AR-6 (replay equivalence).
+    ///
+    /// Refolding from the SETTLED rewind point must land on state byte-identical to folding
+    /// straight through from bootstrap over the same canonical chain. This is THE safety claim of
+    /// the slice: rewinding to a nearer baseline moves only the STARTING POINT of a deterministic
+    /// re-derivation, so the derived result cannot differ. If it ever could, the bounded rewind
+    /// would be trading correctness for speed.
+    #[test]
+    fn refold_from_settled_point_equals_fold_from_bootstrap() {
+        use crate::chaindb::InMemoryChainDb;
+        let sched = schedule_86k();
+        let seed = SlotNo(42_000_000);
+        let tip = SlotNo(43_500_000);
+        // All within epoch 500 (86_000 * 500 = 43_000_000), so this exercises the within-epoch fold.
+        let slots = [43_000_000u64, 43_010_000, 43_020_000, 43_030_000];
+        let db = InMemoryChainDb::new();
+        for s in slots {
+            put_raw(&db, s);
+        }
+
+        // PATH A — the pre-slice behaviour: one straight fold from the bootstrap baseline.
+        let tmp_a = TempDir::new().unwrap();
+        let sa = sealed_store_at_epoch_500(&tmp_a, seed);
+        advance_accumulator_over_chaindb(&sa, &db, &sched, seed, tip).unwrap();
+        let expected = sa.load_current().unwrap().expect("path A sealed");
+
+        // PATH B — fold partway, promote that point as SETTLED, fold on to the tip, then rewind to
+        // the settled point and refold the remainder.
+        let tmp_b = TempDir::new().unwrap();
+        let sb = sealed_store_at_epoch_500(&tmp_b, seed);
+        advance_accumulator_over_chaindb(&sb, &db, &sched, seed, SlotNo(43_010_000)).unwrap();
+        // The synthetic fixture reuses ONE raw block, so every stored block decodes to the SAME
+        // block_no — there is no height separation to earn a promotion with. The tip height is
+        // supplied by the caller (as the live path does, from the ChainDb), so take it from the
+        // staged point itself and use k=0: that isolates the promotion mechanism from the height
+        // arithmetic, which `settled_point_is_only_promoted_once_k_blocks_settled` covers.
+        let staged_bn = sb
+            .last_advanced_point()
+            .unwrap()
+            .expect("certified after fold")
+            .block_no;
+        assert!(!sb.roll_settled_rewind_point(staged_bn, 0).unwrap());
+        assert!(sb.roll_settled_rewind_point(staged_bn, 0).unwrap());
+        let settled = sb.settled_rewind_point().unwrap().expect("promoted");
+        assert_eq!(settled.slot, SlotNo(43_010_000));
+
+        advance_accumulator_over_chaindb(&sb, &db, &sched, seed, tip).unwrap();
+        assert_eq!(
+            sb.load_current().unwrap().expect("path B pre-rewind"),
+            expected,
+            "sanity: both paths reach the same tip state before any rewind"
+        );
+
+        // Rewind to the settled point -- the accumulator goes back to 43_010_000...
+        assert!(sb.reset_to_settled().unwrap());
+        assert_eq!(sb.last_advanced_slot().unwrap(), Some(SlotNo(43_010_000)));
+        // ...and the refold from there reproduces the SAME state, byte for byte.
+        advance_accumulator_over_chaindb(&sb, &db, &sched, seed, tip).unwrap();
+        let refolded = sb.load_current().unwrap().expect("path B refolded");
+        assert_eq!(
+            refolded, expected,
+            "refold from the settled rewind point must be byte-identical to the \
+             fold-from-bootstrap it replaces (INV-AR-6)"
+        );
+    }
+
     /// A re-walk over an already-folded prefix advances nothing (idempotent resume — replay-safe).
     #[test]
     fn over_chaindb_rewalk_is_idempotent() {
