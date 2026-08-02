@@ -9829,3 +9829,127 @@ status = "declared"
 introduced_in = "LIVE-LEDGER-EPOCH-TRANSITION-S4-pre-1a"
 strengthened_in = ["LIVE-LEDGER-EPOCH-TRANSITION-S4-pre-1b", "LIVE-LEDGER-EPOCH-TRANSITION-S4-pre-1c", "LIVE-LEDGER-EPOCH-TRANSITION-S4-pre-2", "LIVE-LEDGER-EPOCH-TRANSITION-S4-0", "LIVE-LEDGER-EPOCH-TRANSITION-S4-L1", "LIVE-LEDGER-EPOCH-TRANSITION-S4-L2"]
 open_obligation = "S4-0 DONE: leadership is EPOCH-INDEXED behind a SOLE exact-epoch read -- leadership_authority_for_epoch(e) returns ONLY the object whose target_leadership_epoch == e, else fails closed (LeadershipEpochNotSealed / LeadershipEpochMismatch); NO production 'current / latest / nearest leadership' read exists. Two epoch-indexed tables (bootstrap + current); the bootstrap seeds the certified initial condition {nesPd_{seed} from the seed record, nesPd_{seed+1} from the imported MARK} that native freezes cannot, native freezes cover seed+2+. PROVEN across the full band 1338..=1342 (exact index, distinct objects, byte-stable across reopen, off-band 1337/1343 + legacy fail closed, reset restores current := bootstrap), and the S5 #8 reference proof re-run THROUGH the epoch-indexed read confirms nesPd_1342 byte-exact vs the cardano reference nes[5] (658/658 incl 32 zero-stake), byte-identical across within-k rollback+reset+refold + warm restart. S4-L1 DONE: the INITIAL/WARM live leadership view (node_lifecycle 658/840/3397) now reads leadership_authority_for_epoch(seed_epoch) -- byte-identical to the retired seed projection (proven), fail-closed with NO seed fallback; every production first-run route (native + legacy) seals readable leadership, and the end-to-end fixtures seal a leadership-certified store. REMAINING = S4-L2: promote the PROMOTION path -- thread the store through run_node_sync -> prepare_authority_for_candidate_slot, read leadership_authority_for_epoch(candidate_epoch) for boundary 2+, delete the seed+2 ceiling (epoch_wire.rs), add a production seed-authority-resurrection guard, and prove the former ceiling crossed with epoch-indexed frozen leadership only. Until L2 the promotion + seed+2 ceiling stay seed-window-bound (a staged authority retirement, not a fallback: each initial/warm site has exactly one authority)."
+
+
+[[rules]]
+id = "DC-EPOCH-26"
+tier = "derived"
+statement = """
+Settled rewind target. The epoch accumulator is NEVER rewound to a point within k of the durable tip:
+every rewind target is beyond the reach of an admissible reorg. Separation is measured in BLOCK units
+(LastAdvancedPoint.block_no vs the tip's height from resolve_canonical_point), NOT slots -- a slot
+comparison would embed an active-slot-coefficient assumption and be wrong wherever f differs. The staged
+(pending) point is promoted to the settled rewind target only once the tip has outrun it by k.
+"""
+source = "docs/clusters/ACCUMULATOR-REFOLD-BOUND/SLICE-S1-settled-rewind-point.md (INV-AR-1)"
+cross_ref = ["DC-EPOCH-22", "DC-NODE-23", "DC-NODE-28", "CN-CONS-01"]
+code_locus = "crates/ade_runtime/src/chaindb/epoch_accumulator_store.rs (roll_settled_rewind_point promotion guard) + crates/ade_node/src/node_lifecycle.rs (settled_rewind_admissible condition 1). Gate ci/ci_check_accumulator_refold_bound.sh."
+tests = ["settled_point_is_only_promoted_once_k_blocks_settled", "settled_rewind_admission_requires_settled_depth_and_intact_lineage"]
+ci_scripts = ["ci/ci_check_accumulator_refold_bound.sh"]
+status = "enforced"
+evidence_notes = "Generalises the reset_to_bootstrap trust argument: the bootstrap blob was trusted because it is immutable and certified; a point older than k is trusted because no admissible reorg can reach it. SUPPORTING live evidence only (never the reason for enforcement): the 2026-08-01 sustained preview run measured the UNBOUNDED pre-slice behaviour -- refold 225s at 25,838 slots from the bootstrap anchor rising to 1595s (26.6 min) at 85,690, per-slot cost climbing 0.009->0.019 s/slot, over 14 reorgs in 18h. CE-AR-6 (a live run showing refold no longer grows with uptime) is still OUTSTANDING. Enforcement rests on the named tests + ci/ci_check_accumulator_refold_bound.sh."
+introduced_in = "ACCUMULATOR-REFOLD-BOUND-S1"
+strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-27"
+tier = "derived"
+statement = """
+Lineage-bound rewind. A settled rewind target whose header hash no longer resolves canonically at its
+slot -- a point the chain has ABANDONED -- is REFUSED, and the rollback falls back to the bootstrap
+rewind. A rewind target ahead of the rollback target is likewise refused. Every refusal path lands on
+reset_to_bootstrap, the unchanged pre-slice behaviour, so a refusal (or any I/O fault in the predicate)
+costs refold time and never safety.
+"""
+source = "docs/clusters/ACCUMULATOR-REFOLD-BOUND/SLICE-S1-settled-rewind-point.md (INV-AR-2)"
+cross_ref = ["DC-EPOCH-22", "DC-NODE-29", "DC-EPOCH-26"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (settled_rewind_admissible conditions 2+3; accumulator_admit_and_clear_for_rollback fallback). Gate ci/ci_check_accumulator_refold_bound.sh."
+tests = ["settled_rewind_admission_requires_settled_depth_and_intact_lineage"]
+ci_scripts = ["ci/ci_check_accumulator_refold_bound.sh"]
+status = "enforced"
+evidence_notes = "The gate additionally asserts the bootstrap fallback REMAINS reachable from the rollback path -- removing it would turn a refusal into an unhandled case (verified by negative test at registration). SUPPORTING live evidence only (never the reason for enforcement): the 2026-08-01 sustained preview run measured the UNBOUNDED pre-slice behaviour -- refold 225s at 25,838 slots from the bootstrap anchor rising to 1595s (26.6 min) at 85,690, per-slot cost climbing 0.009->0.019 s/slot, over 14 reorgs in 18h. CE-AR-6 (a live run showing refold no longer grows with uptime) is still OUTSTANDING. Enforcement rests on the named tests + ci/ci_check_accumulator_refold_bound.sh."
+introduced_in = "ACCUMULATOR-REFOLD-BOUND-S1"
+strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-28"
+tier = "derived"
+statement = """
+Leadership coherence across a rewind. A rewind restores CURRENT_LEADERSHIP_BY_EPOCH to exactly the
+epochs valid at the rewind point, so no sealed leadership object can outrun the refolded accumulator
+(which would violate replay equivalence). The leadership table is snapshotted WITH the accumulator blob
+so the pair is restored atomically. This is the existing reset_to_bootstrap guarantee (CURRENT :=
+BOOTSTRAP) generalised to an arbitrary settled baseline; it is well-defined at any point because
+leadership is written ONLY at boundary crossings (advance_with_current_leadership is called from exactly
+one site, inside cross_accumulator_over_boundary_block, riding the same commit).
+"""
+source = "docs/clusters/ACCUMULATOR-REFOLD-BOUND/SLICE-S1-settled-rewind-point.md (INV-AR-3)"
+cross_ref = ["DC-EPOCH-22", "DC-EPOCH-16"]
+code_locus = "crates/ade_runtime/src/chaindb/epoch_accumulator_store.rs (reset_to_settled leadership restore; roll_settled_rewind_point leadership snapshot). Gate ci/ci_check_accumulator_refold_bound.sh."
+tests = ["reset_to_settled_restores_pair_and_leaves_store_uncertified", "settled_leadership_encoding_roundtrips_and_fails_closed_when_torn"]
+ci_scripts = ["ci/ci_check_accumulator_refold_bound.sh"]
+status = "enforced"
+evidence_notes = "The S4-L2 frozen leadership is the forge authority, so a torn accumulator/leadership pair is a consensus fault rather than a performance one. SUPPORTING live evidence only (never the reason for enforcement): the 2026-08-01 sustained preview run measured the UNBOUNDED pre-slice behaviour -- refold 225s at 25,838 slots from the bootstrap anchor rising to 1595s (26.6 min) at 85,690, per-slot cost climbing 0.009->0.019 s/slot, over 14 reorgs in 18h. CE-AR-6 (a live run showing refold no longer grows with uptime) is still OUTSTANDING. Enforcement rests on the named tests + ci/ci_check_accumulator_refold_bound.sh."
+introduced_in = "ACCUMULATOR-REFOLD-BOUND-S1"
+strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-29"
+tier = "derived"
+statement = """
+Uncertified after rewind. A rewind clears LAST_ADVANCED_POINT and drops the pending boundary-mark
+binding, so the store is UNCERTIFIED until a canonical re-fold rewrites the anchor: a rewound store is
+never lineage authority. Additionally BOTH rewind paths discard the STAGED (pending) rewind buffer,
+which was taken on the chain being abandoned -- while the already-SETTLED point (>= k old, unreachable by
+an admissible reorg) is deliberately kept, so a second rollback still has a bounded target.
+"""
+source = "docs/clusters/ACCUMULATOR-REFOLD-BOUND/SLICE-S1-settled-rewind-point.md (INV-AR-4)"
+cross_ref = ["DC-EPOCH-22", "DC-NODE-29"]
+code_locus = "crates/ade_runtime/src/chaindb/epoch_accumulator_store.rs (reset_to_settled / reset_to_bootstrap: anchor clear, boundary-mark drop, staged-buffer discard). Gate ci/ci_check_accumulator_refold_bound.sh."
+tests = ["reset_to_settled_restores_pair_and_leaves_store_uncertified", "bootstrap_reset_discards_the_settled_rewind_point"]
+ci_scripts = ["ci/ci_check_accumulator_refold_bound.sh"]
+status = "enforced"
+evidence_notes = "Preserves the S5 crash-safety property verbatim: a crash inside the rollback window leaves an anchor-absent store that the next advance refolds from canonical. SUPPORTING live evidence only (never the reason for enforcement): the 2026-08-01 sustained preview run measured the UNBOUNDED pre-slice behaviour -- refold 225s at 25,838 slots from the bootstrap anchor rising to 1595s (26.6 min) at 85,690, per-slot cost climbing 0.009->0.019 s/slot, over 14 reorgs in 18h. CE-AR-6 (a live run showing refold no longer grows with uptime) is still OUTSTANDING. Enforcement rests on the named tests + ci/ci_check_accumulator_refold_bound.sh."
+introduced_in = "ACCUMULATOR-REFOLD-BOUND-S1"
+strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-30"
+tier = "derived"
+statement = """
+Bounded post-rollback refold. Post-rollback re-derivation is bounded by ~2k and is INDEPENDENT OF NODE
+UPTIME. The settled rewind point is never more than 2k behind the tip: pending is re-staged only on
+promotion, so settled is at least k old (reorg-unreachable) and at most 2k old (the next promotion fires
+as soon as the newly-staged point itself reaches k). The pre-slice behaviour rewound to the bootstrap
+anchor, whose distance grows without limit -- and because the accumulator is the frozen-leadership
+authority, a refold that outgrows the inter-reorg interval means leadership can never be promoted at a
+boundary, i.e. the node cannot forge.
+"""
+source = "docs/clusters/ACCUMULATOR-REFOLD-BOUND/SLICE-S1-settled-rewind-point.md (INV-AR-5)"
+cross_ref = ["DC-EPOCH-26", "DC-EPOCH-20", "OP-MEM-02"]
+code_locus = "crates/ade_runtime/src/chaindb/epoch_accumulator_store.rs (roll_settled_rewind_point stage/promote cycle). Gate ci/ci_check_accumulator_refold_bound.sh."
+tests = ["settled_point_never_falls_further_than_2k_behind_the_tip", "settled_point_is_only_promoted_once_k_blocks_settled"]
+ci_scripts = ["ci/ci_check_accumulator_refold_bound.sh"]
+status = "enforced"
+evidence_notes = "The bound test walks a tip forward well past a single buffer window and asserts the settled age stays within [k, 2k] throughout, and that a promotion actually occurred (never vacuously satisfied by never promoting). SUPPORTING live evidence only (never the reason for enforcement): the 2026-08-01 sustained preview run measured the UNBOUNDED pre-slice behaviour -- refold 225s at 25,838 slots from the bootstrap anchor rising to 1595s (26.6 min) at 85,690, per-slot cost climbing 0.009->0.019 s/slot, over 14 reorgs in 18h. CE-AR-6 (a live run showing refold no longer grows with uptime) is still OUTSTANDING. Enforcement rests on the named tests + ci/ci_check_accumulator_refold_bound.sh."
+introduced_in = "ACCUMULATOR-REFOLD-BOUND-S1"
+strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-31"
+tier = "derived"
+statement = """
+Rewind replay equivalence. Refolding from the settled rewind point yields state byte-identical to
+folding straight through from the bootstrap baseline over the same canonical chain. The bounded rewind
+moves only the STARTING POINT of a deterministic re-derivation, so the derived result cannot differ --
+this is what makes it a performance change rather than a correctness trade.
+"""
+source = "docs/clusters/ACCUMULATOR-REFOLD-BOUND/SLICE-S1-settled-rewind-point.md (INV-AR-6)"
+cross_ref = ["T-DET-01", "DC-EPOCH-20", "DC-EPOCH-26"]
+code_locus = "crates/ade_runtime/src/chaindb/epoch_accumulator_advance.rs (advance_accumulator_over_chaindb refold from either baseline) + crates/ade_runtime/src/chaindb/epoch_accumulator_store.rs (reset_to_settled). Gate ci/ci_check_accumulator_refold_bound.sh."
+tests = ["refold_from_settled_point_equals_fold_from_bootstrap"]
+ci_scripts = ["ci/ci_check_accumulator_refold_bound.sh"]
+status = "enforced"
+evidence_notes = "The proof folds one chain twice -- straight through, and via a promoted settled point plus rewind plus refold -- and asserts the resulting EpochAccumulator is equal; it also asserts both paths agree BEFORE any rewind so a harness that folded nothing would fail rather than pass vacuously. SUPPORTING live evidence only (never the reason for enforcement): the 2026-08-01 sustained preview run measured the UNBOUNDED pre-slice behaviour -- refold 225s at 25,838 slots from the bootstrap anchor rising to 1595s (26.6 min) at 85,690, per-slot cost climbing 0.009->0.019 s/slot, over 14 reorgs in 18h. CE-AR-6 (a live run showing refold no longer grows with uptime) is still OUTSTANDING. Enforcement rests on the named tests + ci/ci_check_accumulator_refold_bound.sh."
+introduced_in = "ACCUMULATOR-REFOLD-BOUND-S1"
+strengthened_in = []

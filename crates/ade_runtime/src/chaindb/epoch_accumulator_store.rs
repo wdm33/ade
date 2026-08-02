@@ -1628,6 +1628,54 @@ mod tests {
         assert_eq!(sp.header_hash, Hash32([0xA1; 32]));
     }
 
+    /// INV-AR-5 (bounded refold): the settled point never falls further than `2k` behind the tip,
+    /// however long the node runs. That bound IS the slice — the pre-slice behaviour rewound to the
+    /// bootstrap anchor, whose distance grows without limit with uptime (measured 26.6 min of
+    /// refold at 85,690 slots out, and still rising).
+    ///
+    /// The mechanism: `pending` is re-staged only on promotion, so `settled` is at least `k` old
+    /// (never reachable by an admissible reorg) and at most `2k` old (the next promotion fires as
+    /// soon as the newly-staged point itself reaches `k`).
+    #[test]
+    fn settled_point_never_falls_further_than_2k_behind_the_tip() {
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        const K: u64 = 10;
+        s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+
+        let mut worst_age = 0u64;
+        // Walk a tip forward far past any single buffer window; the accumulator advances with it.
+        for h in 1..=200u64 {
+            s.advance_with_current_leadership(
+                &acc_advanced(),
+                SlotNo(1_000 + h * 10),
+                BlockNo(h),
+                Hash32([(h & 0xff) as u8; 32]),
+                &distr_at(576),
+            )
+            .unwrap();
+            let _ = s.roll_settled_rewind_point(BlockNo(h), K).unwrap();
+            if let Some(sp) = s.settled_rewind_point().unwrap() {
+                let age = h.saturating_sub(sp.block_no.0);
+                worst_age = worst_age.max(age);
+                assert!(
+                    age >= K,
+                    "a settled point must be at least k={K} old (reorg-unreachable), was {age}"
+                );
+                assert!(
+                    age <= 2 * K,
+                    "a settled point must never exceed 2k={} old -- the refold bound; was {age}",
+                    2 * K
+                );
+            }
+        }
+        // The bound is actually exercised, not vacuously satisfied by never promoting.
+        assert!(
+            worst_age >= K,
+            "the walk must have promoted at least once (worst age {worst_age})"
+        );
+    }
+
     /// CE-AR-1 / INV-AR-3 / INV-AR-4: rewinding to the settled point restores the accumulator AND
     /// its leadership pair, and leaves the store UNCERTIFIED (no lineage anchor) exactly as a
     /// bootstrap reset does.
