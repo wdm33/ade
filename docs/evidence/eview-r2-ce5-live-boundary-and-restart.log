@@ -1,0 +1,9 @@
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=119060608/4534974/82b7a45c durable_tip=119060626/4534975/8c5280ab rollback_target=none anchor_after=119060608/4534974/82b7a45c
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=119060626/4534975/8c5280ab durable_tip=119060626/4534975/8c5280ab rollback_target=none anchor_after=119060626/4534975/8c5280ab
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=119060626/4534975/8c5280ab durable_tip=119060818/4534981/9de46b35 rollback_target=none anchor_after=119060626/4534975/8c5280ab
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=119060818/4534981/9de46b35 durable_tip=119060897/4534982/1748f40d rollback_target=none anchor_after=119060818/4534981/9de46b35
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=119060897/4534982/1748f40d durable_tip=119060910/4534983/0281d5f0 rollback_target=none anchor_after=119060897/4534982/1748f40d
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=119060910/4534983/0281d5f0 durable_tip=119060928/4534984/5e223e13 rollback_target=none anchor_after=119060910/4534983/0281d5f0
+=== SUPERVISOR: starting node at 20:56:44Z ===
+=== SUPERVISOR: node EXITED rc=137 at 00:24:57Z ===
+=== SUPERVISOR: starting node at 00:25:07Z ===

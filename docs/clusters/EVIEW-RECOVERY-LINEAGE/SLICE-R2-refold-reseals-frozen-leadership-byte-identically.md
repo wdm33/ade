@@ -225,7 +225,51 @@ re-crossing in the same pass: after the first rewind the checkpoint sits *behind
 point and simply advances forward onto it. One re-materialisation per refold, not per boundary —
 observed, not merely argued.
 
-CE-R2-5 (a live boundary crossing plus restart) remains open; the node is still following.
+### CE-R2-5 — live boundary crossing plus restart: MET 2026-08-03 00:28Z
+
+Same store, after 3.5 h of live following and three refolds:
+
+```
+forward_fold  anchor_before=119057862  durable_tip=119059222        <- caught up to tip
+CROSSED boundary 1377 -> 1378 at slot 119059222 (mark from s_prev 119059157)
+forward_fold  anchor_before=119059222  durable_tip=119060577        <- following live in 1378
+
+  ... node stopped 00:23:57Z, supervisor restarted it 00:25:07Z ...
+
+recovery_admit action=forward_fold reason=forward_fold_no_reset
+   anchor_before = durable_tip = anchor_after = 119060626/4534975/8c5280ab
+   -> ran on past 00:28:02Z, 0 mismatches, no re-exit
+```
+
+Two things make this the right shape. The crossing is labelled **`CROSSED`, not `REFOLD`**, and
+`anchor == durable_tip` at that moment — so it happened **live at the tip**, not inside a refold. And
+the restart recovery is `forward_fold` with `anchor == tip`, which is the **exact signature that
+killed the poisoned store at ~70 s**. Here it ran on cleanly.
+
+**Positive control (not vacuous):** the WAL now carries a record bound to the NEW boundary point
+`119059157` and to epoch 1379, so recovery genuinely compared rather than resolving `(None,_) =>
+Seed`. The prior boundary point `118886384` is still present (the CE-R2-4 control), and the
+corrupted `de32979c` / `42681f92` / `18892c1b` remain absent.
+
+**Full run tally:** 3 rewinds across 3 refolds, 1 live boundary crossing, 2 restarts (one SIGKILL
+mid-refold, one after the live crossing), **0 eview mismatches, 0 unplanned exits**.
+
+---
+
+## SLICE CLOSED 2026-08-03 — CE-R2-1..5 all MET
+
+Enforcement rests on the four tests plus `ci/ci_check_eview_refold_reseal.sh`
+(`DC-EPOCH-32` / `DC-EPOCH-33`); the live runs are supporting evidence, never the reason.
+
+**The negative control is retained deliberately and is part of the close:** the preserved poisoned
+store *still halts identically* under the fixed binary (exit 43, same field diff). R2 stops a store
+**becoming** poisoned; it does **not** repair one already divergent, and
+`EpochViewPostPromotionMismatch` was not weakened. Forensics at
+`~/.cardano-live1/KEEP-eview-r1-reproducer/`.
+
+**What is NOT claimed by this close:** the refold **thrash** is untouched and is now a demonstrated
+forge blocker — see `LIVE-REFOLD-THRASH` RF-1. R2 makes each refold harmless; it does not stop one
+happening, and the same run that proved R2 also proved the node cannot reliably hold the tip.
 
 ## Not claimed
 
