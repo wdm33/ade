@@ -95,13 +95,16 @@ uses the full `Credential Staking` for the refund target, `isAccountRegistered`,
 test), not the KeyHash projection. Script-hash reward accounts then route byte-exactly. (S1's order test
 used key-hash accounts — the matching projection — so it passed without exercising this.)
 
-> **Split (item #1 finding, tracked).** PO-S3-2 has TWO halves. The POOLREAP deposit-refund target is
-> DONE (item #1: `rules.rs` decodes via `reward_account_credential`). The RUPD REWARD-crediting half is
-> SEPARATE and still pending: the operator/member reward distribution (`rules.rs` `op_cred` ~934-940 + the
-> `delta_t2` partition ~1087-1102) is keyed by a bare `Hash28` (the discriminant already dropped upstream),
-> so a script-hash operator/member reward would mis-route. Routing those by the real discriminant touches
-> byte-exact reward outputs + their oracle tests, so it is its OWN item BEFORE CE-3d (the live byte-exact
-> RUPD gate) — recorded here, not silently dropped.
+> **Split (item #1 finding) — BOTH halves DONE (2026-07-06 ground-truth vs current code).** PO-S3-2 had
+> TWO halves. (1) The POOLREAP deposit-refund target: DONE (`rules.rs` decodes via
+> `reward_account_credential`). (2) The RUPD REWARD-crediting half: **DONE in `aeeaf89d` (2026-06-29,
+> "pay script-hash and pool-owner stakers their exact reward share")** — landed the day AFTER this doc was
+> last edited, so the earlier "still pending" note was stale. The `delta_t2` partition (`rules.rs:1277-1315`)
+> now resolves each reward-delta credential to the REGISTERED discriminant (KeyHash-then-ScriptHash, else
+> treasury); the operator leader-share `s/σ` and the member-exclusion use `params.owners` (Mary+), not the
+> reward account. Net per-account error against cardano's `nesRu rs` fell from ~79.6M to the residual CE-3d
+> now measures. So there is **no remaining reward-crediting BLUE work before CE-3d** — the remaining S3 item
+> is the CE-3d evidence itself (item #3), on an S1-era seed.
 
 ### PO-S3-3 — the live `boundary_mark` source (SNAP's new mark).
 

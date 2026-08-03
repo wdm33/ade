@@ -114,12 +114,28 @@ Ade's consensus inputs — the running node does, through the shared extraction.
 | 2. Bring up the venue's Haskell node | operator | private C1 node | the preprod node |
 | 3. Extract consensus inputs from that node | operational | `build_consensus_inputs_bundle.sh` (env-pointed at C1: `ADE_LIVE_PEER_CONTAINER` / `ADE_LIVE_NETWORK_MAGIC` / `ADE_LIVE_PEER_SOCKET`) | same script, default preprod env |
 | 4. Dump the seed UTxO (cardano-cli) | operational | C1 node | preprod node |
-| 5. Import + run | operational | `ade_node --mode node --listen … --peer <c1> --json-seed … --consensus-inputs-path … --network-magic 42` | same flags, magic 1 |
+| 5a. **Seed-import** → build the durable store (bootstrap-only; does NOT forge) | operational | cardano-cli dump → `ade_node --mode admission --json-seed … --seed-point-slot … --seed-block-hash … --consensus-inputs-path … --snapshot-dir … --wal-dir … --network-magic 42` | same, magic 1 |
+| 5b. **Forge** → WarmStart the built store | operational | `ade_node --mode node --snapshot-dir … --wal-dir … --consensus-inputs-path … --cold-skey/--kes-skey/--vrf-skey/--opcert --listen … --peer <c1> --network-magic 42` | same flags, magic 1 |
 | 6. Capture peer log → `correlate` | operational | non-promotable `PrivateRehearsalManifest` | bounty `Ba02Manifest` |
 
-Same binary, same flags (from the pinned 28-flag set), same import authority, same
-forge/serve/correlate path. The deltas are only columns 1–2 (operator inputs) and
-the manifest label (row 6).
+Same binary, same import authority, same forge/serve/correlate path. The deltas are
+only columns 1–2 (operator inputs) and the manifest label (row 6).
+
+**Seed-import (5a) is a SEPARATE step from the forge (5b) — conflating them is where
+reproducibility breaks.** There are two seed-import forms; the forge (5b) is identical for both:
+- **cardano-cli dump → `--mode admission`** — works for both venues, and is the ONLY option
+  when no Mithril manifest exists (e.g. **preview** today). It imports the UTxO, mints the
+  anchor, catches up to the tip, and stops — it does **not** forge. (A reorg during its
+  catch-up is a retry, NOT a node-path gap — never chase it as one.)
+- **Mithril snapshot → `--mode node` FirstRun `--mithril-manifest-path`** — only where a venue
+  Mithril manifest exists (currently **preprod**). `first_run_mithril_bootstrap`
+  (`crates/ade_node/src/node_lifecycle.rs`) is **Mithril-only and bootstrap-only**: it persists
+  the store and exits 0, producing NO block.
+- **The forge (5b) is ALWAYS `--mode node` WarmStart on the already-built store** (L4 follow +
+  L5 produce). `--mode node --json-seed` against an EMPTY store does NOT do a cardano-cli
+  FirstRun — FirstRun requires `--mithril-manifest-path` and forges nothing. Never write
+  "`--mode node --json-seed`" as a one-shot import-and-forge; that exact conflation sent a pass
+  down an orphaned-store rabbit hole.
 
 ---
 
