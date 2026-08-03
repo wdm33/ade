@@ -302,6 +302,36 @@ exercise the function directly. Only the structural gate catches an unwired or m
 Three mutations were verified caught: unwiring it, moving it before the commit, and weakening
 `DC-EPOCH-29` (making `reset_to_settled` stop de-certifying) to make re-certification easier.
 
+## OPEN OBSERVATION 2026-08-03 — arming the bound may be rarer than discarding it was
+
+RF-1 stops a settled point being **discarded**. Separately, and not addressed by this slice,
+**establishing** one is harder on a rollback-frequent network than the design assumes.
+
+`roll_settled_rewind_point` stages the current point only at `ReachedTip`, and promotes it only once
+the tip has advanced `k` blocks past it. On preview `k = 432`, `f = 0.05`, so promotion needs
+**≈ 8,640 slots ≈ 2.4 h of uninterrupted tip-hold**. And **both reset paths clear `PENDING_*`**, so
+any rollback destroys the staged point and restarts the k-block clock from zero.
+
+Measured inter-rollback gaps on the CE-RF-5 store: **37 min, 160 min, 65 min, ~40 min.** Only one of
+four exceeded 2.4 h. So on observed behaviour a settled point can be banked roughly **1 attempt in
+4**, and a node that is repeatedly knocked off tip may never bank one at all.
+
+Consequences, stated carefully:
+
+- This is **not an RF-1 defect.** RF-1 does exactly what it claims when a settled triple exists.
+- It **does** mean the bound engages less often than DC-EPOCH-30's framing implies, because that
+  rule reasons about the rewind DISTANCE and is silent on how often a rewind target exists.
+- It makes **CE-RF-5 probabilistic to observe** rather than reliably reproducible on preview: the run
+  must catch a >2.4 h rollback-free window followed by a rollback.
+- The natural follow-up (NOT taken here, and not a claim) is the staging cadence itself: staging only
+  at `ReachedTip` is what couples arming the bound to sustained tip-hold, which is precisely the
+  property a thrashing node lacks. A cadence that could stage from a settled-by-depth point without
+  first reaching tip would decouple them — but that is a new invariant needing its own proof, not a
+  tweak, and it must not weaken the k-rule.
+
+Recorded now rather than after CE-RF-5 resolves, so a slow or absent live signal is read as *the
+bound rarely arming*, not as *RF-1 failing*.
+
 ## Not claimed
 
 - No claim that this eliminates refolds — only that a refold starts from a bounded, proven baseline.
