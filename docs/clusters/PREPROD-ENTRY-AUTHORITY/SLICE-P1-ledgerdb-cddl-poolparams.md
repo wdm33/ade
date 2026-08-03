@@ -153,6 +153,52 @@ lesson is that *an empty collection on one venue hides its element encoding enti
   ~13 leader slots/epoch), and 3 remaining epoch-304 leader slots at launch time.
 - Preview is unaffected — it has no shape-B entry.
 
+## FIXED 2026-08-03 — `1b49007e`
+
+`psFutureStakePoolParams` now has its own reader (`read_future_pool_params` /
+`read_future_pool_map`) for the certificate CDDL grammar, with the **operator-equals-map-key** guard
+as the self-validating safety property. Fail-closed on any other shape; skipping the map was
+explicitly rejected (it would silently drop a staged re-registration and diverge at the next boundary
+adoption). Both readers converge on one representation — the CDDL path keeps the raw 29 reward bytes,
+the internal path reconstructs the same 29 from its split form.
+
+Proof: 3 hermetic tests (`future_pool_params_decodes_the_certificate_cddl_form`,
+`..._rejects_an_operator_that_is_not_the_map_key`, `..._refuses_the_internal_form_rather_than_guessing`),
+`ade_ledger` 864 green, and the real preprod snapshot now decodes **past** pool params.
+
+**Honest gap:** preview being unaffected is argued from its on-disk shape (`map(0)` ⇒ zero elements
+read), not demonstrated by a preview re-bootstrap.
+
+## NEXT BLOCKER (not a codec defect) — the snapshot sits in the reward-pulsing phase
+
+With P1 fixed, bootstrap advances to:
+
+```
+nesRu is mid-pulse (Pulsing tag 0, not Complete): seed+2 reward distribution not yet computed
+```
+
+`read_reward_update_deltas` accepts **`SNothing`** (empty delta, legitimate) and **`Complete`**, and
+fails closed on **`Pulsing`** — deliberate, DC-EPOCH-18 / B3c: bootstrapping mid-pulse would silently
+undercount the seed+2 stake. Correct behaviour; the snapshot is simply taken at the wrong moment.
+
+The fetched snapshot (immutable chunk **6017**) sits **64.9%** into epoch 304, past the pulser start.
+Mithril chunks are ~21,600 slots, so position in epoch 304 (start 129,686,400) is derivable directly:
+
+| chunk | % into epoch | nesRu |
+|---|---|---|
+| 6004–6009 | 0–25% | `SNothing` — usable |
+| 6010–6011 | 30–35% | borderline (`stabilityWindow` 3k/f = 30% vs `randomnessStabilisationWindow` 4k/f = 40%) |
+| 6012–6017 | 40–65% | `Pulsing` — refused |
+
+**Operational, not code.** Re-fetching pinned at chunk **6009** (25%, comfortable margin under the
+stricter 3k/f threshold) via the `--certificate` pin that `download()` already supports. Waiting for
+a post-epoch-305 snapshot was rejected: ~16 h away, and it would forfeit every remaining epoch-304
+leader slot for nothing but a shorter catch-up.
+
+Worth recording as a venue property: **a Mithril snapshot is only bootstrappable from part of an
+epoch.** Roughly 30–100% of each epoch is unusable to Ade's fail-closed nesRu rule, so snapshot
+selection is a real operational constraint, not an incidental detail.
+
 ## Not claimed
 
 No fix, no invariant registered, no CE. This seals the diagnosis and the byte evidence so it cannot
