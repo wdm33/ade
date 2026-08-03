@@ -65,6 +65,41 @@ closed, a forge attempt would have proceeded against fabricated epoch geometry.
 The accumulator is unaffected — it uses the real `EraSchedule` and logged **zero** crossings, which is
 why the divergence was invisible in the logs until instrumented.
 
+## The live path — PROVEN by instrumentation, after static tracing got it wrong
+
+A temporary probe inside `detect_epoch_transition` caught it firing **exactly once**, on the first
+block after bootstrap:
+
+```
+P3-detect-epoch-transition: slot=129813444 current_epoch=304 -> new_epoch=498 (MAINNET formula)
+```
+
+`current_epoch=304` is the correctly-seeded value; the mainnet formula returns 498; `498 > 304`
+declares a boundary; `apply_reduced_epoch_boundary` runs once and the projections stay
+`ReducedUnavailable` forever after, because `498 > 498` is false.
+
+**The full live chain** — note where the venue geometry is lost:
+
+```
+receive_apply(era_schedule)            <- correct EraSchedule in scope
+  -> block_delivered(era_schedule)
+  -> admit_via_block_validity(era_schedule)
+  -> block_validity/transition.rs:132  -> apply_block_with_verdicts(ledger, era, inner)
+                                          ^^^ era_schedule DROPPED HERE
+  -> apply_shelley_era_block_with_verdicts
+  -> detect_epoch_transition -> slot_to_epoch   [MAINNET CONSTANTS]
+```
+
+The schedule is threaded correctly all the way to `admit_via_block_validity` and then **dropped at
+the last hop**, which is exactly why a hardcoded fallback exists there at all.
+
+**Method note, recorded because it recurred:** static tracing concluded the callers were
+"test-only" — `apply_block_with_verdicts` had one reference in `runtime`/`node` and it was a comment,
+`apply_block_with_accounting` only tests. That was wrong: the call comes from **inside `ade_ledger`
+itself** (`block_validity/transition.rs`), which a grep scoped to `ade_runtime`/`ade_node` cannot
+see. The probe was right and the code-reading was wrong — the third time in this session that
+instrumenting beat inference.
+
 ## Fix direction (NOT selected — this is the open work)
 
 `detect_epoch_transition` must derive the epoch from the **venue's `EraSchedule`**, the same authority
