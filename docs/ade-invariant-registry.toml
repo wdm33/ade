@@ -9998,3 +9998,25 @@ status = "enforced"
 evidence_notes = "The proof crosses a boundary through the PRODUCTION co-advancer, captures the sealed leadership set, then forces the live refold shape -- accumulator reset to bootstrap, reduced checkpoint left at the durable tip (and deliberately not ahead of it, so the tip-only reset does not fire) -- and asserts the re-sealed set is equal. It was verified to DISCRIMINATE: with the seal path reverted to the bare forward advance it fails on exactly the field the live node halted on. SUPPORTING live evidence only (never the reason for enforcement): the 2026-08-02 70-second preview reproducer halted with differing=[checkpoint_commitment, stake_view_canonical_hash, view_canonical_hash] while target_epoch, transition_point and the eta0 nonce all matched -- every accumulator-derived field agreeing and every checkpoint-derived field disagreeing. CE-R2-4 is now MET LIVE (2026-08-02): a fresh preview store crossed 1375->1376 and 1376->1377, took a genuine peer rollback -> reset_to_settled -> reset_and_refold, and the refold re-crossed the boundary with the checkpoint 153,565 slots ahead of it in a later epoch -- the exact poisoning condition -- logging 'reduced checkpoint REWOUND onto boundary point 118886384 before sealing'. After a second such refold the node was SIGKILLed mid-refold and restarted clean, past 200s, with no EpochViewPostPromotionMismatch. The pass is NOT vacuous: the store's WAL activation record binds cbb12da0 / 88c236d6 / b35be7b6 / 091b1881 -- every field the poisoned store's record bound -- and none of the corrupted de32979c / 42681f92 / 18892c1b, so recovery took the (Some,Some)+matches => Promoted arm and a separate bootstrap independently reproduced the correct values byte for byte. Negative control: the poisoned store still halts identically under the same fixed binary, so the terminal was not weakened. CE-R2-5 (live boundary crossing plus restart) is OUTSTANDING. Enforcement rests on the named test + ci/ci_check_eview_refold_reseal.sh."
 introduced_in = "EVIEW-RECOVERY-LINEAGE-R2"
 strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-34"
+tier = "true"
+statement = """
+Settled-triple integrity. The settled rewind triple (accumulator blob + settled point + settled
+leadership) is bound by a domain-separated, length-prefixed fingerprint written in the SAME durable
+commit that promotes it, and that fingerprint is RECOMPUTED and compared before the triple is ever
+restored from. An absent fingerprint, an unreadable lineage/schema context, or any mismatch refuses
+the restore and falls back to reset_to_bootstrap, which re-derives from the Mithril-certified
+baseline. The fallback is always safe, so this can only ever cost refold time; it can never admit an
+unverified triple.
+"""
+source = "docs/clusters/LIVE-REFOLD-THRASH/SLICE-RF-1-settled-rewind-must-survive-recovery.md (CE-RF-6)"
+cross_ref = ["DC-EPOCH-31", "DC-EPOCH-29", "DC-EPOCH-20", "T-DET-01"]
+code_locus = "crates/ade_runtime/src/chaindb/epoch_accumulator_store.rs (settled_fingerprint; written in roll_settled_rewind_point's promote commit; verified in reset_to_settled; cleared with the triple in reset_to_bootstrap). Gate ci/ci_check_settled_triple_integrity.sh."
+tests = ["a_corrupted_settled_triple_is_refused_and_falls_back", "a_settled_triple_with_no_fingerprint_is_refused", "the_settled_fingerprint_binds_every_input"]
+ci_scripts = ["ci/ci_check_settled_triple_integrity.sh"]
+status = "enforced"
+evidence_notes = "WHY this is needed before RF-1 and not after: today the recovery path always re-derives the accumulator from the certified baseline, so a silently corrupted settled blob is self-healed by recomputation. RF-1 removes that accidental self-heal on the bounded path by restoring from the triple instead. decode_epoch_accumulator fails closed on malformed bytes, but a flipped bit inside an otherwise valid numeric field decodes cleanly and would be trusted and folded forward from -- and EVIEW-R1/R2 is a live demonstration that a durable store CAN go internally inconsistent and only surface much later at a comparison boundary. The corruption proof flips ONE bit in each triple member in turn and asserts every one is refused AND that refusing leaves the store untouched so the bootstrap fallback stays correct; it was verified to DISCRIMINATE (removing the comparison makes it fail). The binding proof asserts each of the five inputs changes the digest and that length-prefixing prevents ('ab','c') colliding with ('a','bc'). The gate additionally pins STRUCTURE no compiler check covers: domain separation, a versioned domain tag, length-prefixing, write-on-promote, recompute-on-restore, clear-with-the-triple, and let-else on the absent case (a permissive `if let` would verify when present and silently restore when absent). All four of those regressions were mutated and caught."
+introduced_in = "LIVE-REFOLD-THRASH-RF-1"
+strengthened_in = []

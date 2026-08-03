@@ -97,6 +97,44 @@ const SETTLED_LEADERSHIP_KEY: &str = "settled_leadership";
 const PENDING_BLOB_KEY: &str = "pending_settled_blob";
 const PENDING_POINT_KEY: &str = "pending_settled_point";
 const PENDING_LEADERSHIP_KEY: &str = "pending_settled_leadership";
+/// LIVE-REFOLD-THRASH RF-1 / CE-RF-6 (DC-EPOCH-34): integrity binding over the SETTLED triple.
+const SETTLED_FP_KEY: &str = "settled_fingerprint";
+/// Domain separation + version. A future binding change MUST bump this, so an old fingerprint can
+/// never be silently re-interpreted under new semantics — it fails closed to a bootstrap refold.
+const SETTLED_FP_DOMAIN: &[u8] = b"ade-settled-triple-v1";
+
+/// CE-RF-6 (DC-EPOCH-34): the integrity fingerprint over the settled triple.
+///
+/// The settled blob is the node's OWN deterministic output, so this is not defending against a
+/// hostile writer. It defends against silent durable-store corruption. Today the accumulator is
+/// always re-derived from the Mithril-certified baseline on the recovery path, which self-heals a
+/// corrupted blob by recomputation. Once RF-1 lets recovery RESTORE from the settled triple instead,
+/// that accidental self-heal is gone: `decode_epoch_accumulator` fails closed on malformed bytes, but
+/// a flipped bit inside an otherwise valid numeric field decodes cleanly and would be trusted. This
+/// makes a restore MECHANICALLY COMPARABLE rather than trusted by convention.
+///
+/// Binds, domain-separated and LENGTH-PREFIXED so no two different triples can share a preimage:
+///   tag+version ‖ seed_slot ‖ leadership schema ‖ settled point (slot/block/hash) ‖ blob ‖ leadership
+///
+/// `seed_slot` stands in for network/profile identity — the store carries no network magic, but a
+/// blob from a different bootstrap lineage cannot match. Pure: no I/O, no clock, no allocation order
+/// dependence.
+fn settled_fingerprint(
+    seed_slot: u64,
+    leadership_schema: &[u8],
+    point: &[u8],
+    blob: &[u8],
+    leadership: &[u8],
+) -> Hash32 {
+    let mut pre = Vec::new();
+    pre.extend_from_slice(SETTLED_FP_DOMAIN);
+    pre.extend_from_slice(&seed_slot.to_be_bytes());
+    for part in [leadership_schema, point, blob, leadership] {
+        pre.extend_from_slice(&(part.len() as u64).to_be_bytes());
+        pre.extend_from_slice(part);
+    }
+    ade_crypto::blake2b_256(&pre)
+}
 
 /// Deterministic length-prefixed encoding of the epoch-indexed leadership table:
 /// `count(4 BE) ++ [epoch(8 BE) ++ len(4 BE) ++ blob]*`. Entries are written in redb's ascending
@@ -558,6 +596,9 @@ impl EpochAccumulatorStore {
             let _ = meta.remove(SETTLED_BLOB_KEY).map_err(rerr)?;
             let _ = meta.remove(SETTLED_POINT_KEY).map_err(rerr)?;
             let _ = meta.remove(SETTLED_LEADERSHIP_KEY).map_err(rerr)?;
+            // CE-RF-6: the fingerprint dies with the triple it binds -- a stale fingerprint over a
+            // deleted triple could otherwise validate a LATER triple written under a torn promotion.
+            let _ = meta.remove(SETTLED_FP_KEY).map_err(rerr)?;
             // S5: a reset leaves the accumulator at the seed baseline but NOT lineage-certified — clear the
             // anchor. Recovery treats the cleared store as uncertified until a successful canonical re-fold
             // re-writes a fresh LastAdvancedPoint; it never trusts a reset store as lineage authority.
@@ -667,11 +708,30 @@ impl EpochAccumulatorStore {
                 (b, p, l)
             };
             if let (Some(b), Some(p)) = (b, p) {
+                // CE-RF-6 (DC-EPOCH-34): bind the triple's integrity in the SAME commit that
+                // promotes it. Written here rather than at restore time so a torn promotion can
+                // never leave a triple whose fingerprint was computed over different bytes.
+                let (seed, schema) = {
+                    let meta = txn.open_table(META_TABLE).map_err(rerr)?;
+                    let seed = meta
+                        .get(SEED_SLOT_KEY)
+                        .map_err(rerr)?
+                        .and_then(|v| v.value().try_into().ok().map(u64::from_be_bytes))
+                        .unwrap_or(0);
+                    let schema = meta
+                        .get(LEADERSHIP_SCHEMA_KEY)
+                        .map_err(rerr)?
+                        .map(|v| v.value().to_vec())
+                        .unwrap_or_default();
+                    (seed, schema)
+                };
+                let fp = settled_fingerprint(seed, &schema, &p, &b, &l);
                 let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
                 meta.insert(SETTLED_BLOB_KEY, b.as_slice()).map_err(rerr)?;
                 meta.insert(SETTLED_POINT_KEY, p.as_slice()).map_err(rerr)?;
                 meta.insert(SETTLED_LEADERSHIP_KEY, l.as_slice())
                     .map_err(rerr)?;
+                meta.insert(SETTLED_FP_KEY, fp.0.as_slice()).map_err(rerr)?;
             }
         }
         {
@@ -763,6 +823,37 @@ impl EpochAccumulatorStore {
                 .map_err(rerr)?
                 .map(|v| v.value().to_vec())
                 .unwrap_or_default();
+            // CE-RF-6 (DC-EPOCH-34): VERIFY the triple's integrity before restoring from it.
+            // Restoring means the accumulator is adopted WITHOUT re-deriving it from the certified
+            // baseline, so a silently corrupted blob would otherwise be trusted and folded forward
+            // from. Any failure -- absent fingerprint (pre-CE-RF-6 store), unreadable seed/schema, or
+            // a mismatch -- returns `false`, and the caller falls back to `reset_to_bootstrap`, which
+            // re-derives from the Mithril-certified baseline. That fallback is always safe, so this
+            // can only ever cost refold time; it can never admit an unverified triple.
+            let seed = meta
+                .get(SEED_SLOT_KEY)
+                .map_err(rerr)?
+                .and_then(|v| v.value().try_into().ok().map(u64::from_be_bytes))
+                .unwrap_or(0);
+            let schema = meta
+                .get(LEADERSHIP_SCHEMA_KEY)
+                .map_err(rerr)?
+                .map(|v| v.value().to_vec())
+                .unwrap_or_default();
+            let Some(stored_fp) = meta
+                .get(SETTLED_FP_KEY)
+                .map_err(rerr)?
+                .map(|v| v.value().to_vec())
+            else {
+                return Ok(false);
+            };
+            if stored_fp.as_slice()
+                != settled_fingerprint(seed, &schema, &praw, &blob, &lraw)
+                    .0
+                    .as_slice()
+            {
+                return Ok(false);
+            }
             (
                 blob,
                 LastAdvancedPoint::decode(&praw)?,
@@ -1718,6 +1809,140 @@ mod tests {
         // sealed AFTER the settled point and must not survive.
         assert!(s.frozen_leadership_for_epoch(EpochNo(576)).unwrap().is_some());
         assert!(s.frozen_leadership_for_epoch(EpochNo(577)).unwrap().is_none());
+    }
+
+    // ===== LIVE-REFOLD-THRASH RF-1 / CE-RF-6: settled-triple integrity (DC-EPOCH-34) =====
+    //
+    // Today the recovery path always re-derives the accumulator from the Mithril-certified baseline,
+    // which self-heals a corrupted settled blob by recomputation. RF-1 removes that self-heal on the
+    // bounded path, so the triple must be PROVEN before it is restored from -- not trusted because
+    // the node wrote it. `decode_epoch_accumulator` fails closed on malformed bytes, but a flipped
+    // bit inside a valid numeric field decodes cleanly, which is exactly what these pin.
+
+    /// Corrupt each member of the triple in turn; every one must be REFUSED, and refusing must leave
+    /// the store untouched so the caller's `reset_to_bootstrap` fallback is still correct.
+    #[test]
+    fn a_corrupted_settled_triple_is_refused_and_falls_back() {
+        const K: u64 = 10;
+        for (label, key) in [
+            ("blob", SETTLED_BLOB_KEY),
+            ("point", SETTLED_POINT_KEY),
+            ("leadership", SETTLED_LEADERSHIP_KEY),
+        ] {
+            let tmp = TempDir::new().unwrap();
+            let s = store(&tmp);
+            s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+            s.advance_with_current_leadership(
+                &acc_advanced(),
+                SlotNo(200),
+                BlockNo(20),
+                Hash32([0xA1; 32]),
+                &distr_at(576),
+            )
+            .unwrap();
+            assert!(!s.roll_settled_rewind_point(BlockNo(20), K).unwrap());
+            assert!(s.roll_settled_rewind_point(BlockNo(30), K).unwrap());
+
+            // Flip ONE bit inside the stored member -- structurally intact, semantically wrong.
+            {
+                let txn = s.db.begin_write().unwrap();
+                {
+                    let mut meta = txn.open_table(META_TABLE).unwrap();
+                    let mut v = meta.get(key).unwrap().map(|x| x.value().to_vec()).unwrap();
+                    assert!(!v.is_empty(), "{label} must be present to corrupt");
+                    let last = v.len() - 1;
+                    v[last] ^= 0x01;
+                    meta.insert(key, v.as_slice()).unwrap();
+                }
+                txn.commit().unwrap();
+            }
+
+            assert!(
+                !s.reset_to_settled().unwrap(),
+                "a corrupted settled {label} must be REFUSED, not restored from"
+            );
+            // Refusal must not disturb the store: the caller still falls back to bootstrap.
+            assert!(
+                s.last_advanced_point().unwrap().is_some(),
+                "refusing must leave the store untouched (still certified at its own tip)"
+            );
+        }
+    }
+
+    /// A store written BEFORE CE-RF-6 has a settled triple but no fingerprint. It must be refused
+    /// rather than grandfathered in -- an unverifiable triple is exactly what the gate exists for.
+    #[test]
+    fn a_settled_triple_with_no_fingerprint_is_refused() {
+        let tmp = TempDir::new().unwrap();
+        let s = store(&tmp);
+        const K: u64 = 10;
+        s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+        s.advance_with_current_leadership(
+            &acc_advanced(),
+            SlotNo(200),
+            BlockNo(20),
+            Hash32([0xA1; 32]),
+            &distr_at(576),
+        )
+        .unwrap();
+        assert!(!s.roll_settled_rewind_point(BlockNo(20), K).unwrap());
+        assert!(s.roll_settled_rewind_point(BlockNo(30), K).unwrap());
+        // Simulate the pre-slice on-disk shape.
+        {
+            let txn = s.db.begin_write().unwrap();
+            {
+                let mut meta = txn.open_table(META_TABLE).unwrap();
+                meta.remove(SETTLED_FP_KEY).unwrap();
+            }
+            txn.commit().unwrap();
+        }
+        assert!(
+            !s.reset_to_settled().unwrap(),
+            "an unfingerprinted settled triple must be refused, never grandfathered"
+        );
+    }
+
+    /// The fingerprint must bind EVERY member plus the lineage/schema context. Changing any one input
+    /// alone must change the digest -- otherwise two different triples share a preimage and the
+    /// verification above is decorative.
+    #[test]
+    fn the_settled_fingerprint_binds_every_input() {
+        let base = settled_fingerprint(100, b"v6", b"point", b"blob", b"lead");
+        for (label, fp) in [
+            (
+                "seed_slot",
+                settled_fingerprint(101, b"v6", b"point", b"blob", b"lead"),
+            ),
+            (
+                "schema",
+                settled_fingerprint(100, b"v7", b"point", b"blob", b"lead"),
+            ),
+            (
+                "point",
+                settled_fingerprint(100, b"v6", b"pointX", b"blob", b"lead"),
+            ),
+            (
+                "blob",
+                settled_fingerprint(100, b"v6", b"point", b"blobX", b"lead"),
+            ),
+            (
+                "leadership",
+                settled_fingerprint(100, b"v6", b"point", b"blob", b"leadX"),
+            ),
+        ] {
+            assert_ne!(base.0, fp.0, "the fingerprint must bind {label}");
+        }
+        // Length-prefixing: moving a byte across a member boundary must NOT collide.
+        assert_ne!(
+            settled_fingerprint(100, b"v6", b"ab", b"c", b"d").0,
+            settled_fingerprint(100, b"v6", b"a", b"bc", b"d").0,
+            "members must be length-prefixed, or concatenation is ambiguous"
+        );
+        // Deterministic: same inputs, same digest.
+        assert_eq!(
+            base.0,
+            settled_fingerprint(100, b"v6", b"point", b"blob", b"lead").0
+        );
     }
 
     /// A bootstrap reset discards BOTH rewind buffers -- nothing survives it as a rewind target.
