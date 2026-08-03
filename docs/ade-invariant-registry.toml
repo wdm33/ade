@@ -2650,6 +2650,28 @@ introduced_in = "PHASE4-N-C"
 strengthened_in = []
 
 [[rules]]
+id = "DC-LEDGER-13"
+tier = "derived"
+statement = """
+MAINNET Shelley constants (SHELLEY_START_SLOT / SHELLEY_START_EPOCH / SHELLEY_EPOCH_LENGTH) may enter a
+computation ONLY through the explicitly-named `mainnet_shelley_schedule()`, plus a justified allowlist.
+`slot_to_epoch`, which applied those constants to whatever slot it was handed and so yielded a
+fictitious epoch off-mainnet, is DELETED and must not return. Epoch derivation on any authoritative path
+goes through the caller's EraSchedule. Exactly one allowlisted site remains --
+`rules::apply_epoch_boundary_full`'s monetary-expansion denominator (SHELLEY_EPOCH_LENGTH / 20) -- which
+must carry a justification naming it mainnet-only, so the allowlist cannot grow silently.
+"""
+source = "docs/clusters/PREPROD-ENTRY-AUTHORITY/SLICE-P5-epoch-agreement-and-venue-constant-containment.md"
+cross_ref = ["DC-EPOCH-36"]
+code_locus = "crates/ade_ledger/src/state.rs (mainnet_shelley_schedule -- the sole sanctioned entry; slot_to_epoch removed); crates/ade_ledger/src/rules.rs (apply_epoch_boundary_full -- the single allowlisted use)"
+tests = ["mainnet_epoch_at_shelley_start", "mainnet_epoch_mid_epoch", "mainnet_epoch_allegra", "mainnet_epoch_pre_shelley"]
+ci_scripts = ["ci/ci_check_venue_constant_containment.sh"]
+status = "enforced"
+evidence_notes = "P3 established this containment in PROSE ('the constants can only enter a computation through an explicit, named mainnet schedule'); P5 makes it mechanical after P4 proved prose was insufficient. The gate immediately surfaced a SECOND live instance of the same bug class that P3 did not remove: apply_epoch_boundary_full still passes the mainnet 432_000/20 = 21_600 expected-blocks denominator, while the accumulator path already sources the real per-era epoch length from the era schedule. That site is deliberately NOT changed by P5 -- it is the full-ledger (track_utxo=true) path producing the mainnet reward results CE-71 / CE-3d are measured against, so altering it is a reward-semantics change rather than containment cleanup -- and is allowlisted with justification and tracked as follow-up. Negative-tested two ways: reintroducing slot_to_epoch, and using a mainnet constant in a non-allowlisted file, were each caught."
+introduced_in = "PREPROD-ENTRY-AUTHORITY-P5"
+strengthened_in = []
+
+[[rules]]
 id = "CN-CONS-06"
 tier = "release"
 statement = "Cross-impl acceptance: blocks forged by Ade are accepted by cardano-node when delivered via N2N block-fetch / chain-sync. Evidence is operator-action: a sustained-window live_block_production_session against a private cardano-node capturing CE-N-C-LIVE_<date>.log. Conditional on testnet stake / SPO registration; if unavailable at cluster close the live half is marked blocked_until_operator_stake_available, not deferred."
@@ -10044,4 +10066,29 @@ ci_scripts = ["ci/ci_check_settled_rewind_survives_recovery.sh"]
 status = "enforced"
 evidence_notes = "The defect was measured live on 2026-08-02/03: reset_to_settled applied a correct bounded rewind, the next pass read an absent anchor and called reset_to_bootstrap, which discarded the rewind AND deleted the settled triple -- so every later rollback was unbounded too. Refold distance grew 153,565 -> 155,796 -> 165,210 -> 171,449 slots at ~30 min each until it outgrew the ~20 min inter-rollback interval and the node stopped holding tip at all, which is the DC-EPOCH-30 forge-blocking condition (leadership can never be promoted at a boundary). The positive proof asserts BOTH that an absent anchor reconciles to ResetAndRefold beforehand and that the re-certified anchor reconciles to ForwardFold after, so it cannot pass vacuously; it was verified to DISCRIMINATE (forcing recertify_settled_anchor to refuse makes it fail). CRITICAL gate rationale: deleting the post-commit call entirely COMPILES CLEAN and every unit test still passes, because the tests exercise the function directly -- only the structural gate catches an unwired or mis-ordered call. The gate pins ORDER (pre-clear < rollback commit < re-certify), that reset_to_settled STILL de-certifies (DC-EPOCH-29 not weakened to make this easier), k-settledness in BLOCK units, and fingerprint+cursor re-verification; unwiring, re-ordering before the commit, and weakening DC-EPOCH-29 were each mutated and caught."
 introduced_in = "LIVE-REFOLD-THRASH-RF-1"
+strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-36"
+tier = "derived"
+statement = """
+After the epoch-boundary decision for a block at `slot`, the ledger's epoch MUST equal the venue era
+schedule's epoch for that slot. A disagreement in EITHER direction is a durable-state contradiction and
+fails closed as a typed `LedgerError::EpochAgreement`, halting the apply with ZERO mutation. This is
+strictly STRONGER than the detection it guards: `detect_epoch_transition` fires only on
+`schedule > ledger`, so it is structurally blind to a ledger AHEAD of the schedule. The check is a
+POST-condition (the epoch legitimately changes during the crossing), and an UNLOCATABLE slot -- before
+the schedule's first era, which the mainnet corpus contains -- makes the invariant unverifiable, NOT
+violated, preserving pre-P5 behaviour exactly. Enforcement is structural rather than remembered:
+`detect_epoch_transition` is pub(crate) with EXACTLY ONE non-test caller,
+`rules::cross_epoch_boundary_for_slot`, which pairs detection with the check.
+"""
+source = "docs/clusters/PREPROD-ENTRY-AUTHORITY/SLICE-P5-epoch-agreement-and-venue-constant-containment.md"
+cross_ref = ["DC-LEDGER-13"]
+code_locus = "crates/ade_ledger/src/state.rs (check_epoch_agreement, EpochAgreementViolation, detect_epoch_transition pub(crate)); crates/ade_ledger/src/rules.rs (cross_epoch_boundary_for_slot -- the SOLE crossing point, used by all three former open-coded sites); crates/ade_ledger/src/error.rs (LedgerError::EpochAgreement); crates/ade_ledger/src/phase.rs (Phase1 for totality)"
+tests = ["epoch_agreement_rejects_a_stale_ledger_epoch", "epoch_agreement_rejects_a_ledger_ahead_of_the_schedule", "epoch_agreement_accepts_agreement", "epoch_agreement_is_silent_on_an_unlocatable_slot"]
+ci_scripts = ["ci/ci_check_epoch_agreement.sh"]
+status = "enforced"
+evidence_notes = "Written directly from the P4 root cause (e1de7a2e), which measured what having NEITHER check costs: a preview store ran its entire life with ledger_epoch=1375 against schedule_epoch=1378 while a third authority (the epoch-accumulator) advanced correctly to 1378, and nothing compared them. The drift surfaced only three epochs later, as an opaque recovery FingerprintMismatch, when a binary that computed the epoch correctly replayed the store and applied the three skipped boundaries on the first replayed block. This invariant would have caught the originating P3 defect on the FIRST block on BOTH venues -- preview (473 vs 1375, frozen forever) and preprod (498 vs 304, phantom boundary) -- where a mainnet-shaped test corpus structurally could not. The gate was negative-tested three ways: making detect_epoch_transition bare pub, adding a second unpaired caller, and removing the check from the crossing point were each mutated and caught."
+introduced_in = "PREPROD-ENTRY-AUTHORITY-P5"
 strengthened_in = []

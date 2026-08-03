@@ -77,6 +77,10 @@ pub fn classify_failure_phase(err: &LedgerError) -> ValidationPhase {
         // not a per-tx script phase. Phase1 for totality (ValidationPhase only models tx script phases; there is
         // never a phase-2 collateral consequence). (CRE S4.3.)
         LedgerError::GovernanceBoundaryTerminal(_) => ValidationPhase::Phase1,
+        // P5 (DC-EPOCH-36): an epoch disagreement halts the apply deterministically with zero mutation — a
+        // durable-state contradiction, not a per-tx script phase. Phase1 for totality, for the same reason as
+        // the governance boundary terminal above: there is never a phase-2 collateral consequence.
+        LedgerError::EpochAgreement(_) => ValidationPhase::Phase1,
         LedgerError::DuplicateInput(_) => ValidationPhase::Phase1,
         LedgerError::Conservation(_) => ValidationPhase::Phase1,
         LedgerError::NegativeValue(_) => ValidationPhase::Phase1,

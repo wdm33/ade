@@ -108,6 +108,46 @@ grows without an accompanying justification comment.
 | **CE-P5-7** | Negative-tested: both CI gates fail when the violation they exist to catch is introduced |
 | **CE-P5-8** | Existing suites green — `ade_ledger`, `ade_node`, `ade_runtime`, `ade_core` — with no fingerprint change on the mainnet corpus |
 
+## IMPLEMENTED 2026-08-03 — all eight CEs met
+
+| CE | Result |
+|---|---|
+| CE-P5-1 | `check_epoch_agreement` rejects BOTH directions as typed `LedgerError::EpochAgreement` — `epoch_agreement_rejects_a_stale_ledger_epoch`, `epoch_agreement_rejects_a_ledger_ahead_of_the_schedule`, `epoch_agreement_accepts_agreement` |
+| CE-P5-2 | `epoch_agreement_is_silent_on_an_unlocatable_slot` — pre-Shelley slot is `Ok(())`, behaviour identical to pre-slice |
+| CE-P5-3 | `detect_epoch_transition` is `pub(crate)` with exactly ONE non-test caller; `ci/ci_check_epoch_agreement.sh` |
+| CE-P5-4 | All three sites route through `cross_epoch_boundary_for_slot`; every existing suite byte-identical |
+| CE-P5-5 | `slot_to_epoch` DELETED (not merely demoted); the integration test derives its epoch from `mainnet_shelley_schedule().locate()` |
+| CE-P5-6 | `ci/ci_check_venue_constant_containment.sh` |
+| CE-P5-7 | Both gates negative-tested — 5 mutations, all caught (below) |
+| CE-P5-8 | `ade_ledger` 1007, `ade_node` 621, `ade_runtime` 557, `ade_core` 140 — 0 failed |
+
+Registered as **DC-EPOCH-36** and **DC-LEDGER-13**, both `status = "enforced"` with real tests and CI
+scripts (registry now 452 rules, no duplicate IDs).
+
+### The gates were negative-tested, because a gate that cannot fail proves nothing
+
+| mutation | caught |
+|---|---|
+| `detect_epoch_transition` made bare `pub` | yes |
+| a second, unpaired `detect_epoch_transition` caller added | yes |
+| the agreement check removed from the crossing point | yes |
+| `slot_to_epoch` reintroduced | yes |
+| a mainnet constant used in a non-allowlisted file | yes |
+
+### `slot_to_epoch` was deleted, not demoted
+
+The plan said "make it private". Once it had no production callers, `pub(crate)` left it as dead code
+*and* left the trap armed for the next caller. Deleting it makes `mainnet_shelley_schedule()` the sole
+consumer of the constants — the strongest available form of the containment — and its four mainnet
+mapping assertions were preserved verbatim against the schedule instead.
+
+### Note on what the invariant did NOT find
+
+Enabling it broke **nothing**: every existing test already satisfied epoch agreement. That is the
+expected result for a correct codebase post-P3 and is not evidence the check is vacuous — it
+discriminates, as the negative tests show, and it would have caught the P3 defect on the first block
+on both venues. Its value is prospective.
+
 ## What this does NOT do
 
 - It does **not** recover the P4 store. Nothing can; three epochs of boundary effects were never

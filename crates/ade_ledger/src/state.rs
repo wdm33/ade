@@ -338,16 +338,61 @@ pub fn mainnet_shelley_schedule() -> ade_core::consensus::era_schedule::EraSched
     .expect("mainnet shelley schedule is well-formed")
 }
 
-/// Compute the epoch number for a given slot (Shelley+ only).
+// PREPROD-ENTRY-AUTHORITY P5 (DC-LEDGER-13): `slot_to_epoch` USED TO LIVE HERE and is deliberately
+// GONE. It applied the MAINNET constants above to whatever slot it was handed, which off-mainnet
+// yields a fictitious epoch (preprod slot 130,046,891 -> 498 instead of 304; preview -> 473 instead of
+// 1378). That is the P3 defect, and P4 (`e1de7a2e`) measured what it cost: a preview store whose
+// ledger never advanced past its seed epoch for its entire life. Epoch derivation now goes through the
+// caller's `EraSchedule`; a genuinely mainnet-shaped caller builds `mainnet_shelley_schedule()` and
+// calls `locate`, which is the SOLE consumer of these constants.
+// `ci/ci_check_venue_constant_containment.sh` enforces that mechanically.
+
+/// The ledger epoch disagrees with the venue era schedule for a slot (P5, DC-EPOCH-36).
 ///
-/// Returns None for pre-Shelley slots.
-pub fn slot_to_epoch(slot: SlotNo) -> Option<EpochNo> {
-    if slot.0 < SHELLEY_START_SLOT {
-        return None;
+/// Carries both epochs and the slot so an operator can tell a STALE ledger (the P4 shape: the
+/// boundary never fired, `ledger < schedule`) from a ledger AHEAD of the schedule (a wrong-venue or
+/// wrong-geometry store) without re-deriving anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EpochAgreementViolation {
+    pub slot: SlotNo,
+    pub ledger_epoch: EpochNo,
+    pub schedule_epoch: EpochNo,
+}
+
+/// DC-EPOCH-36 — the epoch-agreement invariant.
+///
+/// After the epoch-boundary decision for a block at `slot`, the ledger's epoch MUST equal the venue
+/// era schedule's epoch for that slot. A disagreement in EITHER direction is a durable-state
+/// contradiction and fails closed.
+///
+/// This is strictly STRONGER than the detection it guards. [`detect_epoch_transition`] fires only on
+/// `schedule > ledger`, so it is structurally blind to a ledger AHEAD of the schedule — equally a
+/// contradiction, and equally silent. P4 (`e1de7a2e`) proved the cost of having neither check: a
+/// preview store ran its entire life with `ledger_epoch=1375` against `schedule_epoch=1378`, and the
+/// drift only surfaced — three epochs later, as an opaque recovery fingerprint mismatch — when a
+/// binary that computed the epoch correctly replayed it.
+///
+/// An UNLOCATABLE slot (before the schedule's first era — the mainnet corpus has pre-Shelley slots)
+/// makes the invariant unverifiable, NOT violated: `Ok(())`. This preserves `detect_epoch_transition`'s
+/// pre-P5 behaviour exactly (it already returns `None` via `.ok()?` there). Turning an unlocatable
+/// slot into an error would be an unrelated behaviour change and is deliberately not done.
+pub fn check_epoch_agreement(
+    ledger_epoch: EpochNo,
+    slot: SlotNo,
+    era_schedule: &ade_core::consensus::era_schedule::EraSchedule,
+) -> Result<(), EpochAgreementViolation> {
+    let Ok(location) = era_schedule.locate(slot) else {
+        return Ok(());
+    };
+    if location.epoch.0 == ledger_epoch.0 {
+        Ok(())
+    } else {
+        Err(EpochAgreementViolation {
+            slot,
+            ledger_epoch,
+            schedule_epoch: location.epoch,
+        })
     }
-    let offset = slot.0 - SHELLEY_START_SLOT;
-    let epoch = SHELLEY_START_EPOCH + offset / SHELLEY_EPOCH_LENGTH;
-    Some(EpochNo(epoch))
 }
 
 /// Check if a slot is the first slot of a new epoch relative to
@@ -355,7 +400,14 @@ pub fn slot_to_epoch(slot: SlotNo) -> Option<EpochNo> {
 ///
 /// Returns Some(new_epoch) if the slot crosses an epoch boundary,
 /// None if it's still in the current epoch.
-pub fn detect_epoch_transition(
+///
+/// PREPROD-ENTRY-AUTHORITY P5: `pub(crate)`, NOT `pub`, with a SINGLE non-test caller —
+/// `rules::cross_epoch_boundary_for_slot`, which pairs it with [`check_epoch_agreement`]. Detection
+/// alone cannot see a ledger ahead of the schedule, so an open-coded detect-then-dispatch site is a
+/// silent hole; routing every crossing through one function makes the pairing unforgettable rather
+/// than remembered. `ci/ci_check_epoch_agreement.sh` enforces the single-caller invariant. Mirrors
+/// the `block_validity_trusted_replay` containment pattern.
+pub(crate) fn detect_epoch_transition(
     current_epoch: EpochNo,
     slot: SlotNo,
     era_schedule: &ade_core::consensus::era_schedule::EraSchedule,
@@ -406,29 +458,85 @@ mod tests {
         );
     }
 
-    #[test]
-    fn slot_to_epoch_shelley_start() {
-        assert_eq!(slot_to_epoch(SlotNo(4_492_800)), Some(EpochNo(208)));
+    /// P5: the mainnet slot->epoch mapping these tests cover is unchanged; only its ENTRY POINT moved.
+    /// `slot_to_epoch` applied the mainnet constants to any venue; the schedule cannot, because a
+    /// caller must name which schedule it means.
+    fn mainnet_epoch_of(slot: SlotNo) -> Option<EpochNo> {
+        mainnet_shelley_schedule().locate(slot).ok().map(|l| l.epoch)
     }
 
     #[test]
-    fn slot_to_epoch_mid_epoch() {
+    fn mainnet_epoch_at_shelley_start() {
+        assert_eq!(mainnet_epoch_of(SlotNo(4_492_800)), Some(EpochNo(208)));
+    }
+
+    #[test]
+    fn mainnet_epoch_mid_epoch() {
         // Slot 4,924,800 = start of epoch 209
-        assert_eq!(slot_to_epoch(SlotNo(4_924_800)), Some(EpochNo(209)));
+        assert_eq!(mainnet_epoch_of(SlotNo(4_924_800)), Some(EpochNo(209)));
         // One slot before = still epoch 208
-        assert_eq!(slot_to_epoch(SlotNo(4_924_799)), Some(EpochNo(208)));
+        assert_eq!(mainnet_epoch_of(SlotNo(4_924_799)), Some(EpochNo(208)));
     }
 
     #[test]
-    fn slot_to_epoch_allegra() {
+    fn mainnet_epoch_allegra() {
         // Allegra epoch 236 starts at 4,492,800 + 28*432,000 = 16,588,800
-        assert_eq!(slot_to_epoch(SlotNo(16_588_800)), Some(EpochNo(236)));
+        assert_eq!(mainnet_epoch_of(SlotNo(16_588_800)), Some(EpochNo(236)));
     }
 
     #[test]
-    fn slot_to_epoch_pre_shelley() {
-        assert_eq!(slot_to_epoch(SlotNo(0)), None);
-        assert_eq!(slot_to_epoch(SlotNo(4_492_799)), None);
+    fn mainnet_epoch_pre_shelley() {
+        assert_eq!(mainnet_epoch_of(SlotNo(0)), None);
+        assert_eq!(mainnet_epoch_of(SlotNo(4_492_799)), None);
+    }
+
+    /// DC-EPOCH-36 CE-P5-1: a STALE ledger epoch (the P4 shape) is rejected.
+    #[test]
+    fn epoch_agreement_rejects_a_stale_ledger_epoch() {
+        let err =
+            check_epoch_agreement(EpochNo(208), SlotNo(4_924_800), &mainnet_shelley_schedule())
+                .expect_err("ledger 208 vs schedule 209 must fail closed");
+        assert_eq!(err.ledger_epoch, EpochNo(208));
+        assert_eq!(err.schedule_epoch, EpochNo(209));
+        assert_eq!(err.slot, SlotNo(4_924_800));
+    }
+
+    /// DC-EPOCH-36 CE-P5-1: the OTHER direction — a ledger AHEAD of the schedule. This is the case
+    /// `detect_epoch_transition` is structurally blind to, and the reason the invariant is not just a
+    /// restatement of the detection.
+    #[test]
+    fn epoch_agreement_rejects_a_ledger_ahead_of_the_schedule() {
+        let sched = mainnet_shelley_schedule();
+        assert_eq!(
+            detect_epoch_transition(EpochNo(999), SlotNo(4_500_000), &sched),
+            None,
+            "detection cannot see a ledger ahead of the schedule"
+        );
+        let err = check_epoch_agreement(EpochNo(999), SlotNo(4_500_000), &sched)
+            .expect_err("a ledger ahead of the schedule must fail closed");
+        assert_eq!(err.ledger_epoch, EpochNo(999));
+        assert_eq!(err.schedule_epoch, EpochNo(208));
+    }
+
+    /// DC-EPOCH-36 CE-P5-1: agreement passes.
+    #[test]
+    fn epoch_agreement_accepts_agreement() {
+        assert!(check_epoch_agreement(
+            EpochNo(208),
+            SlotNo(4_500_000),
+            &mainnet_shelley_schedule()
+        )
+        .is_ok());
+    }
+
+    /// DC-EPOCH-36 CE-P5-2: an UNLOCATABLE slot (pre-Shelley on the mainnet schedule) is
+    /// unverifiable, NOT violated — behaviour identical to pre-P5.
+    #[test]
+    fn epoch_agreement_is_silent_on_an_unlocatable_slot() {
+        assert!(
+            check_epoch_agreement(EpochNo(1), SlotNo(0), &mainnet_shelley_schedule()).is_ok(),
+            "a slot the schedule cannot locate makes the invariant unverifiable, not violated"
+        );
     }
 
     #[test]

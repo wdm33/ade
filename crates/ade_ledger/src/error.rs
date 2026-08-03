@@ -81,6 +81,12 @@ pub enum LedgerError {
     /// verbatim (action id + reason preserved, never collapsed to a string). (CRE S4.3.)
     GovernanceBoundaryTerminal(crate::governance::GovernanceTerminal),
 
+    /// The ledger epoch disagreed with the venue era schedule for the block's slot AFTER the epoch-boundary
+    /// decision (P5, DC-EPOCH-36) — a durable-state contradiction, so the apply halts with ZERO mutation.
+    /// Carries both epochs and the slot verbatim. P4 (`e1de7a2e`) is the case this exists to make loud:
+    /// without it a venue-wrong epoch derivation freezes the ledger silently for a store's entire life.
+    EpochAgreement(crate::state::EpochAgreementViolation),
+
     // Late-era state-backed validation (Alonzo+) — O-27 obligations
     BadInputs(BadInputsError),
     NoCollateralInputs,
@@ -673,6 +679,21 @@ impl core::fmt::Display for LedgerError {
             }
             LedgerError::GovernanceBoundaryTerminal(t) => {
                 write!(f, "conway governance epoch boundary terminal: {:?}", t)
+            }
+            LedgerError::EpochAgreement(e) => {
+                write!(
+                    f,
+                    "epoch disagreement at slot {}: ledger epoch {} but the venue era schedule says {} \
+                     (DC-EPOCH-36) -- the ledger is {} the schedule",
+                    e.slot.0,
+                    e.ledger_epoch.0,
+                    e.schedule_epoch.0,
+                    if e.ledger_epoch.0 < e.schedule_epoch.0 {
+                        "BEHIND"
+                    } else {
+                        "AHEAD OF"
+                    }
+                )
             }
             LedgerError::InsufficientCollateral(e) => {
                 write!(

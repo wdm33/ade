@@ -120,16 +120,8 @@ pub fn apply_block_with_accounting(
     // Check for epoch boundary, capture accounting if it fires. Routes through THE dispatcher
     // (RVBP B1): a track_utxo=false Conway follower crosses reduced (no accounting); everything
     // else runs the full boundary. This is the same dispatch the two live crossers use.
-    let mut accounting = None;
-    let pre_boundary_state = if let Some(new_epoch) =
-        crate::state::detect_epoch_transition(state.epoch_state.epoch, slot, era_schedule)
-    {
-        let (new_state, acct) = dispatch_epoch_boundary(state, new_epoch)?;
-        accounting = acct;
-        new_state
-    } else {
-        state.clone()
-    };
+    let (pre_boundary_state, accounting) =
+        cross_epoch_boundary_for_slot(state, slot, era_schedule)?;
 
     // Apply block normally on the (possibly post-boundary) state
     let (final_state, verdict) =
@@ -176,6 +168,33 @@ pub fn apply_reduced_epoch_boundary(state: &LedgerState, new_epoch: ade_types::E
 /// `apply_shelley_era_block_classified`) and the accounting entry point route through THIS function, so
 /// no production `track_utxo=false` Conway path can reach the full boundary. Returns the post-boundary
 /// state and the accounting (`None` on the reduced plane — there is no authoritative accounting to emit).
+/// Cross the epoch boundary due for a block at `slot`, if any, and then ENFORCE the epoch-agreement
+/// invariant (P5, DC-EPOCH-36). Returns the (possibly unchanged) state and any boundary accounting.
+///
+/// **This is the SOLE non-test caller of `detect_epoch_transition`**, and that is the point. Detection
+/// fires only on `schedule > ledger`, so it cannot see a ledger AHEAD of the schedule; pairing it with
+/// [`crate::state::check_epoch_agreement`] here — rather than offering the check as something each
+/// call site must remember — is what makes the pairing unforgettable. Three sites open-coded
+/// detect-then-dispatch before this existed; a fourth that forgot the check would silently reopen the
+/// P4 hole. `ci/ci_check_epoch_agreement.sh` enforces the single-caller invariant mechanically.
+///
+/// The check is a POST-condition: the epoch legitimately changes during this function, so it runs
+/// after any boundary application, never before.
+fn cross_epoch_boundary_for_slot(
+    state: &LedgerState,
+    slot: SlotNo,
+    era_schedule: &ade_core::consensus::era_schedule::EraSchedule,
+) -> Result<(LedgerState, Option<EpochBoundaryAccounting>), LedgerError> {
+    let crossed =
+        match crate::state::detect_epoch_transition(state.epoch_state.epoch, slot, era_schedule) {
+            Some(new_epoch) => dispatch_epoch_boundary(state, new_epoch)?,
+            None => (state.clone(), None),
+        };
+    crate::state::check_epoch_agreement(crossed.0.epoch_state.epoch, slot, era_schedule)
+        .map_err(LedgerError::EpochAgreement)?;
+    Ok(crossed)
+}
+
 fn dispatch_epoch_boundary(
     state: &LedgerState,
     new_epoch: ade_types::EpochNo,
@@ -301,16 +320,11 @@ fn apply_shelley_era_block_with_verdicts(
 ) -> Result<BlockApplyResult, LedgerError> {
     let slot = SlotNo(block.header.body.slot);
 
-    let mut current_state = state.clone();
-    if let Some(new_epoch) =
-        crate::state::detect_epoch_transition(current_state.epoch_state.epoch, slot, era_schedule)
-    {
-        // RVBP B1: dispatch by validation plane BEFORE full boundary execution. A track_utxo=false Conway
-        // follower crosses via the reduced projection (cert/gov/snapshots = ReducedUnavailable) and never
-        // reaches the full reward/pot/POOLREAP/gov boundary — that authority is the accumulator's alone.
-        let (new_state, _accounting) = dispatch_epoch_boundary(&current_state, new_epoch)?;
-        current_state = new_state;
-    }
+    // RVBP B1: dispatch by validation plane BEFORE full boundary execution. A track_utxo=false Conway
+    // follower crosses via the reduced projection (cert/gov/snapshots = ReducedUnavailable) and never
+    // reaches the full reward/pot/POOLREAP/gov boundary — that authority is the accumulator's alone.
+    // P5: routed through the single crossing point, so the epoch-agreement post-condition applies here too.
+    let (current_state, _accounting) = cross_epoch_boundary_for_slot(state, slot, era_schedule)?;
 
     let mut verdict = decode_validate_tx_bodies(block, era)?;
 
@@ -392,17 +406,12 @@ fn apply_shelley_era_block_classified(
 ) -> Result<(LedgerState, BlockVerdict), LedgerError> {
     let slot = SlotNo(block.header.body.slot);
 
-    // Detect epoch transition: if this block's slot falls in a new epoch,
-    // apply the epoch boundary transition before processing the block.
-    let mut current_state = state.clone();
-    if let Some(new_epoch) =
-        crate::state::detect_epoch_transition(current_state.epoch_state.epoch, slot, era_schedule)
-    {
-        // RVBP B1: dispatch by validation plane BEFORE full boundary execution — a track_utxo=false Conway
-        // follower crosses via the reduced projection and never reaches the full boundary (accumulator authority).
-        let (new_state, _accounting) = dispatch_epoch_boundary(&current_state, new_epoch)?;
-        current_state = new_state;
-    }
+    // Detect epoch transition: if this block's slot falls in a new epoch, apply the epoch boundary
+    // transition before processing the block.
+    // RVBP B1: dispatch by validation plane BEFORE full boundary execution — a track_utxo=false Conway
+    // follower crosses via the reduced projection and never reaches the full boundary (accumulator authority).
+    // P5: routed through the single crossing point, so the epoch-agreement post-condition applies here too.
+    let (current_state, _accounting) = cross_epoch_boundary_for_slot(state, slot, era_schedule)?;
 
     let mut verdict = decode_validate_tx_bodies(block, era)?;
 

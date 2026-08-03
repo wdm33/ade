@@ -11,7 +11,7 @@
 
 use ade_ledger::epoch::EpochStakeSnapshots;
 use ade_ledger::rules::apply_block_with_verdicts;
-use ade_ledger::state::{slot_to_epoch, LedgerState};
+use ade_ledger::state::{mainnet_shelley_schedule, LedgerState};
 use ade_types::{CardanoEra, EpochNo, SlotNo};
 
 // The REAL Conway block captured from the live preprod peer (public chain data), reused from the ade_node
@@ -36,7 +36,10 @@ fn inner_conway_block() -> (Vec<u8>, u64) {
 #[test]
 fn live_follower_path_crosses_reduced_at_conway_boundary() {
     let (inner, slot) = inner_conway_block();
-    let block_epoch = slot_to_epoch(SlotNo(slot)).expect("the fixture slot maps to an epoch");
+    let block_epoch = mainnet_shelley_schedule()
+        .locate(SlotNo(slot))
+        .expect("the fixture slot maps to an epoch")
+        .epoch;
     assert!(block_epoch.0 >= 1, "the block epoch must allow a one-epoch-behind seed");
 
     // A reduced follower: track_utxo=false Conway, positioned ONE epoch behind the block so the crossing fires.
@@ -54,7 +57,7 @@ fn live_follower_path_crosses_reduced_at_conway_boundary() {
         "the seed gov is authoritative before crossing"
     );
 
-    let result = apply_block_with_verdicts(&state, CardanoEra::Conway, &inner, &ade_ledger::state::mainnet_shelley_schedule())
+    let result = apply_block_with_verdicts(&state, CardanoEra::Conway, &inner, &mainnet_shelley_schedule())
         .expect("the live follower path applies the boundary-crossing block");
 
     // The reduced dispatch fired on the REAL follower path — no fabricated authority survives the crossing.
@@ -83,12 +86,15 @@ fn live_follower_path_crosses_reduced_at_conway_boundary() {
 /// tests below). A track_utxo=false Conway follower one epoch behind the fixture block, crossed forward.
 fn crossed_reduced_state() -> LedgerState {
     let (inner, slot) = inner_conway_block();
-    let block_epoch = slot_to_epoch(SlotNo(slot)).expect("the fixture slot maps to an epoch");
+    let block_epoch = mainnet_shelley_schedule()
+        .locate(SlotNo(slot))
+        .expect("the fixture slot maps to an epoch")
+        .epoch;
     let mut state = LedgerState::new(CardanoEra::Conway);
     state.track_utxo = false;
     state.epoch_state.epoch = EpochNo(block_epoch.0 - 1);
     state.epoch_state.slot = SlotNo(slot.saturating_sub(1));
-    apply_block_with_verdicts(&state, CardanoEra::Conway, &inner, &ade_ledger::state::mainnet_shelley_schedule())
+    apply_block_with_verdicts(&state, CardanoEra::Conway, &inner, &mainnet_shelley_schedule())
         .expect("the live follower path applies the boundary-crossing block")
         .new_state
 }
@@ -137,7 +143,10 @@ fn reduced_continuation_full_access_fails_closed() {
 #[test]
 fn live_follower_within_epoch_keeps_authoritative_seed() {
     let (inner, slot) = inner_conway_block();
-    let block_epoch = slot_to_epoch(SlotNo(slot)).expect("the fixture slot maps to an epoch");
+    let block_epoch = mainnet_shelley_schedule()
+        .locate(SlotNo(slot))
+        .expect("the fixture slot maps to an epoch")
+        .epoch;
 
     // SAME epoch as the block -> detect_epoch_transition returns None -> no boundary.
     let mut state = LedgerState::new(CardanoEra::Conway);
@@ -145,7 +154,7 @@ fn live_follower_within_epoch_keeps_authoritative_seed() {
     state.epoch_state.epoch = block_epoch;
     state.epoch_state.slot = SlotNo(slot.saturating_sub(1));
 
-    let result = apply_block_with_verdicts(&state, CardanoEra::Conway, &inner, &ade_ledger::state::mainnet_shelley_schedule())
+    let result = apply_block_with_verdicts(&state, CardanoEra::Conway, &inner, &mainnet_shelley_schedule())
         .expect("the live follower path applies the within-epoch block");
 
     assert!(
