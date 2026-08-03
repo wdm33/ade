@@ -863,7 +863,43 @@ where
         if should_capture {
             PersistentSnapshotCache::new(chaindb)
                 .capture(tip.slot, &state.receive.ledger, &state.receive.chain_dep)
-                .map_err(|e| NodeSyncError::Capture(format!("{e:?}")))?;
+                .map_err(|e| {
+                    // EMIT-ONLY (P2): `ReducedStateNotSerializable` names the RVBP guard but not WHICH
+                    // projection is reduced, nor the epoch the state believes it is in. Both are needed
+                    // to tell "arrived reduced from bootstrap" from "went reduced at a boundary
+                    // crossing" -- and a wrong answer there picks the wrong fix entirely. No behaviour
+                    // change: this only annotates an error already being returned.
+                    let l = &state.receive.ledger;
+                    let red = |b: bool| if b { "REDUCED" } else { "authoritative" };
+                    let cert_red = matches!(
+                        l.cert_state,
+                        ade_ledger::state::CertStateProjection::ReducedUnavailable
+                    );
+                    let gov_red = matches!(
+                        l.gov_state,
+                        ade_ledger::state::GovStateProjection::ReducedUnavailable
+                    );
+                    let snap_red = matches!(
+                        l.epoch_state.snapshots,
+                        ade_ledger::epoch::EpochStakeSnapshots::ReducedUnavailable
+                    );
+                    crate::node_log!(
+                        "capture-refused: tip_slot={} ledger_epoch={} track_utxo={} \
+                         cert={} gov={} snapshots={}",
+                        tip.slot.0,
+                        l.epoch_state.epoch.0,
+                        l.track_utxo,
+                        red(cert_red),
+                        red(gov_red),
+                        if snap_red { "REDUCED" } else { "present" },
+                    );
+                    crate::node_log!(
+                        "capture-refused-geometry: schedule_locate_epoch={:?} tip_slot={}",
+                        era_schedule.locate(tip.slot).ok().map(|x| x.epoch.0),
+                        tip.slot.0
+                    );
+                    NodeSyncError::Capture(format!("{e:?}"))
+                })?;
             prune_recovery_checkpoints(chaindb);
         }
     }
