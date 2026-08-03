@@ -113,9 +113,34 @@ That is checkable, self-validating, and cannot silently accept a certificate for
 Branching on `element[0]` width (28 vs 32) alone would make the symptom disappear while accepting
 whatever happened to be there; **that is not the fix.**
 
-Still to confirm before implementing: whether `future_pools` is consumed anywhere that would change
-authoritative output (it feeds `future_pool_count` in the probe at line 925), and whether any other
-Conway state field carries a CDDL sub-structure with the same latent hazard.
+### `future_pools` is AUTHORITATIVE, not probe-only — the fix needs a real proof
+
+I expected this to be probe-only (`future_pool_count`). It is not:
+
+| site | effect |
+|---|---|
+| `delegation.rs:317`, `rules.rs:1382` | `std::mem::take(&mut cert.pool.future_pools)` — **adopted into the ACTIVE pool set at the epoch boundary** |
+| `snapshot/cert_state.rs:109` | encoded into the durable **cert-state snapshot** (ECA-0a) — part of the fingerprint |
+| `delegation.rs:887` | the staged entry's **`vrf_hash`** is what gets adopted |
+
+So a mis-decoded future pool would install a wrong **VRF keyhash** into the active pool params at
+the next boundary — reaching leader validation for that pool via the frozen-leadership
+`registered_pool_vrfs` — and would change the cert-state fingerprint, i.e. **replay divergence**.
+
+Consequences for the fix:
+
+- It is a **consensus-authoritative** change, not a decode nicety. It needs byte-exactness against a
+  real preprod state, not just "it parses".
+- The operator-equals-map-key check is therefore a **hard requirement**, not a nicety: it is the only
+  self-validating guard that the value belongs to the pool it is filed under.
+- A "skip the future-pools map" shortcut is **NOT acceptable** — it would silently drop a pending
+  re-registration and diverge at the next boundary adoption.
+- Vindicates not patching this against the forge-window clock.
+
+**Still open:** whether any other Conway state field carries a CDDL sub-structure with the same
+latent hazard — i.e. a collection that is empty on preview and non-empty elsewhere. The general
+lesson is that *an empty collection on one venue hides its element encoding entirely*, so
+"decodes on preview" is not evidence about any map preview happens to keep empty.
 
 ## Impact
 
