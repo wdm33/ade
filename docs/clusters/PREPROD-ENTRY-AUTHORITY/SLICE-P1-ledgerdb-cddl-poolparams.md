@@ -70,16 +70,52 @@ into a byte-level diagnosis, and it made two of my own hypotheses falsifiable:
 - *"the two venues' snapshots use different node-release encodings"* — **wrong**; both use shape A
   for the pool map. The difference is one extra certificate, not a format revision.
 
-## What is NOT yet known (the fix cannot be chosen until it is)
+## RESOLVED — the field is `psFutureStakePoolParams`, confirmed by the decoder's own code
 
-- **Which state field** holds the shape-B entry. It must be identified, not guessed — the fix
-  differs entirely between "a pending pool registration in a cert queue", "a governance proposal",
-  and "a stashed/future pool params map".
-- Whether that field is currently **skipped, mis-skipped, or read** by the decoder.
-- Whether other Conway state fields carry CDDL sub-structures with the same hazard.
+Structural walk of the snapshot located the entry at
+`root[1]/[0]/[6]/[1]/[1]/[1]/[3]/[1]/[0]/[1]/[2]` — i.e. Conway era → NewEpochState[3]=EpochState →
+esLState → CertState → **PState[2]**. Both venues agree on the shape and differ in exactly one child:
 
-Branching on `element[0]` width (28 vs 32) would make the symptom disappear without answering any of
-these, and would silently accept a certificate as a registered pool. **That is not the fix.**
+| PState child | preprod | preview |
+|---|---|---|
+| `[0]` (skipped, 32-byte-key map) | `map(indef)` | `map(indef)` |
+| `[1]` psStakePoolParams | `map(indef)` — 559 shape-A | `map(indef)` — 713 shape-A |
+| **`[2]` psFutureStakePoolParams** | **`map(1)`** — one shape-B | **`map(0)`** — empty |
+| `[3]` psRetiring | `map(2)` | `map(1)` |
+
+And `ledgerdb_state.rs:942` applies the **same reader to both maps**:
+
+```rust
+expect_array(d, o, 4, "PState")?;
+skip_item(d, o)?;                          // [0]
+let pools        = read_pool_map(d, o)?;   // [1] psStakePoolParams       -> shape A, works
+let future_pools = read_pool_map(d, o)?;   // [2] psFutureStakePoolParams -> shape B, FAILS
+let retiring     = read_retiring(d, o)?;   // [3] psRetiring
+```
+
+**The two maps do not share a value encoding.** `psStakePoolParams` holds the LedgerDB-internal form
+(`array(10)`, vrf-first, no operator — the map key supplies it). `psFutureStakePoolParams` holds the
+params **as the registration certificate delivered them**: canonical CDDL `array(9)`, operator-first,
+29-byte reward account. Preview's future map is perpetually empty, so the second `read_pool_map` call
+never had to decode a single entry — the bug sat dormant behind an empty collection.
+
+`psFutureStakePoolParams` is the pending pool re-registration set: params that take effect at the
+next epoch boundary. Exactly one preprod pool currently has one; no preview pool does.
+
+## Fix shape (specified, NOT yet implemented)
+
+`read_pool_map` must stop being used for both. The future-pools map needs its own reader for the CDDL
+form, with a **verifiable** safety property rather than a width sniff:
+
+> the `operator` inside the value MUST equal the map key — otherwise reject.
+
+That is checkable, self-validating, and cannot silently accept a certificate for the wrong pool.
+Branching on `element[0]` width (28 vs 32) alone would make the symptom disappear while accepting
+whatever happened to be there; **that is not the fix.**
+
+Still to confirm before implementing: whether `future_pools` is consumed anywhere that would change
+authoritative output (it feeds `future_pool_count` in the probe at line 925), and whether any other
+Conway state field carries a CDDL sub-structure with the same latent hazard.
 
 ## Impact
 
