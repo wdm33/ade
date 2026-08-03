@@ -262,6 +262,46 @@ Registry: `DC-EPOCH-34` (settled-triple integrity — fingerprint-bound, never t
 CE-RF-1..4 and CE-RF-6 exist as tests **and** the CI gate lands; CE-RF-5 is supporting live
 evidence, never the reason.
 
+## IMPLEMENTED 2026-08-03 — CE-RF-6 then RF-1, in the required order
+
+**CE-RF-6 first** (`a6d584e2`, `DC-EPOCH-34`) — the settled triple is fingerprint-bound and verified
+before any restore. Landed as the hard gate, additive only.
+
+**RF-1 second** (`DC-EPOCH-35`) — after the ChainDb rollback COMMITS, the settled point is re-proved
+against the chain as it now stands and the anchor is re-established there:
+
+```
+pre-clear (anchor cleared)  ->  apply_chain_event(RolledBack)  ->  re-certify + re-anchor
+        [S5 crash window, unchanged]        [durable]        [canonical? k-settled? fingerprint? cursor?]
+```
+
+Order is the safety property: the anchor is never carried ACROSS the rollback window, so a crash in
+that window still refolds from canonical. The uncertified window is **closed afterwards, never
+widened**. Any failed proof leaves the anchor absent — the unchanged pre-slice behaviour — so this
+can only ever save refold time.
+
+### Gates, as required
+
+| # | requirement | how it is held |
+|---|---|---|
+| 1 | anchor cleared before the rollback commit | gate asserts `pre-clear < apply_chain_event` line order |
+| 2 | re-certification checks canonical / k-settled / fingerprint | three separate checks; k in **block** units, slot comparison explicitly forbidden |
+| 3 | restored state writes a new `LastAdvancedPoint` | `recertify_settled_anchor_writes_the_anchor_at_the_settled_point` |
+| 4 | next pass does not reset on `AnchorAbsent` | `a_recertified_settled_point_makes_the_next_pass_forward_fold` asserts `ResetAndRefold` **before** and `ForwardFold` **after** — so it cannot pass vacuously |
+| 5 | no bootstrap refold after a successful bounded rewind | same test asserts the accumulator is still at the settled point, not the seed |
+| 6 | final state equals the full-refold result | inherited from `DC-EPOCH-31` (`refold_from_settled_point_equals_fold_from_bootstrap`) — this slice moves only the *starting point* of a deterministic re-derivation |
+
+Negatives, all landing on `reset_to_bootstrap`: corrupt blob / bad fingerprint / point not canonical
+on the new chain / not k-settled against the new tip / missing-or-absent settled triple / cursor not
+at the settled point.
+
+### The gate exists because nothing else catches the worst regression
+
+Deleting the post-commit call **compiles clean and every unit test still passes** — the tests
+exercise the function directly. Only the structural gate catches an unwired or mis-ordered call.
+Three mutations were verified caught: unwiring it, moving it before the commit, and weakening
+`DC-EPOCH-29` (making `reset_to_settled` stop de-certifying) to make re-certification easier.
+
 ## Not claimed
 
 - No claim that this eliminates refolds — only that a refold starts from a bounded, proven baseline.

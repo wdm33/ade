@@ -2543,6 +2543,90 @@ fn accumulator_admit_and_clear_for_rollback(
     Ok(())
 }
 
+/// LIVE-REFOLD-THRASH RF-1 (DC-EPOCH-35): after the ChainDb rollback has COMMITTED, re-certify the
+/// settled rewind point against the POST-rollback canonical chain and re-establish the lineage
+/// anchor there, so the next recovery pass FORWARD-FOLDS from the bounded point instead of reading
+/// an absent anchor and refolding from the bootstrap baseline.
+///
+/// The defect this closes: `reset_to_settled` applies a correct bounded rewind and clears the anchor
+/// (DC-EPOCH-29 — the store must not be lineage authority across the rollback window). The next pass
+/// then reconciles an ABSENT anchor to `ResetAndRefold { AnchorAbsent }` and calls
+/// `reset_to_bootstrap`, which discards the rewind *and deletes the settled triple*, so every
+/// subsequent rollback is unbounded too. Measured live growing 153,565 → 171,449 slots per refold,
+/// until the refold outgrew the inter-rollback interval and the node stopped holding tip at all.
+///
+/// ORDER IS THE SAFETY PROPERTY. The anchor is never carried ACROSS the rollback commit: the
+/// pre-clear still runs first and a crash in that window still refolds from canonical. Only after
+/// the rollback is durable is the point re-proved against the chain AS IT NOW STANDS:
+///
+///  1. **Still canonical** — the settled point's header hash resolves at its slot on the NEW chain.
+///     A hash pins its whole ancestry, so this proves the prefix that produced the stored state is
+///     byte-identical to the current canonical prefix.
+///  2. **Still k-settled** — `k` BLOCKS behind the NEW tip (block units, no ASC assumption).
+///  3. **Integrity** — the CE-RF-6 fingerprint verifies and the cursor sits exactly at the point
+///     (checked store-side by `recertify_settled_anchor`).
+///
+/// Any failure leaves the anchor ABSENT, i.e. exactly today's behaviour: the next pass refolds from
+/// bootstrap. The fallback is always safe, so this can only ever save refold time.
+fn accumulator_recertify_settled_after_rollback(
+    epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
+    chaindb: &dyn ChainDb,
+    policy: &RecoveryAdmissionPolicy,
+) -> Result<(), NodeLifecycleError> {
+    let Some(store) = epoch_accumulator else {
+        return Ok(());
+    };
+    // No settled point (bootstrap reset ran, or none promoted yet) -> nothing to re-certify.
+    let Ok(Some(sp)) = store.settled_rewind_point() else {
+        return Ok(());
+    };
+    // (1) still canonical at its slot on the POST-rollback chain.
+    let canonical = resolve_canonical_point(chaindb, sp.slot)?;
+    let Some(cp) = canonical.filter(|c| c.hash == sp.header_hash) else {
+        crate::node_log!(
+            "epoch-accumulator: settled point {} not canonical after rollback -> anchor stays absent (bootstrap refold)",
+            sp.slot.0
+        );
+        return Ok(());
+    };
+    // (2) still k BLOCKS behind the NEW tip.
+    let Ok(Some(tip)) = chaindb.tip() else {
+        return Ok(());
+    };
+    let Some(tip_pt) = resolve_canonical_point(chaindb, tip.slot)? else {
+        return Ok(());
+    };
+    if cp.block_no.0.saturating_add(policy.security_param.0) > tip_pt.block_no.0 {
+        crate::node_log!(
+            "epoch-accumulator: settled point {} not k-settled against new tip {} -> anchor stays absent",
+            sp.slot.0,
+            tip_pt.block_no.0
+        );
+        return Ok(());
+    }
+    // (3) integrity + cursor, store-side. `None` = refused; anchor stays absent.
+    match store.recertify_settled_anchor() {
+        Ok(Some(p)) => {
+            crate::node_log!(
+                "epoch-accumulator: settled rewind RE-CERTIFIED at {}/{} after rollback -- next pass forward-folds, no bootstrap refold (DC-EPOCH-35)",
+                p.slot.0,
+                p.block_no.0
+            );
+        }
+        Ok(None) => {
+            crate::node_log!(
+                "epoch-accumulator: settled triple failed integrity/cursor re-certification -> anchor stays absent (bootstrap refold)"
+            );
+        }
+        Err(e) => {
+            crate::node_log!(
+                "epoch-accumulator: settled re-certification faulted (observe-only, bootstrap refold): {e:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// ACCUMULATOR-REFOLD-BOUND S1: may the accumulator be rewound to its SETTLED point for this
 /// rollback, instead of all the way to the bootstrap baseline?
 ///
@@ -5904,6 +5988,18 @@ where
     );
     *pending_reselection = false;
     applied.map_err(|e| NodeSyncError::Pump(format!("apply_chain_event: {e:?}")))?;
+    // LIVE-REFOLD-THRASH RF-1 (DC-EPOCH-35): the rollback is now DURABLE. Re-certify the settled
+    // rewind point against the chain as it now stands and re-establish the lineage anchor there, so
+    // the next recovery pass forward-folds from the bounded point instead of reading an absent
+    // anchor and refolding from bootstrap. Strictly AFTER commit -- the anchor is never carried
+    // across the rollback window, so the S5 pre-clear crash-safety property is unchanged. Any
+    // refusal leaves the anchor absent, i.e. exactly the pre-slice behaviour.
+    accumulator_recertify_settled_after_rollback(
+        epoch_accumulator,
+        chaindb,
+        &RecoveryAdmissionPolicy { security_param },
+    )
+    .map_err(|e| NodeSyncError::Pump(format!("settled re-certification: {e:?}")))?;
     // EMIT-ONLY: a followed rollback was previously SILENT, so the `follow:` tip log (which is
     // throttled) was the only hint one had happened -- and it undercounts badly. Without this an
     // operator cannot tell a rollback-driven accumulator reset from a recovery-driven one.
@@ -6876,6 +6972,175 @@ mod tests {
             assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(43_086_000)));
             // The boundary-mark binding was consumed + cleared by the cross.
             assert_eq!(store.boundary_mark_binding().unwrap(), None);
+        }
+
+        // ===== LIVE-REFOLD-THRASH RF-1: post-rollback anchor re-certification (DC-EPOCH-35) =====
+        //
+        // The defect: `reset_to_settled` applies a correct BOUNDED rewind and clears the anchor
+        // (DC-EPOCH-29). The next recovery pass then reconciles an ABSENT anchor to
+        // `ResetAndRefold { AnchorAbsent }` and calls `reset_to_bootstrap`, discarding the rewind AND
+        // deleting the settled triple -- so every later rollback is unbounded too. Measured live
+        // growing 153,565 -> 171,449 slots per refold until the node stopped holding tip at all.
+
+        /// Fold a store to a point and promote it to SETTLED, then rewind to it -- the state the
+        /// re-certification runs against, immediately after a durable rollback.
+        fn settled_and_rewound(tmp: &TempDir, db: &InMemoryChainDb) -> EpochAccumulatorStore {
+            use ade_runtime::chaindb::advance_accumulator_over_chaindb;
+            let s = sealed_store_at_epoch_500(tmp, SlotNo(42_000_000));
+            put_raw(db, 43_000_000);
+            advance_accumulator_over_chaindb(
+                &s,
+                db,
+                &schedule_86k(),
+                SlotNo(42_000_000),
+                SlotNo(43_500_000),
+            )
+            .unwrap();
+            let bn = s
+                .last_advanced_point()
+                .unwrap()
+                .expect("certified")
+                .block_no;
+            assert!(!s.roll_settled_rewind_point(bn, 0).unwrap());
+            assert!(s.roll_settled_rewind_point(bn, 0).unwrap());
+            assert!(s.settled_rewind_point().unwrap().is_some(), "promoted");
+            assert!(s.reset_to_settled().unwrap());
+            // DC-EPOCH-29: uncertified across the rollback window. This is the state the bug leaves
+            // behind permanently, and what re-certification is allowed to close AFTER the commit.
+            assert!(s.last_advanced_point().unwrap().is_none());
+            s
+        }
+
+        /// Gates 3+4 (DC-EPOCH-35): a canonical, k-settled, fingerprint-verified settled point is
+        /// re-certified after the rollback, and the next recovery pass therefore FORWARD-FOLDS
+        /// instead of returning `ResetAndRefold { AnchorAbsent }`.
+        #[test]
+        fn a_recertified_settled_point_makes_the_next_pass_forward_fold() {
+            use ade_ledger::rollback::admission::{reconcile_recovery, RecoveryAction};
+            let tmp = TempDir::new().unwrap();
+            let db = InMemoryChainDb::new();
+            let s = settled_and_rewound(&tmp, &db);
+            let sp = s.settled_rewind_point().unwrap().expect("promoted");
+            // The synthetic fixture reuses ONE raw block, so every block decodes to the same height;
+            // k=0 isolates the lineage/integrity conditions from the height arithmetic, exactly as
+            // `settled_rewind_admission_requires_settled_depth_and_intact_lineage` does. The k-bound
+            // itself is proven by the dedicated negative below.
+            let policy = RecoveryAdmissionPolicy {
+                security_param: SecurityParam(0),
+            };
+
+            // BEFORE: an absent anchor reconciles to ResetAndRefold -- the loop that eats the rewind.
+            let tip_pt = resolve_canonical_point(&db, SlotNo(43_000_000))
+                .unwrap()
+                .unwrap();
+            let seed_pt = resolve_canonical_point(&db, SlotNo(42_000_000))
+                .unwrap()
+                .unwrap_or(CanonicalPoint {
+                    slot: SlotNo(42_000_000),
+                    block_no: BlockNo(0),
+                    hash: Hash32([0u8; 32]),
+                });
+            let canonical = |slot: SlotNo| {
+                resolve_canonical_point(&db, slot)
+                    .ok()
+                    .flatten()
+                    .map(|p| p.hash)
+            };
+            assert!(matches!(
+                reconcile_recovery(None, None, &tip_pt, &seed_pt, 0, canonical),
+                Ok(RecoveryAction::ResetAndRefold { .. })
+            ));
+
+            // Re-certify against the POST-rollback chain.
+            accumulator_recertify_settled_after_rollback(Some(&s), &db, &policy).unwrap();
+
+            // Gate 3: a NEW anchor exists, at the settled point.
+            let anchor = s
+                .last_advanced_point()
+                .unwrap()
+                .expect("re-certification must re-establish the anchor");
+            assert_eq!(anchor.slot, sp.slot);
+
+            // Gate 4: the next pass forward-folds -- no AnchorAbsent reset.
+            let anchor_pt = CanonicalPoint {
+                slot: anchor.slot,
+                block_no: anchor.block_no,
+                hash: anchor.header_hash.clone(),
+            };
+            let durable_at_anchor = resolve_canonical_point(&db, anchor.slot).unwrap();
+            assert_eq!(
+                reconcile_recovery(
+                    Some(&anchor_pt),
+                    durable_at_anchor.as_ref(),
+                    &tip_pt,
+                    &seed_pt,
+                    0,
+                    canonical
+                ),
+                Ok(RecoveryAction::ForwardFold),
+                "a re-certified settled anchor must FORWARD-FOLD, never reset to bootstrap"
+            );
+
+            // Gate 5: the accumulator is still at the settled point, not rewound to the seed.
+            let (slot, _) = s.load_current().unwrap().expect("sealed");
+            assert_eq!(slot, sp.slot, "no bootstrap refold after a bounded rewind");
+        }
+
+        /// NEGATIVE: a settled point the POST-rollback chain has ABANDONED must be refused, leaving
+        /// the anchor absent so the caller refolds from bootstrap. This is the condition that keeps
+        /// the fix safe -- a hash pins its whole ancestry, so re-certifying only when the hash still
+        /// resolves is what proves the stored state matches the current canonical prefix.
+        #[test]
+        fn recertification_refuses_a_settled_point_the_new_chain_abandoned() {
+            let tmp = TempDir::new().unwrap();
+            let db = InMemoryChainDb::new();
+            let s = settled_and_rewound(&tmp, &db);
+            let sp = s.settled_rewind_point().unwrap().expect("promoted");
+
+            // The rollback replaced the block at that slot with a different one.
+            let diverged = InMemoryChainDb::new();
+            diverged
+                .put_block(&StoredBlock {
+                    hash: Hash32([0xEE; 32]),
+                    slot: SlotNo(43_000_000),
+                    bytes: RAW_CONWAY_BLOCK.to_vec(),
+                })
+                .unwrap();
+            assert_ne!(sp.header_hash, Hash32([0xEE; 32]));
+
+            accumulator_recertify_settled_after_rollback(
+                Some(&s),
+                &diverged,
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .unwrap();
+            assert!(
+                s.last_advanced_point().unwrap().is_none(),
+                "an abandoned settled point must NOT be certified as lineage authority"
+            );
+        }
+
+        /// NEGATIVE: a settled point that is no longer `k` blocks behind the NEW tip must be refused
+        /// -- an admissible reorg could still reach it, so it is not a safe baseline.
+        #[test]
+        fn recertification_refuses_a_settled_point_not_k_settled_against_the_new_tip() {
+            let tmp = TempDir::new().unwrap();
+            let db = InMemoryChainDb::new();
+            let s = settled_and_rewound(&tmp, &db);
+
+            // A huge k puts the settled point back inside the reorg window.
+            accumulator_recertify_settled_after_rollback(
+                Some(&s),
+                &db,
+                &RecoveryAdmissionPolicy {
+                    security_param: SecurityParam(1_000_000),
+                },
+            )
+            .unwrap();
+            assert!(
+                s.last_advanced_point().unwrap().is_none(),
+                "a point inside the reorg window must NOT be certified"
+            );
         }
 
         // ===== EVIEW-RECOVERY-LINEAGE R2: a refold must re-seal frozen leadership byte-identically =====

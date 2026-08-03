@@ -901,6 +901,103 @@ impl EpochAccumulatorStore {
         Ok(true)
     }
 
+    /// LIVE-REFOLD-THRASH RF-1 (DC-EPOCH-35): re-establish the lineage anchor AT the settled point,
+    /// AFTER a durable rollback has committed and the caller has re-proved that point against the
+    /// POST-rollback canonical chain.
+    ///
+    /// WHY this is a separate call and not part of `reset_to_settled`: the pre-clear deliberately
+    /// leaves the store UNCERTIFIED across the rollback window (DC-EPOCH-29), so a crash in that
+    /// window refolds from canonical. That property is unchanged and must stay — the anchor is
+    /// never carried ACROSS the rollback commit. This re-certifies only once the rollback is
+    /// durable, so the uncertified window is never widened, merely closed afterwards.
+    ///
+    /// Without this, `reset_to_settled` applies a correct bounded rewind and the very next recovery
+    /// pass reads an absent anchor, returns `ResetAndRefold { AnchorAbsent }`, and calls
+    /// `reset_to_bootstrap` — discarding the rewind AND deleting the settled triple, so every later
+    /// rollback is unbounded too. That loop was measured live growing 153,565 → 171,449 slots.
+    ///
+    /// Fails closed to `Ok(None)` — anchor left ABSENT, next pass refolds from bootstrap exactly as
+    /// today — when the store is unsealed, no settled triple exists, the CE-RF-6 fingerprint is
+    /// absent or mismatched, or the accumulator's own cursor is not sitting exactly at the settled
+    /// point (i.e. the restore did not happen, or something superseded it). The caller owns the
+    /// chain-level proofs (canonical-at-slot, k-settled) because only it holds the ChainDb.
+    pub fn recertify_settled_anchor(
+        &self,
+    ) -> Result<Option<LastAdvancedPoint>, EpochAccumulatorStoreError> {
+        if !self.is_complete()? {
+            return Ok(None);
+        }
+        let point = {
+            let txn = self.db.begin_read().map_err(rerr)?;
+            let meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            let Some(blob) = meta
+                .get(SETTLED_BLOB_KEY)
+                .map_err(rerr)?
+                .map(|v| v.value().to_vec())
+            else {
+                return Ok(None);
+            };
+            let Some(praw) = meta
+                .get(SETTLED_POINT_KEY)
+                .map_err(rerr)?
+                .map(|v| v.value().to_vec())
+            else {
+                return Ok(None);
+            };
+            let lraw = meta
+                .get(SETTLED_LEADERSHIP_KEY)
+                .map_err(rerr)?
+                .map(|v| v.value().to_vec())
+                .unwrap_or_default();
+            // CE-RF-6 (DC-EPOCH-34): the triple must still verify. Certifying an unverified triple
+            // as lineage authority is strictly worse than restoring from one.
+            let seed = meta
+                .get(SEED_SLOT_KEY)
+                .map_err(rerr)?
+                .and_then(|v| v.value().try_into().ok().map(u64::from_be_bytes))
+                .unwrap_or(0);
+            let schema = meta
+                .get(LEADERSHIP_SCHEMA_KEY)
+                .map_err(rerr)?
+                .map(|v| v.value().to_vec())
+                .unwrap_or_default();
+            let Some(stored_fp) = meta
+                .get(SETTLED_FP_KEY)
+                .map_err(rerr)?
+                .map(|v| v.value().to_vec())
+            else {
+                return Ok(None);
+            };
+            if stored_fp.as_slice()
+                != settled_fingerprint(seed, &schema, &praw, &blob, &lraw)
+                    .0
+                    .as_slice()
+            {
+                return Ok(None);
+            }
+            let point = LastAdvancedPoint::decode(&praw)?;
+            // The accumulator must ACTUALLY be at the settled point. If a bootstrap reset ran
+            // instead (or anything else moved the cursor), certifying this point would claim
+            // lineage the stored state does not have.
+            let cursor = meta
+                .get(LAST_SLOT_KEY)
+                .map_err(rerr)?
+                .and_then(|v| v.value().try_into().ok().map(u64::from_be_bytes));
+            if cursor != Some(point.slot.0) {
+                return Ok(None);
+            }
+            point
+        };
+        let txn = self.db.begin_write().map_err(rerr)?;
+        {
+            let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+            meta.insert(LAST_ADVANCED_POINT_KEY, point.encode().as_slice())
+                .map_err(rerr)?;
+        }
+        txn.commit().map_err(rerr)?;
+        Ok(Some(point))
+    }
+
     /// DC-EPOCH-22 (BOUNDARY-ALIGNED-MARK-CAPTURE): durably BIND the boundary-mark witness — the canonical
     /// boundary point `(boundary_slot, boundary_hash)` the co-advancer is about to cross at — in ONE redb
     /// commit, BEFORE the accumulator crosses. The mark VALUE is not stored: it is the deterministic
@@ -1943,6 +2040,113 @@ mod tests {
             base.0,
             settled_fingerprint(100, b"v6", b"point", b"blob", b"lead").0
         );
+    }
+
+    // ===== LIVE-REFOLD-THRASH RF-1: post-rollback anchor re-certification (DC-EPOCH-35) =====
+
+    /// Stage + promote a settled point, then rewind to it -- the exact pre-rollback-commit state the
+    /// re-certification runs against.
+    fn store_rewound_to_settled(tmp: &TempDir) -> EpochAccumulatorStore {
+        const K: u64 = 10;
+        let s = store(tmp);
+        s.seal_bootstrap(&acc_bootstrap(), SlotNo(100)).unwrap();
+        s.advance_with_current_leadership(
+            &acc_advanced(),
+            SlotNo(200),
+            BlockNo(20),
+            Hash32([0xA1; 32]),
+            &distr_at(576),
+        )
+        .unwrap();
+        assert!(!s.roll_settled_rewind_point(BlockNo(20), K).unwrap());
+        assert!(s.roll_settled_rewind_point(BlockNo(30), K).unwrap());
+        assert!(s.reset_to_settled().unwrap());
+        // The pre-clear leaves the store UNCERTIFIED across the rollback window (DC-EPOCH-29).
+        assert!(s.last_advanced_point().unwrap().is_none());
+        s
+    }
+
+    /// Gate 3 (DC-EPOCH-35): re-certification writes a NEW LastAdvancedPoint at the settled point,
+    /// which is what stops the next recovery pass reading an absent anchor.
+    #[test]
+    fn recertify_settled_anchor_writes_the_anchor_at_the_settled_point() {
+        let tmp = TempDir::new().unwrap();
+        let s = store_rewound_to_settled(&tmp);
+
+        let p = s
+            .recertify_settled_anchor()
+            .unwrap()
+            .expect("a canonical, fingerprint-verified settled triple must re-certify");
+        assert_eq!(p.slot, SlotNo(200));
+        let anchor = s
+            .last_advanced_point()
+            .unwrap()
+            .expect("the anchor must now be present -- that is the whole point");
+        assert_eq!(anchor.slot, SlotNo(200));
+        assert_eq!(anchor.block_no, BlockNo(20));
+        assert_eq!(anchor.header_hash, Hash32([0xA1; 32]));
+    }
+
+    /// NEGATIVE: a corrupted triple must NOT be certified as lineage authority. Certifying an
+    /// unverified triple is strictly worse than merely restoring from one, so CE-RF-6's fingerprint
+    /// is re-checked here too rather than assumed from the earlier `reset_to_settled`.
+    #[test]
+    fn recertify_refuses_a_triple_whose_fingerprint_does_not_verify() {
+        for key in [SETTLED_BLOB_KEY, SETTLED_POINT_KEY, SETTLED_LEADERSHIP_KEY] {
+            let tmp = TempDir::new().unwrap();
+            let s = store_rewound_to_settled(&tmp);
+            {
+                let txn = s.db.begin_write().unwrap();
+                {
+                    let mut meta = txn.open_table(META_TABLE).unwrap();
+                    let mut v = meta.get(key).unwrap().map(|x| x.value().to_vec()).unwrap();
+                    let last = v.len() - 1;
+                    v[last] ^= 0x01;
+                    meta.insert(key, v.as_slice()).unwrap();
+                }
+                txn.commit().unwrap();
+            }
+            assert!(
+                s.recertify_settled_anchor().unwrap().is_none(),
+                "a corrupted {key} must refuse re-certification"
+            );
+            assert!(
+                s.last_advanced_point().unwrap().is_none(),
+                "refusing must leave the anchor ABSENT so the next pass refolds from bootstrap"
+            );
+        }
+    }
+
+    /// NEGATIVE: the accumulator must actually BE at the settled point. After a BOOTSTRAP reset the
+    /// cursor is at the seed, so certifying the settled point would claim lineage the stored state
+    /// does not have. (A bootstrap reset also deletes the triple, so this is belt and braces.)
+    #[test]
+    fn recertify_refuses_when_the_cursor_is_not_at_the_settled_point() {
+        let tmp = TempDir::new().unwrap();
+        let s = store_rewound_to_settled(&tmp);
+        // Move the cursor off the settled point without touching the triple.
+        {
+            let txn = s.db.begin_write().unwrap();
+            {
+                let mut meta = txn.open_table(META_TABLE).unwrap();
+                meta.insert(LAST_SLOT_KEY, 999u64.to_be_bytes().as_slice())
+                    .unwrap();
+            }
+            txn.commit().unwrap();
+        }
+        assert!(s.recertify_settled_anchor().unwrap().is_none());
+        assert!(s.last_advanced_point().unwrap().is_none());
+    }
+
+    /// NEGATIVE: no settled triple at all (bootstrap reset ran, or none promoted yet) -> refuse.
+    #[test]
+    fn recertify_refuses_when_no_settled_triple_exists() {
+        let tmp = TempDir::new().unwrap();
+        let s = store_rewound_to_settled(&tmp);
+        s.reset_to_bootstrap().unwrap();
+        assert!(s.settled_rewind_point().unwrap().is_none());
+        assert!(s.recertify_settled_anchor().unwrap().is_none());
+        assert!(s.last_advanced_point().unwrap().is_none());
     }
 
     /// A bootstrap reset discards BOTH rewind buffers -- nothing survives it as a rewind target.

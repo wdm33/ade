@@ -10020,3 +10020,28 @@ status = "enforced"
 evidence_notes = "WHY this is needed before RF-1 and not after: today the recovery path always re-derives the accumulator from the certified baseline, so a silently corrupted settled blob is self-healed by recomputation. RF-1 removes that accidental self-heal on the bounded path by restoring from the triple instead. decode_epoch_accumulator fails closed on malformed bytes, but a flipped bit inside an otherwise valid numeric field decodes cleanly and would be trusted and folded forward from -- and EVIEW-R1/R2 is a live demonstration that a durable store CAN go internally inconsistent and only surface much later at a comparison boundary. The corruption proof flips ONE bit in each triple member in turn and asserts every one is refused AND that refusing leaves the store untouched so the bootstrap fallback stays correct; it was verified to DISCRIMINATE (removing the comparison makes it fail). The binding proof asserts each of the five inputs changes the digest and that length-prefixing prevents ('ab','c') colliding with ('a','bc'). The gate additionally pins STRUCTURE no compiler check covers: domain separation, a versioned domain tag, length-prefixing, write-on-promote, recompute-on-restore, clear-with-the-triple, and let-else on the absent case (a permissive `if let` would verify when present and silently restore when absent). All four of those regressions were mutated and caught."
 introduced_in = "LIVE-REFOLD-THRASH-RF-1"
 strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-35"
+tier = "derived"
+statement = """
+A bounded settled rewind survives the recovery pass that follows a durable rollback. After the
+ChainDb rollback COMMITS -- never before -- the settled point is re-proved against the chain as it
+now stands (still canonical at its slot by header hash, still k BLOCKS behind the NEW tip) and its
+CE-RF-6 fingerprint and cursor are re-verified, and only then is LastAdvancedPoint re-established at
+that point. The next recovery pass therefore ForwardFolds from the bounded baseline instead of
+reading an absent anchor, returning ResetAndRefold{AnchorAbsent} and refolding from bootstrap. The
+S5 pre-clear is unchanged: the anchor is still cleared BEFORE the rollback commits, so a crash in
+that window still refolds from canonical -- the uncertified window is closed afterwards, never
+widened or carried across. Any failed proof leaves the anchor absent, i.e. the unchanged pre-slice
+behaviour, so this can only ever save refold time.
+"""
+source = "docs/clusters/LIVE-REFOLD-THRASH/SLICE-RF-1-settled-rewind-must-survive-recovery.md (INV-RF-1)"
+cross_ref = ["DC-EPOCH-34", "DC-EPOCH-29", "DC-EPOCH-30", "DC-EPOCH-31", "DC-EPOCH-26"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (accumulator_recertify_settled_after_rollback, called in resolve_and_apply_peer_rollback strictly AFTER apply_chain_event) + crates/ade_runtime/src/chaindb/epoch_accumulator_store.rs (recertify_settled_anchor). Gate ci/ci_check_settled_rewind_survives_recovery.sh."
+tests = ["a_recertified_settled_point_makes_the_next_pass_forward_fold", "recertification_refuses_a_settled_point_the_new_chain_abandoned", "recertification_refuses_a_settled_point_not_k_settled_against_the_new_tip", "recertify_settled_anchor_writes_the_anchor_at_the_settled_point", "recertify_refuses_a_triple_whose_fingerprint_does_not_verify", "recertify_refuses_when_the_cursor_is_not_at_the_settled_point", "recertify_refuses_when_no_settled_triple_exists"]
+ci_scripts = ["ci/ci_check_settled_rewind_survives_recovery.sh"]
+status = "enforced"
+evidence_notes = "The defect was measured live on 2026-08-02/03: reset_to_settled applied a correct bounded rewind, the next pass read an absent anchor and called reset_to_bootstrap, which discarded the rewind AND deleted the settled triple -- so every later rollback was unbounded too. Refold distance grew 153,565 -> 155,796 -> 165,210 -> 171,449 slots at ~30 min each until it outgrew the ~20 min inter-rollback interval and the node stopped holding tip at all, which is the DC-EPOCH-30 forge-blocking condition (leadership can never be promoted at a boundary). The positive proof asserts BOTH that an absent anchor reconciles to ResetAndRefold beforehand and that the re-certified anchor reconciles to ForwardFold after, so it cannot pass vacuously; it was verified to DISCRIMINATE (forcing recertify_settled_anchor to refuse makes it fail). CRITICAL gate rationale: deleting the post-commit call entirely COMPILES CLEAN and every unit test still passes, because the tests exercise the function directly -- only the structural gate catches an unwired or mis-ordered call. The gate pins ORDER (pre-clear < rollback commit < re-certify), that reset_to_settled STILL de-certifies (DC-EPOCH-29 not weakened to make this easier), k-settledness in BLOCK units, and fingerprint+cursor re-verification; unwiring, re-ordering before the commit, and weakening DC-EPOCH-29 were each mutated and caught."
+introduced_in = "LIVE-REFOLD-THRASH-RF-1"
+strengthened_in = []
