@@ -4400,6 +4400,220 @@ pub(crate) fn warm_start_recovery(
                 snaps.last().map(|s| s.0),
                 snaps.last().map(|s| wal_tail_slot.0.saturating_sub(s.0)),
             );
+            // EMIT-ONLY: the geometry above says the replay reached the right tip from a
+            // near-by anchor, which leaves the ANCHOR itself as the suspect. Each durable
+            // snapshot has a WAL-recorded expected value: the `post_fp` of the AdmitBlock at
+            // the same slot. A degenerate `materialize_rolled_back_state` AT a snapshot slot
+            // reads that snapshot back with no forward replay and no header-VRF validation,
+            // so this compares the STORED anchor against the ADMITTED ledger, per snapshot,
+            // over the production materialize path. It distinguishes "the forward replay
+            // diverged" from "the replay was correct and started from a poisoned anchor" --
+            // and names WHICH anchors are clean. Bounded by the snapshot retention count and
+            // reached only on an already-terminal fault.
+            let wal_fp_at: BTreeMap<u64, Hash32> = entries
+                .iter()
+                .filter_map(|e| match e {
+                    ade_ledger::wal::WalEntry::AdmitBlock { slot, post_fp, .. } => {
+                        Some((slot.0, post_fp.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let wal_hash_at: BTreeMap<u64, Hash32> = entries
+                .iter()
+                .filter_map(|e| match e {
+                    ade_ledger::wal::WalEntry::AdmitBlock {
+                        slot, block_hash, ..
+                    } => Some((slot.0, block_hash.clone())),
+                    _ => None,
+                })
+                .collect();
+            let probe_reader = PersistentSnapshotCache::new(chaindb);
+            let probe_source = ChainDbBlockSource::new(chaindb);
+            // The replay anchor: the newest snapshot at/below the WAL tail is the one
+            // `materialize_rolled_back_state` actually starts the failing replay from.
+            let anchor = snaps.iter().rev().find(|s| s.0 <= wal_tail_slot.0).copied();
+            if let Some(a) = anchor {
+                let at = TargetPoint {
+                    slot: a,
+                    hash: Hash32([0u8; 32]),
+                };
+                match materialize_rolled_back_state(
+                    at,
+                    &probe_reader,
+                    &probe_source,
+                    &era_schedule,
+                    &ledger_view,
+                    None,
+                ) {
+                    Ok((snap_ledger, _)) => {
+                        let snap_fp = fingerprint(&snap_ledger).combined;
+                        let expected = wal_fp_at.get(&a.0);
+                        crate::node_log!(
+                            "warmstart-snap-probe: slot={} snap_fp={} wal_fp={} verdict={}",
+                            a.0,
+                            hex_prefix8(&snap_fp),
+                            expected.map(hex_prefix8).unwrap_or_else(|| "-".to_string()),
+                            match expected {
+                                None => "no-wal-entry",
+                                Some(w) if *w == snap_fp => "CLEAN",
+                                Some(_) => "POISONED",
+                            },
+                        );
+                    }
+                    Err(e) => crate::node_log!(
+                        "warmstart-snap-probe: slot={} materialize-err={:?}",
+                        a.0,
+                        e
+                    ),
+                }
+                // EMIT-ONLY: the replay reads BLOCK BYTES from the ChainDb, but the WAL is
+                // the record of what was ADMITTED. Recovery only trims orphans ABOVE the
+                // WAL tail (`rollback_to_slot(wal_tail_slot)`), so a block stored below the
+                // tail but never admitted -- the pump writes StoreBlockBytes BEFORE
+                // AppendWal -- survives recovery and would be replayed as if admitted.
+                // Compare the two sets over the replay span directly: no ledger work, just
+                // block reads. An `extra_in_chaindb` slot or a `hash_mismatch` means the
+                // replay is applying a DIFFERENT chain than the WAL recorded.
+                let wal_span: Vec<u64> = wal_hash_at
+                    .range((a.0 + 1)..=wal_tail_slot.0)
+                    .map(|(s, _)| *s)
+                    .collect();
+                match chaindb.range_bytes_capped(SlotNo(a.0 + 1), wal_tail_slot, 4096) {
+                    Ok(range) => {
+                        let mut extra: Vec<u64> = Vec::new();
+                        let mut mismatch: Vec<u64> = Vec::new();
+                        for (slot, bytes) in &range.blocks {
+                            match wal_hash_at.get(&slot.0) {
+                                None => extra.push(slot.0),
+                                Some(w) => {
+                                    let got = decode_block(bytes).ok().map(|d| d.block_hash);
+                                    if got.as_ref() != Some(w) {
+                                        mismatch.push(slot.0);
+                                    }
+                                }
+                            }
+                        }
+                        crate::node_log!(
+                            "warmstart-chain-vs-wal: span=({},{}] chaindb_blocks={} wal_admits={} \
+                             truncated={} extra_in_chaindb={} first_extra={:?} hash_mismatch={} \
+                             first_mismatch={:?}",
+                            a.0,
+                            wal_tail_slot.0,
+                            range.blocks.len(),
+                            wal_span.len(),
+                            range.truncated,
+                            extra.len(),
+                            extra.first(),
+                            mismatch.len(),
+                            mismatch.first(),
+                        );
+                    }
+                    Err(e) => {
+                        crate::node_log!("warmstart-chain-vs-wal: range-err={:?}", e)
+                    }
+                }
+            }
+            // EMIT-ONLY: if the anchors are clean, the divergence is INSIDE the forward
+            // replay, and the useful fact is WHICH block first disagrees. Every admitted
+            // slot in (anchor, wal_tail] has a WAL-recorded `post_fp`, and
+            // `materialize_rolled_back_state` at slot S replays the SAME span the failing
+            // recovery replays, so `materialize(S) == wal_post_fp(S)` is monotone: true up
+            // to the first divergent block, false after. That admits a BINARY SEARCH --
+            // ~log2(n) materializes instead of one per block -- for the first slot where
+            // the warm-start replay stops reproducing live admission. Reached only on an
+            // already-terminal fault.
+            if let Some(anchor) = anchor {
+                let span: Vec<u64> = wal_fp_at
+                    .range((anchor.0 + 1)..=wal_tail_slot.0)
+                    .map(|(s, _)| *s)
+                    .collect();
+                let agrees = |slot: u64| -> Option<bool> {
+                    let at = TargetPoint {
+                        slot: SlotNo(slot),
+                        hash: Hash32([0u8; 32]),
+                    };
+                    let got = materialize_rolled_back_state(
+                        at,
+                        &probe_reader,
+                        &probe_source,
+                        &era_schedule,
+                        &ledger_view,
+                        None,
+                    )
+                    .ok()?;
+                    Some(fingerprint(&got.0).combined == *wal_fp_at.get(&slot)?)
+                };
+                // Invariant: `lo` agrees, `hi` disagrees. Converge on the first disagreeing slot.
+                let (mut lo, mut hi) = (0usize, span.len());
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    match agrees(span[mid]) {
+                        Some(true) => lo = mid + 1,
+                        Some(false) => hi = mid,
+                        None => break,
+                    }
+                }
+                crate::node_log!(
+                    "warmstart-replay-bisect: anchor={} span_blocks={} first_divergent_slot={:?} \
+                     wal_fp_there={:?}",
+                    anchor.0,
+                    span.len(),
+                    span.get(lo),
+                    span.get(lo).and_then(|s| wal_fp_at.get(s)).map(hex_prefix8),
+                );
+                // EMIT-ONLY: the combined fingerprint says THAT the replay diverged, not WHICH
+                // part of the ledger did. `LedgerFingerprint` is a rollup of seven independent
+                // components, so printing them either side of the first divergent block names
+                // the diverging component directly -- e.g. a `utxo` component that MOVES across
+                // the block would mean the replay is mutating the UTxO where live admission
+                // (running track_utxo=false, constant UTxO component) did not. Two materializes.
+                let components = |slot: u64| {
+                    materialize_rolled_back_state(
+                        TargetPoint {
+                            slot: SlotNo(slot),
+                            hash: Hash32([0u8; 32]),
+                        },
+                        &probe_reader,
+                        &probe_source,
+                        &era_schedule,
+                        &ledger_view,
+                        None,
+                    )
+                    .ok()
+                    .map(|(l, _)| (fingerprint(&l), l.epoch_state.epoch.0))
+                };
+                for (tag, slot) in [
+                    ("anchor", Some(anchor.0)),
+                    ("diverged", span.get(lo).copied()),
+                ] {
+                    let Some(slot) = slot else { continue };
+                    match components(slot) {
+                        Some((f, ledger_epoch)) => crate::node_log!(
+                            "warmstart-fp-components: {} slot={} ledger_epoch={} schedule_epoch={:?} \
+                             era={} utxo={} cert={} epoch={} \
+                             snapshots={} pparams={} governance={} combined={}",
+                            tag,
+                            slot,
+                            ledger_epoch,
+                            era_schedule.locate(SlotNo(slot)).ok().map(|l| l.epoch.0),
+                            hex_prefix8(&f.era),
+                            hex_prefix8(&f.utxo),
+                            hex_prefix8(&f.cert),
+                            hex_prefix8(&f.epoch),
+                            hex_prefix8(&f.snapshots),
+                            hex_prefix8(&f.pparams),
+                            hex_prefix8(&f.governance),
+                            hex_prefix8(&f.combined),
+                        ),
+                        None => crate::node_log!(
+                            "warmstart-fp-components: {} slot={} materialize-err",
+                            tag,
+                            slot
+                        ),
+                    }
+                }
+            }
             return Err(NodeLifecycleError::RecoveryAdmission(
                 RecoveryAdmissionFault::FingerprintMismatch {
                     expected: wal_tail_fp,
