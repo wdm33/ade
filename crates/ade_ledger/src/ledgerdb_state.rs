@@ -155,9 +155,17 @@ fn read_u64(d: &[u8], o: &mut usize, what: &str) -> R<u64> {
 }
 
 fn read_fixed_bytes(d: &[u8], o: &mut usize, n: usize, what: &str) -> R<Vec<u8>> {
+    // The read POSITION is part of the diagnosis, not decoration: a fixed-width mismatch almost
+    // always means the cursor is misaligned somewhere UPSTREAM, and the field name alone cannot
+    // distinguish "this field is the wrong width" from "we are not where we think we are". Without
+    // the offset a real ledger-state decode failure is un-locatable in a 32 MB CBOR blob.
+    let at = *o;
     let (b, _) = read_bytes(d, o)?;
     if b.len() != n {
-        return Err(malformed(format!("{what}: byte len {} != {n}", b.len())));
+        return Err(malformed(format!(
+            "{what}: byte len {} != {n} at offset {at}",
+            b.len()
+        )));
     }
     Ok(b)
 }
