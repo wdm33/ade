@@ -4385,6 +4385,21 @@ pub(crate) fn warm_start_recovery(
             // T-REC-05 promoted (S5 2b): a WAL-tail fingerprint disagreement is a durable-state
             // contradiction -- the recovered ledger is NOT replay-equivalent to the admitted chain --
             // so it fails closed as a typed recovery-admission fault, not a generic warm-start string.
+            // EMIT-ONLY: the typed fault names two hashes and nothing about WHERE the replay
+            // diverged. A crash-recovery failure is un-diagnosable without the replay geometry --
+            // which snapshot the forward replay started from, how far it had to go, and where the
+            // WAL tail sits. No behaviour change; this annotates a fault already being returned.
+            let snaps = SnapshotStore::list_snapshot_slots(chaindb).unwrap_or_default();
+            crate::node_log!(
+                "warmstart-fp-mismatch: wal_tail_slot={} admit_count={} recovered_tip={:?} \
+                 snapshots={} newest_snapshot={:?} replay_span_from_newest={:?}",
+                wal_tail_slot.0,
+                admit_count,
+                recovered.tip.as_ref().map(|t| t.slot.0),
+                snaps.len(),
+                snaps.last().map(|s| s.0),
+                snaps.last().map(|s| wal_tail_slot.0.saturating_sub(s.0)),
+            );
             return Err(NodeLifecycleError::RecoveryAdmission(
                 RecoveryAdmissionFault::FingerprintMismatch {
                     expected: wal_tail_fp,
