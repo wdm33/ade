@@ -236,6 +236,75 @@ fn read_pool_params(d: &[u8], o: &mut usize, pool_id: PoolId) -> R<PoolParams> {
     })
 }
 
+/// PREPROD-ENTRY-AUTHORITY P1: decode one `psFutureStakePoolParams` VALUE.
+///
+/// **The future-pools map does NOT share an encoding with `psStakePoolParams`.** The ACTIVE map
+/// holds the LedgerDB-internal form (`array(>=6)`, vrf-first, no operator — the map key supplies it,
+/// reward account as `array(2)[net, hash28]`), read by [`read_pool_params`]. The FUTURE map holds
+/// the params **as the registration certificate delivered them**: canonical CDDL `array(9)`,
+/// operator-first, reward account as a raw 29-byte address.
+///
+/// This was invisible until preprod because **preview keeps this map empty** (`map(0)`), so the
+/// shared reader was never handed an element. An empty collection hides its element encoding
+/// entirely — "decodes on preview" was never evidence about this map.
+///
+/// **SAFETY — the embedded `operator` MUST equal the map key.** `future_pools` is `mem::take`-n and
+/// ADOPTED into the active pool set at the next epoch boundary (its `vrf_hash` then reaches leader
+/// validation via the frozen-leadership `registered_pool_vrfs`) and is encoded into the durable
+/// cert-state snapshot, so a value filed under the wrong pool is a consensus fault, not a cosmetic
+/// one. Discriminating on the first element's WIDTH alone would accept whatever was there; the
+/// operator check is the only self-validating guard.
+///
+/// FAIL-CLOSED on any other shape. Only ONE such entry has ever been observed (preprod, 2026-08-03),
+/// so this models exactly what was seen; an unexpected shape halts loudly rather than being
+/// re-interpreted under a guessed grammar.
+fn read_future_pool_params(d: &[u8], o: &mut usize, pool_id: PoolId) -> R<PoolParams> {
+    let n = array_len(d, o, "futurePoolParams")?;
+    if n < 8 {
+        return Err(malformed(format!("futurePoolParams arity {n} < 8")));
+    }
+    let operator = hash28(read_fixed_bytes(d, o, 28, "futurePoolParams.operator")?);
+    if operator != pool_id.0 {
+        return Err(malformed(format!(
+            "futurePoolParams.operator {:02x?} != map key {:02x?} — a staged re-registration filed \
+             under the wrong pool would install its VRF at the next boundary adoption",
+            &operator.0[..8],
+            &pool_id.0 .0[..8]
+        )));
+    }
+    let vrf = hash32(read_fixed_bytes(d, o, 32, "futurePoolParams.vrf")?);
+    if vrf.0 == [0u8; 32] {
+        return Err(LedgerDbStateError::ZeroVrf(pool_id));
+    }
+    let pledge = Coin(read_u64(d, o, "futurePoolParams.pledge")?);
+    let cost = Coin(read_u64(d, o, "futurePoolParams.cost")?);
+    let (mt, _) = read_tag(d, o)?;
+    if mt != TAG_RATIONAL {
+        return Err(malformed(format!("futurePoolParams.margin tag {mt} != 30")));
+    }
+    expect_array(d, o, 2, "futurePoolParams.margin")?;
+    let mnum = read_u64(d, o, "margin.num")?;
+    let mden = read_u64(d, o, "margin.den")?;
+    // CDDL reward_account is the RAW 29-byte stake address (header byte ‖ 28-byte credential),
+    // not the internal form's `array(2)[net, hash28]`. Kept verbatim: `read_pool_params`
+    // RECONSTRUCTS the same 29 bytes from its split form, so both readers yield one representation.
+    let reward_account = read_fixed_bytes(d, o, 29, "futurePoolParams.rewardAcct")?;
+    let owners = read_hash28_set(d, o, "futurePoolParams.owners")?;
+    // relays, metadata, … are not leadership-relevant.
+    for _ in 7..n {
+        skip_item(d, o)?;
+    }
+    Ok(PoolParams {
+        pool_id,
+        vrf_hash: vrf,
+        pledge,
+        cost,
+        margin: (mnum, mden),
+        reward_account,
+        owners,
+    })
+}
+
 /// Read a set/array of 28-byte hashes (owners). Tolerates the CBOR set tag (258).
 fn read_hash28_set(d: &[u8], o: &mut usize, what: &str) -> R<Vec<Hash28>> {
     if ade_codec::cbor::peek_major(d, *o)? == 6 {
@@ -346,6 +415,88 @@ mod tip_tests {
             StakeCredential::ScriptHash(Hash28([0xbb; 28])),
             "tag 1 must decode to ScriptHash"
         );
+    }
+
+    /// PREPROD-ENTRY-AUTHORITY P1. `psFutureStakePoolParams` carries the CERTIFICATE's canonical
+    /// CDDL form -- `array(9)`, operator-first, reward account as a raw 29-byte address -- NOT the
+    /// LedgerDB-internal form `psStakePoolParams` uses (`array(>=6)`, vrf-first, no operator, reward
+    /// account split as `array(2)[net, hash28]`).
+    ///
+    /// This was invisible for as long as preview was the only bootstrap venue, because preview keeps
+    /// this map EMPTY (`map(0)`) -- an empty collection hides its element encoding entirely, so
+    /// "decodes on preview" was never evidence about it. Preprod has one staged re-registration and
+    /// bootstrap failed closed on it.
+    fn cddl_future_pool(operator: [u8; 28], vrf: [u8; 32]) -> Vec<u8> {
+        let mut v = vec![0x89u8]; // array(9)
+        v.extend_from_slice(&[0x58, 0x1c]); // bytes(28) operator
+        v.extend_from_slice(&operator);
+        v.extend_from_slice(&[0x58, 0x20]); // bytes(32) vrf
+        v.extend_from_slice(&vrf);
+        v.extend_from_slice(&[0x1a, 0x3b, 0x9a, 0xca, 0x00]); // pledge 1_000_000_000
+        v.extend_from_slice(&[0x1a, 0x0a, 0x21, 0xfe, 0x80]); // cost     170_000_000
+        v.extend_from_slice(&[0xd8, 0x1e, 0x82, 0x01, 0x18, 0x19]); // margin tag30 [1, 25]
+        v.extend_from_slice(&[0x58, 0x1d]); // bytes(29) raw reward address
+        v.push(0xe0);
+        v.extend_from_slice(&[0x11; 28]);
+        v.extend_from_slice(&[0xd9, 0x01, 0x02, 0x81, 0x58, 0x1c]); // tag(258) array(1) bytes(28)
+        v.extend_from_slice(&[0x22; 28]);
+        v.extend_from_slice(&[0x80]); // relays []
+        v.push(0xf6); // metadata null
+        v
+    }
+
+    #[test]
+    fn future_pool_params_decodes_the_certificate_cddl_form() {
+        let op = [0xab; 28];
+        let vrf = [0xcd; 32];
+        let bytes = cddl_future_pool(op, vrf);
+        let mut o = 0;
+        let pp = read_future_pool_params(&bytes, &mut o, PoolId(Hash28(op))).expect("CDDL decodes");
+        assert_eq!(
+            pp.vrf_hash,
+            Hash32(vrf),
+            "vrf is element 1, after the operator"
+        );
+        assert_eq!(pp.pledge, Coin(1_000_000_000));
+        assert_eq!(pp.cost, Coin(170_000_000));
+        assert_eq!(pp.margin, (1, 25));
+        // The CDDL reward account is the RAW 29 bytes; `read_pool_params` RECONSTRUCTS the same 29
+        // from its split form, so both readers yield one representation.
+        assert_eq!(pp.reward_account.len(), 29);
+        assert_eq!(pp.reward_account[0], 0xe0);
+        assert_eq!(pp.owners, vec![Hash28([0x22; 28])]);
+        assert_eq!(
+            o,
+            bytes.len(),
+            "the whole value is consumed, cursor stays aligned"
+        );
+    }
+
+    #[test]
+    fn future_pool_params_rejects_an_operator_that_is_not_the_map_key() {
+        // The ONLY self-validating guard that the value belongs to the pool it is filed under. A
+        // width sniff (28 vs 32) alone would accept this. `future_pools` is adopted into the ACTIVE
+        // pool set at the next epoch boundary and its vrf_hash reaches leader validation, so a value
+        // filed under the wrong pool is a consensus fault, not a cosmetic one.
+        let bytes = cddl_future_pool([0xab; 28], [0xcd; 32]);
+        let mut o = 0;
+        let r = read_future_pool_params(&bytes, &mut o, PoolId(Hash28([0x99; 28])));
+        assert!(
+            matches!(r, Err(LedgerDbStateError::MalformedCbor(ref m)) if m.contains("operator")),
+            "a staged re-registration filed under the wrong pool must be REFUSED, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn future_pool_params_refuses_the_internal_form_rather_than_guessing() {
+        // The active map's shape (array(10), vrf-first) handed to the future reader must FAIL CLOSED,
+        // not be re-interpreted under a guessed grammar. Only one CDDL entry has ever been observed
+        // (preprod 2026-08-03), so an unexpected shape halts loudly.
+        let mut v = vec![0x8au8, 0x58, 0x20]; // array(10), bytes(32) vrf FIRST -- internal form
+        v.extend_from_slice(&[0xcd; 32]);
+        let mut o = 0;
+        let r = read_future_pool_params(&v, &mut o, PoolId(Hash28([0xab; 28])));
+        assert!(r.is_err(), "the internal form must not silently decode as CDDL");
     }
 
     #[test]
@@ -943,7 +1094,10 @@ fn read_cert_state(d: &[u8], o: &mut usize) -> R<(PoolState, DelegationState, Bo
     expect_array(d, o, 4, "PState")?;
     skip_item(d, o)?; // PState[0] (32-byte-key map; not the active pool params)
     let pools = read_pool_map(d, o)?;
-    let future_pools = read_pool_map(d, o)?;
+    // P1: psFutureStakePoolParams carries the CERTIFICATE's CDDL form, NOT the internal form the
+    // active map uses. Sharing `read_pool_map` here decoded fine on preview only because preview
+    // keeps this map EMPTY; preprod has one staged re-registration and it failed closed at bootstrap.
+    let future_pools = read_future_pool_map(d, o)?;
     let retiring = read_retiring(d, o)?;
     let pool = PoolState {
         pools,
@@ -1041,6 +1195,20 @@ fn read_vstate(
     // the ratification denominator; discarding it here would force a VState re-decode at S4.
     let num_dormant_epochs = read_u64(d, o, "vsNumDormantEpochs")?;
     Ok((drep_expiry, committee_hot_keys, num_dormant_epochs))
+}
+
+/// P1: decode `psFutureStakePoolParams` = `Map PoolId <CDDL pool_params>`. Separate from
+/// [`read_pool_map`] because the two maps carry DIFFERENT value grammars; see
+/// [`read_future_pool_params`].
+fn read_future_pool_map(d: &[u8], o: &mut usize) -> R<BTreeMap<PoolId, PoolParams>> {
+    let mut out = BTreeMap::new();
+    map_each(d, o, "futurePoolMap", |o| {
+        let pid = PoolId(hash28(read_fixed_bytes(d, o, 28, "futurePoolMap.key")?));
+        let pp = read_future_pool_params(d, o, pid.clone())?;
+        out.insert(pid, pp);
+        Ok(())
+    })?;
+    Ok(out)
 }
 
 /// Decode a `Map PoolId PoolParams` (28-byte pool-id key -> PoolParams array).
