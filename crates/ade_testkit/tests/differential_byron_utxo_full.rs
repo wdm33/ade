@@ -192,7 +192,7 @@ fn byron_utxo_equality_full_1500_blocks() {
         let env = decode_block_envelope(&raw).unwrap();
         let inner = &raw[env.block_start..env.block_end];
 
-        state = apply_block(&state, env.era, inner)
+        state = apply_block(&state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule())
             .unwrap_or_else(|e| panic!("block {filename} rejected: {e}"));
         accepted += 1;
 
@@ -238,7 +238,7 @@ fn byron_full_replay_determinism() {
         let raw = std::fs::read(era_dir.join(filename)).unwrap();
         let env = decode_block_envelope(&raw).unwrap();
         let inner = &raw[env.block_start..env.block_end];
-        state1 = apply_block(&state1, env.era, inner).unwrap();
+        state1 = apply_block(&state1, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()).unwrap();
     }
 
     // Run 2
@@ -249,7 +249,7 @@ fn byron_full_replay_determinism() {
         let raw = std::fs::read(era_dir.join(filename)).unwrap();
         let env = decode_block_envelope(&raw).unwrap();
         let inner = &raw[env.block_start..env.block_end];
-        state2 = apply_block(&state2, env.era, inner).unwrap();
+        state2 = apply_block(&state2, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()).unwrap();
     }
 
     // States must be identical

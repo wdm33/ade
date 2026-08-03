@@ -60,7 +60,7 @@ fn replay_with_epoch_trigger(
         let inner = &raw[env.block_start..env.block_end];
 
         let prev_epoch = state.epoch_state.epoch.0;
-        match apply_block_classified(&state, env.era, inner) {
+        match apply_block_classified(&state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
             Ok((new_state, _)) => {
                 if new_state.epoch_state.epoch.0 != prev_epoch {
                     let summary = EpochBoundarySummary {

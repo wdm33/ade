@@ -30,6 +30,7 @@ pub fn apply_block(
     state: &LedgerState,
     era: CardanoEra,
     block_cbor: &[u8],
+    era_schedule: &ade_core::consensus::era_schedule::EraSchedule,
 ) -> Result<LedgerState, LedgerError> {
     match era {
         CardanoEra::ByronEbb => {
@@ -44,32 +45,32 @@ pub fn apply_block(
         CardanoEra::Shelley => {
             let preserved = shelley::decode_shelley_block(block_cbor)?;
             let block = preserved.decoded();
-            apply_shelley_era_block(state, block, CardanoEra::Shelley)
+            apply_shelley_era_block(state, block, CardanoEra::Shelley, era_schedule)
         }
         CardanoEra::Allegra => {
             let preserved = allegra::decode_allegra_block(block_cbor)?;
             let block = preserved.decoded();
-            apply_shelley_era_block(state, block, CardanoEra::Allegra)
+            apply_shelley_era_block(state, block, CardanoEra::Allegra, era_schedule)
         }
         CardanoEra::Mary => {
             let preserved = mary::decode_mary_block(block_cbor)?;
             let block = preserved.decoded();
-            apply_shelley_era_block(state, block, CardanoEra::Mary)
+            apply_shelley_era_block(state, block, CardanoEra::Mary, era_schedule)
         }
         CardanoEra::Alonzo => {
             let preserved = alonzo::decode_alonzo_block(block_cbor)?;
             let block = preserved.decoded();
-            apply_shelley_era_block(state, block, CardanoEra::Alonzo)
+            apply_shelley_era_block(state, block, CardanoEra::Alonzo, era_schedule)
         }
         CardanoEra::Babbage => {
             let preserved = babbage::decode_babbage_block(block_cbor)?;
             let block = preserved.decoded();
-            apply_shelley_era_block(state, block, CardanoEra::Babbage)
+            apply_shelley_era_block(state, block, CardanoEra::Babbage, era_schedule)
         }
         CardanoEra::Conway => {
             let preserved = conway::decode_conway_block(block_cbor)?;
             let block = preserved.decoded();
-            apply_shelley_era_block(state, block, CardanoEra::Conway)
+            apply_shelley_era_block(state, block, CardanoEra::Conway, era_schedule)
         }
     }
 }
@@ -91,11 +92,12 @@ pub fn apply_block_with_accounting(
     state: &LedgerState,
     era: CardanoEra,
     block_cbor: &[u8],
+    era_schedule: &ade_core::consensus::era_schedule::EraSchedule,
 ) -> Result<(LedgerState, BlockVerdict, Option<EpochBoundaryAccounting>), LedgerError> {
     // Pre-decode the block to get the slot for epoch detection
     let slot = match era {
         CardanoEra::ByronEbb | CardanoEra::ByronRegular => {
-            let (s, v) = apply_block_classified(state, era, block_cbor)?;
+            let (s, v) = apply_block_classified(state, era, block_cbor, era_schedule)?;
             return Ok((s, v, None));
         }
         _ => {
@@ -107,7 +109,7 @@ pub fn apply_block_with_accounting(
                 CardanoEra::Babbage => babbage::decode_babbage_block(block_cbor)?,
                 CardanoEra::Conway => conway::decode_conway_block(block_cbor)?,
                 _ => {
-                    let (s, v) = apply_block_classified(state, era, block_cbor)?;
+                    let (s, v) = apply_block_classified(state, era, block_cbor, era_schedule)?;
                     return Ok((s, v, None));
                 }
             };
@@ -119,9 +121,9 @@ pub fn apply_block_with_accounting(
     // (RVBP B1): a track_utxo=false Conway follower crosses reduced (no accounting); everything
     // else runs the full boundary. This is the same dispatch the two live crossers use.
     let mut accounting = None;
-    let pre_boundary_state = if let Some(new_epoch) = crate::state::detect_epoch_transition(
-        state.epoch_state.epoch, slot,
-    ) {
+    let pre_boundary_state = if let Some(new_epoch) =
+        crate::state::detect_epoch_transition(state.epoch_state.epoch, slot, era_schedule)
+    {
         let (new_state, acct) = dispatch_epoch_boundary(state, new_epoch)?;
         accounting = acct;
         new_state
@@ -130,7 +132,8 @@ pub fn apply_block_with_accounting(
     };
 
     // Apply block normally on the (possibly post-boundary) state
-    let (final_state, verdict) = apply_block_classified(&pre_boundary_state, era, block_cbor)?;
+    let (final_state, verdict) =
+        apply_block_classified(&pre_boundary_state, era, block_cbor, era_schedule)?;
     Ok((final_state, verdict, accounting))
 }
 
@@ -191,6 +194,7 @@ pub fn apply_block_classified(
     state: &LedgerState,
     era: CardanoEra,
     block_cbor: &[u8],
+    era_schedule: &ade_core::consensus::era_schedule::EraSchedule,
 ) -> Result<(LedgerState, BlockVerdict), LedgerError> {
     match era {
         CardanoEra::ByronEbb => Ok((
@@ -214,7 +218,7 @@ pub fn apply_block_classified(
                 CardanoEra::Alonzo => alonzo::decode_alonzo_block(block_cbor)?,
                 CardanoEra::Babbage => babbage::decode_babbage_block(block_cbor)?,
                 CardanoEra::Conway => conway::decode_conway_block(block_cbor)?,
-                _ => return apply_block(state, era, block_cbor).map(|s| (s, BlockVerdict {
+                _ => return apply_block(state, era, block_cbor, era_schedule).map(|s| (s, BlockVerdict {
                     tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0,
                     native_script_passed: 0, native_script_failed: 0,
                     state_backed_phase1_rejected: 0,
@@ -223,7 +227,7 @@ pub fn apply_block_classified(
                 })),
             };
             let block = decoded.decoded();
-            apply_shelley_era_block_classified(state, block, era)
+            apply_shelley_era_block_classified(state, block, era, era_schedule)
         }
     }
 }
@@ -232,8 +236,9 @@ fn apply_shelley_era_block(
     state: &LedgerState,
     block: &ade_types::shelley::block::ShelleyBlock,
     era: CardanoEra,
+    era_schedule: &ade_core::consensus::era_schedule::EraSchedule,
 ) -> Result<LedgerState, LedgerError> {
-    apply_shelley_era_block_classified(state, block, era).map(|(s, _)| s)
+    apply_shelley_era_block_classified(state, block, era, era_schedule).map(|(s, _)| s)
 }
 
 /// Apply a block and return `BlockApplyResult` — state transition,
@@ -251,10 +256,11 @@ pub fn apply_block_with_verdicts(
     state: &LedgerState,
     era: CardanoEra,
     block_cbor: &[u8],
+    era_schedule: &ade_core::consensus::era_schedule::EraSchedule,
 ) -> Result<BlockApplyResult, LedgerError> {
     // For Byron and empty-tx cases, reuse the existing classified path.
     if matches!(era, CardanoEra::ByronEbb | CardanoEra::ByronRegular) {
-        let (new_state, verdict) = apply_block_classified(state, era, block_cbor)?;
+        let (new_state, verdict) = apply_block_classified(state, era, block_cbor, era_schedule)?;
         return Ok(BlockApplyResult {
             new_state,
             verdict,
@@ -273,7 +279,8 @@ pub fn apply_block_with_verdicts(
         CardanoEra::Babbage => babbage::decode_babbage_block(block_cbor)?,
         CardanoEra::Conway => conway::decode_conway_block(block_cbor)?,
         _ => {
-            let (new_state, verdict) = apply_block_classified(state, era, block_cbor)?;
+            let (new_state, verdict) =
+                apply_block_classified(state, era, block_cbor, era_schedule)?;
             return Ok(BlockApplyResult {
                 new_state,
                 verdict,
@@ -283,21 +290,21 @@ pub fn apply_block_with_verdicts(
         }
     };
     let block = decoded.decoded();
-    apply_shelley_era_block_with_verdicts(state, block, era)
+    apply_shelley_era_block_with_verdicts(state, block, era, era_schedule)
 }
 
 fn apply_shelley_era_block_with_verdicts(
     state: &LedgerState,
     block: &ade_types::shelley::block::ShelleyBlock,
     era: CardanoEra,
+    era_schedule: &ade_core::consensus::era_schedule::EraSchedule,
 ) -> Result<BlockApplyResult, LedgerError> {
     let slot = SlotNo(block.header.body.slot);
 
     let mut current_state = state.clone();
-    if let Some(new_epoch) = crate::state::detect_epoch_transition(
-        current_state.epoch_state.epoch,
-        slot,
-    ) {
+    if let Some(new_epoch) =
+        crate::state::detect_epoch_transition(current_state.epoch_state.epoch, slot, era_schedule)
+    {
         // RVBP B1: dispatch by validation plane BEFORE full boundary execution. A track_utxo=false Conway
         // follower crosses via the reduced projection (cert/gov/snapshots = ReducedUnavailable) and never
         // reaches the full reward/pot/POOLREAP/gov boundary — that authority is the accumulator's alone.
@@ -381,16 +388,16 @@ fn apply_shelley_era_block_classified(
     state: &LedgerState,
     block: &ade_types::shelley::block::ShelleyBlock,
     era: CardanoEra,
+    era_schedule: &ade_core::consensus::era_schedule::EraSchedule,
 ) -> Result<(LedgerState, BlockVerdict), LedgerError> {
     let slot = SlotNo(block.header.body.slot);
 
     // Detect epoch transition: if this block's slot falls in a new epoch,
     // apply the epoch boundary transition before processing the block.
     let mut current_state = state.clone();
-    if let Some(new_epoch) = crate::state::detect_epoch_transition(
-        current_state.epoch_state.epoch,
-        slot,
-    ) {
+    if let Some(new_epoch) =
+        crate::state::detect_epoch_transition(current_state.epoch_state.epoch, slot, era_schedule)
+    {
         // RVBP B1: dispatch by validation plane BEFORE full boundary execution — a track_utxo=false Conway
         // follower crosses via the reduced projection and never reaches the full boundary (accumulator authority).
         let (new_state, _accounting) = dispatch_epoch_boundary(&current_state, new_epoch)?;
@@ -2667,7 +2674,8 @@ mod tests {
         let mut buf = Vec::new();
         ebb.ade_encode(&mut buf, &ctx).unwrap();
 
-        let result = apply_block(&state, CardanoEra::ByronEbb, &buf);
+        let sched = crate::state::mainnet_shelley_schedule();
+        let result = apply_block(&state, CardanoEra::ByronEbb, &buf, &sched);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), state);
     }
@@ -2676,8 +2684,9 @@ mod tests {
     fn apply_block_deterministic() {
         // Determinism: same invalid input produces same error both times
         let state = LedgerState::new(CardanoEra::Mary);
-        let result1 = apply_block(&state, CardanoEra::Mary, &[0x83, 0x01, 0x02]);
-        let result2 = apply_block(&state, CardanoEra::Mary, &[0x83, 0x01, 0x02]);
+        let sched = crate::state::mainnet_shelley_schedule();
+        let result1 = apply_block(&state, CardanoEra::Mary, &[0x83, 0x01, 0x02], &sched);
+        let result2 = apply_block(&state, CardanoEra::Mary, &[0x83, 0x01, 0x02], &sched);
         assert_eq!(result1, result2);
     }
 

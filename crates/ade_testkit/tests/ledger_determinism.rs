@@ -62,7 +62,7 @@ fn replay_sequence(
         let env = decode_block_envelope(raw)
             .unwrap_or_else(|e| panic!("envelope decode failed for {filename}: {e}"));
         let inner = &raw[env.block_start..env.block_end];
-        state = apply_block(&state, env.era, inner)
+        state = apply_block(&state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule())
             .unwrap_or_else(|e| panic!("apply_block failed for {filename}: {e}"));
     }
     state

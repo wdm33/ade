@@ -129,7 +129,7 @@ fn block_validity_with_eligibility(
     // Step 5: body authority. The body authority consumes the INNER block
     // (the envelope's `[era, ..]` tag is stripped).
     let inner = &block_cbor[decoded.inner_start..decoded.inner_end];
-    let body = match apply_block_with_verdicts(ledger, decoded.era, inner) {
+    let body = match apply_block_with_verdicts(ledger, decoded.era, inner, era_schedule) {
         Ok(b) => b,
         Err(e) => return invalid(ledger, chain_dep, BlockValidityError::Body(e)),
     };

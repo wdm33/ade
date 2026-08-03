@@ -222,7 +222,7 @@ fn post_block_1_utxo_matches_oracle() {
         conway_deposit_params: None,
     };
 
-    state = ade_ledger::rules::apply_block(&state, env.era, inner).unwrap();
+    state = ade_ledger::rules::apply_block(&state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()).unwrap();
 
     // Compare UTxO counts
     assert_eq!(

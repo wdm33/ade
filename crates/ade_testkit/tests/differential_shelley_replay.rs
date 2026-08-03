@@ -74,7 +74,7 @@ fn shelley_replay_verdict_agreement() {
         let env = decode_block_envelope(&raw).unwrap();
         let inner = &raw[env.block_start..env.block_end];
 
-        match apply_block(&state, env.era, inner) {
+        match apply_block(&state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
             Ok(new_state) => {
                 state = new_state;
                 accepted += 1;
@@ -118,8 +118,8 @@ fn shelley_replay_determinism() {
         let env = decode_block_envelope(&raw).unwrap();
         let inner = &raw[env.block_start..env.block_end];
 
-        let r1 = apply_block(&state1, env.era, inner);
-        let r2 = apply_block(&state2, env.era, inner);
+        let r1 = apply_block(&state1, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule());
+        let r2 = apply_block(&state2, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule());
         assert_eq!(r1, r2);
 
         if let Ok(s) = r1 { state1 = s; }
@@ -145,7 +145,7 @@ fn shelley_slot_progression() {
         let env = decode_block_envelope(&raw).unwrap();
         let inner = &raw[env.block_start..env.block_end];
 
-        match apply_block(&state, env.era, inner) {
+        match apply_block(&state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
             Ok(new_state) => state = new_state,
             Err(_) => break,
         }

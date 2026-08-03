@@ -496,7 +496,10 @@ mod tip_tests {
         v.extend_from_slice(&[0xcd; 32]);
         let mut o = 0;
         let r = read_future_pool_params(&v, &mut o, PoolId(Hash28([0xab; 28])));
-        assert!(r.is_err(), "the internal form must not silently decode as CDDL");
+        assert!(
+            r.is_err(),
+            "the internal form must not silently decode as CDDL"
+        );
     }
 
     #[test]

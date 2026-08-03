@@ -54,7 +54,7 @@ fn live_follower_path_crosses_reduced_at_conway_boundary() {
         "the seed gov is authoritative before crossing"
     );
 
-    let result = apply_block_with_verdicts(&state, CardanoEra::Conway, &inner)
+    let result = apply_block_with_verdicts(&state, CardanoEra::Conway, &inner, &ade_ledger::state::mainnet_shelley_schedule())
         .expect("the live follower path applies the boundary-crossing block");
 
     // The reduced dispatch fired on the REAL follower path — no fabricated authority survives the crossing.
@@ -88,7 +88,7 @@ fn crossed_reduced_state() -> LedgerState {
     state.track_utxo = false;
     state.epoch_state.epoch = EpochNo(block_epoch.0 - 1);
     state.epoch_state.slot = SlotNo(slot.saturating_sub(1));
-    apply_block_with_verdicts(&state, CardanoEra::Conway, &inner)
+    apply_block_with_verdicts(&state, CardanoEra::Conway, &inner, &ade_ledger::state::mainnet_shelley_schedule())
         .expect("the live follower path applies the boundary-crossing block")
         .new_state
 }
@@ -145,7 +145,7 @@ fn live_follower_within_epoch_keeps_authoritative_seed() {
     state.epoch_state.epoch = block_epoch;
     state.epoch_state.slot = SlotNo(slot.saturating_sub(1));
 
-    let result = apply_block_with_verdicts(&state, CardanoEra::Conway, &inner)
+    let result = apply_block_with_verdicts(&state, CardanoEra::Conway, &inner, &ade_ledger::state::mainnet_shelley_schedule())
         .expect("the live follower path applies the within-epoch block");
 
     assert!(

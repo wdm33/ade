@@ -130,7 +130,7 @@ fn emit_first_conway_divergent_tx() {
 
         let pre_state = state.clone();
 
-        let result = match apply_block_with_verdicts(&pre_state, env.era, inner) {
+        let result = match apply_block_with_verdicts(&pre_state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("  apply failed at {filename}: {e}");

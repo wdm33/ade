@@ -55,7 +55,7 @@ fn replay_era(era_name: &'static str, initial_era: CardanoEra) -> ReplayResult {
 
         let inner = &raw[env.block_start..env.block_end];
 
-        match apply_block(&state, env.era, inner) {
+        match apply_block(&state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
             Ok(new_state) => {
                 state = new_state;
                 accepted += 1;

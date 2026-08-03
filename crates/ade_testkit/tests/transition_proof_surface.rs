@@ -103,7 +103,7 @@ fn shelley_allegra_transition_proof_surface() {
         let env = decode_block_envelope(&raw).unwrap();
         let inner = &raw[env.block_start..env.block_end];
 
-        match apply_block_classified(&state, env.era, inner) {
+        match apply_block_classified(&state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
             Ok((new_state, verdict)) => {
                 chain_started = true;
                 state = new_state;
@@ -200,7 +200,7 @@ fn all_transitions_proof_surface_summary() {
             let env = decode_block_envelope(&raw).unwrap();
             let inner = &raw[env.block_start..env.block_end];
 
-            if let Ok((new_state, verdict)) = apply_block_classified(&state, env.era, inner) {
+            if let Ok((new_state, verdict)) = apply_block_classified(&state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
                 state = new_state;
                 applied += 1;
                 total_txs += verdict.tx_count;

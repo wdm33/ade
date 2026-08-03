@@ -64,7 +64,7 @@ fn replay_era(
         let env = decode_block_envelope(&raw).unwrap();
         let inner = &raw[env.block_start..env.block_end];
 
-        match apply_block(&state, env.era, inner) {
+        match apply_block(&state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
             Ok(new_state) => {
                 state = new_state;
                 accepted += 1;
@@ -103,8 +103,8 @@ fn alonzo_replay_determinism() {
         let env = decode_block_envelope(&raw).unwrap();
         let inner = &raw[env.block_start..env.block_end];
 
-        let r1 = apply_block(&s1, env.era, inner);
-        let r2 = apply_block(&s2, env.era, inner);
+        let r1 = apply_block(&s1, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule());
+        let r2 = apply_block(&s2, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule());
         assert_eq!(r1, r2);
         if let Ok(s) = r1 { s1 = s; }
         if let Ok(s) = r2 { s2 = s; }
@@ -137,8 +137,8 @@ fn babbage_replay_determinism() {
         let env = decode_block_envelope(&raw).unwrap();
         let inner = &raw[env.block_start..env.block_end];
 
-        let r1 = apply_block(&s1, env.era, inner);
-        let r2 = apply_block(&s2, env.era, inner);
+        let r1 = apply_block(&s1, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule());
+        let r2 = apply_block(&s2, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule());
         assert_eq!(r1, r2);
         if let Ok(s) = r1 { s1 = s; }
         if let Ok(s) = r2 { s2 = s; }
@@ -171,8 +171,8 @@ fn conway_replay_determinism() {
         let env = decode_block_envelope(&raw).unwrap();
         let inner = &raw[env.block_start..env.block_end];
 
-        let r1 = apply_block(&s1, env.era, inner);
-        let r2 = apply_block(&s2, env.era, inner);
+        let r1 = apply_block(&s1, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule());
+        let r2 = apply_block(&s2, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule());
         assert_eq!(r1, r2);
         if let Ok(s) = r1 { s1 = s; }
         if let Ok(s) = r2 { s2 = s; }

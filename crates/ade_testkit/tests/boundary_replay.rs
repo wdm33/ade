@@ -62,7 +62,7 @@ fn replay_hfc_transition(
 
         era_tags.push((filename.to_string(), env.era.as_u8()));
 
-        match apply_block_classified(&state, env.era, inner) {
+        match apply_block_classified(&state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
             Ok((new_state, _verdict)) => {
                 state = new_state;
                 accepted += 1;
@@ -100,7 +100,7 @@ fn replay_epoch_boundary(dir: &str, era: CardanoEra) -> (usize, usize) {
         let env = decode_block_envelope(&raw).unwrap();
         let inner = &raw[env.block_start..env.block_end];
 
-        match apply_block_classified(&state, env.era, inner) {
+        match apply_block_classified(&state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
             Ok((new_state, _verdict)) => {
                 state = new_state;
                 accepted += 1;

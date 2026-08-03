@@ -83,7 +83,7 @@ fn stateful_boundary_replay(
         let env = decode_block_envelope(&raw).unwrap();
         let inner = &raw[env.block_start..env.block_end];
 
-        match apply_block_classified(&state, env.era, inner) {
+        match apply_block_classified(&state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
             Ok((new_state, _verdict)) => {
                 chain_started = true;
                 state = new_state;

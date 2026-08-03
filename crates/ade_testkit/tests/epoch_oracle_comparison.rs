@@ -211,7 +211,7 @@ fn precise_boundary_comparison_eta_diagnosis() {
         let inner = &raw[env.block_start..env.block_end];
         let era_enum = match era { 3 => ade_types::CardanoEra::Allegra, _ => continue };
 
-        match ade_ledger::rules::apply_block_with_accounting(&state, era_enum, inner) {
+        match ade_ledger::rules::apply_block_with_accounting(&state, era_enum, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
             Ok((new_state, _, acct)) => {
                 if let Some(a) = acct {
                     if boundary_accounting.is_none() {
@@ -762,7 +762,7 @@ fn conway_epoch_508_boundary_comparison() {
             _ => continue,
         };
 
-        match ade_ledger::rules::apply_block_with_accounting(&state, era_enum, inner) {
+        match ade_ledger::rules::apply_block_with_accounting(&state, era_enum, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
             Ok((new_state, _, acct)) => {
                 if let Some(a) = acct {
                     if !boundary_fired {
@@ -1549,7 +1549,7 @@ fn ce71_root_cause_isolation() {
         let inner = &raw[env.block_start..env.block_end];
         let era_enum = match era { 3 => ade_types::CardanoEra::Allegra, _ => continue };
 
-        match ade_ledger::rules::apply_block_with_accounting(&state, era_enum, inner) {
+        match ade_ledger::rules::apply_block_with_accounting(&state, era_enum, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
             Ok((new_state, _, acct)) => {
                 if let Some(a) = acct {
                     if accounting_with_current.is_none() {
@@ -1603,7 +1603,7 @@ fn ce71_root_cause_isolation() {
             let env = ade_codec::cbor::envelope::decode_block_envelope(&raw).unwrap();
             let inner = &raw[env.block_start..env.block_end];
             let era_enum = match era { 3 => ade_types::CardanoEra::Allegra, _ => continue };
-            if let Ok((new_state, _, acct)) = ade_ledger::rules::apply_block_with_accounting(&go_st, era_enum, inner) {
+            if let Ok((new_state, _, acct)) = ade_ledger::rules::apply_block_with_accounting(&go_st, era_enum, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
                 if let Some(a) = acct {
                     if go_accounting.is_none() { go_accounting = Some(a); }
                 }
@@ -2312,7 +2312,7 @@ fn reward_formula_bisection_all_eras() {
                     _ => continue,
                 };
 
-                match ade_ledger::rules::apply_block_with_accounting(&state, era_enum, inner) {
+                match ade_ledger::rules::apply_block_with_accounting(&state, era_enum, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
                     Ok((new_state, _, acct)) => {
                         if let Some(a) = acct {
                             if !boundary_fired {

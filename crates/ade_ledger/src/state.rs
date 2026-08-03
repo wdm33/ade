@@ -313,6 +313,31 @@ pub const SHELLEY_START_SLOT: u64 = 4_492_800;
 pub const SHELLEY_START_EPOCH: u64 = 208;
 pub const SHELLEY_EPOCH_LENGTH: u64 = 432_000;
 
+/// PREPROD-ENTRY-AUTHORITY P3: the MAINNET Shelley schedule, built from the constants above.
+///
+/// These constants describe MAINNET and nothing else. They used to be applied to every venue by
+/// `slot_to_epoch`, which silently produced a fictitious epoch off-mainnet. Boundary detection is now
+/// bound to the caller's `EraSchedule`; this constructor exists so mainnet-shaped callers and the
+/// existing mainnet test corpus keep byte-identical behaviour, and so the constants can only enter a
+/// computation through an explicit, named mainnet schedule rather than by default.
+pub fn mainnet_shelley_schedule() -> ade_core::consensus::era_schedule::EraSchedule {
+    use ade_core::consensus::era_schedule::{BootstrapAnchorHash, EraSchedule, EraSummary};
+    EraSchedule::new(
+        BootstrapAnchorHash(ade_types::Hash32([0u8; 32])),
+        SHELLEY_START_SLOT,
+        vec![EraSummary {
+            randomness_stabilisation_window_slots: None,
+            era: CardanoEra::Shelley,
+            start_slot: SlotNo(SHELLEY_START_SLOT),
+            start_epoch: EpochNo(SHELLEY_START_EPOCH),
+            slot_length_ms: 1_000,
+            epoch_length_slots: SHELLEY_EPOCH_LENGTH as u32,
+            safe_zone_slots: SHELLEY_EPOCH_LENGTH as u32,
+        }],
+    )
+    .expect("mainnet shelley schedule is well-formed")
+}
+
 /// Compute the epoch number for a given slot (Shelley+ only).
 ///
 /// Returns None for pre-Shelley slots.
@@ -330,8 +355,19 @@ pub fn slot_to_epoch(slot: SlotNo) -> Option<EpochNo> {
 ///
 /// Returns Some(new_epoch) if the slot crosses an epoch boundary,
 /// None if it's still in the current epoch.
-pub fn detect_epoch_transition(current_epoch: EpochNo, slot: SlotNo) -> Option<EpochNo> {
-    let new_epoch = slot_to_epoch(slot)?;
+pub fn detect_epoch_transition(
+    current_epoch: EpochNo,
+    slot: SlotNo,
+    era_schedule: &ade_core::consensus::era_schedule::EraSchedule,
+) -> Option<EpochNo> {
+    // PREPROD-ENTRY-AUTHORITY P3: the epoch MUST come from the VENUE's era schedule, never from the
+    // mainnet constants in `slot_to_epoch`. Those constants yield a fictitious epoch off-mainnet
+    // (preprod slot 130,046,891 -> 498 instead of 304), and because this is the trigger for EVERY
+    // ledger boundary application, a fictitious epoch ABOVE the real one declares a phantom boundary,
+    // routes through `apply_reduced_epoch_boundary`, and leaves cert/gov/snapshots permanently
+    // `ReducedUnavailable`. Preview was unaffected only by numeric accident (its fictitious epoch sat
+    // BELOW its real one, so the comparison never fired) -- luck, not correctness.
+    let new_epoch = era_schedule.locate(slot).ok()?.epoch;
     if new_epoch.0 > current_epoch.0 {
         Some(new_epoch)
     } else {
@@ -398,7 +434,7 @@ mod tests {
     #[test]
     fn detect_transition_same_epoch() {
         assert_eq!(
-            detect_epoch_transition(EpochNo(208), SlotNo(4_500_000)),
+            detect_epoch_transition(EpochNo(208), SlotNo(4_500_000), &mainnet_shelley_schedule()),
             None
         );
     }
@@ -406,7 +442,7 @@ mod tests {
     #[test]
     fn detect_transition_new_epoch() {
         assert_eq!(
-            detect_epoch_transition(EpochNo(208), SlotNo(4_924_800)),
+            detect_epoch_transition(EpochNo(208), SlotNo(4_924_800), &mainnet_shelley_schedule()),
             Some(EpochNo(209))
         );
     }
@@ -415,7 +451,7 @@ mod tests {
     fn detect_transition_skip_epoch() {
         // If a slot is 2 epochs ahead (shouldn't happen in practice but test the logic)
         assert_eq!(
-            detect_epoch_transition(EpochNo(208), SlotNo(5_356_800)),
+            detect_epoch_transition(EpochNo(208), SlotNo(5_356_800), &mainnet_shelley_schedule()),
             Some(EpochNo(210))
         );
     }

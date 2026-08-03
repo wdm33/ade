@@ -129,7 +129,7 @@ fn replay_contiguous(
         };
         let inner = &raw[env.block_start..env.block_end];
 
-        match apply_block_with_verdicts(&state, env.era, inner) {
+        match apply_block_with_verdicts(&state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
             Ok(result) => {
                 chain_started = true;
                 tally.blocks_applied += 1;

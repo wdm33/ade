@@ -124,7 +124,7 @@ fn replay_with_verdict_aggregation(
         };
         let inner = &raw[env.block_start..env.block_end];
 
-        match apply_block_classified(&state, env.era, inner) {
+        match apply_block_classified(&state, env.era, inner, &ade_ledger::state::mainnet_shelley_schedule()) {
             Ok((new_state, verdict)) => {
                 chain_started = true;
                 agg.blocks_applied += 1;
