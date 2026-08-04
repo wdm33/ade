@@ -35,6 +35,13 @@ pub enum ChainDbError {
     /// silent mixed-version replay. `found` is 0 if the marker is absent (v1).
     FingerprintVersionMismatch { expected: u32, found: u32 },
 
+    /// PREPROD-ENTRY-AUTHORITY P6 (DC-STORE-10): the durable artifact's AUTHORITY SEMANTICS disagree
+    /// with this binary — its derived bytes were produced by different production rules. Distinct from
+    /// [`ChainDbError::SchemaMismatch`] (byte layout) and [`ChainDbError::FingerprintVersionMismatch`]
+    /// (fingerprint construction): a store can satisfy both of those and still be semantically stale,
+    /// which is exactly what P4 measured. Terminal — the only remediation is re-bootstrap.
+    StoreSemantics(ade_ledger::store_semantics::StoreSemanticsVersionMismatch),
+
     /// Operation invalid for the current state — e.g., rolling back
     /// to a slot beyond the tip, or putting a block whose claimed
     /// slot conflicts with an existing block at that slot.
@@ -57,6 +64,9 @@ impl fmt::Display for ChainDbError {
                 "chaindb fingerprint-version mismatch: expected v{expected}, found v{found} \
                  (v1/unversioned store rejected; a v2 node requires an explicit re-bootstrap)",
             ),
+            // P6: delegate verbatim — the BLUE type owns the operator-facing wording, including WHY
+            // there is no stamp path. The shell must not paraphrase a semantic terminal.
+            ChainDbError::StoreSemantics(e) => write!(f, "{e}"),
             ChainDbError::InvalidOperation(detail) => {
                 write!(f, "chaindb invalid operation: {detail}")
             }

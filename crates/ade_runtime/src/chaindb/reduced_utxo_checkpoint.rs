@@ -39,6 +39,9 @@ use redb::{Database, ReadableTable, TableDefinition};
 const KEY_LEN: usize = 34; // tx_hash(32) ++ index(2 BE)
 const REDUCED_TABLE: TableDefinition<&[u8; KEY_LEN], &[u8]> = TableDefinition::new("reduced_utxo");
 const META_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("reduced_meta");
+/// PREPROD-ENTRY-AUTHORITY P6 (DC-STORE-10): the AUTHORITY-SEMANTICS marker for this artifact.
+/// Records which PRODUCTION rules derived the reduced UTxO plane, not whether its bytes parse.
+const STORE_SEMANTICS_KEY: &str = "store_semantics_version";
 /// value = fingerprint(32) ++ count(8 BE). Present iff the build completed.
 const COMPLETE_KEY: &str = "complete";
 /// S3f-4d-mat-2 (DC-EPOCH-11): the slot of the last block the checkpoint advanced over.
@@ -57,6 +60,10 @@ const FP_DOMAIN: &[u8] = b"eview-reduced-utxo-checkpoint-v1";
 
 #[derive(Debug)]
 pub enum ReducedCheckpointError {
+    /// P6 (DC-STORE-10): this artifact's AUTHORITY SEMANTICS disagree with the binary. Terminal; the
+    /// only remediation is re-bootstrap. A semantically stale checkpoint decodes perfectly, which is
+    /// exactly why a decode-level check cannot substitute for this one.
+    StoreSemantics(ade_ledger::store_semantics::StoreSemanticsVersionMismatch),
     Redb(String),
     /// The checkpoint has no completeness marker (a crashed / partial build).
     Incomplete,
@@ -120,7 +127,52 @@ impl ReducedUtxoCheckpoint {
     /// durability (fsync per commit) gives crash-safe commits.
     pub fn open(path: &Path) -> Result<Self, ReducedCheckpointError> {
         let db = Database::create(path).map_err(rerr)?;
-        Ok(Self { db })
+        let me = Self { db };
+        me.init_or_check_store_semantics()?;
+        Ok(me)
+    }
+
+    /// P6 (DC-STORE-10): stamp a FRESH artifact, gate a populated one.
+    ///
+    /// This artifact needs its own marker for the same reason the accumulator does — it is opened from
+    /// `snapshot_dir`, independently of `chain.db`, so provenance can differ. "Has authority content"
+    /// is keyed off the completeness marker and the advanced-slot cursor, so an empty file created by
+    /// `Database::create` on the build path is not mistaken for a legacy store.
+    fn init_or_check_store_semantics(&self) -> Result<(), ReducedCheckpointError> {
+        let (marker, has_authority) = {
+            let txn = self.db.begin_read().map_err(rerr)?;
+            match txn.open_table(META_TABLE) {
+                Ok(meta) => {
+                    let marker = meta
+                        .get(STORE_SEMANTICS_KEY)
+                        .map_err(rerr)?
+                        .and_then(|v| v.value().try_into().ok().map(u32::from_be_bytes));
+                    let has_authority = meta.get(COMPLETE_KEY).map_err(rerr)?.is_some()
+                        || meta.get(LAST_SLOT_KEY).map_err(rerr)?.is_some();
+                    (marker, has_authority)
+                }
+                Err(redb::TableError::TableDoesNotExist(_)) => (None, false),
+                Err(e) => return Err(ReducedCheckpointError::Redb(format!("{e:?}"))),
+            }
+        };
+        if marker.is_none() && !has_authority {
+            let txn = self.db.begin_write().map_err(rerr)?;
+            {
+                let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+                meta.insert(
+                    STORE_SEMANTICS_KEY,
+                    &ade_ledger::store_semantics::STORE_SEMANTICS_VERSION.to_be_bytes()[..],
+                )
+                .map_err(rerr)?;
+            }
+            txn.commit().map_err(rerr)?;
+            return Ok(());
+        }
+        ade_ledger::store_semantics::check_store_semantics_version(
+            ade_ledger::store_semantics::AuthorityArtifact::ReducedCheckpoint,
+            marker,
+        )
+        .map_err(ReducedCheckpointError::StoreSemantics)
     }
 
     /// Build the checkpoint from a reduced UTxO. Idempotent + rebuild-safe: clears any

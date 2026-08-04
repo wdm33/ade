@@ -1,7 +1,21 @@
 # SLICE P6 (P4-S2) — store-semantics version gate
 
-> **SCOPED, NOT IMPLEMENTED.** P4 follow-up #1. Turns *"mysterious hash mismatch after upgrade"* into
-> *"this store was produced under incompatible semantics; re-bootstrap or run a proven migration."*
+> **IMPLEMENTED 2026-08-04 — strict rejection, no stamp tool.** P4 follow-up #1. Turns *"mysterious
+> hash mismatch after upgrade"* into *"this store was produced under incompatible semantics;
+> re-bootstrap or run a proven migration."*
+>
+> **Proven live against the preserved P4 store.** Where it previously took a multi-hour investigation
+> to reach `FingerprintMismatch { expected: c395bad1.., recovered: 2cda6765.. }` *after* a full
+> replay, it now fails at `open`, before any recovery work:
+>
+> ```
+> ade_node --mode node: cannot open persistent ChainDb:
+>   StoreSemantics(StoreSemanticsVersionMismatch {
+>       artifact: ChainDb, found: Absent, required: 1, action: RebootstrapRequired })
+> ```
+>
+> Registered as **DC-STORE-10** (true), **DC-STORE-11** (derived), **DC-STORE-12** (release), all
+> `enforced`. See the implementation record at the end.
 >
 > P5 (`45c2b942`) prevents the bug class from recurring in LIVE computation. This slice addresses the
 > orthogonal failure mode: a DURABLE store produced under an older semantic contract, recovered by a
@@ -195,6 +209,68 @@ This is the one decision that needs an explicit call before implementation.
   possible is in scope.
 - **Multi-venue behavioural parity testing**: out of scope; noted as the strengthening path for the
   bump trigger.
+
+## IMPLEMENTATION RECORD — 2026-08-04
+
+### The open decision was settled: STRICT, no stamp tool
+
+Option 1 was chosen. A stamp would recreate the P4 failure mode behind a more official-looking button:
+that store was structurally valid, fully decodable, and three epochs stale, and no operator inspecting
+it would have concluded otherwise. `RemediationAction` therefore has exactly ONE variant, so the type
+system itself cannot express "trust me", and a CI gate holds it at one.
+
+### CEs
+
+| CE | Result |
+|---|---|
+| CE-P6-1 | Fresh artifacts stamp at creation — `fresh_{chaindb,accumulator,reduced_checkpoint}_is_stamped_and_reopens` |
+| CE-P6-2 | Verified in `open`, which is STRONGER than checking in `warm_start_recovery`: every reader is gated structurally, and the failure precedes the replay entirely |
+| CE-P6-3 | `unmarked_chaindb_is_rejected_as_legacy`, `absent_marker_is_rejected_as_legacy` — `Absent` is a distinct state, not a sentinel number |
+| CE-P6-4 | `older_marked_chaindb_is_rejected`, `older_marker_is_rejected` |
+| CE-P6-5 | `future_marked_chaindb_is_rejected`, `future_marker_is_rejected` |
+| CE-P6-6 | Fresh current stores recover normally — the gate is not vacuous |
+| CE-P6-7 | `ci/ci_check_store_semantics_gate.sh` — reachability, not presence (see below) |
+| CE-P6-8 | `stale_accumulator_is_rejected_independently_of_the_chaindb`, `stale_reduced_checkpoint_is_rejected_independently` — a CURRENT chain.db still opens while its stale sibling is rejected |
+| CE-P6-9 | `ci/ci_check_store_semantics_lock.sh` + `ci/store-semantics-surface.lock` |
+| CE-P6-10 | 7 mutations, all caught (below) |
+
+`ade_ledger` 1012, `ade_runtime` 566, `ade_node` 621, `ade_core` 140 — 0 failed. Registry 455 rules, no
+duplicate IDs.
+
+### The negative tests found a real hole in my own gate
+
+Worth recording, because it is the exact defect class this project keeps rediscovering. The first
+version of reader-bypass check (B) only grepped that each store's *file* mentioned
+`check_store_semantics_version`. Its negative test caught the hole immediately: **deleting the call
+from `open` left the checking function defined-but-unreachable, the file still matched, and the gate
+passed.** Identical in shape to what the RF-1 gate documents — *"deleting the post-commit call
+COMPILES CLEAN and every unit test still passes; only the structural gate catches an unwired call."*
+
+(B) now walks two hops explicitly: `open` must call its initializer, and that initializer must call the
+checker. A gate that merely proves a symbol exists somewhere in a file proves nothing.
+
+| mutation | caught |
+|---|---|
+| accumulator `open` unwired from its checker | yes *(missed by the first version)* |
+| ChainDb check removed from `init_or_check_schema` | yes |
+| an `OperatorStampAccepted` remediation variant added | yes |
+| a new `AuthorityArtifact` added without wiring its store | yes |
+| semantics-bearing surface changed without reconciling the lock | yes |
+| lock version diverging from the code constant | yes |
+| (lock) placeholder hash left unrecorded | yes |
+
+### Fresh-vs-legacy is keyed off authority CONTENT, not file existence
+
+`Database::create` makes an empty file on the bootstrap path, so "no marker" alone cannot mean
+"legacy". Each sibling decides by whether the artifact already holds authority content — sealed
+baseline / current blob for the accumulator, completeness marker / advanced-slot cursor for the reduced
+checkpoint. Without that distinction the gate would reject every store including brand-new ones, and
+the node could never bootstrap.
+
+### Scope held
+
+The `apply_epoch_boundary_full` mainnet denominator was NOT touched, per the slice's own exclusion. It
+remains DC-LEDGER-13's single justified allowlist entry and its own future reward-semantics slice.
 
 ## Proposed registry IDs
 

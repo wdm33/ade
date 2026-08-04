@@ -69,6 +69,14 @@ const META_KEY_SCHEMA: &str = "schema_version";
 const FINGERPRINT_VERSION: u32 = 2;
 const META_KEY_FINGERPRINT_VERSION: &str = "fingerprint_version";
 
+/// PREPROD-ENTRY-AUTHORITY P6 (DC-STORE-10): the AUTHORITY-SEMANTICS marker, orthogonal to both
+/// `SCHEMA_VERSION` (byte layout) and `FINGERPRINT_VERSION` (fingerprint construction). It records
+/// which PRODUCTION rules wrote the derived bytes, not whether they parse. P4 proved the difference:
+/// P3 changed the authoritative epoch-boundary rule and no byte layout at all, so every object still
+/// decoded at its current schema version while its MEANING was three epochs stale. Absent reads as
+/// `None` and is rejected -- pre-P6 stores are legacy and must be re-bootstrapped; there is no stamp.
+const META_KEY_STORE_SEMANTICS_VERSION: &str = "store_semantics_version";
+
 /// Sync cadence policy. Per O-34.2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncCadence {
@@ -169,6 +177,19 @@ impl PersistentChainDb {
                                     found: fp_version,
                                 });
                             }
+                            // P6 (DC-STORE-10): the authority-semantics gate. Strict in EVERY
+                            // direction -- absent (legacy), older, and newer all fail closed with
+                            // RebootstrapRequired. This runs inside `open`, so every reader of this
+                            // store is gated structurally rather than by remembering to call it.
+                            let semantics_version = meta
+                                .get(META_KEY_STORE_SEMANTICS_VERSION)
+                                .map_err(map_storage_err)?
+                                .map(|v| u32_from_bytes(v.value()));
+                            ade_ledger::store_semantics::check_store_semantics_version(
+                                ade_ledger::store_semantics::AuthorityArtifact::ChainDb,
+                                semantics_version,
+                            )
+                            .map_err(ChainDbError::StoreSemantics)?;
                             // Forward-compatible: v1 files are
                             // accepted. Schema is upgraded to current
                             // on first write below.
@@ -221,6 +242,12 @@ impl PersistentChainDb {
             // this marker) is rejected fail-closed.
             let fp_version_bytes = FINGERPRINT_VERSION.to_le_bytes();
             meta.insert(META_KEY_FINGERPRINT_VERSION, &fp_version_bytes[..])
+                .map_err(map_storage_err)?;
+            // P6 (DC-STORE-10): stamp the authority-semantics version on every fresh store, so the
+            // store records which PRODUCTION rules wrote its derived bytes. Pre-P6 stores lack this
+            // key entirely and are rejected on open -- deliberately, with no stamp path.
+            let semantics_bytes = ade_ledger::store_semantics::STORE_SEMANTICS_VERSION.to_le_bytes();
+            meta.insert(META_KEY_STORE_SEMANTICS_VERSION, &semantics_bytes[..])
                 .map_err(map_storage_err)?;
         }
         txn.commit().map_err(map_commit_err)?;

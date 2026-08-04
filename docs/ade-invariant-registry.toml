@@ -3185,6 +3185,74 @@ open_obligation = "snapshot_schema_migration_follow_on_cluster"
 notes = "Schema-version migration tool is the snapshot-format lifecycle home for the v1->v2 (and onward) upgrade path. The current rule already pins the fail-closed posture on unknown versions; the open_obligation captures the missing operator-facing migration tooling. NOT a node-binary concern (PHASE4-N-K DC-NODE-04 deliberately does not carry this). PHASE4-N-K (2026-05-26) restated this scoping: ade_node's authority-fatal-decode exit path (DC-NODE-04) handles unknown-version + fingerprint-mismatch at bootstrap by halting deterministically (binary_halts_on_authority_fatal_decode_error). Schema-migration tooling remains the open obligation on this rule."
 
 [[rules]]
+id = "DC-STORE-10"
+tier = "true"
+statement = """
+Replay equivalence requires the persisted authority store and the binary to agree on the MEANING of the
+bytes, not merely on their layout. Every durable authority artifact carries a STORE_SEMANTICS_VERSION
+marker recording which PRODUCTION rules derived its contents, verified on `open` -- before any recovery
+work. The gate is strict in every direction: marker ABSENT (a pre-P6 legacy store), OLDER, or NEWER all
+fail closed with a typed terminal carrying `action = RebootstrapRequired`. There is deliberately NO
+stamp tool, NO operator override, NO CLI/env bypass and NO warn-and-continue; `RemediationAction` has
+exactly ONE variant so the type system cannot express "trust me". A future migration is permitted ONLY
+as a sealed migration proof (read an old MARKED store, prove a deterministic old->new transform, write a
+new store, emit evidence), never as a stamp.
+"""
+source = "docs/clusters/PREPROD-ENTRY-AUTHORITY/SLICE-P6-store-semantics-version-gate.md"
+cross_ref = ["DC-STORE-11", "DC-STORE-12", "DC-EPOCH-36", "DC-LEDGER-13"]
+code_locus = "crates/ade_ledger/src/store_semantics.rs (STORE_SEMANTICS_VERSION, AuthorityArtifact, FoundSemanticsVersion, RemediationAction, check_store_semantics_version); crates/ade_runtime/src/chaindb/persistent.rs (META_KEY_STORE_SEMANTICS_VERSION, stamped in write_meta, verified in init_or_check_schema); crates/ade_runtime/src/chaindb/epoch_accumulator_store.rs + reduced_utxo_checkpoint.rs (init_or_check_store_semantics)"
+tests = ["current_marker_is_accepted", "absent_marker_is_rejected_as_legacy", "older_marker_is_rejected", "future_marker_is_rejected", "the_only_remediation_is_rebootstrap", "fresh_chaindb_is_stamped_and_reopens", "unmarked_chaindb_is_rejected_as_legacy", "older_marked_chaindb_is_rejected", "future_marked_chaindb_is_rejected", "the_terminal_names_rebootstrap_and_offers_no_override"]
+ci_scripts = ["ci/ci_check_store_semantics_gate.sh"]
+status = "enforced"
+evidence_notes = "Built from the P4 root cause (e1de7a2e). The six pre-existing version constants (FROZEN_LEADERSHIP=6, SEED_CINPUT=6, BOOTSTRAP_RUPD=3, RECOVERED_ANCHOR_POINT=1, ChainDb SCHEMA_VERSION=3, FINGERPRINT_VERSION=2) all version the ENCODING of bytes; none versions the RULES that produced the values inside them. That distinction is the whole slice: P3 changed the authoritative epoch rule and NO byte layout at all, so every durable object still decoded cleanly while its meaning was three epochs stale, surfacing only as an opaque recovery FingerprintMismatch. PROVEN LIVE against the preserved P4 store: where it previously required a multi-hour investigation to reach `FingerprintMismatch { expected: c395bad1.., recovered: 2cda6765.. }` AFTER a full replay, it now fails immediately at ChainDb open with `StoreSemantics(StoreSemanticsVersionMismatch { artifact: ChainDb, found: Absent, required: 1, action: RebootstrapRequired })`. The mechanism generalizes the already-proven FINGERPRINT_VERSION gate, which encodes the required asymmetry in the same function: the ENCODING version upgrades forward on next write, the SEMANTICS version hard-fails in either direction."
+introduced_in = "PREPROD-ENTRY-AUTHORITY-P6"
+strengthened_in = []
+
+[[rules]]
+id = "DC-STORE-11"
+tier = "derived"
+statement = """
+The semantics marker is PER-ARTIFACT, and every authority artifact must agree with the binary
+independently. `chain.db` (with the WAL written in lockstep beside it) comes from the data directory
+while `epoch-accumulator.redb` and `reduced-checkpoint.redb` are opened from `snapshot_dir`, so the
+authority artifacts can arrive from DIFFERENT provenance. A single store-level marker would therefore
+let a semantically stale accumulator or reduced checkpoint ride along with a current ChainDb. Because
+each artifact must equal the binary's required version, pairwise agreement between siblings follows
+structurally rather than needing a separate cross-check.
+"""
+source = "docs/clusters/PREPROD-ENTRY-AUTHORITY/SLICE-P6-store-semantics-version-gate.md"
+cross_ref = ["DC-STORE-10"]
+code_locus = "crates/ade_runtime/src/chaindb/epoch_accumulator_store.rs (STORE_SEMANTICS_KEY in epoch_acc_meta); crates/ade_runtime/src/chaindb/reduced_utxo_checkpoint.rs (STORE_SEMANTICS_KEY in reduced_meta); crates/ade_runtime/src/chaindb/persistent.rs (META_KEY_STORE_SEMANTICS_VERSION in meta)"
+tests = ["fresh_accumulator_is_stamped_and_reopens", "stale_accumulator_is_rejected_independently_of_the_chaindb", "fresh_reduced_checkpoint_is_stamped_and_reopens", "stale_reduced_checkpoint_is_rejected_independently"]
+ci_scripts = ["ci/ci_check_store_semantics_gate.sh"]
+status = "enforced"
+evidence_notes = "The independent-provenance risk is not hypothetical: the P4 investigation runs pair `--snapshot-dir preview-snapshot-1376` with `--data-dir ade-r2-live`, i.e. accumulator and reduced checkpoint from one lineage and chain.db/WAL from another. The positive test proves a CURRENT chain.db still opens while its stale sibling is rejected, so the check cannot pass by rejecting everything. A fresh artifact is STAMPED rather than rejected (keyed off whether the artifact already holds authority content), so bootstrap remains possible -- without that, the gate would reject every store including new ones."
+introduced_in = "PREPROD-ENTRY-AUTHORITY-P6"
+strengthened_in = []
+
+[[rules]]
+id = "DC-STORE-12"
+tier = "release"
+statement = """
+The semantics version may not be left to memory. The declared semantics-bearing surface
+(`ci/store-semantics-surface.lock`) is content-hashed, and any drift fails CI until the author makes ONE
+of two EXPLICIT choices: increase STORE_SEMANTICS_VERSION (stores from the previous binary become
+invalid), or record `semantics_neutral = true` with a rationale naming why what the rules PRODUCE is
+unchanged. The lock is append-only, versions are non-decreasing, every entry carries a rationale, and a
+non-neutral entry must strictly increase the version. The code constant and the last lock entry must
+agree.
+"""
+source = "docs/clusters/PREPROD-ENTRY-AUTHORITY/SLICE-P6-store-semantics-version-gate.md"
+cross_ref = ["DC-STORE-10"]
+code_locus = "ci/store-semantics-surface.lock (the declared surface + append-only entry log); ci/ci_check_store_semantics_lock.sh; crates/ade_ledger/src/store_semantics.rs (STORE_SEMANTICS_VERSION)"
+tests = []
+ci_scripts = ["ci/ci_check_store_semantics_lock.sh"]
+status = "enforced"
+evidence_notes = "A CONTENT trigger was chosen over the intuitive BEHAVIOURAL one after establishing that a golden replay-corpus fingerprint WOULD HAVE MISSED P3 -- the very change this mechanism exists to catch. P3 altered the authoritative epoch rule and did not move the mainnet corpus at all: preview was spared by numeric accident (its fictitious epoch sat BELOW its real one so the comparison never fired) and preprod is not in the corpus. A behavioural trigger measured against a mainnet-shaped corpus is structurally blind to venue-geometry defects, which is the entire P3/P4 family; a content trigger is not. Accepted cost: a comment-only edit inside the declared surface trips the gate, and declaring semantics_neutral takes one line -- the friction is the point. Negative-tested: surface drift without reconciliation, and a lock version diverging from the code constant, were each mutated and caught."
+introduced_in = "PREPROD-ENTRY-AUTHORITY-P6"
+strengthened_in = []
+
+[[rules]]
 id = "CN-STORE-08"
 tier = "release"
 statement = """

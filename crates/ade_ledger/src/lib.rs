@@ -64,6 +64,7 @@ pub mod shelley;
 pub mod snapshot;
 pub mod stake_ref;
 pub mod state;
+pub mod store_semantics;
 pub mod tx_validity;
 pub mod utxo;
 pub mod utxo_overlay;

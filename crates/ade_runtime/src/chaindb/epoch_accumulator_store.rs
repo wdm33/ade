@@ -44,6 +44,17 @@ use redb::{Database, ReadableTable, TableDefinition};
 
 const META_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("epoch_acc_meta");
 /// The current accumulator, canonically encoded (`encode_epoch_accumulator`).
+/// PREPROD-ENTRY-AUTHORITY P6 (DC-STORE-10): the AUTHORITY-SEMANTICS marker for this artifact.
+///
+/// Distinct in kind from [`LEADERSHIP_SCHEMA_KEY`] below, which versions the ENCODING of the frozen
+/// leadership object. This key records which PRODUCTION rules derived the accumulator's contents. The
+/// accumulator needs its OWN marker rather than inheriting the ChainDb's: it is opened from
+/// `snapshot_dir` while `chain.db` comes from the data dir, so the two can arrive from different
+/// provenance (the P4 investigation runs pair `--snapshot-dir preview-snapshot-1376` with
+/// `--data-dir ade-r2-live`). A single shared marker would let a stale accumulator ride along with a
+/// current ChainDb.
+const STORE_SEMANTICS_KEY: &str = "store_semantics_version";
+
 const CURRENT_BLOB_KEY: &str = "current_blob";
 /// The slot the current accumulator is applied through (8 BE bytes) — the DC-EPOCH-20 `LAST_SLOT` cursor.
 const LAST_SLOT_KEY: &str = "last_advanced_slot";
@@ -199,6 +210,11 @@ const BOOTSTRAP_LEADERSHIP_BY_EPOCH: TableDefinition<u64, &[u8]> =
 /// Closed store-failure surface.
 #[derive(Debug)]
 pub enum EpochAccumulatorStoreError {
+    /// P6 (DC-STORE-10): this artifact's AUTHORITY SEMANTICS disagree with the binary — its derived
+    /// contents were produced by different production rules. Terminal; the only remediation is
+    /// re-bootstrap. Distinct from `Decode` (corrupt bytes) and from the leadership SCHEMA version
+    /// (encoding): a semantically stale accumulator decodes perfectly.
+    StoreSemantics(ade_ledger::store_semantics::StoreSemanticsVersionMismatch),
     /// A redb error (open / txn / table / commit).
     Redb(String),
     /// A stored value was expected but absent (a corrupt / partially-written store).
@@ -365,7 +381,54 @@ impl EpochAccumulatorStore {
     /// commit) gives crash-safe commits.
     pub fn open(path: &Path) -> Result<Self, EpochAccumulatorStoreError> {
         let db = Database::create(path).map_err(rerr)?;
-        Ok(Self { db })
+        let me = Self { db };
+        me.init_or_check_store_semantics()?;
+        Ok(me)
+    }
+
+    /// P6 (DC-STORE-10): stamp a FRESH artifact, gate a populated one.
+    ///
+    /// Runs inside `open`, so every reader is gated structurally rather than by remembering to call
+    /// it. A brand-new file (no authority content and no marker) is stamped with the current version;
+    /// anything that already holds authority content must carry a matching marker, and absent / older
+    /// / newer all fail closed with `RebootstrapRequired`. "Has authority content" is keyed off the
+    /// sealed baseline and current blobs, so an empty file created by `Database::create` on the
+    /// bootstrap path is not mistaken for a legacy store.
+    fn init_or_check_store_semantics(&self) -> Result<(), EpochAccumulatorStoreError> {
+        let (marker, has_authority) = {
+            let txn = self.db.begin_read().map_err(rerr)?;
+            match txn.open_table(META_TABLE) {
+                Ok(meta) => {
+                    let marker = meta
+                        .get(STORE_SEMANTICS_KEY)
+                        .map_err(rerr)?
+                        .and_then(|v| v.value().try_into().ok().map(u32::from_be_bytes));
+                    let has_authority = meta.get(BOOTSTRAP_BLOB_KEY).map_err(rerr)?.is_some()
+                        || meta.get(CURRENT_BLOB_KEY).map_err(rerr)?.is_some();
+                    (marker, has_authority)
+                }
+                Err(redb::TableError::TableDoesNotExist(_)) => (None, false),
+                Err(e) => return Err(EpochAccumulatorStoreError::Redb(format!("{e:?}"))),
+            }
+        };
+        if marker.is_none() && !has_authority {
+            let txn = self.db.begin_write().map_err(rerr)?;
+            {
+                let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
+                meta.insert(
+                    STORE_SEMANTICS_KEY,
+                    &ade_ledger::store_semantics::STORE_SEMANTICS_VERSION.to_be_bytes()[..],
+                )
+                .map_err(rerr)?;
+            }
+            txn.commit().map_err(rerr)?;
+            return Ok(());
+        }
+        ade_ledger::store_semantics::check_store_semantics_version(
+            ade_ledger::store_semantics::AuthorityArtifact::EpochAccumulator,
+            marker,
+        )
+        .map_err(EpochAccumulatorStoreError::StoreSemantics)
     }
 
     /// Seal the bootstrap baseline: the accumulator at `seed_slot` becomes BOTH the immutable reorg-reset

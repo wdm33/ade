@@ -1,0 +1,69 @@
+# PREPROD-ENTRY-AUTHORITY P6 (DC-STORE-12) — the semantics-bearing surface lock.
+#
+# WHAT THIS IS FOR
+# ----------------
+# `STORE_SEMANTICS_VERSION` records which PRODUCTION rules wrote a durable store's derived bytes. A
+# version constant that must be REMEMBERED gets forgotten exactly once, which is all it takes -- P4
+# (e1de7a2e) is the proof. So the surface below is content-hashed, and any drift fails
+# `ci/ci_check_store_semantics_lock.sh` until the change is reconciled here.
+#
+# Reconciling forces ONE OF TWO EXPLICIT CHOICES, never a silent third:
+#
+#   1. BUMP  -- the change alters authoritative production rules, so a store written by the previous
+#              binary is no longer replay-equivalent. Append an entry with an INCREASED
+#              `store_semantics_version` and bump the constant in
+#              `crates/ade_ledger/src/store_semantics.rs`.
+#   2. NEUTRAL -- the change provably does not alter what the rules PRODUCE (comments, refactors,
+#              tests, error wording). Append an entry with `semantics_neutral = true`, the SAME
+#              version, and a rationale naming why.
+#
+# WHY NOT A GOLDEN-CORPUS TRIGGER
+# -------------------------------
+# The intuitive alternative -- pin a replay-corpus output fingerprint and treat drift as a semantics
+# change -- WOULD HAVE MISSED P3, the very change this mechanism exists to catch. P3 altered the
+# authoritative epoch rule and did not move the mainnet corpus at all: preview was spared "by numeric
+# accident", and preprod is not in the corpus. A behavioural trigger measured against a mainnet-shaped
+# corpus is structurally blind to venue-geometry defects. A content trigger is not.
+#
+# The cost is real and accepted: a comment-only edit inside the surface trips the gate. Declaring
+# `semantics_neutral = true` takes one line, and the friction is the point -- it converts "remember to
+# think about whether this changes stored meaning" into "state, on the record, that it does not".
+
+# The declared semantics-bearing surface. Files whose content determines what authoritative ledger,
+# epoch, and leadership production WRITES into a durable store.
+[surface]
+files = [
+  # --- authoritative ledger application + epoch boundary ---
+  "crates/ade_ledger/src/rules.rs",
+  "crates/ade_ledger/src/state.rs",
+  "crates/ade_ledger/src/epoch.rs",
+  "crates/ade_ledger/src/phase.rs",
+  # --- reduced-validation plane (what a track_utxo=false follower persists) ---
+  "crates/ade_ledger/src/reduced_boundary.rs",
+  "crates/ade_ledger/src/reduced_advance.rs",
+  "crates/ade_ledger/src/reduced_aggregate.rs",
+  "crates/ade_ledger/src/reduced_snapshot.rs",
+  "crates/ade_ledger/src/reduced_utxo.rs",
+  "crates/ade_ledger/src/reduced_epoch_view.rs",
+  # --- governance / reward production that lands in durable state ---
+  "crates/ade_ledger/src/governance.rs",
+  "crates/ade_ledger/src/bootstrap_reward_update.rs",
+  # --- the fingerprint the WAL chain is built from ---
+  "crates/ade_ledger/src/fingerprint.rs",
+  # --- epoch/leadership authority derived into the accumulator ---
+  "crates/ade_ledger/src/epoch_accumulator.rs",
+  "crates/ade_ledger/src/frozen_leadership.rs",
+  "crates/ade_ledger/src/consensus_view.rs",
+  # --- consensus geometry + nonce evolution that the above depend on ---
+  "crates/ade_core/src/consensus/era_schedule.rs",
+  "crates/ade_core/src/consensus/nonce.rs",
+  "crates/ade_core/src/consensus/praos_state.rs",
+  "crates/ade_core/src/consensus/leader_schedule.rs",
+]
+
+# Append-only log. The LAST entry must match the computed hash and the code constant.
+[[entry]]
+store_semantics_version = 1
+surface_hash = "5a61c06e389b3890b286ac5dc8ae976eceea7181cdfe31276e2d3949fc03666e"
+semantics_neutral = false
+rationale = "P6 initial declaration. Version 1 is the first MARKED generation; every store produced before this point is unmarked and is rejected as legacy (no stamp path, by design -- see crates/ade_ledger/src/store_semantics.rs)."
