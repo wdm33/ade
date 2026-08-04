@@ -8135,6 +8135,29 @@ introduced_in = ["LIVE-WIRE-LIVENESS-S1", "LIVE-WIRE-LIVENESS-S2"]
 strengthened_in = []
 
 [[rules]]
+id = "DC-NODE-44"
+tier = "release"
+statement = """
+A warm-start replay divergence (T-REC-05) must be SELF-DESCRIBING: the typed fault carries a
+`ReplayDivergenceReport` alongside the two fingerprints, naming the WAL-tail slot, admit count, the
+recovered ledger epoch paired with the venue schedule's epoch at that slot, the replay anchor and span,
+the per-COMPONENT fingerprints of both the anchor and the result (so `moved_components()` names which
+part of the ledger the replay changed), the store's authority-semantics generation, and the artifact.
+An epoch disagreement is called out explicitly as the fault rather than left to be inferred, and an
+unreadable anchor is reported distinctly from "nothing moved" so an absent signal is never read as
+evidence.
+"""
+source = "docs/clusters/PREPROD-ENTRY-AUTHORITY/SLICE-P6-store-semantics-version-gate.md (P6-S4)"
+cross_ref = ["DC-STORE-10", "DC-EPOCH-36"]
+code_locus = "crates/ade_ledger/src/replay_divergence.rs (ReplayDivergenceReport, moved_components, epoch_disagreement, Display); crates/ade_node/src/node_lifecycle.rs (RecoveryAdmissionFault::FingerprintMismatch carries it; the single construction site at the T-REC-05 check)"
+tests = ["moved_components_names_only_what_changed", "identical_components_report_none_moved", "unreadable_anchor_is_not_reported_as_no_movement", "epoch_disagreement_is_called_out_explicitly", "unlocatable_schedule_epoch_is_not_a_disagreement", "report_names_artifact_and_semantics_version"]
+ci_scripts = ["ci/ci_check_recovery_fault_self_describing.sh"]
+status = "enforced"
+evidence_notes = "The bare `FingerprintMismatch { expected, recovered }` cost hours and four wrong hypotheses to diagnose in P4 (e1de7a2e); what finally cracked it was per-component fingerprints -- the `snapshots` component moving across ONE mid-epoch block revealed an epoch boundary live admission never applied -- plus the ledger-vs-schedule epoch pair 1375 vs 1378. All of it was reconstructed afterwards with bespoke probes. Landing it in the fault means the next divergence is read off the error. The gate is structural because nothing else catches a regression: dropping the report compiles clean and every test still passes, since no test constructs a fault it never triggers. Negative-tested six ways (regression to the two-hash form; schedule_epoch hardcoded; moved_components or epoch_disagreement renamed away; the anchor field dropped; the report built but never rendered) -- and the FIRST version of the method check was itself too weak, matching the test `fn moved_components_names_only_what_changed` instead of the method, which its own negative test caught. Building the report also REPLACED two redundant emit-only probes: the anchor is materialized once and reused, cutting ~3 multi-GB ledger materializes from a terminal path that P4 reached on an already OOM-killed box."
+introduced_in = "PREPROD-ENTRY-AUTHORITY-P6-S4"
+strengthened_in = []
+
+[[rules]]
 id = "DC-WAL-05"
 tier = "derived"
 statement = """

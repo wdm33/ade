@@ -267,6 +267,39 @@ baseline / current blob for the accumulator, completeness marker / advanced-slot
 checkpoint. Without that distinction the gate would reject every store including brand-new ones, and
 the node could never bootstrap.
 
+### P6-S4 (2026-08-04) — the recovery divergence is now self-describing (DC-NODE-44)
+
+The store-semantics gate stops a *stale* store from being replayed at all. It does not help when a
+replay diverges for some future reason — and that fault was still the bare pair that cost P4 hours:
+
+```
+FingerprintMismatch { expected: c395bad1.., recovered: 2cda6765.. }
+```
+
+`RecoveryAdmissionFault::FingerprintMismatch` now carries a `ReplayDivergenceReport`: WAL-tail slot,
+admit count, recovered ledger epoch **paired with** the venue schedule's epoch at that slot, the replay
+anchor and span, per-component fingerprints of both the anchor and the result, the store's semantics
+generation, and the artifact. Two derived signals do the interpreting:
+
+- `moved_components()` — which of the seven components the replay CHANGED. In P4 this was
+  `cert, epoch, snapshots, governance` with `utxo`/`pparams` absent, and `snapshots` moving across a
+  single mid-epoch block is what named the cause (stake snapshots rotate only at a boundary).
+- `epoch_disagreement()` — flags the P3/P4 geometry signature explicitly, so the reader stops
+  searching rather than inferring.
+
+An unreadable anchor renders distinctly from "nothing moved": an absent signal must never read as
+evidence.
+
+**It also made the terminal path cheaper.** Building the report materializes the anchor once and the
+older probes reuse it; the superseded per-component dump was deleted. Net ~3 fewer multi-GB ledger
+materializes on a path P4 reached on a box that had just been OOM-killed — where a heavyweight
+diagnostic is how one outage becomes two.
+
+Six negative tests. Notably the first version of the method check was itself too weak — it grepped
+`fn moved_components`, which also matched the *test* `fn moved_components_names_only_what_changed`, so
+renaming the real method still passed. Its own negative test caught it. That is twice in this slice
+that mutation testing found a gate weaker than intended, which is the argument for doing it at all.
+
 ### Scope held
 
 The `apply_epoch_boundary_full` mainnet denominator was NOT touched, per the slice's own exclusion. It

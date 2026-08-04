@@ -398,7 +398,17 @@ pub enum RecoveryAdmissionFault {
     NonContiguousCanonicalSpan { slot: u64 },
     /// Schema / corruption fault: the rematerialized ledger fingerprint disagrees with the recovered WAL-tail
     /// commitment (T-REC-05). Re-bootstrap.
-    FingerprintMismatch { expected: Hash32, recovered: Hash32 },
+    ///
+    /// P6-S4: carries a SELF-DESCRIBING [`ReplayDivergenceReport`] alongside the two hashes. The bare
+    /// pair cost hours and four wrong hypotheses to diagnose in P4; the report carries the evidence
+    /// that actually cracked it — per-component fingerprints (which components the replay MOVED), the
+    /// ledger-vs-schedule epoch pair, the replay anchor and span, and the store's semantics generation.
+    /// Boxed to keep the enum small.
+    FingerprintMismatch {
+        expected: Hash32,
+        recovered: Hash32,
+        report: Box<ade_ledger::replay_divergence::ReplayDivergenceReport>,
+    },
 }
 
 impl RecoveryAdmissionFault {
@@ -4385,21 +4395,55 @@ pub(crate) fn warm_start_recovery(
             // T-REC-05 promoted (S5 2b): a WAL-tail fingerprint disagreement is a durable-state
             // contradiction -- the recovered ledger is NOT replay-equivalent to the admitted chain --
             // so it fails closed as a typed recovery-admission fault, not a generic warm-start string.
-            // EMIT-ONLY: the typed fault names two hashes and nothing about WHERE the replay
-            // diverged. A crash-recovery failure is un-diagnosable without the replay geometry --
-            // which snapshot the forward replay started from, how far it had to go, and where the
-            // WAL tail sits. No behaviour change; this annotates a fault already being returned.
+            //
+            // P6-S4: the fault itself now CARRIES the diagnosis. The bare (expected, recovered) pair
+            // cost hours and four wrong hypotheses in P4; what actually cracked it was per-component
+            // fingerprints plus the ledger-vs-schedule epoch pair. Both are assembled here and travel
+            // WITH the error, so the next divergence is read off the fault instead of reconstructed
+            // with bespoke probes. Everything below is either already computed or one cheap read; the
+            // anchor decode is best-effort and degrades to `None` rather than masking the real fault.
             let snaps = SnapshotStore::list_snapshot_slots(chaindb).unwrap_or_default();
-            crate::node_log!(
-                "warmstart-fp-mismatch: wal_tail_slot={} admit_count={} recovered_tip={:?} \
-                 snapshots={} newest_snapshot={:?} replay_span_from_newest={:?}",
-                wal_tail_slot.0,
-                admit_count,
-                recovered.tip.as_ref().map(|t| t.slot.0),
-                snaps.len(),
-                snaps.last().map(|s| s.0),
-                snaps.last().map(|s| wal_tail_slot.0.saturating_sub(s.0)),
-            );
+            let anchor_slot = snaps.iter().rev().find(|s| s.0 <= wal_tail_slot.0).copied();
+            let report_reader = PersistentSnapshotCache::new(chaindb);
+            let report_source = ChainDbBlockSource::new(chaindb);
+            let anchor_fp = anchor_slot.and_then(|a| {
+                materialize_rolled_back_state(
+                    TargetPoint {
+                        slot: a,
+                        hash: Hash32([0u8; 32]),
+                    },
+                    &report_reader,
+                    &report_source,
+                    &era_schedule,
+                    &ledger_view,
+                    None,
+                )
+                .ok()
+                .map(|(l, _)| fingerprint(&l))
+            });
+            let span_blocks = anchor_slot.map(|a| {
+                entries
+                    .iter()
+                    .filter(|e| {
+                        matches!(e, ade_ledger::wal::WalEntry::AdmitBlock { slot, .. }
+                            if slot.0 > a.0 && slot.0 <= wal_tail_slot.0)
+                    })
+                    .count() as u64
+            });
+            let report = ade_ledger::replay_divergence::ReplayDivergenceReport {
+                slot: wal_tail_slot,
+                admit_count: admit_count as u64,
+                ledger_epoch: recovered.ledger.epoch_state.epoch,
+                schedule_epoch: era_schedule.locate(wal_tail_slot).ok().map(|l| l.epoch),
+                expected_combined: wal_tail_fp.clone(),
+                actual: fingerprint(&recovered.ledger),
+                anchor: anchor_fp,
+                anchor_slot,
+                span_blocks,
+                store_semantics_version: ade_ledger::store_semantics::STORE_SEMANTICS_VERSION,
+                artifact: ade_ledger::store_semantics::AuthorityArtifact::ChainDb,
+            };
+            crate::node_log!("warmstart-replay-divergence: {}", report);
             // EMIT-ONLY: the geometry above says the replay reached the right tip from a
             // near-by anchor, which leaves the ANCHOR itself as the suspect. Each durable
             // snapshot has a WAL-recorded expected value: the `post_fp` of the AdmitBlock at
@@ -4430,24 +4474,17 @@ pub(crate) fn warm_start_recovery(
                 .collect();
             let probe_reader = PersistentSnapshotCache::new(chaindb);
             let probe_source = ChainDbBlockSource::new(chaindb);
-            // The replay anchor: the newest snapshot at/below the WAL tail is the one
-            // `materialize_rolled_back_state` actually starts the failing replay from.
-            let anchor = snaps.iter().rev().find(|s| s.0 <= wal_tail_slot.0).copied();
+            // P6-S4: the anchor was already materialized to build the report, so REUSE it rather than
+            // decoding a multi-GB ledger a second time. This path is terminal and was reached, in P4,
+            // on a box that had just been OOM-killed -- gratuitous re-materializes here are how a
+            // diagnostic turns into a second outage. The verdict below is still worth emitting: it
+            // compares the stored anchor against the WAL's `post_fp` at the SAME slot, which
+            // distinguishes "the anchor was poisoned" from "the forward replay diverged".
+            let anchor = report.anchor_slot;
             if let Some(a) = anchor {
-                let at = TargetPoint {
-                    slot: a,
-                    hash: Hash32([0u8; 32]),
-                };
-                match materialize_rolled_back_state(
-                    at,
-                    &probe_reader,
-                    &probe_source,
-                    &era_schedule,
-                    &ledger_view,
-                    None,
-                ) {
-                    Ok((snap_ledger, _)) => {
-                        let snap_fp = fingerprint(&snap_ledger).combined;
+                match report.anchor.as_ref() {
+                    Some(f) => {
+                        let snap_fp = f.combined.clone();
                         let expected = wal_fp_at.get(&a.0);
                         crate::node_log!(
                             "warmstart-snap-probe: slot={} snap_fp={} wal_fp={} verdict={}",
@@ -4461,10 +4498,9 @@ pub(crate) fn warm_start_recovery(
                             },
                         );
                     }
-                    Err(e) => crate::node_log!(
-                        "warmstart-snap-probe: slot={} materialize-err={:?}",
-                        a.0,
-                        e
+                    None => crate::node_log!(
+                        "warmstart-snap-probe: slot={} anchor could not be materialized",
+                        a.0
                     ),
                 }
                 // EMIT-ONLY: the replay reads BLOCK BYTES from the ChainDb, but the WAL is
@@ -4562,62 +4598,17 @@ pub(crate) fn warm_start_recovery(
                     span.get(lo),
                     span.get(lo).and_then(|s| wal_fp_at.get(s)).map(hex_prefix8),
                 );
-                // EMIT-ONLY: the combined fingerprint says THAT the replay diverged, not WHICH
-                // part of the ledger did. `LedgerFingerprint` is a rollup of seven independent
-                // components, so printing them either side of the first divergent block names
-                // the diverging component directly -- e.g. a `utxo` component that MOVES across
-                // the block would mean the replay is mutating the UTxO where live admission
-                // (running track_utxo=false, constant UTxO component) did not. Two materializes.
-                let components = |slot: u64| {
-                    materialize_rolled_back_state(
-                        TargetPoint {
-                            slot: SlotNo(slot),
-                            hash: Hash32([0u8; 32]),
-                        },
-                        &probe_reader,
-                        &probe_source,
-                        &era_schedule,
-                        &ledger_view,
-                        None,
-                    )
-                    .ok()
-                    .map(|(l, _)| (fingerprint(&l), l.epoch_state.epoch.0))
-                };
-                for (tag, slot) in [
-                    ("anchor", Some(anchor.0)),
-                    ("diverged", span.get(lo).copied()),
-                ] {
-                    let Some(slot) = slot else { continue };
-                    match components(slot) {
-                        Some((f, ledger_epoch)) => crate::node_log!(
-                            "warmstart-fp-components: {} slot={} ledger_epoch={} schedule_epoch={:?} \
-                             era={} utxo={} cert={} epoch={} \
-                             snapshots={} pparams={} governance={} combined={}",
-                            tag,
-                            slot,
-                            ledger_epoch,
-                            era_schedule.locate(SlotNo(slot)).ok().map(|l| l.epoch.0),
-                            hex_prefix8(&f.era),
-                            hex_prefix8(&f.utxo),
-                            hex_prefix8(&f.cert),
-                            hex_prefix8(&f.epoch),
-                            hex_prefix8(&f.snapshots),
-                            hex_prefix8(&f.pparams),
-                            hex_prefix8(&f.governance),
-                            hex_prefix8(&f.combined),
-                        ),
-                        None => crate::node_log!(
-                            "warmstart-fp-components: {} slot={} materialize-err",
-                            tag,
-                            slot
-                        ),
-                    }
-                }
+                // P6-S4: the per-component dump that used to live here is GONE -- superseded by the
+                // typed report above, which carries the anchor's and the result's components and
+                // computes `moved_components()` from them. Keeping both would have cost two more
+                // multi-GB materializes to restate what the fault already says, on a terminal path
+                // that is reached exactly when the machine is least healthy.
             }
             return Err(NodeLifecycleError::RecoveryAdmission(
                 RecoveryAdmissionFault::FingerprintMismatch {
                     expected: wal_tail_fp,
                     recovered: recovered_fp,
+                    report: Box::new(report),
                 },
             ));
         }

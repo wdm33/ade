@@ -54,6 +54,7 @@ pub mod reduced_boundary;
 pub mod reduced_epoch_view;
 pub mod reduced_snapshot;
 pub mod reduced_utxo;
+pub mod replay_divergence;
 pub mod rollback;
 pub mod bootstrap_bridge;
 pub mod bootstrap_reward_update;
