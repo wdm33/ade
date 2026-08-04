@@ -67,3 +67,9 @@ store_semantics_version = 1
 surface_hash = "5a61c06e389b3890b286ac5dc8ae976eceea7181cdfe31276e2d3949fc03666e"
 semantics_neutral = false
 rationale = "P6 initial declaration. Version 1 is the first MARKED generation; every store produced before this point is unmarked and is rejected as legacy (no stamp path, by design -- see crates/ade_ledger/src/store_semantics.rs)."
+
+[[entry]]
+store_semantics_version = 1
+surface_hash = "d43885e23dbcca95ae07fafd37fa2b1b7625895aa75644080401b8b16d6df4a0"
+semantics_neutral = true
+rationale = "P6-S5 multi-venue differential (DC-EPOCH-37). state.rs changed by APPENDING tests only, inside its existing #[cfg(test)] module: a VENUES geometry table, three per-venue property tests, and the P3 regression pin. No production item was added, removed or altered -- detect_epoch_transition, check_epoch_agreement, mainnet_shelley_schedule and every other non-test item are byte-identical, so nothing a store records can differ. Verified by the ade_ledger suite staying green at 1022 with only new tests added."

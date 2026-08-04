@@ -10183,3 +10183,29 @@ status = "enforced"
 evidence_notes = "Written directly from the P4 root cause (e1de7a2e), which measured what having NEITHER check costs: a preview store ran its entire life with ledger_epoch=1375 against schedule_epoch=1378 while a third authority (the epoch-accumulator) advanced correctly to 1378, and nothing compared them. The drift surfaced only three epochs later, as an opaque recovery FingerprintMismatch, when a binary that computed the epoch correctly replayed the store and applied the three skipped boundaries on the first replayed block. This invariant would have caught the originating P3 defect on the FIRST block on BOTH venues -- preview (473 vs 1375, frozen forever) and preprod (498 vs 304, phantom boundary) -- where a mainnet-shaped test corpus structurally could not. The gate was negative-tested three ways: making detect_epoch_transition bare pub, adding a second unpaired caller, and removing the check from the crossing point were each mutated and caught."
 introduced_in = "PREPROD-ENTRY-AUTHORITY-P5"
 strengthened_in = []
+
+[[rules]]
+id = "DC-EPOCH-37"
+tier = "release"
+statement = """
+Authoritative epoch semantics must be proven PER VENUE, not inferred from a mainnet-shaped corpus.
+Every venue in the closed node-side registry (`native_firstrun::shelley_boundary_for_magic` +
+`bootstrap_export::resolve_network_profile`) is exercised by a differential suite asserting, for that
+venue's real geometry: epoch derivation at every boundary edge, that the boundary fires EXACTLY at the
+first slot of a new epoch and never mid-epoch, and that DC-EPOCH-36 agreement discriminates in both
+directions. The suite additionally PINS the P3 regression with the values measured live -- preprod
+498-vs-304 (fictitious epoch ABOVE the real one, so a phantom boundary is declared) and preview
+473-vs-1378 (fictitious epoch BELOW the real one, so no ledger boundary ever fires) -- together with
+the fact that on MAINNET the wrong formula and the venue schedule agree exactly, which is why a
+mainnet-only suite stays green through the defect. Adding a venue to the registry without differential
+coverage fails CI.
+"""
+source = "docs/clusters/PREPROD-ENTRY-AUTHORITY/SLICE-P6-store-semantics-version-gate.md (P6-S5)"
+cross_ref = ["DC-EPOCH-36", "DC-LEDGER-13"]
+code_locus = "crates/ade_ledger/src/state.rs (the VENUES table + the venue_differential_* suite); pinned against crates/ade_node/src/native_firstrun.rs (shelley_boundary_for_magic) and crates/ade_node/src/bootstrap_export.rs (resolve_network_profile) by ci/ci_check_venue_differential.sh"
+tests = ["venue_differential_epoch_derivation_is_correct_for_every_venue", "venue_differential_boundary_fires_exactly_at_each_venue_boundary", "venue_differential_epoch_agreement_discriminates_for_every_venue", "venue_differential_mainnet_formula_is_wrong_off_mainnet"]
+ci_scripts = ["ci/ci_check_venue_differential.sh"]
+status = "enforced"
+evidence_notes = "P3 is the proof that a green mainnet corpus is not evidence of venue correctness: it computed the epoch from hardcoded MAINNET constants, the entire mainnet corpus stayed byte-identical, and the defect was FATAL on preprod (phantom boundary -> cert/gov/snapshots ReducedUnavailable -> exit 43) and SILENTLY corrosive on preview (the ledger epoch never advanced for a store's entire life, surfacing only months later as P4's opaque recovery FingerprintMismatch). Mainnet is the one venue where the wrong formula is right, so no mainnet test could ever have caught it. All four pinned anchors (304, 498, 1378, 473) are reproduced independently by the venue geometry in the test, so the suite proves the arithmetic rather than restating the incident. Negative-tested: a new venue added to the node registry without differential coverage; differential geometry drifted from the authority; a differential property deleted; and the measured anchors removed. The anchor check itself was initially TOO WEAK -- it grepped the whole file, matching the module docs that recount the same numbers in prose, so deleting the assertions still passed; it now scopes to the pin's body and requires an assert line. That was the third gate weakness in this cluster found by mutation testing."
+introduced_in = "PREPROD-ENTRY-AUTHORITY-P6-S5"
+strengthened_in = []

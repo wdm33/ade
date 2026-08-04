@@ -563,4 +563,166 @@ mod tests {
             Some(EpochNo(210))
         );
     }
+
+    // -----------------------------------------------------------------------------------------
+    // PREPROD-ENTRY-AUTHORITY P6-S5 — the MULTI-VENUE differential (DC-EPOCH-37).
+    //
+    // A green mainnet-shaped corpus is NOT evidence that preview/preprod semantics are correct.
+    // P3 is the proof: `detect_epoch_transition` computed the epoch from hardcoded MAINNET constants,
+    // the entire mainnet corpus stayed byte-identical, and the defect was fatal on preprod (a phantom
+    // boundary) and silently corrosive on preview (the ledger epoch never advanced for a store's whole
+    // life). No mainnet test could have caught it, because mainnet is the one venue where the wrong
+    // formula is right.
+    //
+    // So every venue's geometry is exercised directly, and the anchors below are the values MEASURED
+    // during P3/P4 rather than recomputed here — they are the regression this suite exists to pin.
+    // -----------------------------------------------------------------------------------------
+
+    /// (name, shelley_start_epoch, shelley_start_slot, epoch_length_slots).
+    /// Mirrors `ade_node::native_firstrun::shelley_boundary_for_magic` +
+    /// `ade_node::bootstrap_export::resolve_network_profile`;
+    /// `ci/ci_check_venue_differential.sh` pins these against those authorities so they cannot drift.
+    use ade_core::consensus::era_schedule::{BootstrapAnchorHash, EraSchedule, EraSummary};
+
+    const VENUES: [(&str, u64, u64, u32); 3] = [
+        ("mainnet", 208, 4_492_800, 432_000),
+        ("preprod", 4, 86_400, 432_000),
+        ("preview", 0, 0, 86_400),
+    ];
+
+    fn venue_schedule(start_epoch: u64, start_slot: u64, epoch_length: u32) -> EraSchedule {
+        EraSchedule::new(
+            BootstrapAnchorHash(ade_types::Hash32([0u8; 32])),
+            start_slot,
+            vec![EraSummary {
+                randomness_stabilisation_window_slots: None,
+                era: CardanoEra::Conway,
+                start_slot: SlotNo(start_slot),
+                start_epoch: EpochNo(start_epoch),
+                slot_length_ms: 1_000,
+                epoch_length_slots: epoch_length,
+                safe_zone_slots: epoch_length,
+            }],
+        )
+        .expect("venue geometry is well-formed")
+    }
+
+    /// `schedule.locate(slot).epoch`, unwrapped -- the operation every venue assertion below performs.
+    fn epoch_at(sched: &EraSchedule, slot: u64, name: &str) -> u64 {
+        sched.locate(SlotNo(slot)).expect(name).epoch.0
+    }
+
+    /// The MAINNET formula that P3 deleted, reproduced here ONLY to prove it is wrong off-mainnet.
+    fn mainnet_formula_epoch(slot: u64) -> Option<u64> {
+        (slot >= SHELLEY_START_SLOT)
+            .then(|| SHELLEY_START_EPOCH + (slot - SHELLEY_START_SLOT) / SHELLEY_EPOCH_LENGTH)
+    }
+
+    /// Epoch derivation is correct at every boundary edge, for EVERY venue — not just the one whose
+    /// constants happen to be compiled in.
+    #[test]
+    fn venue_differential_epoch_derivation_is_correct_for_every_venue() {
+        for (name, start_epoch, start_slot, epoch_length) in VENUES {
+            let sched = venue_schedule(start_epoch, start_slot, epoch_length);
+            let len = u64::from(epoch_length);
+            let at = |slot: u64| epoch_at(&sched, slot, name);
+
+            assert_eq!(at(start_slot), start_epoch, "{name}: epoch start");
+            assert_eq!(at(start_slot + len - 1), start_epoch, "{name}: before");
+            assert_eq!(at(start_slot + len), start_epoch + 1, "{name}: after");
+            assert_eq!(at(start_slot + 5 * len + 7), start_epoch + 5, "{name}: +5");
+        }
+    }
+
+    /// The boundary fires EXACTLY once per venue epoch, at the first slot of the new epoch — never a
+    /// slot early (a phantom boundary, the preprod failure) and never never (the preview failure).
+    #[test]
+    fn venue_differential_boundary_fires_exactly_at_each_venue_boundary() {
+        for (name, start_epoch, start_slot, epoch_length) in VENUES {
+            let sched = venue_schedule(start_epoch, start_slot, epoch_length);
+            let len = u64::from(epoch_length);
+            let here = EpochNo(start_epoch);
+
+            assert_eq!(
+                detect_epoch_transition(here, SlotNo(start_slot + len - 1), &sched),
+                None,
+                "{name}: the slot BEFORE the boundary must not declare a transition"
+            );
+            assert_eq!(
+                detect_epoch_transition(here, SlotNo(start_slot + len), &sched),
+                Some(EpochNo(start_epoch + 1)),
+                "{name}: the first slot of the new epoch must declare exactly one transition"
+            );
+            assert_eq!(
+                detect_epoch_transition(here, SlotNo(start_slot + len / 2), &sched),
+                None,
+                "{name}: mid-epoch must never declare a transition"
+            );
+        }
+    }
+
+    /// DC-EPOCH-36 holds per venue, in both directions.
+    #[test]
+    fn venue_differential_epoch_agreement_discriminates_for_every_venue() {
+        for (name, start_epoch, start_slot, epoch_length) in VENUES {
+            let sched = venue_schedule(start_epoch, start_slot, epoch_length);
+            let mid = SlotNo(start_slot + u64::from(epoch_length) / 2);
+
+            assert!(
+                check_epoch_agreement(EpochNo(start_epoch), mid, &sched).is_ok(),
+                "{name}: an agreeing ledger must pass"
+            );
+            let stale = check_epoch_agreement(EpochNo(start_epoch + 3), mid, &sched)
+                .expect_err("a ledger ahead of the schedule must fail closed");
+            assert_eq!(stale.schedule_epoch.0, start_epoch, "{name}");
+        }
+    }
+
+    /// THE P3 REGRESSION PIN. The mainnet formula and the venue schedule disagree off-mainnet, and the
+    /// numbers here are the ones MEASURED in P3/P4 — preprod 498-vs-304 (fatal: a phantom boundary
+    /// declared, cert/gov/snapshots left ReducedUnavailable, node dead at exit 43) and preview
+    /// 473-vs-1378 (silent: the fictitious epoch sits BELOW the real one, so `new > current` never
+    /// fires and the ledger epoch NEVER advances).
+    ///
+    /// It also pins WHY a mainnet corpus cannot catch this: on mainnet the two agree exactly.
+    #[test]
+    fn venue_differential_mainnet_formula_is_wrong_off_mainnet() {
+        // mainnet: the formula and the schedule agree -- which is precisely why a mainnet-only suite
+        // stays green through this defect.
+        let mainnet = venue_schedule(208, 4_492_800, 432_000);
+        let mainnet_slot = 119_075_343u64;
+        assert_eq!(
+            mainnet_formula_epoch(mainnet_slot),
+            Some(epoch_at(&mainnet, mainnet_slot, "mainnet")),
+            "on mainnet the formula is correct -- this is the blind spot"
+        );
+
+        // preprod: FATAL direction. Fictitious epoch ABOVE the real one => phantom boundary.
+        let preprod = venue_schedule(4, 86_400, 432_000);
+        let preprod_slot = 130_046_891u64;
+        let preprod_real = epoch_at(&preprod, preprod_slot, "preprod");
+        assert_eq!(preprod_real, 304, "the real preprod epoch measured in P3");
+        assert_eq!(
+            mainnet_formula_epoch(preprod_slot),
+            Some(498),
+            "the fictitious epoch measured in P3"
+        );
+        assert!(498 > preprod_real, "ABOVE real => phantom boundary");
+
+        // preview: SILENT direction. Fictitious epoch BELOW the real one => no boundary ever fires.
+        let preview = venue_schedule(0, 0, 86_400);
+        let preview_slot = 119_075_343u64;
+        let preview_real = epoch_at(&preview, preview_slot, "preview");
+        assert_eq!(preview_real, 1378, "the real preview epoch measured in P4");
+        assert_eq!(
+            mainnet_formula_epoch(preview_slot),
+            Some(473),
+            "the fictitious epoch measured in P4"
+        );
+        assert!(473 < preview_real, "BELOW real => no boundary ever fires");
+
+        // And the invariant that would have caught BOTH on the first block:
+        assert!(check_epoch_agreement(EpochNo(473), SlotNo(preview_slot), &preview).is_err());
+        assert!(check_epoch_agreement(EpochNo(498), SlotNo(preprod_slot), &preprod).is_err());
+    }
 }
