@@ -3,16 +3,45 @@
 > **OPEN — SEALED SLICE, NOT YET IMPLEMENTED.** Doc before impl. Fix for the PREPROD-NONCE-1 root
 > cause. Blocks preprod LIVE-2 until closed.
 
-## Intent
+## Intent — NARROWED after the reference proof
 
-**No durable epoch activation record may be written until every consensus input inside that record is
-final.** For `eta0(N+1)` that means the candidate nonce must already be frozen.
+Make the **bootstrap bridge's** durable epoch activation agree with the same Praos nonce value
+cardano-node will use at the real boundary.
+
+The governing invariant is unchanged — *no durable epoch activation record may be written until every
+consensus input inside it is final; for `eta0(N+1)` the candidate nonce must already be frozen* — but
+the **fix target is now bridge-specific**, not activation timing in general.
 
 ```
-before the freeze slot :  leadership may be known/previewed,
-                          but NO durable activation record with an eta0 commitment
-at/after the freeze slot: candidate frozen -> eta0 final -> activation record may be written
+KNOWN-GOOD (reference-proven, DO NOT TOUCH):
+    the live boundary tick computes eta0(305) BYTE-IDENTICAL to cardano-node
+KNOWN-BAD:
+    the bootstrap bridge committed eta0(305) early, from candidate@SEED
+FIX BOUNDARY:
+    alter bridge commitment TIMING / PROVENANCE only
 ```
+
+### Explicitly OUT OF SCOPE — these are proven correct, changing them is a regression
+
+- the candidate-freeze rule and freeze-slot arithmetic
+- the candidate / evolving operand order (`extract_praos_nonces_v2`)
+- the Praos boundary combine `epoch_nonce' = candidate ⭒ last_epoch_block_nonce`
+- the live tick logic in `node_sync`
+- venue `k` / `f` / RSW geometry
+
+A change to any of the above would be "fixing" something the reference proof shows is already right.
+
+## METHODOLOGICAL RULE for this slice (first-class, not advice)
+
+> **ECA-5 showed this exact code class had an operand-order bug that stayed masked until a real
+> boundary was crossed. Therefore this slice MUST verify against cardano-node reference values BEFORE
+> changing any nonce logic.**
+
+`26565bec` records the precedent verbatim: *"`extract_praos_nonces_v2` had evolving and candidate
+swapped … proven by value against the live node's epoch nonce. The original deadlock had always masked
+this (no real boundary had ever been crossed)."* Preprod 304→305 is the first real preprod boundary
+ever attempted, so the identical masking condition applied here. Internal self-consistency is NOT
+sufficient evidence in this code; a reference value is.
 
 ## The mechanism — CORRECTED from the NONCE-1 first reading
 
@@ -102,16 +131,30 @@ non-final eta0" unrepresentable, in the spirit of the closed `RemediationAction`
 
 ## Acceptance criteria
 
-| CE | Criterion |
-|---|---|
-| **CE-N2-1** | Seed BEFORE freeze: no final activation record is written carrying `candidate@SEED` |
-| **CE-N2-2** | At/after freeze: the activation record uses `candidate@FROZEN` |
-| **CE-N2-3** | preprod `eta0(305)` equals `blake2b256(candidate@FROZEN ‖ last_epoch_block_nonce)` and matches the reference |
-| **CE-N2-4** | Restart BEFORE freeze does not recover a premature activation |
-| **CE-N2-5** | Restart AFTER freeze recovers the final activation and matches |
-| **CE-N2-6** | `ActivationAboveDurableTip` remains terminal |
-| **CE-N2-7** | Multi-venue differential covers seed-position × freeze geometry: seed before freeze, seed after freeze, and boundary at/around the freeze |
-| **CE-N2-8** | Negative-tested: each gate proven to FAIL when its violation is introduced |
+| CE | Criterion | status |
+|---|---|---|
+| **CE-N2-1** | cardano-node preprod `epochNonce(305)` == Ade's boundary-tick `eta0(305)` | **MET** — both `74f10bea…` |
+| **CE-N2-2** | cardano-node `lastEpochBlockNonce(305)` == Ade's post-tick bookkeeping value | **MET** — both `60b3a0ae…` (see the precision note below) |
+| **CE-N2-3** | The bridge no longer commits `e3402a2b…` | open |
+| **CE-N2-4** | The bridge commitment resolves to `74f10bea…` | open |
+| **CE-N2-5** | Restart after the bootstrap bridge recovers the SAME value | open |
+| **CE-N2-6** | `ActivationAboveDurableTip` remains terminal | open |
+| **CE-N2-7** | Seed BEFORE freeze: no final activation record carries `candidate@SEED`; at/after freeze it carries `candidate@FROZEN` | open |
+| **CE-N2-8** | Multi-venue differential covers seed-position × freeze geometry (seed before freeze, seed after freeze, boundary at/around the freeze) — **DC-EPOCH-38** | open |
+| **CE-N2-9** | Negative-tested: each gate proven to FAIL when its violation is introduced | open |
+
+### Precision note on CE-N2-2 — do NOT read this as validating the combine operand
+
+Getting this backwards is the ECA-5 mistake in miniature, so state it exactly:
+
+| value | which one | matches reference? |
+|---|---|---|
+| cardano `lastEpochBlockNonce = 60b3a0ae…` | **post**-tick bookkeeping | == Ade's **pre**-tick `lab`, which becomes `last_epoch_block_nonce'` ✓ |
+| Ade `last_epoch_block_nonce = 151dc584…` | the **combine operand** at the tick | validated only INDIRECTLY — the combine OUTPUT matches |
+
+So CE-N2-2 confirms the bookkeeping rotation, **not** the operand. The operand is confirmed by
+CE-N2-1 (the output matching). Anyone reading CE-N2-2 as "the operand is wrong, `151dc584` should be
+`60b3a0ae`" would break a correct combine.
 
 CE-N2-7 is **DC-EPOCH-38**, opened with this slice's fix so the gate encodes what was proven. NONCE-1
 established the surface is **seed-position**, not venue: the freeze sits at `1 − RSW/epoch_length`
