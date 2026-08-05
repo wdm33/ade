@@ -1,0 +1,1081 @@
+
+=== Ade native Mithril bootstrap receipt ===
+network / profile      : preprod (magic 1)
+shelley genesis hash   : Hash32(162d29c4e1cf6b8a84f2d692e67a3ac6bc7851bc3e6e4afe64d15778bed8bd86)
+certified anchor point : slot 129813427 / block Hash32(4153b4f5acae17be10d66e90e9454c66ff2f69df52ec4cf4e34462d1eb86582c)
+seed artifact commit   : Hash32(5c7bdf6a47bc31f7329336aaeee46dc8e84189103a650355ddd0f69a5035ecc3)
+UTxO commitment        : Hash32(c9906929dfd9924943b9d12cd4436b26759f9cf03eb4490abcb59ea79960e239)
+durable ledger lineage : Hash32(fe99c63936729ec42237d07ea66cfd7aa1b15d74c824e3687a95817c175b0113)
+reduced checkpoint     : built (/home/ts/.cardano-live1/ade-preprod/reduced-checkpoint.redb)
+ChainSync              : starting against 1 peer(s)
+============================================
+ade_node: cardano-cli kes.skey loaded; KES VK fingerprint = fd2f1de3b35c8ea7cb26b630455d0e7361a35e2b9174906de3c87fad87c07d59 — verify this matches your opcert before block production.
+keep_alive: ping cookie=0 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=0 validated
+keep_alive: ping cookie=1 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=1 validated
+keep_alive: ping cookie=2 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=2 validated
+keep_alive: ping cookie=3 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=3 validated
+follow: tip slot=129813444 behind=236697 slots from peer
+keep_alive: ping cookie=4 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=4 validated
+follow: tip slot=129825426 behind=224795 slots from peer
+keep_alive: ping cookie=5 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=5 validated
+follow: tip slot=129836636 behind=213585 slots from peer
+keep_alive: ping cookie=6 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=6 validated
+follow: tip slot=129848166 behind=202055 slots from peer
+follow: tip slot=129859648 behind=190573 slots from peer
+keep_alive: ping cookie=7 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=7 validated
+follow: tip slot=129871238 behind=178983 slots from peer
+keep_alive: ping cookie=8 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=8 validated
+follow: tip slot=129883160 behind=167061 slots from peer
+keep_alive: ping cookie=9 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=9 validated
+follow: tip slot=129894579 behind=155642 slots from peer
+follow: tip slot=129906441 behind=143780 slots from peer
+keep_alive: ping cookie=10 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=10 validated
+follow: tip slot=129917131 behind=133090 slots from peer
+keep_alive: ping cookie=11 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=11 validated
+follow: tip slot=129928702 behind=121519 slots from peer
+keep_alive: ping cookie=12 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=12 validated
+follow: tip slot=129938854 behind=111550 slots from peer
+follow: tip slot=129950334 behind=100070 slots from peer
+keep_alive: ping cookie=13 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=13 validated
+follow: tip slot=129961505 behind=88899 slots from peer
+keep_alive: ping cookie=14 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=14 validated
+follow: tip slot=129971821 behind=78583 slots from peer
+keep_alive: ping cookie=15 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=15 validated
+follow: tip slot=129982521 behind=67883 slots from peer
+follow: tip slot=129993788 behind=56616 slots from peer
+keep_alive: ping cookie=16 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=16 validated
+follow: tip slot=130005380 behind=45111 slots from peer
+keep_alive: ping cookie=17 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=17 validated
+follow: tip slot=130017012 behind=33498 slots from peer
+keep_alive: ping cookie=18 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=18 validated
+follow: tip slot=130028468 behind=22065 slots from peer
+keep_alive: ping cookie=19 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=19 validated
+follow: tip slot=130040378 behind=10155 slots from peer
+keep_alive: ping cookie=20 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=20 validated
+follow: tip slot=130050533 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=21 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=21 validated
+keep_alive: ping cookie=22 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=22 validated
+recovery-trace: path=recovery_admit action=reset_and_refold reason=anchor_absent anchor_before=absent durable_tip=130050533/5010827/d9a1dbf5 rollback_target=none anchor_after=absent
+keep_alive: ping cookie=23 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=23 validated
+keep_alive: ping cookie=24 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=24 validated
+keep_alive: ping cookie=25 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=25 validated
+keep_alive: ping cookie=26 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=26 validated
+keep_alive: ping cookie=27 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=27 validated
+keep_alive: ping cookie=28 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=28 validated
+keep_alive: ping cookie=29 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=29 validated
+keep_alive: ping cookie=30 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=30 validated
+keep_alive: ping cookie=31 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=31 validated
+keep_alive: ping cookie=32 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=32 validated
+keep_alive: ping cookie=33 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=33 validated
+keep_alive: ping cookie=34 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=34 validated
+keep_alive: ping cookie=35 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=35 validated
+keep_alive: ping cookie=36 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=36 validated
+keep_alive: ping cookie=37 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=37 validated
+keep_alive: ping cookie=38 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=38 validated
+keep_alive: ping cookie=39 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=39 validated
+keep_alive: ping cookie=40 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=40 validated
+keep_alive: ping cookie=41 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=41 validated
+keep_alive: ping cookie=42 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=42 validated
+keep_alive: ping cookie=43 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=43 validated
+keep_alive: ping cookie=44 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=44 validated
+keep_alive: ping cookie=45 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=45 validated
+keep_alive: ping cookie=46 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=46 validated
+keep_alive: ping cookie=47 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=47 validated
+keep_alive: ping cookie=48 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=48 validated
+keep_alive: ping cookie=49 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=49 validated
+keep_alive: ping cookie=50 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=50 validated
+keep_alive: ping cookie=51 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=51 validated
+keep_alive: ping cookie=52 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=52 validated
+keep_alive: ping cookie=53 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=53 validated
+keep_alive: ping cookie=54 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=54 validated
+keep_alive: ping cookie=55 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=55 validated
+keep_alive: ping cookie=56 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=56 validated
+keep_alive: ping cookie=57 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=57 validated
+keep_alive: ping cookie=58 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=58 validated
+keep_alive: ping cookie=59 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=59 validated
+keep_alive: ping cookie=60 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=60 validated
+keep_alive: ping cookie=61 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=61 validated
+keep_alive: ping cookie=62 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=62 validated
+keep_alive: ping cookie=63 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=63 validated
+keep_alive: ping cookie=64 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=64 validated
+keep_alive: ping cookie=65 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=65 validated
+keep_alive: ping cookie=66 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=66 validated
+keep_alive: ping cookie=67 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=67 validated
+keep_alive: ping cookie=68 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=68 validated
+keep_alive: ping cookie=69 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=69 validated
+keep_alive: ping cookie=70 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=70 validated
+follow: tip slot=130050581 behind=759 slots from peer
+recovery-trace: path=rollback_admit action=reset_to_bootstrap reason=rollback_admission anchor_before=130050533/5010827/d9a1dbf5 durable_tip=130051332/5010856/0a5695ea rollback_target=130051324/5010855/0fe37415 anchor_after=absent
+keep_alive: ping cookie=71 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=71 validated
+keep_alive: ping cookie=72 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=72 validated
+keep_alive: ping cookie=73 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=73 validated
+keep_alive: ping cookie=74 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=74 validated
+rollback-followed: to_slot=130051324 to_hash=0fe37415
+keep_alive: ping cookie=75 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=75 validated
+follow: tip slot=130051340 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=76 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=76 validated
+follow: tip slot=130051663 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130051693 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=reset_and_refold reason=anchor_absent anchor_before=absent durable_tip=130051693/5010875/27e26a0c rollback_target=none anchor_after=absent
+keep_alive: ping cookie=77 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=77 validated
+keep_alive: ping cookie=78 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=78 validated
+keep_alive: ping cookie=79 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=79 validated
+keep_alive: ping cookie=80 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=80 validated
+keep_alive: ping cookie=81 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=81 validated
+keep_alive: ping cookie=82 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=82 validated
+keep_alive: ping cookie=83 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=83 validated
+keep_alive: ping cookie=84 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=84 validated
+keep_alive: ping cookie=85 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=85 validated
+keep_alive: ping cookie=86 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=86 validated
+keep_alive: ping cookie=87 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=87 validated
+keep_alive: ping cookie=88 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=88 validated
+keep_alive: ping cookie=89 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=89 validated
+keep_alive: ping cookie=90 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=90 validated
+keep_alive: ping cookie=91 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=91 validated
+keep_alive: ping cookie=92 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=92 validated
+keep_alive: ping cookie=93 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=93 validated
+keep_alive: ping cookie=94 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=94 validated
+keep_alive: ping cookie=95 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=95 validated
+keep_alive: ping cookie=96 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=96 validated
+keep_alive: ping cookie=97 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=97 validated
+keep_alive: ping cookie=98 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=98 validated
+keep_alive: ping cookie=99 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=99 validated
+keep_alive: ping cookie=100 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=100 validated
+keep_alive: ping cookie=101 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=101 validated
+keep_alive: ping cookie=102 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=102 validated
+keep_alive: ping cookie=103 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=103 validated
+keep_alive: ping cookie=104 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=104 validated
+keep_alive: ping cookie=105 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=105 validated
+keep_alive: ping cookie=106 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=106 validated
+keep_alive: ping cookie=107 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=107 validated
+keep_alive: ping cookie=108 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=108 validated
+keep_alive: ping cookie=109 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=109 validated
+keep_alive: ping cookie=110 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=110 validated
+keep_alive: ping cookie=111 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=111 validated
+keep_alive: ping cookie=112 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=112 validated
+keep_alive: ping cookie=113 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=113 validated
+keep_alive: ping cookie=114 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=114 validated
+keep_alive: ping cookie=115 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=115 validated
+keep_alive: ping cookie=116 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=116 validated
+keep_alive: ping cookie=117 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=117 validated
+keep_alive: ping cookie=118 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=118 validated
+keep_alive: ping cookie=119 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=119 validated
+follow: tip slot=130051720 behind=623 slots from peer
+follow: tip slot=130052343 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130052360 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130052529 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130052565 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=120 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=120 validated
+keep_alive: ping cookie=121 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=121 validated
+keep_alive: ping cookie=122 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=122 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130051693/5010875/27e26a0c durable_tip=130052565/5010912/fc5827b5 rollback_target=none anchor_after=130051693/5010875/27e26a0c
+keep_alive: ping cookie=123 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=123 validated
+keep_alive: ping cookie=124 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=124 validated
+follow: tip slot=130052667 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052565/5010912/fc5827b5 durable_tip=130052667/5010913/241d0dc2 rollback_target=none anchor_after=130052565/5010912/fc5827b5
+keep_alive: ping cookie=125 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=125 validated
+follow: tip slot=130052675 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052667/5010913/241d0dc2 durable_tip=130052675/5010914/3301ca6b rollback_target=none anchor_after=130052667/5010913/241d0dc2
+keep_alive: ping cookie=126 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=126 validated
+follow: tip slot=130052710 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052675/5010914/3301ca6b durable_tip=130052710/5010915/afb80812 rollback_target=none anchor_after=130052675/5010914/3301ca6b
+keep_alive: ping cookie=127 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=127 validated
+keep_alive: ping cookie=128 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=128 validated
+follow: tip slot=130052738 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052710/5010915/afb80812 durable_tip=130052738/5010916/b74fdc58 rollback_target=none anchor_after=130052710/5010915/afb80812
+keep_alive: ping cookie=129 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=129 validated
+follow: tip slot=130052756 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052738/5010916/b74fdc58 durable_tip=130052756/5010917/a8df22a6 rollback_target=none anchor_after=130052738/5010916/b74fdc58
+keep_alive: ping cookie=130 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=130 validated
+follow: tip slot=130052774 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052756/5010917/a8df22a6 durable_tip=130052774/5010918/925b6807 rollback_target=none anchor_after=130052756/5010917/a8df22a6
+follow: tip slot=130052787 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052774/5010918/925b6807 durable_tip=130052787/5010919/fa67e43a rollback_target=none anchor_after=130052774/5010918/925b6807
+keep_alive: ping cookie=131 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=131 validated
+follow: tip slot=130052798 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052787/5010919/fa67e43a durable_tip=130052798/5010920/da5d0d7d rollback_target=none anchor_after=130052787/5010919/fa67e43a
+follow: tip slot=130052805 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052798/5010920/da5d0d7d durable_tip=130052805/5010921/d7bc1f8a rollback_target=none anchor_after=130052798/5010920/da5d0d7d
+keep_alive: ping cookie=132 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=132 validated
+keep_alive: ping cookie=133 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=133 validated
+keep_alive: ping cookie=134 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=134 validated
+follow: tip slot=130052862 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052805/5010921/d7bc1f8a durable_tip=130052862/5010922/807b2cbc rollback_target=none anchor_after=130052805/5010921/d7bc1f8a
+keep_alive: ping cookie=135 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=135 validated
+keep_alive: ping cookie=136 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=136 validated
+follow: tip slot=130052903 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052862/5010922/807b2cbc durable_tip=130052903/5010923/2fb22bb5 rollback_target=none anchor_after=130052862/5010922/807b2cbc
+follow: tip slot=130052913 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=137 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=137 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052903/5010923/2fb22bb5 durable_tip=130052913/5010924/1f8a128c rollback_target=none anchor_after=130052903/5010923/2fb22bb5
+follow: tip slot=130052921 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052913/5010924/1f8a128c durable_tip=130052921/5010925/3f5fe5be rollback_target=none anchor_after=130052913/5010924/1f8a128c
+follow: tip slot=130052932 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=138 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=138 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052921/5010925/3f5fe5be durable_tip=130052932/5010926/42cbca8f rollback_target=none anchor_after=130052921/5010925/3f5fe5be
+follow: tip slot=130052936 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052932/5010926/42cbca8f durable_tip=130052936/5010927/fd79c226 rollback_target=none anchor_after=130052932/5010926/42cbca8f
+keep_alive: ping cookie=139 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=139 validated
+keep_alive: ping cookie=140 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=140 validated
+keep_alive: ping cookie=141 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=141 validated
+follow: tip slot=130053001 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130053002 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052936/5010927/fd79c226 durable_tip=130053002/5010929/b3de9426 rollback_target=none anchor_after=130052936/5010927/fd79c226
+follow: tip slot=130053003 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053002/5010929/b3de9426 durable_tip=130053003/5010930/c1128ab8 rollback_target=none anchor_after=130053002/5010929/b3de9426
+keep_alive: ping cookie=142 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=142 validated
+follow: tip slot=130053016 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053003/5010930/c1128ab8 durable_tip=130053016/5010931/63007b3b rollback_target=none anchor_after=130053003/5010930/c1128ab8
+follow: tip slot=130053018 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130053020 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053016/5010931/63007b3b durable_tip=130053020/5010933/88f40a4a rollback_target=none anchor_after=130053016/5010931/63007b3b
+follow: tip slot=130053021 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053020/5010933/88f40a4a durable_tip=130053021/5010934/a0c692b8 rollback_target=none anchor_after=130053020/5010933/88f40a4a
+keep_alive: ping cookie=143 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=143 validated
+follow: tip slot=130053034 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053021/5010934/a0c692b8 durable_tip=130053034/5010935/116661b3 rollback_target=none anchor_after=130053021/5010934/a0c692b8
+follow: tip slot=130053046 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053034/5010935/116661b3 durable_tip=130053046/5010936/65eb9670 rollback_target=none anchor_after=130053034/5010935/116661b3
+follow: tip slot=130053051 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053046/5010936/65eb9670 durable_tip=130053051/5010937/44c39b69 rollback_target=none anchor_after=130053046/5010936/65eb9670
+keep_alive: ping cookie=144 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=144 validated
+keep_alive: ping cookie=145 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=145 validated
+follow: tip slot=130053074 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053051/5010937/44c39b69 durable_tip=130053074/5010938/1bf35ea4 rollback_target=none anchor_after=130053051/5010937/44c39b69
+keep_alive: ping cookie=146 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=146 validated
+follow: tip slot=130053096 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053074/5010938/1bf35ea4 durable_tip=130053096/5010939/cc32f883 rollback_target=none anchor_after=130053074/5010938/1bf35ea4
+keep_alive: ping cookie=147 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=147 validated
+keep_alive: ping cookie=148 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=148 validated
+keep_alive: ping cookie=149 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=149 validated
+follow: tip slot=130053155 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053096/5010939/cc32f883 durable_tip=130053155/5010940/93ba10aa rollback_target=none anchor_after=130053096/5010939/cc32f883
+keep_alive: ping cookie=150 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=150 validated
+follow: tip slot=130053178 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053155/5010940/93ba10aa durable_tip=130053178/5010941/b8dd0602 rollback_target=none anchor_after=130053155/5010940/93ba10aa
+keep_alive: ping cookie=151 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=151 validated
+follow: tip slot=130053197 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053178/5010941/b8dd0602 durable_tip=130053197/5010942/bde178f0 rollback_target=none anchor_after=130053178/5010941/b8dd0602
+keep_alive: ping cookie=152 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=152 validated
+follow: tip slot=130053215 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130053216 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053197/5010942/bde178f0 durable_tip=130053216/5010944/5e8aa5fa rollback_target=none anchor_after=130053197/5010942/bde178f0
+follow: tip slot=130053218 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053216/5010944/5e8aa5fa durable_tip=130053218/5010945/dcf5f308 rollback_target=none anchor_after=130053216/5010944/5e8aa5fa
+follow: tip slot=130053221 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053218/5010945/dcf5f308 durable_tip=130053221/5010946/49eca020 rollback_target=none anchor_after=130053218/5010945/dcf5f308
+follow: tip slot=130053233 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=153 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=153 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053221/5010946/49eca020 durable_tip=130053233/5010947/1a868be3 rollback_target=none anchor_after=130053221/5010946/49eca020
+keep_alive: ping cookie=154 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=154 validated
+follow: tip slot=130053269 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053233/5010947/1a868be3 durable_tip=130053269/5010948/abe24526 rollback_target=none anchor_after=130053233/5010947/1a868be3
+keep_alive: ping cookie=155 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=155 validated
+follow: tip slot=130053282 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053269/5010948/abe24526 durable_tip=130053282/5010949/8610b873 rollback_target=none anchor_after=130053269/5010948/abe24526
+follow: tip slot=130053292 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=156 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=156 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053282/5010949/8610b873 durable_tip=130053292/5010950/52e977e8 rollback_target=none anchor_after=130053282/5010949/8610b873
+follow: tip slot=130053297 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053292/5010950/52e977e8 durable_tip=130053297/5010951/24df1a9c rollback_target=none anchor_after=130053292/5010950/52e977e8
+keep_alive: ping cookie=157 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=157 validated
+follow: tip slot=130053318 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053297/5010951/24df1a9c durable_tip=130053318/5010952/d1983f91 rollback_target=none anchor_after=130053297/5010951/24df1a9c
+follow: tip slot=130053327 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053318/5010952/d1983f91 durable_tip=130053327/5010953/f506a94d rollback_target=none anchor_after=130053318/5010952/d1983f91
+keep_alive: ping cookie=158 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=158 validated
+keep_alive: ping cookie=159 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=159 validated
+keep_alive: ping cookie=160 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=160 validated
+follow: tip slot=130053392 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=161 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=161 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053327/5010953/f506a94d durable_tip=130053392/5010954/34878ef3 rollback_target=none anchor_after=130053327/5010953/f506a94d
+keep_alive: ping cookie=162 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=162 validated
+follow: tip slot=130053428 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053392/5010954/34878ef3 durable_tip=130053428/5010955/8f5aa422 rollback_target=none anchor_after=130053392/5010954/34878ef3
+keep_alive: ping cookie=163 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=163 validated
+follow: tip slot=130053453 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=rollback_admit action=reset_to_bootstrap reason=rollback_admission anchor_before=130053428/5010955/8f5aa422 durable_tip=130053453/5010956/c7129fe1 rollback_target=130053428/5010955/8f5aa422 anchor_after=absent
+keep_alive: ping cookie=164 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=164 validated
+keep_alive: ping cookie=165 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=165 validated
+keep_alive: ping cookie=166 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=166 validated
+keep_alive: ping cookie=167 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=167 validated
+keep_alive: ping cookie=168 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=168 validated
+rollback-followed: to_slot=130053428 to_hash=8f5aa422
+keep_alive: ping cookie=169 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=169 validated
+follow: tip slot=130053453 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130053527 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130053564 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=reset_and_refold reason=anchor_absent anchor_before=absent durable_tip=130053564/5010962/fe22f741 rollback_target=none anchor_after=absent
+keep_alive: ping cookie=170 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=170 validated
+keep_alive: ping cookie=171 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=171 validated
+keep_alive: ping cookie=172 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=172 validated
+keep_alive: ping cookie=173 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=173 validated
+keep_alive: ping cookie=174 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=174 validated
+keep_alive: ping cookie=175 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=175 validated
+keep_alive: ping cookie=176 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=176 validated
+keep_alive: ping cookie=177 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=177 validated
+keep_alive: ping cookie=178 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=178 validated
+keep_alive: ping cookie=179 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=179 validated
+keep_alive: ping cookie=180 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=180 validated
+keep_alive: ping cookie=181 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=181 validated
+keep_alive: ping cookie=182 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=182 validated
+keep_alive: ping cookie=183 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=183 validated
+keep_alive: ping cookie=184 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=184 validated
+keep_alive: ping cookie=185 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=185 validated
+keep_alive: ping cookie=186 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=186 validated
+keep_alive: ping cookie=187 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=187 validated
+keep_alive: ping cookie=188 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=188 validated
+keep_alive: ping cookie=189 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=189 validated
+keep_alive: ping cookie=190 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=190 validated
+keep_alive: ping cookie=191 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=191 validated
+keep_alive: ping cookie=192 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=192 validated
+keep_alive: ping cookie=193 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=193 validated
+keep_alive: ping cookie=194 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=194 validated
+keep_alive: ping cookie=195 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=195 validated
+keep_alive: ping cookie=196 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=196 validated
+keep_alive: ping cookie=197 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=197 validated
+keep_alive: ping cookie=198 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=198 validated
+keep_alive: ping cookie=199 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=199 validated
+keep_alive: ping cookie=200 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=200 validated
+keep_alive: ping cookie=201 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=201 validated
+keep_alive: ping cookie=202 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=202 validated
+keep_alive: ping cookie=203 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=203 validated
+keep_alive: ping cookie=204 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=204 validated
+keep_alive: ping cookie=205 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=205 validated
+keep_alive: ping cookie=206 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=206 validated
+keep_alive: ping cookie=207 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=207 validated
+keep_alive: ping cookie=208 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=208 validated
+keep_alive: ping cookie=209 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=209 validated
+keep_alive: ping cookie=210 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=210 validated
+keep_alive: ping cookie=211 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=211 validated
+keep_alive: ping cookie=212 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=212 validated
+follow: tip slot=130053571 behind=475 slots from peer
+follow: tip slot=130054046 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130054054 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130054350 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130054379 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130054431 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053564/5010962/fe22f741 durable_tip=130054431/5011007/17e897b7 rollback_target=none anchor_after=130053564/5010962/fe22f741
+keep_alive: ping cookie=213 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=213 validated
+keep_alive: ping cookie=214 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=214 validated
+keep_alive: ping cookie=215 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=215 validated
+keep_alive: ping cookie=216 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=216 validated
+keep_alive: ping cookie=217 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=217 validated
+follow: tip slot=130054514 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054431/5011007/17e897b7 durable_tip=130054514/5011008/021c14d3 rollback_target=none anchor_after=130054431/5011007/17e897b7
+keep_alive: ping cookie=218 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=218 validated
+follow: tip slot=130054548 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054514/5011008/021c14d3 durable_tip=130054548/5011009/d7141aea rollback_target=none anchor_after=130054514/5011008/021c14d3
+keep_alive: ping cookie=219 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=219 validated
+keep_alive: ping cookie=220 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=220 validated
+keep_alive: ping cookie=221 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=221 validated
+follow: tip slot=130054613 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=222 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=222 validated
+keep_alive: ping cookie=223 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=223 validated
+keep_alive: ping cookie=224 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=224 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054548/5011009/d7141aea durable_tip=130054613/5011010/73b48b28 rollback_target=none anchor_after=130054548/5011009/d7141aea
+follow: tip slot=130054638 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054613/5011010/73b48b28 durable_tip=130054638/5011011/77d28bfb rollback_target=none anchor_after=130054613/5011010/73b48b28
+keep_alive: ping cookie=225 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=225 validated
+keep_alive: ping cookie=226 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=226 validated
+follow: tip slot=130054704 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054638/5011011/77d28bfb durable_tip=130054704/5011012/ae58ec2a rollback_target=none anchor_after=130054638/5011011/77d28bfb
+keep_alive: ping cookie=227 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=227 validated
+follow: tip slot=130054718 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054704/5011012/ae58ec2a durable_tip=130054718/5011013/d4335f1d rollback_target=none anchor_after=130054704/5011012/ae58ec2a
+keep_alive: ping cookie=228 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=228 validated
+follow: tip slot=130054745 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054718/5011013/d4335f1d durable_tip=130054745/5011014/d45c0414 rollback_target=none anchor_after=130054718/5011013/d4335f1d
+keep_alive: ping cookie=229 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=229 validated
+follow: tip slot=130054763 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054745/5011014/d45c0414 durable_tip=130054763/5011015/1fbe6e27 rollback_target=none anchor_after=130054745/5011014/d45c0414
+keep_alive: ping cookie=230 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=230 validated
+follow: tip slot=130054774 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054763/5011015/1fbe6e27 durable_tip=130054774/5011016/3bc9ad83 rollback_target=none anchor_after=130054763/5011015/1fbe6e27
+keep_alive: ping cookie=231 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=231 validated
+follow: tip slot=130054797 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130054798 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054774/5011016/3bc9ad83 durable_tip=130054798/5011018/01e1f802 rollback_target=none anchor_after=130054774/5011016/3bc9ad83
+follow: tip slot=130054800 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054798/5011018/01e1f802 durable_tip=130054800/5011019/09735a62 rollback_target=none anchor_after=130054798/5011018/01e1f802
+follow: tip slot=130054813 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=232 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=232 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054800/5011019/09735a62 durable_tip=130054813/5011020/8589d9a6 rollback_target=none anchor_after=130054800/5011019/09735a62
+keep_alive: ping cookie=233 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=233 validated
+follow: tip slot=130054851 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054813/5011020/8589d9a6 durable_tip=130054851/5011021/1496a8ed rollback_target=none anchor_after=130054813/5011020/8589d9a6
+keep_alive: ping cookie=234 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=234 validated
+keep_alive: ping cookie=235 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=235 validated
+keep_alive: ping cookie=236 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=236 validated
+follow: tip slot=130054903 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054851/5011021/1496a8ed durable_tip=130054903/5011022/9609f938 rollback_target=none anchor_after=130054851/5011021/1496a8ed
+follow: tip slot=130054911 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=237 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=237 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054903/5011022/9609f938 durable_tip=130054911/5011023/7afb203d rollback_target=none anchor_after=130054903/5011022/9609f938
+keep_alive: ping cookie=238 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=238 validated
+follow: tip slot=130054951 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=239 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=239 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054911/5011023/7afb203d durable_tip=130054951/5011024/d89a03cc rollback_target=none anchor_after=130054911/5011023/7afb203d
+follow: tip slot=130054953 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130054954 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054951/5011024/d89a03cc durable_tip=130054954/5011026/11e3e61d rollback_target=none anchor_after=130054951/5011024/d89a03cc
+follow: tip slot=130054961 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054954/5011026/11e3e61d durable_tip=130054961/5011027/aaaa3d99 rollback_target=none anchor_after=130054954/5011026/11e3e61d
+follow: tip slot=130054968 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054961/5011027/aaaa3d99 durable_tip=130054968/5011028/a6179ceb rollback_target=none anchor_after=130054961/5011027/aaaa3d99
+keep_alive: ping cookie=240 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=240 validated
+follow: tip slot=130054985 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054968/5011028/a6179ceb durable_tip=130054985/5011029/17995c41 rollback_target=none anchor_after=130054968/5011028/a6179ceb
+keep_alive: ping cookie=241 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=241 validated
+keep_alive: ping cookie=242 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=242 validated
+keep_alive: ping cookie=243 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=243 validated
+follow: tip slot=130055035 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054985/5011029/17995c41 durable_tip=130055035/5011030/8fdff31b rollback_target=none anchor_after=130054985/5011029/17995c41
+keep_alive: ping cookie=244 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=244 validated
+follow: tip slot=130055073 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=245 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=245 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055035/5011030/8fdff31b durable_tip=130055073/5011031/80730106 rollback_target=none anchor_after=130055035/5011030/8fdff31b
+follow: tip slot=130055079 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055073/5011031/80730106 durable_tip=130055079/5011032/e8774499 rollback_target=none anchor_after=130055073/5011031/80730106
+keep_alive: ping cookie=246 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=246 validated
+follow: tip slot=130055098 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055079/5011032/e8774499 durable_tip=130055098/5011033/83378d7d rollback_target=none anchor_after=130055079/5011032/e8774499
+follow: tip slot=130055109 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055098/5011033/83378d7d durable_tip=130055109/5011034/cc6514b0 rollback_target=none anchor_after=130055098/5011033/83378d7d
+keep_alive: ping cookie=247 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=247 validated
+follow: tip slot=130055119 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130055120 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055109/5011034/cc6514b0 durable_tip=130055120/5011036/f5cd588c rollback_target=none anchor_after=130055109/5011034/cc6514b0
+keep_alive: ping cookie=248 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=248 validated
+follow: tip slot=130055148 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055120/5011036/f5cd588c durable_tip=130055148/5011037/f1488689 rollback_target=none anchor_after=130055120/5011036/f5cd588c
+keep_alive: ping cookie=249 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=249 validated
+follow: tip slot=130055154 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055148/5011037/f1488689 durable_tip=130055154/5011038/61faff04 rollback_target=none anchor_after=130055148/5011037/f1488689
+keep_alive: ping cookie=250 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=250 validated
+keep_alive: ping cookie=251 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=251 validated
+keep_alive: ping cookie=252 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=252 validated
+follow: tip slot=130055219 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055154/5011038/61faff04 durable_tip=130055219/5011039/3f443c40 rollback_target=none anchor_after=130055154/5011038/61faff04
+keep_alive: ping cookie=253 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=253 validated
+follow: tip slot=130055247 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055219/5011039/3f443c40 durable_tip=130055247/5011040/a1e71f3e rollback_target=none anchor_after=130055219/5011039/3f443c40
+keep_alive: ping cookie=254 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=254 validated
+keep_alive: ping cookie=255 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=255 validated
+follow: tip slot=130055275 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055247/5011040/a1e71f3e durable_tip=130055275/5011041/3285f42e rollback_target=none anchor_after=130055247/5011040/a1e71f3e
+keep_alive: ping cookie=256 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=256 validated
+keep_alive: ping cookie=257 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=257 validated
+follow: tip slot=130055325 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055275/5011041/3285f42e durable_tip=130055325/5011042/cfb28459 rollback_target=none anchor_after=130055275/5011041/3285f42e
+keep_alive: ping cookie=258 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=258 validated
+keep_alive: ping cookie=259 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=259 validated
+follow: tip slot=130055373 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=260 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=260 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055325/5011042/cfb28459 durable_tip=130055373/5011043/b984f43a rollback_target=none anchor_after=130055325/5011042/cfb28459
+keep_alive: ping cookie=261 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=261 validated
+keep_alive: ping cookie=262 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=262 validated
+follow: tip slot=130055431 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=263 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=263 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055373/5011043/b984f43a durable_tip=130055431/5011044/cd468ea2 rollback_target=none anchor_after=130055373/5011043/b984f43a
+follow: tip slot=130055438 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055431/5011044/cd468ea2 durable_tip=130055438/5011045/4dc72180 rollback_target=none anchor_after=130055431/5011044/cd468ea2
+keep_alive: ping cookie=264 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=264 validated
+follow: tip slot=130055470 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=265 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=265 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055438/5011045/4dc72180 durable_tip=130055470/5011046/ef882e97 rollback_target=none anchor_after=130055438/5011045/4dc72180
+keep_alive: ping cookie=266 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=266 validated
+follow: tip slot=130055496 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055470/5011046/ef882e97 durable_tip=130055496/5011047/998a6d39 rollback_target=none anchor_after=130055470/5011046/ef882e97
+follow: tip slot=130055501 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055496/5011047/998a6d39 durable_tip=130055501/5011048/97c6fd88 rollback_target=none anchor_after=130055496/5011047/998a6d39
+follow: tip slot=130055506 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055501/5011048/97c6fd88 durable_tip=130055506/5011049/6411f487 rollback_target=none anchor_after=130055501/5011048/97c6fd88
+keep_alive: ping cookie=267 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=267 validated
+follow: tip slot=130055527 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055506/5011049/6411f487 durable_tip=130055527/5011050/5370c66d rollback_target=none anchor_after=130055506/5011049/6411f487
+follow: tip slot=130055531 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055527/5011050/5370c66d durable_tip=130055531/5011051/f5d521ad rollback_target=none anchor_after=130055527/5011050/5370c66d
+keep_alive: ping cookie=268 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=268 validated
+follow: tip slot=130055536 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055531/5011051/f5d521ad durable_tip=130055536/5011052/d5c94825 rollback_target=none anchor_after=130055531/5011051/f5d521ad
+follow: tip slot=130055544 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055536/5011052/d5c94825 durable_tip=130055544/5011053/98c33232 rollback_target=none anchor_after=130055536/5011052/d5c94825
+keep_alive: ping cookie=269 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=269 validated
+follow: tip slot=130055569 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130055570 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055544/5011053/98c33232 durable_tip=130055570/5011055/333e8dff rollback_target=none anchor_after=130055544/5011053/98c33232
+keep_alive: ping cookie=270 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=270 validated
+keep_alive: ping cookie=271 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=271 validated
+keep_alive: ping cookie=272 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=272 validated
+keep_alive: ping cookie=273 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=273 validated
+follow: tip slot=130055650 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055570/5011055/333e8dff durable_tip=130055650/5011056/24fb8120 rollback_target=none anchor_after=130055570/5011055/333e8dff
+keep_alive: ping cookie=274 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=274 validated
+keep_alive: ping cookie=275 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=275 validated
+follow: tip slot=130055680 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055650/5011056/24fb8120 durable_tip=130055680/5011057/e826fdcd rollback_target=none anchor_after=130055650/5011056/24fb8120
+follow: tip slot=130055692 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=276 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=276 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055680/5011057/e826fdcd durable_tip=130055692/5011058/cde452fb rollback_target=none anchor_after=130055680/5011057/e826fdcd
+follow: tip slot=130055709 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055692/5011058/cde452fb durable_tip=130055709/5011059/e6fcfb54 rollback_target=none anchor_after=130055692/5011058/cde452fb
+keep_alive: ping cookie=277 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=277 validated
+keep_alive: ping cookie=278 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=278 validated
+keep_alive: ping cookie=279 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=279 validated
+follow: tip slot=130055773 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=280 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=280 validated
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055709/5011059/e6fcfb54 durable_tip=130055773/5011060/54e67d2d rollback_target=none anchor_after=130055709/5011059/e6fcfb54
+follow: tip slot=130055785 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055773/5011060/54e67d2d durable_tip=130055785/5011061/c7a82543 rollback_target=none anchor_after=130055773/5011060/54e67d2d
+keep_alive: ping cookie=281 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=281 validated
+follow: tip slot=130055794 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055785/5011061/c7a82543 durable_tip=130055794/5011062/79951cf1 rollback_target=none anchor_after=130055785/5011061/c7a82543
+follow: tip slot=130055805 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055794/5011062/79951cf1 durable_tip=130055805/5011063/848c04fa rollback_target=none anchor_after=130055794/5011062/79951cf1
+keep_alive: ping cookie=282 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=282 validated
+follow: tip slot=130055824 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055805/5011063/848c04fa durable_tip=130055824/5011064/346881b5 rollback_target=none anchor_after=130055805/5011063/848c04fa
+keep_alive: ping cookie=283 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=283 validated
+follow: tip slot=130055852 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=rollback_admit action=reset_to_bootstrap reason=rollback_admission anchor_before=130055824/5011064/346881b5 durable_tip=130055852/5011065/de185e24 rollback_target=130055824/5011064/346881b5 anchor_after=absent
+keep_alive: ping cookie=284 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=284 validated
+keep_alive: ping cookie=285 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=285 validated
+keep_alive: ping cookie=286 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=286 validated
+keep_alive: ping cookie=287 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=287 validated
+keep_alive: ping cookie=288 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=288 validated
+rollback-followed: to_slot=130055824 to_hash=346881b5
+keep_alive: ping cookie=289 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=289 validated
+follow: tip slot=130055852 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=290 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=290 validated
+keep_alive: ping cookie=291 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=291 validated
+keep_alive: ping cookie=292 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=292 validated
+keep_alive: ping cookie=293 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=293 validated
+rollback-followed: to_slot=130055933 to_hash=6105481b
+keep_alive: ping cookie=294 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=294 validated
+follow: tip slot=130055955 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130055959 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130056035 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130056070 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=295 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=295 validated
+recovery-trace: path=recovery_admit action=reset_and_refold reason=anchor_absent anchor_before=absent durable_tip=130056070/5011077/558d1d7a rollback_target=none anchor_after=absent
+keep_alive: ping cookie=296 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=296 validated
+keep_alive: ping cookie=297 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=297 validated
+keep_alive: ping cookie=298 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=298 validated
+keep_alive: ping cookie=299 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=299 validated
+keep_alive: ping cookie=300 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=300 validated
+keep_alive: ping cookie=301 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=301 validated
+keep_alive: ping cookie=302 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=302 validated
+keep_alive: ping cookie=303 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=303 validated
+keep_alive: ping cookie=304 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=304 validated
+keep_alive: ping cookie=305 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=305 validated
+keep_alive: ping cookie=306 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=306 validated
+keep_alive: ping cookie=307 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=307 validated
+keep_alive: ping cookie=308 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=308 validated
+keep_alive: ping cookie=309 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=309 validated
+keep_alive: ping cookie=310 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=310 validated
+keep_alive: ping cookie=311 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=311 validated
+keep_alive: ping cookie=312 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=312 validated
+keep_alive: ping cookie=313 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=313 validated
+keep_alive: ping cookie=314 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=314 validated
+keep_alive: ping cookie=315 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=315 validated
+keep_alive: ping cookie=316 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=316 validated
+keep_alive: ping cookie=317 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=317 validated
+keep_alive: ping cookie=318 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=318 validated
+keep_alive: ping cookie=319 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=319 validated
+keep_alive: ping cookie=320 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=320 validated
+keep_alive: ping cookie=321 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=321 validated
+keep_alive: ping cookie=322 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=322 validated
+keep_alive: ping cookie=323 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=323 validated
+keep_alive: ping cookie=324 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=324 validated
+keep_alive: ping cookie=325 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=325 validated
+keep_alive: ping cookie=326 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=326 validated
+keep_alive: ping cookie=327 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=327 validated
+keep_alive: ping cookie=328 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=328 validated
+keep_alive: ping cookie=329 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=329 validated
+keep_alive: ping cookie=330 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=330 validated
+keep_alive: ping cookie=331 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=331 validated
+keep_alive: ping cookie=332 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=332 validated
+keep_alive: ping cookie=333 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=333 validated
+keep_alive: ping cookie=334 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=334 validated
+keep_alive: ping cookie=335 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=335 validated
+keep_alive: ping cookie=336 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=336 validated
+keep_alive: ping cookie=337 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=337 validated
+keep_alive: ping cookie=338 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=338 validated
+keep_alive: ping cookie=339 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=339 validated
+keep_alive: ping cookie=340 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=340 validated
+keep_alive: ping cookie=341 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=341 validated
+keep_alive: ping cookie=342 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=342 validated
+follow: tip slot=130056078 behind=506 slots from peer
+recovery-trace: path=rollback_admit action=reset_to_bootstrap reason=rollback_admission anchor_before=130056070/5011077/558d1d7a durable_tip=130056372/5011093/23fb9e0d rollback_target=130056359/5011092/1e2de002 anchor_after=absent
+keep_alive: ping cookie=343 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=343 validated
+keep_alive: ping cookie=344 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=344 validated
+keep_alive: ping cookie=345 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=345 validated
+keep_alive: ping cookie=346 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=346 validated
+rollback-followed: to_slot=130056359 to_hash=1e2de002
+keep_alive: ping cookie=347 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=347 validated
+keep_alive: ping cookie=348 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=348 validated
+follow: tip slot=130056584 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130057084 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130057121 -- AT PEER TIP (caught up, following live)
+keep_alive: ping cookie=349 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=349 validated
+keep_alive: ping cookie=350 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=350 validated
+keep_alive: ping cookie=351 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=351 validated
+recovery-trace: path=recovery_admit action=reset_and_refold reason=anchor_absent anchor_before=absent durable_tip=130057121/5011127/61b2f774 rollback_target=none anchor_after=absent
+keep_alive: ping cookie=352 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=352 validated
+keep_alive: ping cookie=353 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=353 validated
+keep_alive: ping cookie=354 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=354 validated
+keep_alive: ping cookie=355 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=355 validated
+keep_alive: ping cookie=356 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=356 validated
+keep_alive: ping cookie=357 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=357 validated
+keep_alive: ping cookie=358 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=358 validated
+keep_alive: ping cookie=359 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=359 validated
+keep_alive: ping cookie=360 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=360 validated
+keep_alive: ping cookie=361 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=361 validated
+keep_alive: ping cookie=362 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=362 validated
+keep_alive: ping cookie=363 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=363 validated
+keep_alive: ping cookie=364 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=364 validated
+keep_alive: ping cookie=365 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=365 validated
+keep_alive: ping cookie=366 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=366 validated
+keep_alive: ping cookie=367 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=367 validated
+keep_alive: ping cookie=368 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=368 validated
+keep_alive: ping cookie=369 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=369 validated
+keep_alive: ping cookie=370 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=370 validated
+keep_alive: ping cookie=371 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=371 validated
+keep_alive: ping cookie=372 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=372 validated
+keep_alive: ping cookie=373 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=373 validated
+keep_alive: ping cookie=374 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=374 validated
+keep_alive: ping cookie=375 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=375 validated
+keep_alive: ping cookie=376 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=376 validated
+keep_alive: ping cookie=377 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=377 validated
+keep_alive: ping cookie=378 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=378 validated
+keep_alive: ping cookie=379 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=379 validated
+keep_alive: ping cookie=380 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=380 validated
+keep_alive: ping cookie=381 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=381 validated
+keep_alive: ping cookie=382 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=382 validated
+keep_alive: ping cookie=383 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=383 validated
+keep_alive: ping cookie=384 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=384 validated
+keep_alive: ping cookie=385 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=385 validated
+keep_alive: ping cookie=386 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=386 validated
+keep_alive: ping cookie=387 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=387 validated
+keep_alive: ping cookie=388 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=388 validated
+keep_alive: ping cookie=389 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=389 validated
+keep_alive: ping cookie=390 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=390 validated
+keep_alive: ping cookie=391 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=391 validated
+keep_alive: ping cookie=392 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=392 validated
+keep_alive: ping cookie=393 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=393 validated
+keep_alive: ping cookie=394 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=394 validated
+keep_alive: ping cookie=395 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=395 validated
+keep_alive: ping cookie=396 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=396 validated
+keep_alive: ping cookie=397 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=397 validated
+keep_alive: ping cookie=398 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=398 validated
+keep_alive: ping cookie=399 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=399 validated
+keep_alive: ping cookie=400 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=400 validated
+keep_alive: ping cookie=401 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=401 validated
+keep_alive: ping cookie=402 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=402 validated
+ade_node --mode node: relay run loop exited (recovered/bootstrapped epoch=Some(304), tip slot=Some(129813427); forge CAPABLE — operator keys loaded — LIVE WirePump feed wired to ["127.0.0.1:3001"]: forge is observable when the feed is Continuing and a due leader slot is reached. Peer ACCEPT is NOT claimed — it is operator-gated (RO-LIVE-01/06), proven only by the peer's validation log. NO peer-acceptance / BA-02 claim.
+keep_alive: ping cookie=403 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=403 validated

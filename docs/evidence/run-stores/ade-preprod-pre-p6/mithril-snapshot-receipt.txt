@@ -1,0 +1,13 @@
+=== Ade verified Mithril snapshot receipt ===
+network / profile      : preprod (magic 1)
+shelley genesis hash   : 162d29c4e1cf6b8a84f2d692e67a3ac6bc7851bc3e6e4afe64d15778bed8bd86
+mithril aggregator     : https://aggregator.release-preprod.api.mithril.network/aggregator
+certified point        : slot 129813427 / block 4153b4f5acae17be10d66e90e9454c66ff2f69df52ec4cf4e34462d1eb86582c
+ledger state           : /home/ts/.cardano-live1/preprod-snapshot-6009/db/ledger/129813427/state (29323759 bytes)
+ledger tables          : /home/ts/.cardano-live1/preprod-snapshot-6009/db/ledger/129813427/tables (941682226 bytes)
+immutable range        : 0 .. 6010
+verification           : mithril-client verified the immutable files via the certificate; ancillary IOG-signed
+manifest               : /home/ts/.cardano-live1/preprod-snapshot-6009/manifest.json
+============================================
+next: ade node run --network preprod --bootstrap-mithril /home/ts/.cardano-live1/preprod-snapshot-6009/manifest.json \
+       --snapshot-dir /home/ts/.cardano-live1/preprod-snapshot-6009 --data-dir <your-data-dir> --peer <preview-node-addr>

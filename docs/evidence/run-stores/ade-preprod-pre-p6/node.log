@@ -1,0 +1,260 @@
+follow: tip slot=129813444 behind=236697 slots from peer
+follow: tip slot=129825426 behind=224795 slots from peer
+follow: tip slot=129836636 behind=213585 slots from peer
+follow: tip slot=129848166 behind=202055 slots from peer
+follow: tip slot=129859648 behind=190573 slots from peer
+follow: tip slot=129871238 behind=178983 slots from peer
+follow: tip slot=129883160 behind=167061 slots from peer
+follow: tip slot=129894579 behind=155642 slots from peer
+follow: tip slot=129906441 behind=143780 slots from peer
+follow: tip slot=129917131 behind=133090 slots from peer
+follow: tip slot=129928702 behind=121519 slots from peer
+follow: tip slot=129938854 behind=111550 slots from peer
+follow: tip slot=129950334 behind=100070 slots from peer
+follow: tip slot=129961505 behind=88899 slots from peer
+follow: tip slot=129971821 behind=78583 slots from peer
+follow: tip slot=129982521 behind=67883 slots from peer
+follow: tip slot=129993788 behind=56616 slots from peer
+follow: tip slot=130005380 behind=45111 slots from peer
+follow: tip slot=130017012 behind=33498 slots from peer
+follow: tip slot=130028468 behind=22065 slots from peer
+follow: tip slot=130040378 behind=10155 slots from peer
+follow: tip slot=130050533 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=reset_and_refold reason=anchor_absent anchor_before=absent durable_tip=130050533/5010827/d9a1dbf5 rollback_target=none anchor_after=absent
+follow: tip slot=130050581 behind=759 slots from peer
+recovery-trace: path=rollback_admit action=reset_to_bootstrap reason=rollback_admission anchor_before=130050533/5010827/d9a1dbf5 durable_tip=130051332/5010856/0a5695ea rollback_target=130051324/5010855/0fe37415 anchor_after=absent
+rollback-followed: to_slot=130051324 to_hash=0fe37415
+follow: tip slot=130051340 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130051663 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130051693 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=reset_and_refold reason=anchor_absent anchor_before=absent durable_tip=130051693/5010875/27e26a0c rollback_target=none anchor_after=absent
+follow: tip slot=130051720 behind=623 slots from peer
+follow: tip slot=130052343 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130052360 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130052529 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130052565 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130051693/5010875/27e26a0c durable_tip=130052565/5010912/fc5827b5 rollback_target=none anchor_after=130051693/5010875/27e26a0c
+follow: tip slot=130052667 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052565/5010912/fc5827b5 durable_tip=130052667/5010913/241d0dc2 rollback_target=none anchor_after=130052565/5010912/fc5827b5
+follow: tip slot=130052675 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052667/5010913/241d0dc2 durable_tip=130052675/5010914/3301ca6b rollback_target=none anchor_after=130052667/5010913/241d0dc2
+follow: tip slot=130052710 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052675/5010914/3301ca6b durable_tip=130052710/5010915/afb80812 rollback_target=none anchor_after=130052675/5010914/3301ca6b
+follow: tip slot=130052738 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052710/5010915/afb80812 durable_tip=130052738/5010916/b74fdc58 rollback_target=none anchor_after=130052710/5010915/afb80812
+follow: tip slot=130052756 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052738/5010916/b74fdc58 durable_tip=130052756/5010917/a8df22a6 rollback_target=none anchor_after=130052738/5010916/b74fdc58
+follow: tip slot=130052774 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052756/5010917/a8df22a6 durable_tip=130052774/5010918/925b6807 rollback_target=none anchor_after=130052756/5010917/a8df22a6
+follow: tip slot=130052787 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052774/5010918/925b6807 durable_tip=130052787/5010919/fa67e43a rollback_target=none anchor_after=130052774/5010918/925b6807
+follow: tip slot=130052798 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052787/5010919/fa67e43a durable_tip=130052798/5010920/da5d0d7d rollback_target=none anchor_after=130052787/5010919/fa67e43a
+follow: tip slot=130052805 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052798/5010920/da5d0d7d durable_tip=130052805/5010921/d7bc1f8a rollback_target=none anchor_after=130052798/5010920/da5d0d7d
+follow: tip slot=130052862 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052805/5010921/d7bc1f8a durable_tip=130052862/5010922/807b2cbc rollback_target=none anchor_after=130052805/5010921/d7bc1f8a
+follow: tip slot=130052903 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052862/5010922/807b2cbc durable_tip=130052903/5010923/2fb22bb5 rollback_target=none anchor_after=130052862/5010922/807b2cbc
+follow: tip slot=130052913 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052903/5010923/2fb22bb5 durable_tip=130052913/5010924/1f8a128c rollback_target=none anchor_after=130052903/5010923/2fb22bb5
+follow: tip slot=130052921 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052913/5010924/1f8a128c durable_tip=130052921/5010925/3f5fe5be rollback_target=none anchor_after=130052913/5010924/1f8a128c
+follow: tip slot=130052932 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052921/5010925/3f5fe5be durable_tip=130052932/5010926/42cbca8f rollback_target=none anchor_after=130052921/5010925/3f5fe5be
+follow: tip slot=130052936 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052932/5010926/42cbca8f durable_tip=130052936/5010927/fd79c226 rollback_target=none anchor_after=130052932/5010926/42cbca8f
+follow: tip slot=130053001 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130053002 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130052936/5010927/fd79c226 durable_tip=130053002/5010929/b3de9426 rollback_target=none anchor_after=130052936/5010927/fd79c226
+follow: tip slot=130053003 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053002/5010929/b3de9426 durable_tip=130053003/5010930/c1128ab8 rollback_target=none anchor_after=130053002/5010929/b3de9426
+follow: tip slot=130053016 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053003/5010930/c1128ab8 durable_tip=130053016/5010931/63007b3b rollback_target=none anchor_after=130053003/5010930/c1128ab8
+follow: tip slot=130053018 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130053020 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053016/5010931/63007b3b durable_tip=130053020/5010933/88f40a4a rollback_target=none anchor_after=130053016/5010931/63007b3b
+follow: tip slot=130053021 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053020/5010933/88f40a4a durable_tip=130053021/5010934/a0c692b8 rollback_target=none anchor_after=130053020/5010933/88f40a4a
+follow: tip slot=130053034 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053021/5010934/a0c692b8 durable_tip=130053034/5010935/116661b3 rollback_target=none anchor_after=130053021/5010934/a0c692b8
+follow: tip slot=130053046 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053034/5010935/116661b3 durable_tip=130053046/5010936/65eb9670 rollback_target=none anchor_after=130053034/5010935/116661b3
+follow: tip slot=130053051 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053046/5010936/65eb9670 durable_tip=130053051/5010937/44c39b69 rollback_target=none anchor_after=130053046/5010936/65eb9670
+follow: tip slot=130053074 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053051/5010937/44c39b69 durable_tip=130053074/5010938/1bf35ea4 rollback_target=none anchor_after=130053051/5010937/44c39b69
+follow: tip slot=130053096 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053074/5010938/1bf35ea4 durable_tip=130053096/5010939/cc32f883 rollback_target=none anchor_after=130053074/5010938/1bf35ea4
+follow: tip slot=130053155 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053096/5010939/cc32f883 durable_tip=130053155/5010940/93ba10aa rollback_target=none anchor_after=130053096/5010939/cc32f883
+follow: tip slot=130053178 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053155/5010940/93ba10aa durable_tip=130053178/5010941/b8dd0602 rollback_target=none anchor_after=130053155/5010940/93ba10aa
+follow: tip slot=130053197 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053178/5010941/b8dd0602 durable_tip=130053197/5010942/bde178f0 rollback_target=none anchor_after=130053178/5010941/b8dd0602
+follow: tip slot=130053215 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130053216 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053197/5010942/bde178f0 durable_tip=130053216/5010944/5e8aa5fa rollback_target=none anchor_after=130053197/5010942/bde178f0
+follow: tip slot=130053218 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053216/5010944/5e8aa5fa durable_tip=130053218/5010945/dcf5f308 rollback_target=none anchor_after=130053216/5010944/5e8aa5fa
+follow: tip slot=130053221 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053218/5010945/dcf5f308 durable_tip=130053221/5010946/49eca020 rollback_target=none anchor_after=130053218/5010945/dcf5f308
+follow: tip slot=130053233 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053221/5010946/49eca020 durable_tip=130053233/5010947/1a868be3 rollback_target=none anchor_after=130053221/5010946/49eca020
+follow: tip slot=130053269 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053233/5010947/1a868be3 durable_tip=130053269/5010948/abe24526 rollback_target=none anchor_after=130053233/5010947/1a868be3
+follow: tip slot=130053282 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053269/5010948/abe24526 durable_tip=130053282/5010949/8610b873 rollback_target=none anchor_after=130053269/5010948/abe24526
+follow: tip slot=130053292 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053282/5010949/8610b873 durable_tip=130053292/5010950/52e977e8 rollback_target=none anchor_after=130053282/5010949/8610b873
+follow: tip slot=130053297 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053292/5010950/52e977e8 durable_tip=130053297/5010951/24df1a9c rollback_target=none anchor_after=130053292/5010950/52e977e8
+follow: tip slot=130053318 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053297/5010951/24df1a9c durable_tip=130053318/5010952/d1983f91 rollback_target=none anchor_after=130053297/5010951/24df1a9c
+follow: tip slot=130053327 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053318/5010952/d1983f91 durable_tip=130053327/5010953/f506a94d rollback_target=none anchor_after=130053318/5010952/d1983f91
+follow: tip slot=130053392 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053327/5010953/f506a94d durable_tip=130053392/5010954/34878ef3 rollback_target=none anchor_after=130053327/5010953/f506a94d
+follow: tip slot=130053428 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053392/5010954/34878ef3 durable_tip=130053428/5010955/8f5aa422 rollback_target=none anchor_after=130053392/5010954/34878ef3
+follow: tip slot=130053453 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=rollback_admit action=reset_to_bootstrap reason=rollback_admission anchor_before=130053428/5010955/8f5aa422 durable_tip=130053453/5010956/c7129fe1 rollback_target=130053428/5010955/8f5aa422 anchor_after=absent
+rollback-followed: to_slot=130053428 to_hash=8f5aa422
+follow: tip slot=130053453 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130053527 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130053564 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=reset_and_refold reason=anchor_absent anchor_before=absent durable_tip=130053564/5010962/fe22f741 rollback_target=none anchor_after=absent
+follow: tip slot=130053571 behind=475 slots from peer
+follow: tip slot=130054046 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130054054 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130054350 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130054379 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130054431 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130053564/5010962/fe22f741 durable_tip=130054431/5011007/17e897b7 rollback_target=none anchor_after=130053564/5010962/fe22f741
+follow: tip slot=130054514 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054431/5011007/17e897b7 durable_tip=130054514/5011008/021c14d3 rollback_target=none anchor_after=130054431/5011007/17e897b7
+follow: tip slot=130054548 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054514/5011008/021c14d3 durable_tip=130054548/5011009/d7141aea rollback_target=none anchor_after=130054514/5011008/021c14d3
+follow: tip slot=130054613 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054548/5011009/d7141aea durable_tip=130054613/5011010/73b48b28 rollback_target=none anchor_after=130054548/5011009/d7141aea
+follow: tip slot=130054638 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054613/5011010/73b48b28 durable_tip=130054638/5011011/77d28bfb rollback_target=none anchor_after=130054613/5011010/73b48b28
+follow: tip slot=130054704 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054638/5011011/77d28bfb durable_tip=130054704/5011012/ae58ec2a rollback_target=none anchor_after=130054638/5011011/77d28bfb
+follow: tip slot=130054718 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054704/5011012/ae58ec2a durable_tip=130054718/5011013/d4335f1d rollback_target=none anchor_after=130054704/5011012/ae58ec2a
+follow: tip slot=130054745 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054718/5011013/d4335f1d durable_tip=130054745/5011014/d45c0414 rollback_target=none anchor_after=130054718/5011013/d4335f1d
+follow: tip slot=130054763 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054745/5011014/d45c0414 durable_tip=130054763/5011015/1fbe6e27 rollback_target=none anchor_after=130054745/5011014/d45c0414
+follow: tip slot=130054774 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054763/5011015/1fbe6e27 durable_tip=130054774/5011016/3bc9ad83 rollback_target=none anchor_after=130054763/5011015/1fbe6e27
+follow: tip slot=130054797 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130054798 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054774/5011016/3bc9ad83 durable_tip=130054798/5011018/01e1f802 rollback_target=none anchor_after=130054774/5011016/3bc9ad83
+follow: tip slot=130054800 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054798/5011018/01e1f802 durable_tip=130054800/5011019/09735a62 rollback_target=none anchor_after=130054798/5011018/01e1f802
+follow: tip slot=130054813 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054800/5011019/09735a62 durable_tip=130054813/5011020/8589d9a6 rollback_target=none anchor_after=130054800/5011019/09735a62
+follow: tip slot=130054851 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054813/5011020/8589d9a6 durable_tip=130054851/5011021/1496a8ed rollback_target=none anchor_after=130054813/5011020/8589d9a6
+follow: tip slot=130054903 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054851/5011021/1496a8ed durable_tip=130054903/5011022/9609f938 rollback_target=none anchor_after=130054851/5011021/1496a8ed
+follow: tip slot=130054911 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054903/5011022/9609f938 durable_tip=130054911/5011023/7afb203d rollback_target=none anchor_after=130054903/5011022/9609f938
+follow: tip slot=130054951 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054911/5011023/7afb203d durable_tip=130054951/5011024/d89a03cc rollback_target=none anchor_after=130054911/5011023/7afb203d
+follow: tip slot=130054953 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130054954 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054951/5011024/d89a03cc durable_tip=130054954/5011026/11e3e61d rollback_target=none anchor_after=130054951/5011024/d89a03cc
+follow: tip slot=130054961 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054954/5011026/11e3e61d durable_tip=130054961/5011027/aaaa3d99 rollback_target=none anchor_after=130054954/5011026/11e3e61d
+follow: tip slot=130054968 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054961/5011027/aaaa3d99 durable_tip=130054968/5011028/a6179ceb rollback_target=none anchor_after=130054961/5011027/aaaa3d99
+follow: tip slot=130054985 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054968/5011028/a6179ceb durable_tip=130054985/5011029/17995c41 rollback_target=none anchor_after=130054968/5011028/a6179ceb
+follow: tip slot=130055035 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130054985/5011029/17995c41 durable_tip=130055035/5011030/8fdff31b rollback_target=none anchor_after=130054985/5011029/17995c41
+follow: tip slot=130055073 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055035/5011030/8fdff31b durable_tip=130055073/5011031/80730106 rollback_target=none anchor_after=130055035/5011030/8fdff31b
+follow: tip slot=130055079 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055073/5011031/80730106 durable_tip=130055079/5011032/e8774499 rollback_target=none anchor_after=130055073/5011031/80730106
+follow: tip slot=130055098 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055079/5011032/e8774499 durable_tip=130055098/5011033/83378d7d rollback_target=none anchor_after=130055079/5011032/e8774499
+follow: tip slot=130055109 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055098/5011033/83378d7d durable_tip=130055109/5011034/cc6514b0 rollback_target=none anchor_after=130055098/5011033/83378d7d
+follow: tip slot=130055119 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130055120 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055109/5011034/cc6514b0 durable_tip=130055120/5011036/f5cd588c rollback_target=none anchor_after=130055109/5011034/cc6514b0
+follow: tip slot=130055148 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055120/5011036/f5cd588c durable_tip=130055148/5011037/f1488689 rollback_target=none anchor_after=130055120/5011036/f5cd588c
+follow: tip slot=130055154 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055148/5011037/f1488689 durable_tip=130055154/5011038/61faff04 rollback_target=none anchor_after=130055148/5011037/f1488689
+follow: tip slot=130055219 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055154/5011038/61faff04 durable_tip=130055219/5011039/3f443c40 rollback_target=none anchor_after=130055154/5011038/61faff04
+follow: tip slot=130055247 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055219/5011039/3f443c40 durable_tip=130055247/5011040/a1e71f3e rollback_target=none anchor_after=130055219/5011039/3f443c40
+follow: tip slot=130055275 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055247/5011040/a1e71f3e durable_tip=130055275/5011041/3285f42e rollback_target=none anchor_after=130055247/5011040/a1e71f3e
+follow: tip slot=130055325 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055275/5011041/3285f42e durable_tip=130055325/5011042/cfb28459 rollback_target=none anchor_after=130055275/5011041/3285f42e
+follow: tip slot=130055373 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055325/5011042/cfb28459 durable_tip=130055373/5011043/b984f43a rollback_target=none anchor_after=130055325/5011042/cfb28459
+follow: tip slot=130055431 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055373/5011043/b984f43a durable_tip=130055431/5011044/cd468ea2 rollback_target=none anchor_after=130055373/5011043/b984f43a
+follow: tip slot=130055438 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055431/5011044/cd468ea2 durable_tip=130055438/5011045/4dc72180 rollback_target=none anchor_after=130055431/5011044/cd468ea2
+follow: tip slot=130055470 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055438/5011045/4dc72180 durable_tip=130055470/5011046/ef882e97 rollback_target=none anchor_after=130055438/5011045/4dc72180
+follow: tip slot=130055496 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055470/5011046/ef882e97 durable_tip=130055496/5011047/998a6d39 rollback_target=none anchor_after=130055470/5011046/ef882e97
+follow: tip slot=130055501 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055496/5011047/998a6d39 durable_tip=130055501/5011048/97c6fd88 rollback_target=none anchor_after=130055496/5011047/998a6d39
+follow: tip slot=130055506 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055501/5011048/97c6fd88 durable_tip=130055506/5011049/6411f487 rollback_target=none anchor_after=130055501/5011048/97c6fd88
+follow: tip slot=130055527 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055506/5011049/6411f487 durable_tip=130055527/5011050/5370c66d rollback_target=none anchor_after=130055506/5011049/6411f487
+follow: tip slot=130055531 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055527/5011050/5370c66d durable_tip=130055531/5011051/f5d521ad rollback_target=none anchor_after=130055527/5011050/5370c66d
+follow: tip slot=130055536 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055531/5011051/f5d521ad durable_tip=130055536/5011052/d5c94825 rollback_target=none anchor_after=130055531/5011051/f5d521ad
+follow: tip slot=130055544 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055536/5011052/d5c94825 durable_tip=130055544/5011053/98c33232 rollback_target=none anchor_after=130055536/5011052/d5c94825
+follow: tip slot=130055569 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130055570 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055544/5011053/98c33232 durable_tip=130055570/5011055/333e8dff rollback_target=none anchor_after=130055544/5011053/98c33232
+follow: tip slot=130055650 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055570/5011055/333e8dff durable_tip=130055650/5011056/24fb8120 rollback_target=none anchor_after=130055570/5011055/333e8dff
+follow: tip slot=130055680 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055650/5011056/24fb8120 durable_tip=130055680/5011057/e826fdcd rollback_target=none anchor_after=130055650/5011056/24fb8120
+follow: tip slot=130055692 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055680/5011057/e826fdcd durable_tip=130055692/5011058/cde452fb rollback_target=none anchor_after=130055680/5011057/e826fdcd
+follow: tip slot=130055709 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055692/5011058/cde452fb durable_tip=130055709/5011059/e6fcfb54 rollback_target=none anchor_after=130055692/5011058/cde452fb
+follow: tip slot=130055773 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055709/5011059/e6fcfb54 durable_tip=130055773/5011060/54e67d2d rollback_target=none anchor_after=130055709/5011059/e6fcfb54
+follow: tip slot=130055785 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055773/5011060/54e67d2d durable_tip=130055785/5011061/c7a82543 rollback_target=none anchor_after=130055773/5011060/54e67d2d
+follow: tip slot=130055794 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055785/5011061/c7a82543 durable_tip=130055794/5011062/79951cf1 rollback_target=none anchor_after=130055785/5011061/c7a82543
+follow: tip slot=130055805 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055794/5011062/79951cf1 durable_tip=130055805/5011063/848c04fa rollback_target=none anchor_after=130055794/5011062/79951cf1
+follow: tip slot=130055824 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130055805/5011063/848c04fa durable_tip=130055824/5011064/346881b5 rollback_target=none anchor_after=130055805/5011063/848c04fa
+follow: tip slot=130055852 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=rollback_admit action=reset_to_bootstrap reason=rollback_admission anchor_before=130055824/5011064/346881b5 durable_tip=130055852/5011065/de185e24 rollback_target=130055824/5011064/346881b5 anchor_after=absent
+rollback-followed: to_slot=130055824 to_hash=346881b5
+follow: tip slot=130055852 -- AT PEER TIP (caught up, following live)
+rollback-followed: to_slot=130055933 to_hash=6105481b
+follow: tip slot=130055955 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130055959 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130056035 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130056070 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=reset_and_refold reason=anchor_absent anchor_before=absent durable_tip=130056070/5011077/558d1d7a rollback_target=none anchor_after=absent
+follow: tip slot=130056078 behind=506 slots from peer
+recovery-trace: path=rollback_admit action=reset_to_bootstrap reason=rollback_admission anchor_before=130056070/5011077/558d1d7a durable_tip=130056372/5011093/23fb9e0d rollback_target=130056359/5011092/1e2de002 anchor_after=absent
+rollback-followed: to_slot=130056359 to_hash=1e2de002
+follow: tip slot=130056584 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130057084 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130057121 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=reset_and_refold reason=anchor_absent anchor_before=absent durable_tip=130057121/5011127/61b2f774 rollback_target=none anchor_after=absent
