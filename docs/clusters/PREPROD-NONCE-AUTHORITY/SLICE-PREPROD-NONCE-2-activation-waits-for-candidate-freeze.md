@@ -42,6 +42,32 @@ binds a candidate that is still tracking evolving and guaranteed to move.
 **The premature commitment is written at bootstrap/import, not by promotion.** The fix therefore
 belongs at the bridge/seed-authority boundary, not in the promotion path.
 
+## REFERENCE-PROVEN against cardano-node — CE-N2-3's reference half is already satisfied
+
+Ade's internal arithmetic being self-consistent does not say WHICH value Cardano considers correct.
+ECA-5 is the precedent for why that matters: it found `extract_praos_nonces_v2` had **evolving and
+candidate swapped**, caught *"by value against the live node's epoch nonce"*, and notes the original
+deadlock *"had always masked this (no real boundary had ever been crossed)"*. Same shape as here, so
+the assumption was checked rather than trusted:
+
+```
+cardano-node preprod, epoch 305 (query protocol-state):
+  epochNonce          = 74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62
+  lastEpochBlockNonce = 60b3a0aea44e3977baa949c27c5053c984001dc858048e4d296ddebcf8b0dc67
+```
+
+| value | source | verdict |
+|---|---|---|
+| `74f10bea…` | Ade's boundary tick from `candidate@FROZEN` | **matches cardano-node byte-for-byte** |
+| `e3402a2b…` | the bootstrap bridge's committed eta0 | **wrong** |
+
+The post-tick bookkeeping agrees independently: Ade's pre-tick `lab = 60b3a0ae…` becomes
+`last_epoch_block_nonce'`, which is exactly what cardano now reports.
+
+**So Ade's Praos boundary combine is CORRECT against the Haskell reference.** The defect is isolated
+to WHEN the bridge takes its commitment — nothing about the tick, the freeze, or the operand order
+needs to change. This bounds the fix tightly and rules out an ECA-5-style swapped-operand repeat.
+
 ## Why not a mutable commitment
 
 A durable activation record must be a **sealed fact, not a promise to fix the fact later**. A record
