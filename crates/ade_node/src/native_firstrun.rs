@@ -604,15 +604,22 @@ where
                         .to_string(),
                 )
             })?;
-            let first_slot_next_epoch =
-                sc.epoch_start_slot.0.saturating_add(u64::from(sc.epoch_length_slots));
-            let candidate_freeze_slot = first_slot_next_epoch.saturating_sub(u64::from(rsw));
-            let seed_slot = binding.certified_point.slot.0;
-            if seed_slot < candidate_freeze_slot {
+            // Single-sourced with the binder: the SAME pure decision both the builder and the
+            // boundary binder consume, so they can never disagree about whether a seed-time eta0 is
+            // final (the desync class DC-EPOCH-16 S2 closed for the freeze WINDOW, applied here to
+            // the freeze DECISION).
+            if let bb::BridgeEta0Finality::PendingUntilFreeze {
+                candidate_freeze_slot,
+            } = bb::bridge_eta0_finality(
+                binding.certified_point.slot,
+                sc.epoch_start_slot,
+                sc.epoch_length_slots,
+                rsw,
+            ) {
                 return Err(NativeFirstRunError::BridgeNonceNotFinal {
                     target_epoch: s1a.epoch.0 + 1,
-                    seed_slot,
-                    candidate_freeze_slot,
+                    seed_slot: binding.certified_point.slot.0,
+                    candidate_freeze_slot: candidate_freeze_slot.0,
                 });
             }
         }

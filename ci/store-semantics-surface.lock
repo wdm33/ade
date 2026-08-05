@@ -82,3 +82,9 @@ store_semantics_version = 1
 surface_hash = "9a7b879e439b3980038a28ab7dff01f201032a04cf9f9dccc21a205586d21d03"
 semantics_neutral = true
 rationale = "PREPROD-NONCE-2: the SURFACE DECLARATION is widened to include crates/ade_ledger/src/bootstrap_bridge.rs; no production rule changed, so no store written by the previous binary becomes invalid. The omission was a real gap in the P6 surface list -- bootstrap_bridge DETERMINES eta0(seed+1), which lands in a durable activation record, and NONCE-1 proved that commitment wrong on preprod 304->305 while the file sat outside the hashed surface. Adding it means a future change to bridge nonce derivation can no longer alter durable authority without forcing the bump-or-declare decision."
+
+[[entry]]
+store_semantics_version = 1
+surface_hash = "9e3798fc49b0bb866f3b809dc08c7be6ad861fab35f87f0bbc887b995881eb25"
+semantics_neutral = true
+rationale = "PREPROD-NONCE-2 CE-N2-4 step 1: bootstrap_bridge.rs gains the PURE decision `bridge_eta0_finality` (+ tests) and nothing else. No durable field, encoding, canonical commitment or produced value changes -- the bridge is still built byte-identically when the seed is post-freeze, and refused when it is not. The function only NAMES a condition the FirstRun guard already enforced inline; consolidating both onto it removes a duplicate-arithmetic desync risk. Declared neutral because no store written by the previous binary becomes invalid."

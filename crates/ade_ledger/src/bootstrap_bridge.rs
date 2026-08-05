@@ -528,3 +528,113 @@ mod tests {
         );
     }
 }
+
+/// PREPROD-NONCE-2 (DC-EPOCH-16) — is the bridge's `eta0(seed+1)` FINAL at the seed point?
+///
+/// The candidate nonce for epoch N+1 tracks `evolving` until `firstSlotNextEpoch(N) − RSW` and freezes
+/// there. A bridge built from a seed BEFORE that slot binds a candidate that is guaranteed to keep
+/// moving, so its `eta0` is a value the real boundary will not reproduce.
+///
+/// Proven live on preprod 304→305: seed 129_813_427, freeze 129_945_600 → the bridge committed
+/// `blake2b(candidate@SEED ‖ leb) = e3402a2b…`, while cardano-node's `epochNonce(305)` is
+/// `74f10bea… = blake2b(candidate@FROZEN ‖ leb)` — the value Ade's own boundary tick computes
+/// correctly. The tick, the freeze rule, the operand order and the venue geometry are all
+/// reference-proven right; only the COMMITMENT was early.
+///
+/// This is deliberately a typed decision rather than a bare `bool`: the `Pending` arm carries the
+/// freeze slot, so a caller that must refuse or defer can say WHY and UNTIL WHEN without recomputing
+/// it, and cannot silently treat "not final" as "final".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BridgeEta0Finality {
+    /// The seed sits at/after the candidate-freeze slot: the candidate is already frozen, so a
+    /// seed-time `eta0` equals the value the real boundary will compute.
+    Final,
+    /// The seed precedes the freeze: no seed-time `eta0` can be final. Carries the slot at which it
+    /// WOULD become final.
+    PendingUntilFreeze { candidate_freeze_slot: SlotNo },
+}
+
+/// Decide [`BridgeEta0Finality`] from the seed position and the epoch geometry it sits in.
+///
+/// `epoch_start_slot` / `epoch_length_slots` describe the SEED's epoch (N); the freeze that matters is
+/// the one for N+1, at `firstSlotNextEpoch(N) − rsw`. Pure and total: an `rsw` larger than the epoch
+/// saturates to slot 0, which makes every seed `Final` — correct, because a window that spans the whole
+/// epoch means the candidate was frozen before the epoch began.
+pub fn bridge_eta0_finality(
+    seed_slot: SlotNo,
+    epoch_start_slot: SlotNo,
+    epoch_length_slots: u32,
+    rsw_slots: u32,
+) -> BridgeEta0Finality {
+    let first_slot_next_epoch = epoch_start_slot
+        .0
+        .saturating_add(u64::from(epoch_length_slots));
+    let candidate_freeze_slot = first_slot_next_epoch.saturating_sub(u64::from(rsw_slots));
+    if seed_slot.0 >= candidate_freeze_slot {
+        BridgeEta0Finality::Final
+    } else {
+        BridgeEta0Finality::PendingUntilFreeze {
+            candidate_freeze_slot: SlotNo(candidate_freeze_slot),
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod nonce2_finality_tests {
+    use super::*;
+
+    /// The measured preprod 304→305 case: seed 129_813_427 in epoch 304
+    /// (start 129_686_400, len 432_000, rsw 172_800) => freeze 129_945_600, seed is BEFORE it.
+    #[test]
+    fn preprod_snapshot_6009_seed_is_pending() {
+        assert_eq!(
+            bridge_eta0_finality(SlotNo(129_813_427), SlotNo(129_686_400), 432_000, 172_800),
+            BridgeEta0Finality::PendingUntilFreeze {
+                candidate_freeze_slot: SlotNo(129_945_600)
+            }
+        );
+    }
+
+    /// The boundary case is INCLUSIVE: a seed exactly at the freeze slot is already final.
+    #[test]
+    fn seed_exactly_at_the_freeze_slot_is_final() {
+        assert_eq!(
+            bridge_eta0_finality(SlotNo(129_945_600), SlotNo(129_686_400), 432_000, 172_800),
+            BridgeEta0Finality::Final
+        );
+        assert_eq!(
+            bridge_eta0_finality(SlotNo(129_945_599), SlotNo(129_686_400), 432_000, 172_800),
+            BridgeEta0Finality::PendingUntilFreeze {
+                candidate_freeze_slot: SlotNo(129_945_600)
+            }
+        );
+    }
+
+    /// Preview geometry decides the SAME way at the same relative position -- this is seed-position,
+    /// not venue. Freeze sits at 60% into the epoch on both venues (rsw/epoch_len = 0.4).
+    #[test]
+    fn preview_geometry_decides_identically_at_the_same_relative_position() {
+        // preview: epoch 86_400, rsw 34_560 => freeze at 51_840 into the epoch.
+        let start = SlotNo(1338 * 86_400);
+        assert_eq!(
+            bridge_eta0_finality(SlotNo(start.0 + 51_839), start, 86_400, 34_560),
+            BridgeEta0Finality::PendingUntilFreeze {
+                candidate_freeze_slot: SlotNo(start.0 + 51_840)
+            }
+        );
+        assert_eq!(
+            bridge_eta0_finality(SlotNo(start.0 + 51_840), start, 86_400, 34_560),
+            BridgeEta0Finality::Final
+        );
+    }
+
+    /// Total on degenerate geometry: an rsw >= the epoch length saturates rather than underflowing.
+    #[test]
+    fn oversized_rsw_saturates_and_is_final() {
+        assert_eq!(
+            bridge_eta0_finality(SlotNo(0), SlotNo(0), 100, u32::MAX),
+            BridgeEta0Finality::Final
+        );
+    }
+}
