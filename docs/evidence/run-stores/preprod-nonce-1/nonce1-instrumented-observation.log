@@ -1,0 +1,97 @@
+=== re-bootstrap start 03:16:57Z binary=47cfe76a ===
+
+=== Ade native Mithril bootstrap receipt ===
+network / profile      : preprod (magic 1)
+shelley genesis hash   : Hash32(162d29c4e1cf6b8a84f2d692e67a3ac6bc7851bc3e6e4afe64d15778bed8bd86)
+certified anchor point : slot 129813427 / block Hash32(4153b4f5acae17be10d66e90e9454c66ff2f69df52ec4cf4e34462d1eb86582c)
+seed artifact commit   : Hash32(5c7bdf6a47bc31f7329336aaeee46dc8e84189103a650355ddd0f69a5035ecc3)
+UTxO commitment        : Hash32(c9906929dfd9924943b9d12cd4436b26759f9cf03eb4490abcb59ea79960e239)
+durable ledger lineage : Hash32(fe99c63936729ec42237d07ea66cfd7aa1b15d74c824e3687a95817c175b0113)
+reduced checkpoint     : built (/home/ts/.cardano-live1/ade-preprod/reduced-checkpoint.redb)
+ChainSync              : starting against 1 peer(s)
+============================================
+nonce1-seed-quad: seed_epoch=EpochNo(304) seed_slot=129813427 epoch_start_slot=129686400 epoch_len=432000 sidecar_eta0=Hash32(14ff55044c8dd7becca29519ae90aa784a455d40b5313c3b24a82572fb8c758b) start_candidate=Hash32(40b4ed6b9afebe9f778157b9b1c447f96d679ec5ee9f7aeabe3df74ec1077e16) start_evolving=Hash32(40b4ed6b9afebe9f778157b9b1c447f96d679ec5ee9f7aeabe3df74ec1077e16) start_epoch_nonce=Hash32(14ff55044c8dd7becca29519ae90aa784a455d40b5313c3b24a82572fb8c758b) start_prev_epoch_nonce=Hash32(151dc58480d5f19048c6a44f38d08c578a83ed85409c9a4c8b986a9268ef6496) start_lab=Hash32(e99090d2f96810bad05abd7435ab4fb76a8afd1817fee62019083263d2cd85b7) start_last_epoch_block=None
+ade_node: cardano-cli kes.skey loaded; KES VK fingerprint = fd2f1de3b35c8ea7cb26b630455d0e7361a35e2b9174906de3c87fad87c07d59 — verify this matches your opcert before block production.
+nonce1-freeze-window: source=durable-sidecar k=2160 f=1/20 store_rsw=Some(172800) cli_rsw=Some(172800) cross_check=agreed effective_rsw=Some(172800)
+keep_alive: ping cookie=0 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=0 validated
+keep_alive: ping cookie=1 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=1 validated
+keep_alive: ping cookie=2 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=2 validated
+keep_alive: ping cookie=3 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=3 validated
+follow: tip slot=129813444 behind=403397 slots from peer
+keep_alive: ping cookie=4 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=4 validated
+follow: tip slot=129825426 behind=391527 slots from peer
+keep_alive: ping cookie=5 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=5 validated
+follow: tip slot=129836636 behind=380332 slots from peer
+keep_alive: ping cookie=6 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=6 validated
+follow: tip slot=129848166 behind=368815 slots from peer
+follow: tip slot=129859648 behind=357333 slots from peer
+keep_alive: ping cookie=7 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=7 validated
+follow: tip slot=129871238 behind=345743 slots from peer
+keep_alive: ping cookie=8 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=8 validated
+follow: tip slot=129883160 behind=333821 slots from peer
+keep_alive: ping cookie=9 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=9 validated
+follow: tip slot=129894579 behind=322402 slots from peer
+follow: tip slot=129906441 behind=310611 slots from peer
+keep_alive: ping cookie=10 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=10 validated
+follow: tip slot=129917131 behind=299929 slots from peer
+keep_alive: ping cookie=11 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=11 validated
+follow: tip slot=129928702 behind=288377 slots from peer
+keep_alive: ping cookie=12 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=12 validated
+follow: tip slot=129938854 behind=278238 slots from peer
+follow: tip slot=129950334 behind=266758 slots from peer
+keep_alive: ping cookie=13 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=13 validated
+follow: tip slot=129961505 behind=255628 slots from peer
+keep_alive: ping cookie=14 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=14 validated
+follow: tip slot=129971821 behind=245312 slots from peer
+keep_alive: ping cookie=15 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=15 validated
+follow: tip slot=129982521 behind=234612 slots from peer
+follow: tip slot=129993788 behind=223345 slots from peer
+keep_alive: ping cookie=16 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=16 validated
+follow: tip slot=130005380 behind=211812 slots from peer
+keep_alive: ping cookie=17 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=17 validated
+follow: tip slot=130017012 behind=200180 slots from peer
+keep_alive: ping cookie=18 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=18 validated
+follow: tip slot=130028468 behind=188750 slots from peer
+keep_alive: ping cookie=19 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=19 validated
+follow: tip slot=130040378 behind=176852 slots from peer
+follow: tip slot=130051522 behind=165708 slots from peer
+keep_alive: ping cookie=20 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=20 validated
+follow: tip slot=130062417 behind=154859 slots from peer
+keep_alive: ping cookie=21 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=21 validated
+follow: tip slot=130074457 behind=142837 slots from peer
+keep_alive: ping cookie=22 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=22 validated
+follow: tip slot=130086554 behind=130754 slots from peer
+keep_alive: ping cookie=23 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=23 validated
+follow: tip slot=130097870 behind=119449 slots from peer
+keep_alive: ping cookie=24 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=24 validated
+follow: tip slot=130108106 behind=109236 slots from peer
+keep_alive: ping cookie=25 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=25 validated
+nonce1-boundary-operands: from_epoch=EpochNo(304) to_epoch=EpochNo(305) tick_slot=130118424 epoch_start=130118400 epoch_len=Some(432000) rsw=Some(172800) freeze_slot=Some(129945600) durable_tip_slot=130118358 candidate=Hash32(f241d006bc9446096cafe17dca35bd635e803f2bd2b109f196506dc7b1ab8ced) evolving=Hash32(a150cff15bceee01039daa62037c958bd076f126b39f21039a9b83bec6890fb4) prev_epoch_nonce=Hash32(151dc58480d5f19048c6a44f38d08c578a83ed85409c9a4c8b986a9268ef6496) lab=Hash32(60b3a0aea44e3977baa949c27c5053c984001dc858048e4d296ddebcf8b0dc67) last_epoch_block=None last_epoch_block_nonce=Some(Hash32(151dc58480d5f19048c6a44f38d08c578a83ed85409c9a4c8b986a9268ef6496)) computed_eta0=Hash32(74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62) bridge_eta0=Hash32(e3402a2b2d04d1055ccf6a6fbafc3febda97a6a7b3a4247f84d9c6070965c7a1) match=false
+ade_node --mode node: relay run-loop sync step failed (Pump("DC-EPOCH-16 epoch-tick eta0 Hash32(74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62) != bridge eta0 Hash32(e3402a2b2d04d1055ccf6a6fbafc3febda97a6a7b3a4247f84d9c6070965c7a1) at epoch EpochNo(305)")); failing closed (no skip-past, no fallback).
+=== re-bootstrap EXITED rc=43 at 03:29:26Z ===

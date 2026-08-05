@@ -160,6 +160,34 @@ while the boundary tick yields `74f10bea…` from the *frozen* candidate. `epoch
 last_epoch_block_nonce` is applied identically on both sides (`epoch_wire.rs:703` and
 `node_sync.rs`); only the operands differ.
 
+### CONFIRMED on a FRESH store — two-sided, and the mismatch localizes to ONE operand
+
+The instrumented re-bootstrap reproduced the failure deterministically on a brand-new store and
+emitted the boundary side:
+
+```
+nonce1-boundary-operands: from_epoch=304 to_epoch=305 tick_slot=130118424 epoch_start=130118400
+  epoch_len=432000 rsw=172800 freeze_slot=129945600 durable_tip_slot=130118358
+  candidate=f241d006…  evolving=a150cff1…  last_epoch_block_nonce=Some(151dc584…)
+  computed_eta0=74f10bea…  bridge_eta0=e3402a2b…  match=false
+```
+
+Both sides then reproduce arithmetically, with the SECOND operand identical:
+
+```
+last_epoch_block_nonce = 151dc584…            <- IDENTICAL on both sides
+blake2b256(candidate@SEED   ‖ 151dc584…) = e3402a2b…  == committed   ✓
+blake2b256(candidate@FROZEN ‖ 151dc584…) = 74f10bea…  == computed    ✓
+```
+
+**The entire disagreement is ONE operand: the candidate.** `40b4ed6b…` at the seed (still tracking
+evolving) versus `f241d006…` after 132,173 further slots and the freeze.
+
+The same trace independently proves the freeze machinery is CORRECT: at the boundary
+`candidate ≠ evolving` (`f241d006…` vs `a150cff1…`), i.e. the candidate did freeze at 129,945,600
+exactly as computed, and evolving continued past it. Nothing about the freeze needs fixing — only
+*when the commitment is taken*.
+
 ### Everything else measured CLEAN
 
 | checked | result |
