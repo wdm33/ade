@@ -183,6 +183,53 @@ all when the seed precedes the freeze. Two shapes to weigh at implementation tim
 Both satisfy the invariant; they differ in how much the bootstrap receipt can promise. This is
 resolved with evidence during implementation, not guessed here.
 
+## STATE 2026-08-05 — the dangerous behaviour is BLOCKED; the durable completion remains
+
+```
+before:  the bridge could write a wrong FINAL eta0 into a durable activation record
+now:     the bridge REFUSES before the WAL commit-point when eta0 is not final
+```
+
+So this is no longer an emergency guard. What remains is the durable completion: making the
+node write the RIGHT value, safely and replay-equivalently.
+
+| landed | |
+|---|---|
+| `81df0bac` | CE-N2-3 — `BridgeNonceNotFinal` fails closed before the WAL commit-point. Proven live on preprod: `{ target_epoch: 305, seed_slot: 129813427, candidate_freeze_slot: 129945600 }`, rc=41, no bootable partial state |
+| `0481db1b` | CE-N2-4 step 1 — the typed `BridgeEta0Finality` decision, single-sourced between the FirstRun builder and (next) the boundary binder |
+
+### NEXT SESSION — start here, in this order (binding)
+
+1. **Read the history first**: ECA-5 (`26565bec`) and the bridge-nonce lineage. The methodological
+   rule above is not optional — this code class had an operand-order bug that stayed masked until a
+   real boundary crossed.
+2. **Re-read `bind_bridge_view`** (`epoch_wire.rs:570`) and both callers: live promotion (`:769`) and
+   warm-start recovery (`:941`).
+3. **Implement final nonce authority**: the boundary-tick `eta0` is AUTHORITATIVE; the bridge-stored
+   nonce is a CROSS-CHECK only when `BridgeEta0Finality::Final`.
+4. **Prove live path == recovery path** (byte-identical binding — the constraint `bind_bridge_view`'s
+   doc states, and the reason it is the sole binder).
+5. **Prove preprod eta0(305) resolves to `74f10bea…`** (CE-N2-4).
+6. **Prove `e3402a2b…` cannot reach the WAL** (CE-N2-3 regression + CE-N2-9 negative test).
+7. **Keep `ActivationAboveDurableTip` terminal** (CE-N2-6).
+
+**No LIVE-2 until that is green.**
+
+### Feasibility already verified (do not re-derive)
+
+- `bind_bridge_view` is the SOLE binding path, so one edit covers both callers.
+- The live caller has `chain_dep` in scope and can tick exactly as the frozen-leadership path does
+  (`epoch_wire.rs:703`).
+- Recovery already receives `RecoveredEpochNonce { epoch, eta0 }` independently of the bridge.
+- **No durable schema change is required**: the bridge carries `source_point_slot`, and the caller has
+  the `era_schedule` geometry, so finality is derivable at bind time.
+
+### Explicitly NOT to be done
+
+- No post-freeze-snapshot watcher. It is a legitimate temporary operational unblock, but it adds
+  operational noise and tempts the reader into treating timing luck as progress. The durable path is
+  already clear.
+
 ## Not claimed
 
 No fix yet, no invariant registered. This records the approved direction, the corrected mechanism, and
