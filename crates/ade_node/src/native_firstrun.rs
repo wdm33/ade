@@ -62,6 +62,20 @@ const PREVIEW_NETWORK_MAGIC: u32 = 2;
 /// is no partial state and no fallback to the cardano-cli / JSON seed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeFirstRunError {
+    /// PREPROD-NONCE-2 (DC-EPOCH-16): the bootstrap bridge cannot durably commit `eta0(seed+1)`
+    /// because the seed point precedes the candidate-freeze slot, so the candidate it would be built
+    /// from is still tracking `evolving` and WILL change before the real boundary.
+    ///
+    /// Proven live on preprod 304→305: the bridge committed
+    /// `blake2b(candidate@SEED ‖ leb) = e3402a2b…` while cardano-node's `epochNonce(305)` is
+    /// `74f10bea… = blake2b(candidate@FROZEN ‖ leb)` — the value Ade's own boundary tick computes
+    /// correctly. A durable activation record must be a SEALED FACT, so this fails closed rather than
+    /// persist a commitment that is knowably not final.
+    BridgeNonceNotFinal {
+        target_epoch: u64,
+        seed_slot: u64,
+        candidate_freeze_slot: u64,
+    },
     /// A required native-route file (manifest / state / tables / shelley
     /// genesis) could not be read. Carries the path label + the io error kind
     /// (no path bytes).
@@ -564,6 +578,44 @@ where
         // last_epoch_block, where the combine is blake2b_256(a || b) over the two 32-byte nonces;
         // extraEntropy is Neutral on preview. The bare candidate is the WRONG input -- it omits the
         // prev-hash entropy the real chain folds in, so the N+1 header leader-VRF checks would fail.
+        // PREPROD-NONCE-2 (DC-EPOCH-16): that combine is only FINAL if the candidate for seed+1 has
+        // ALREADY frozen at the seed point. The candidate tracks `evolving` until
+        // `firstSlotNextEpoch − RSW` and freezes there; a seed BEFORE that slot yields a candidate that
+        // is guaranteed to keep moving, so committing it durably binds a value the real boundary will
+        // not reproduce.
+        //
+        // Proven live on preprod 304→305 (seed 129_813_427, freeze 129_945_600): the bridge committed
+        // `e3402a2b…` while cardano-node's epochNonce(305) is `74f10bea…` — which Ade's own boundary
+        // tick computes CORRECTLY from the frozen candidate. The tick, the freeze rule, the operand
+        // order and the venue geometry are all reference-proven right; only this commitment was early.
+        // So fail closed here rather than persist a knowably non-final commitment: a durable activation
+        // record is a sealed fact, not a promise to fix the fact later.
+        {
+            let sc = &output.seed_epoch_consensus_inputs;
+            let rsw = ade_core::consensus::era_schedule::praos_rsw_slots(
+                sc.security_param,
+                u64::from(sc.active_slots_coeff.numer),
+                u64::from(sc.active_slots_coeff.denom),
+            )
+            .ok_or_else(|| {
+                NativeFirstRunError::NativeBootstrap(
+                    "DC-EPOCH-16: cannot derive the candidate-freeze window (RSW) from the seed \
+                     geometry -- refusing to bind a bridge nonce whose finality cannot be proven"
+                        .to_string(),
+                )
+            })?;
+            let first_slot_next_epoch =
+                sc.epoch_start_slot.0.saturating_add(u64::from(sc.epoch_length_slots));
+            let candidate_freeze_slot = first_slot_next_epoch.saturating_sub(u64::from(rsw));
+            let seed_slot = binding.certified_point.slot.0;
+            if seed_slot < candidate_freeze_slot {
+                return Err(NativeFirstRunError::BridgeNonceNotFinal {
+                    target_epoch: s1a.epoch.0 + 1,
+                    seed_slot,
+                    candidate_freeze_slot,
+                });
+            }
+        }
         let eta0_next = {
             let mut buf = [0u8; 64];
             buf[0..32].copy_from_slice(&s1a.praos_nonces.candidate.0);

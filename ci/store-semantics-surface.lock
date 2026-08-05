@@ -48,6 +48,9 @@ files = [
   # --- governance / reward production that lands in durable state ---
   "crates/ade_ledger/src/governance.rs",
   "crates/ade_ledger/src/bootstrap_reward_update.rs",
+  # PREPROD-NONCE-2: the bootstrap bridge DETERMINES eta0(seed+1) that lands in a durable
+  # activation record. It was missing from this surface until NONCE-1 proved its commitment wrong.
+  "crates/ade_ledger/src/bootstrap_bridge.rs",
   # --- the fingerprint the WAL chain is built from ---
   "crates/ade_ledger/src/fingerprint.rs",
   # --- epoch/leadership authority derived into the accumulator ---
@@ -73,3 +76,9 @@ store_semantics_version = 1
 surface_hash = "d43885e23dbcca95ae07fafd37fa2b1b7625895aa75644080401b8b16d6df4a0"
 semantics_neutral = true
 rationale = "P6-S5 multi-venue differential (DC-EPOCH-37). state.rs changed by APPENDING tests only, inside its existing #[cfg(test)] module: a VENUES geometry table, three per-venue property tests, and the P3 regression pin. No production item was added, removed or altered -- detect_epoch_transition, check_epoch_agreement, mainnet_shelley_schedule and every other non-test item are byte-identical, so nothing a store records can differ. Verified by the ade_ledger suite staying green at 1022 with only new tests added."
+
+[[entry]]
+store_semantics_version = 1
+surface_hash = "9a7b879e439b3980038a28ab7dff01f201032a04cf9f9dccc21a205586d21d03"
+semantics_neutral = true
+rationale = "PREPROD-NONCE-2: the SURFACE DECLARATION is widened to include crates/ade_ledger/src/bootstrap_bridge.rs; no production rule changed, so no store written by the previous binary becomes invalid. The omission was a real gap in the P6 surface list -- bootstrap_bridge DETERMINES eta0(seed+1), which lands in a durable activation record, and NONCE-1 proved that commitment wrong on preprod 304->305 while the file sat outside the hashed surface. Adding it means a future change to bridge nonce derivation can no longer alter durable authority without forcing the bump-or-declare decision."
