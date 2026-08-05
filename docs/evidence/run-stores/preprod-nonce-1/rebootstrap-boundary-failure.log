@@ -1,0 +1,94 @@
+=== re-bootstrap start 01:12:00Z binary=221031cb ===
+
+=== Ade native Mithril bootstrap receipt ===
+network / profile      : preprod (magic 1)
+shelley genesis hash   : Hash32(162d29c4e1cf6b8a84f2d692e67a3ac6bc7851bc3e6e4afe64d15778bed8bd86)
+certified anchor point : slot 129813427 / block Hash32(4153b4f5acae17be10d66e90e9454c66ff2f69df52ec4cf4e34462d1eb86582c)
+seed artifact commit   : Hash32(5c7bdf6a47bc31f7329336aaeee46dc8e84189103a650355ddd0f69a5035ecc3)
+UTxO commitment        : Hash32(c9906929dfd9924943b9d12cd4436b26759f9cf03eb4490abcb59ea79960e239)
+durable ledger lineage : Hash32(fe99c63936729ec42237d07ea66cfd7aa1b15d74c824e3687a95817c175b0113)
+reduced checkpoint     : built (/home/ts/.cardano-live1/ade-preprod/reduced-checkpoint.redb)
+ChainSync              : starting against 1 peer(s)
+============================================
+ade_node: cardano-cli kes.skey loaded; KES VK fingerprint = fd2f1de3b35c8ea7cb26b630455d0e7361a35e2b9174906de3c87fad87c07d59 — verify this matches your opcert before block production.
+keep_alive: ping cookie=0 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=0 validated
+keep_alive: ping cookie=1 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=1 validated
+keep_alive: ping cookie=2 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=2 validated
+keep_alive: ping cookie=3 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=3 validated
+keep_alive: ping cookie=4 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=4 validated
+follow: tip slot=129813444 behind=395817 slots from peer
+follow: tip slot=129825426 behind=384042 slots from peer
+keep_alive: ping cookie=5 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=5 validated
+follow: tip slot=129836636 behind=372837 slots from peer
+keep_alive: ping cookie=6 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=6 validated
+follow: tip slot=129848166 behind=361328 slots from peer
+follow: tip slot=129859648 behind=349856 slots from peer
+keep_alive: ping cookie=7 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=7 validated
+follow: tip slot=129871238 behind=338283 slots from peer
+keep_alive: ping cookie=8 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=8 validated
+follow: tip slot=129883160 behind=326361 slots from peer
+follow: tip slot=129894579 behind=314942 slots from peer
+keep_alive: ping cookie=9 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=9 validated
+follow: tip slot=129906441 behind=303080 slots from peer
+keep_alive: ping cookie=10 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=10 validated
+follow: tip slot=129917131 behind=292437 slots from peer
+keep_alive: ping cookie=11 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=11 validated
+follow: tip slot=129928702 behind=280886 slots from peer
+follow: tip slot=129938854 behind=270752 slots from peer
+keep_alive: ping cookie=12 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=12 validated
+follow: tip slot=129950334 behind=259272 slots from peer
+keep_alive: ping cookie=13 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=13 validated
+follow: tip slot=129961505 behind=248101 slots from peer
+keep_alive: ping cookie=14 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=14 validated
+follow: tip slot=129971821 behind=237785 slots from peer
+keep_alive: ping cookie=15 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=15 validated
+follow: tip slot=129982521 behind=227140 slots from peer
+follow: tip slot=129993788 behind=215873 slots from peer
+keep_alive: ping cookie=16 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=16 validated
+follow: tip slot=130005380 behind=204281 slots from peer
+keep_alive: ping cookie=17 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=17 validated
+follow: tip slot=130017012 behind=192649 slots from peer
+keep_alive: ping cookie=18 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=18 validated
+follow: tip slot=130028468 behind=181193 slots from peer
+keep_alive: ping cookie=19 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=19 validated
+follow: tip slot=130040378 behind=169283 slots from peer
+keep_alive: ping cookie=20 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=20 validated
+follow: tip slot=130051522 behind=158242 slots from peer
+follow: tip slot=130062417 behind=147347 slots from peer
+keep_alive: ping cookie=21 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=21 validated
+follow: tip slot=130074457 behind=135307 slots from peer
+keep_alive: ping cookie=22 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=22 validated
+follow: tip slot=130086554 behind=123210 slots from peer
+keep_alive: ping cookie=23 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=23 validated
+follow: tip slot=130097870 behind=111894 slots from peer
+keep_alive: ping cookie=24 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=24 validated
+follow: tip slot=130108106 behind=101751 slots from peer
+keep_alive: ping cookie=25 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=25 validated
+ade_node --mode node: relay run-loop sync step failed (Pump("DC-EPOCH-16 epoch-tick eta0 Hash32(74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62) != bridge eta0 Hash32(e3402a2b2d04d1055ccf6a6fbafc3febda97a6a7b3a4247f84d9c6070965c7a1) at epoch EpochNo(305)")); failing closed (no skip-past, no fallback).
+=== re-bootstrap EXITED rc=43 at 01:24:39Z ===

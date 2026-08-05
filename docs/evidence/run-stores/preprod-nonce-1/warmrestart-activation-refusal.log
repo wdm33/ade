@@ -1,0 +1,125 @@
+ade_node: cardano-cli kes.skey loaded; KES VK fingerprint = fd2f1de3b35c8ea7cb26b630455d0e7361a35e2b9174906de3c87fad87c07d59 — verify this matches your opcert before block production.
+keep_alive: ping cookie=0 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=0 validated
+keep_alive: ping cookie=1 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=1 validated
+keep_alive: ping cookie=2 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=2 validated
+recovery-trace: path=recovery_admit action=reset_and_refold reason=anchor_absent anchor_before=absent durable_tip=130118358/5013814/b954f5a0 rollback_target=none anchor_after=absent
+keep_alive: ping cookie=3 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=3 validated
+keep_alive: ping cookie=4 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=4 validated
+keep_alive: ping cookie=5 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=5 validated
+keep_alive: ping cookie=6 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=6 validated
+keep_alive: ping cookie=7 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=7 validated
+keep_alive: ping cookie=8 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=8 validated
+keep_alive: ping cookie=9 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=9 validated
+keep_alive: ping cookie=10 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=10 validated
+keep_alive: ping cookie=11 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=11 validated
+keep_alive: ping cookie=12 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=12 validated
+keep_alive: ping cookie=13 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=13 validated
+keep_alive: ping cookie=14 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=14 validated
+keep_alive: ping cookie=15 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=15 validated
+keep_alive: ping cookie=16 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=16 validated
+keep_alive: ping cookie=17 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=17 validated
+keep_alive: ping cookie=18 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=18 validated
+keep_alive: ping cookie=19 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=19 validated
+keep_alive: ping cookie=20 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=20 validated
+keep_alive: ping cookie=21 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=21 validated
+keep_alive: ping cookie=22 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=22 validated
+keep_alive: ping cookie=23 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=23 validated
+keep_alive: ping cookie=24 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=24 validated
+keep_alive: ping cookie=25 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=25 validated
+keep_alive: ping cookie=26 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=26 validated
+keep_alive: ping cookie=27 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=27 validated
+keep_alive: ping cookie=28 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=28 validated
+keep_alive: ping cookie=29 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=29 validated
+keep_alive: ping cookie=30 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=30 validated
+keep_alive: ping cookie=31 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=31 validated
+keep_alive: ping cookie=32 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=32 validated
+keep_alive: ping cookie=33 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=33 validated
+keep_alive: ping cookie=34 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=34 validated
+keep_alive: ping cookie=35 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=35 validated
+keep_alive: ping cookie=36 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=36 validated
+keep_alive: ping cookie=37 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=37 validated
+keep_alive: ping cookie=38 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=38 validated
+keep_alive: ping cookie=39 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=39 validated
+keep_alive: ping cookie=40 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=40 validated
+keep_alive: ping cookie=41 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=41 validated
+keep_alive: ping cookie=42 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=42 validated
+keep_alive: ping cookie=43 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=43 validated
+keep_alive: ping cookie=44 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=44 validated
+keep_alive: ping cookie=45 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=45 validated
+keep_alive: ping cookie=46 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=46 validated
+keep_alive: ping cookie=47 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=47 validated
+keep_alive: ping cookie=48 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=48 validated
+keep_alive: ping cookie=49 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=49 validated
+keep_alive: ping cookie=50 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=50 validated
+keep_alive: ping cookie=51 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=51 validated
+keep_alive: ping cookie=52 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=52 validated
+keep_alive: ping cookie=53 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=53 validated
+keep_alive: ping cookie=54 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=54 validated
+keep_alive: ping cookie=55 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=55 validated
+keep_alive: ping cookie=56 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=56 validated
+keep_alive: ping cookie=57 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=57 validated
+keep_alive: ping cookie=58 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=58 validated
+keep_alive: ping cookie=59 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=59 validated
+keep_alive: ping cookie=60 sent (cadence) peer=127.0.0.1:3001
+keep_alive: pong cookie=60 validated
+ade_node --mode node: relay run-loop sync step failed (eview recovery resolve: ActivationAboveDurableTip { target_epoch: 305, durable_tip_epoch: 304 }); failing closed (no skip-past, no fallback).

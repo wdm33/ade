@@ -5053,6 +5053,29 @@ fn first_run_native_mithril_bootstrap(
             format!("starting against {} peer(s)", cli.peer_addrs.len())
         },
     );
+    // PREPROD-NONCE-1 (emit-only): the STARTING nonce quad the seed hands the fold.
+    //
+    // The sidecar carries a SINGLE `epoch_nonce` -- there is no imported candidate/evolving pair --
+    // so `candidate` at the seed point is whatever the bootstrap constructed, and every later
+    // accumulation is relative to it. A boundary eta0 disagreement is therefore ambiguous between
+    // "the fold diverged" and "the fold started from the wrong place" unless the starting values are
+    // on the record. Pairs with `nonce1-boundary-operands` to bracket the whole accumulation.
+    crate::node_log!(
+        "nonce1-seed-quad: seed_epoch={:?} seed_slot={} epoch_start_slot={} epoch_len={} \
+         sidecar_eta0={:?} start_candidate={:?} start_evolving={:?} start_epoch_nonce={:?} \
+         start_prev_epoch_nonce={:?} start_lab={:?} start_last_epoch_block={:?}",
+        out.seed_epoch_consensus_inputs.epoch_no,
+        out.seed_epoch_consensus_inputs.seed_point_slot.0,
+        out.seed_epoch_consensus_inputs.epoch_start_slot.0,
+        out.seed_epoch_consensus_inputs.epoch_length_slots,
+        out.seed_epoch_consensus_inputs.epoch_nonce.0,
+        out.chain_dep.candidate_nonce.0,
+        out.chain_dep.evolving_nonce.0,
+        out.chain_dep.epoch_nonce.0,
+        out.chain_dep.previous_epoch_nonce.0,
+        out.chain_dep.lab_nonce.0,
+        out.chain_dep.last_epoch_block,
+    );
     Ok(BootstrapState {
         ledger: out.ledger,
         chain_dep: out.chain_dep,
@@ -5168,6 +5191,26 @@ fn sidecar_freeze_rsw(
             )));
         }
     }
+    // PREPROD-NONCE-1 (emit-only): the candidate-freeze window's PROVENANCE, not just its value.
+    // The prior preview harness defect was exactly a wrong venue `k`, and the value alone cannot
+    // distinguish "the store said so" from "the CLI said so" from "nothing said so and the freeze is
+    // INERT". Emitted once at resolution, before any boundary depends on it.
+    crate::node_log!(
+        "nonce1-freeze-window: source=durable-sidecar k={} f={}/{} store_rsw={:?} cli_rsw={:?} \
+         cross_check={} effective_rsw={:?}",
+        sidecar.security_param,
+        sidecar.active_slots_coeff.numer,
+        sidecar.active_slots_coeff.denom,
+        store_rsw,
+        cli_rsw,
+        match (cli_rsw, store_rsw) {
+            (Some(_), Some(_)) => "agreed",
+            (None, Some(_)) => "store-only (no CLI value to cross-check)",
+            (Some(_), None) => "store DERIVED NOTHING -- freeze would be INERT",
+            (None, None) => "NEITHER -- freeze INERT",
+        },
+        store_rsw,
+    );
     Ok(store_rsw)
 }
 

@@ -758,6 +758,59 @@ where
                                 "DC-EPOCH-16: boundary promotion without a bridge source -- the first-boundary tick cross-check requires it".into(),
                             )
                         })?;
+                    // PREPROD-NONCE-1 (emit-only): the first-boundary cross-check names two hashes
+                    // and nothing about the OPERANDS they were built from, so a mismatch is
+                    // un-diagnosable without a bespoke probe -- which cost a full re-bootstrap cycle
+                    // on preprod 304->305. `eta0' = blake2b(candidate || last_epoch_block_nonce)`, so
+                    // emitting both inputs alongside both outputs localizes the disagreement to a
+                    // single operand: a differing `candidate` means the freeze/accumulation diverged,
+                    // a differing `last_epoch_block` means the rotation operand did, and identical
+                    // inputs with differing outputs would indict the combine itself. Emitted BEFORE
+                    // the terminal so the operands survive the failure. No behaviour change.
+                    {
+                        let cd = &state.receive.chain_dep;
+                        let loc = era_schedule.locate(decoded.header_input.slot).ok();
+                        let rsw = loc.as_ref().and_then(|l| {
+                            era_schedule
+                                .eras()
+                                .get(l.era_index as usize)
+                                .and_then(|e| e.randomness_stabilisation_window_slots)
+                        });
+                        let epoch_start = decoded.header_input.slot.0.saturating_sub(
+                            loc.as_ref().map(|l| u64::from(l.relative_slot_in_epoch)).unwrap_or(0),
+                        );
+                        let epoch_len = loc
+                            .as_ref()
+                            .and_then(|l| era_schedule.eras().get(l.era_index as usize))
+                            .map(|e| u64::from(e.epoch_length_slots));
+                        crate::node_log!(
+                            "nonce1-boundary-operands: from_epoch={:?} to_epoch={:?} \
+                             tick_slot={} epoch_start={} epoch_len={:?} rsw={:?} freeze_slot={:?} \
+                             durable_tip_slot={} \
+                             candidate={:?} evolving={:?} prev_epoch_nonce={:?} lab={:?} \
+                             last_epoch_block={:?} last_epoch_block_nonce={:?} \
+                             computed_eta0={:?} bridge_eta0={:?} match={}",
+                            from_epoch,
+                            auth.epoch(),
+                            decoded.header_input.slot.0,
+                            epoch_start,
+                            epoch_len,
+                            rsw,
+                            // freeze slot = first slot of THIS epoch (the one being entered) - rsw,
+                            // i.e. the same arithmetic header_validate applies for the PREVIOUS epoch.
+                            rsw.map(|r| epoch_start.saturating_sub(u64::from(r))),
+                            durable_tip.slot.0,
+                            cd.candidate_nonce.0,
+                            cd.evolving_nonce.0,
+                            cd.previous_epoch_nonce.0,
+                            cd.lab_nonce.0,
+                            cd.last_epoch_block,
+                            cd.last_epoch_block_nonce.as_ref().map(|n| n.0.clone()),
+                            ticked.epoch_nonce.0,
+                            bridge_eta0,
+                            ticked.epoch_nonce.0 == bridge_eta0,
+                        );
+                    }
                     if ticked.epoch_nonce.0 != bridge_eta0 {
                         return Err(NodeSyncError::Pump(format!(
                             "DC-EPOCH-16 epoch-tick eta0 {:?} != bridge eta0 {:?} at epoch {:?}",
