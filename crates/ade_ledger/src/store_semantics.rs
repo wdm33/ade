@@ -52,7 +52,15 @@
 ///
 /// Version 1 is the first marked generation. Every store produced before P6 is unmarked and is
 /// therefore rejected — see the module docs for why no stamp path exists.
-pub const STORE_SEMANTICS_VERSION: u32 = 1;
+///
+/// Version 2 (PREPROD-NONCE-2, CE-N2-4): the seed+1 bootstrap-bridge boundary now commits the
+/// BOUNDARY-TICK `eta0` into its durable activation record, not the bridge's seed-time projection. A
+/// store written by an earlier binary from a seed that PRECEDED the candidate freeze holds a
+/// `nonce_commitment` this binary will never reproduce — preprod 304→305 wrote `e3402a2b…` where the
+/// real `epochNonce(305)` is `74f10bea…`. Without the bump that store surfaces as an opaque
+/// `EpochViewPostPromotionMismatch` at warm-start; with it, the store is refused up front with a
+/// typed re-bootstrap terminal, which is the whole reason this constant exists.
+pub const STORE_SEMANTICS_VERSION: u32 = 2;
 
 /// A durable artifact that carries authoritative semantics and therefore must be version-marked.
 ///

@@ -1,7 +1,12 @@
 # SLICE PREPROD-NONCE-2 — epoch activation waits for candidate-freeze finality (DC-EPOCH-16)
 
-> **OPEN — SEALED SLICE, NOT YET IMPLEMENTED.** Doc before impl. Fix for the PREPROD-NONCE-1 root
-> cause. Blocks preprod LIVE-2 until closed.
+> **CE-N2-4 GREEN, LIVE-PROVEN 2026-08-05.** The bootstrap bridge now binds the boundary-tick
+> `eta0(seed+1)`; preprod 304→305 commits `74f10bea…`, byte-identical to cardano-node's
+> `epochNonce(305)`, where it previously committed `e3402a2b…`. DC-EPOCH-38 opened with the fix.
+>
+> **CE-N2-5 remains open**, blocked behind **PREPROD-NONCE-3** (warm-start replay cannot re-validate the
+> bridge-boundary block). Preprod LIVE-2 stays blocked — on that and on the pre-existing SLICE-P2, not
+> on nonce authority.
 
 ## Intent — NARROWED after the reference proof
 
@@ -135,13 +140,66 @@ non-final eta0" unrepresentable, in the spirit of the closed `RemediationAction`
 |---|---|---|
 | **CE-N2-1** | cardano-node preprod `epochNonce(305)` == Ade's boundary-tick `eta0(305)` | **MET** — both `74f10bea…` |
 | **CE-N2-2** | cardano-node `lastEpochBlockNonce(305)` == Ade's post-tick bookkeeping value | **MET** — both `60b3a0ae…` (see the precision note below) |
-| **CE-N2-3** | The bridge no longer commits `e3402a2b…` | open |
-| **CE-N2-4** | The bridge commitment resolves to `74f10bea…` | open |
-| **CE-N2-5** | Restart after the bootstrap bridge recovers the SAME value | open |
-| **CE-N2-6** | `ActivationAboveDurableTip` remains terminal | open |
-| **CE-N2-7** | Seed BEFORE freeze: no final activation record carries `candidate@SEED`; at/after freeze it carries `candidate@FROZEN` | open |
-| **CE-N2-8** | Multi-venue differential covers seed-position × freeze geometry (seed before freeze, seed after freeze, boundary at/around the freeze) — **DC-EPOCH-38** | open |
-| **CE-N2-9** | Negative-tested: each gate proven to FAIL when its violation is introduced | open |
+| **CE-N2-3** | The bridge no longer commits `e3402a2b…` | **MET** — the durable WAL record of the CE-N2-4 run holds `74f10bea…`; enforcement moved from a build-time refusal to structural exclusion at the binder (see below) |
+| **CE-N2-4** | The bridge commitment resolves to `74f10bea…` | **MET — LIVE-PROVEN**, see below |
+| **CE-N2-5** | Restart after the bootstrap bridge recovers the SAME value | **BLOCKED** — mechanically proven at the seam (`n2_recovery_nonce_must_be_bound_to_the_target_epoch`), but the live restart cannot be reached: **PREPROD-NONCE-3** |
+| **CE-N2-6** | `ActivationAboveDurableTip` remains terminal | **MET** — `epoch_activation.rs` is untouched by this diff; the guard is unmodified |
+| **CE-N2-7** | Seed BEFORE freeze: no final activation record carries `candidate@SEED`; at/after freeze it carries `candidate@FROZEN` | **MET** — `n2_pre_freeze_seed_binds_the_boundary_tick_not_the_stored_projection` + `n2_final_seed_must_corroborate_the_boundary_tick`, and live on preprod |
+| **CE-N2-8** | Multi-venue differential covers seed-position × freeze geometry (seed before freeze, seed after freeze, boundary at/around the freeze) — **DC-EPOCH-38** | **MET** — `dc_epoch_38_bridge_nonce_freeze_differential_covers_both_sides_per_venue` + `ci/ci_check_bridge_nonce_freeze_differential.sh`; registry entry DC-EPOCH-38 |
+| **CE-N2-9** | Negative-tested: each gate proven to FAIL when its violation is introduced | **MET** — six mutations, two of which the FIRST version of the gate passed (see below) |
+
+### CE-N2-4 — the live proof (preprod 304→305, 2026-08-05)
+
+One fresh native-Mithril bootstrap from snapshot 6009 (seed 129,813,427 — 132,173 slots BEFORE the
+freeze, i.e. the exact defect geometry), followed to the boundary:
+
+```
+bridge-eta0-finality: target_epoch=305 seed_slot=129813427 rsw=172800
+                      candidate_freeze_slot=129945600 decision=PENDING_UNTIL_FREEZE
+   -> bootstrap SUCCEEDS (81df0bac's refusal is gone; a pre-freeze seed is legitimate)
+
+nonce1-boundary-operands: from_epoch=304 to_epoch=305 ... freeze_slot=129945600
+  candidate=f241d006…  evolving=a150cff1…  last_epoch_block_nonce=151dc584…
+  computed_eta0=74f10bea…  promoted_view_nonce=74f10bea…  match=true
+```
+
+And the durable record — the artifact that was actually wrong — read back from the WAL:
+
+| store | `nonce_commitment` | verdict |
+|---|---|---|
+| NONCE-1 reproducer | `e3402a2b…` | wrong (seed-time projection) |
+| CE-N2-4 run | **`74f10bea…`** | **== cardano-node `epochNonce(305)`** |
+
+Same seed, same venue, same `transition_point` (129,813,427) — so the difference is the commitment
+SOURCE and nothing else. `cardano-cli query protocol-state` was re-queried after the run and still
+reports `74f10bea…`.
+
+> The WAL parser `read_activation_record.py` was corrected as part of this: it judged on
+> `transition_point.slot < FREEZE` and therefore printed *"HYPOTHESIS CONFIRMED"* next to CE-N2-4's
+> **correct** record. `transition_point` is the MARK source `s_prev`, which sits below the freeze in a
+> correct record too — the same misreading this slice's "CORRECTED from the NONCE-1 first reading"
+> section already retracted, still live in the tool. It now judges on `nonce_commitment`.
+
+### What the run did NOT achieve
+
+The node halted ~1 block after the boundary with `Capture("Encode(ReducedStateNotSerializable)")`,
+rc=43 — **SLICE-P2**, a pre-existing sealed blocker found 2026-08-03, before this cluster existed. The
+restart then failed in `warm_start_recovery` re-validating the boundary block — **PREPROD-NONCE-3**,
+sealed with this slice. Neither is a nonce-authority defect and neither reopens CE-N2-4; both became
+*reachable* only because the boundary can now be crossed. CE-N2-5 stays open behind NONCE-3.
+
+The run did produce new evidence for P2 (its "check this first" direction 3 is falsified: preprod's
+cadence captures succeeded ~152 times through epoch 304), recorded on the P2 slice.
+
+### CE-N2-9 — the gate was weaker than intended, twice
+
+`ci/ci_check_bridge_nonce_freeze_differential.sh` was mutation-tested six ways: the pre-freeze side
+removed; the 0.4-ratio assertion removed; the venue list hand-copied instead of read from
+`resolve_network_profile`; the differential deleted; **the binder rebound to the stored seed-time value
+(the original regression)**; and **the Final cross-check disabled**. The first version of the gate
+PASSED the last two — its `cargo test --exact` filter used a bare fn name where the full module path is
+required, matched ZERO tests, and `cargo test` exits 0 on an empty filter. Every test invocation now
+asserts a nonzero passed-count. That is the fourth gate weakness in this cluster found by mutation.
 
 ### Precision note on CE-N2-2 — do NOT read this as validating the combine operand
 

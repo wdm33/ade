@@ -51,6 +51,11 @@ files = [
   # PREPROD-NONCE-2: the bootstrap bridge DETERMINES eta0(seed+1) that lands in a durable
   # activation record. It was missing from this surface until NONCE-1 proved its commitment wrong.
   "crates/ade_ledger/src/bootstrap_bridge.rs",
+  # PREPROD-NONCE-2 CE-N2-4: epoch_wire DECIDES the nonce every durable activation record commits
+  # (activation_record_for is a pure projection of the view this file binds). The gap was
+  # DEMONSTRATED, not guessed: CE-N2-4 changed that value for the seed+1 boundary and this gate only
+  # fired because of an unrelated rename in bootstrap_bridge.rs.
+  "crates/ade_node/src/epoch_wire.rs",
   # --- the fingerprint the WAL chain is built from ---
   "crates/ade_ledger/src/fingerprint.rs",
   # --- epoch/leadership authority derived into the accumulator ---
@@ -88,3 +93,9 @@ store_semantics_version = 1
 surface_hash = "9e3798fc49b0bb866f3b809dc08c7be6ad861fab35f87f0bbc887b995881eb25"
 semantics_neutral = true
 rationale = "PREPROD-NONCE-2 CE-N2-4 step 1: bootstrap_bridge.rs gains the PURE decision `bridge_eta0_finality` (+ tests) and nothing else. No durable field, encoding, canonical commitment or produced value changes -- the bridge is still built byte-identically when the seed is post-freeze, and refused when it is not. The function only NAMES a condition the FirstRun guard already enforced inline; consolidating both onto it removes a duplicate-arithmetic desync risk. Declared neutral because no store written by the previous binary becomes invalid."
+
+[[entry]]
+store_semantics_version = 2
+surface_hash = "cbc4f29e808f8c9b18e8b0afb2a260b376b4678954053b077e85bc86065cba1d"
+semantics_neutral = false
+rationale = "PREPROD-NONCE-2 CE-N2-4 -- a REAL semantics change, plus a surface widening that this change itself demonstrated was needed. WHAT CHANGED: the seed+1 bootstrap-bridge boundary now commits the BOUNDARY-TICK eta0 into its durable activation record instead of the bridge's seed-time projection (epoch_wire::bind_bridge_view takes the final eta0 as a required argument and no longer reads the stored field). For a seed that PRECEDED the candidate freeze the two values differ -- preprod 304->305 wrote nonce_commitment = e3402a2b.. where cardano-node's epochNonce(305) is 74f10bea.. -- so a store written by an earlier binary is NOT replay-equivalent under this one: warm-start would re-derive the tick and fail EpochViewPostPromotionMismatch, the exact opaque terminal this version exists to convert into a typed re-bootstrap. Hence a BUMP to 2, not a neutral declaration. Note the direction of the risk: the immediately-previous binary (81df0bac) refused to bootstrap pre-freeze at all, so ITS stores are all post-freeze and would agree; the stores this invalidates are the pre-81df0bac ones, including the preserved preprod reproducer. Choosing neutral on that reasoning would be the P4 mistake in miniature -- relying on which generation happens to be on disk instead of on the marker. SURFACE WIDENING: crates/ade_node/src/epoch_wire.rs is added because it DECIDES the nonce every durable activation record commits (epoch_activation::activation_record_for is a pure projection of the view epoch_wire binds, making no value decisions of its own). This is the same gap 81df0bac closed for bootstrap_bridge.rs, but demonstrated rather than hypothesized: CE-N2-4 altered durable authority and this gate fired ONLY because of an unrelated field rename in bootstrap_bridge.rs. Also included in the hash: bootstrap_bridge.rs field rename epoch_nonce -> seed_time_eta0 (wire-neutral -- positional CBOR, so encoding, canonical_commitment and every existing durable byte are unchanged; the rename exists so the field cannot be read as authority)."

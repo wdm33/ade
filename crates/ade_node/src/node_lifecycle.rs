@@ -3201,6 +3201,10 @@ pub async fn run_relay_loop_with_sched(
                 epoch: recovered_tip_epoch,
                 eta0: state.receive.chain_dep.epoch_nonce.0.clone(),
             },
+            // PREPROD-NONCE-2 (CE-N2-4): the tip-extended schedule the resolver above already used, so
+            // the seed+1 bridge branch decides eta0 finality against the SAME venue RSW the live loop
+            // and the candidate-freeze rule read (never a second, differently-built geometry).
+            &recovery_sched,
             &mut authority,
         )
         .map_err(|e| NodeLifecycleError::RelaySync(format!("eview recovery: {e:?}")))?;

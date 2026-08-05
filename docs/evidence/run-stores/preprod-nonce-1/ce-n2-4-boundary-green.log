@@ -1,0 +1,45 @@
+=== CE-N2-4 live run start 2026-08-05T12:38:35Z binary=6c65cb39+dirty ===
+bridge-eta0-finality: target_epoch=305 seed_slot=129813427 rsw=172800 candidate_freeze_slot=129945600 decision=PENDING_UNTIL_FREEZE (seed precedes the freeze -- the stored seed_time_eta0 is INERT; eta0 comes from the boundary tick)
+
+=== Ade native Mithril bootstrap receipt ===
+network / profile      : preprod (magic 1)
+shelley genesis hash   : Hash32(162d29c4e1cf6b8a84f2d692e67a3ac6bc7851bc3e6e4afe64d15778bed8bd86)
+certified anchor point : slot 129813427 / block Hash32(4153b4f5acae17be10d66e90e9454c66ff2f69df52ec4cf4e34462d1eb86582c)
+seed artifact commit   : Hash32(5c7bdf6a47bc31f7329336aaeee46dc8e84189103a650355ddd0f69a5035ecc3)
+UTxO commitment        : Hash32(c9906929dfd9924943b9d12cd4436b26759f9cf03eb4490abcb59ea79960e239)
+durable ledger lineage : Hash32(fe99c63936729ec42237d07ea66cfd7aa1b15d74c824e3687a95817c175b0113)
+reduced checkpoint     : built (/home/ts/.cardano-live1/ade-preprod-n2/reduced-checkpoint.redb)
+ChainSync              : starting against 1 peer(s)
+============================================
+nonce1-seed-quad: seed_epoch=EpochNo(304) seed_slot=129813427 epoch_start_slot=129686400 epoch_len=432000 sidecar_eta0=Hash32(14ff55044c8dd7becca29519ae90aa784a455d40b5313c3b24a82572fb8c758b) start_candidate=Hash32(40b4ed6b9afebe9f778157b9b1c447f96d679ec5ee9f7aeabe3df74ec1077e16) start_evolving=Hash32(40b4ed6b9afebe9f778157b9b1c447f96d679ec5ee9f7aeabe3df74ec1077e16) start_epoch_nonce=Hash32(14ff55044c8dd7becca29519ae90aa784a455d40b5313c3b24a82572fb8c758b) start_prev_epoch_nonce=Hash32(151dc58480d5f19048c6a44f38d08c578a83ed85409c9a4c8b986a9268ef6496) start_lab=Hash32(e99090d2f96810bad05abd7435ab4fb76a8afd1817fee62019083263d2cd85b7) start_last_epoch_block=None
+nonce1-freeze-window: source=durable-sidecar k=2160 f=1/20 store_rsw=Some(172800) cli_rsw=Some(172800) cross_check=agreed effective_rsw=Some(172800)
+follow: tip slot=129813444 behind=437059 slots from peer
+follow: tip slot=129825426 behind=425135 slots from peer
+follow: tip slot=129836636 behind=413925 slots from peer
+follow: tip slot=129848166 behind=402428 slots from peer
+follow: tip slot=129859648 behind=390968 slots from peer
+follow: tip slot=129871238 behind=379378 slots from peer
+follow: tip slot=129883160 behind=367456 slots from peer
+follow: tip slot=129894579 behind=356079 slots from peer
+follow: tip slot=129906441 behind=344229 slots from peer
+follow: tip slot=129917131 behind=333553 slots from peer
+follow: tip slot=129928702 behind=321999 slots from peer
+follow: tip slot=129938854 behind=311847 slots from peer
+follow: tip slot=129950334 behind=300367 slots from peer
+follow: tip slot=129961505 behind=289196 slots from peer
+follow: tip slot=129971821 behind=278938 slots from peer
+follow: tip slot=129982521 behind=268242 slots from peer
+follow: tip slot=129993788 behind=256994 slots from peer
+follow: tip slot=130005380 behind=245425 slots from peer
+follow: tip slot=130017012 behind=233793 slots from peer
+follow: tip slot=130028468 behind=222362 slots from peer
+follow: tip slot=130040378 behind=210472 slots from peer
+follow: tip slot=130051522 behind=199336 slots from peer
+follow: tip slot=130062417 behind=188441 slots from peer
+follow: tip slot=130074457 behind=176401 slots from peer
+follow: tip slot=130086554 behind=164355 slots from peer
+follow: tip slot=130097870 behind=153039 slots from peer
+follow: tip slot=130108106 behind=142825 slots from peer
+nonce1-boundary-operands: from_epoch=EpochNo(304) to_epoch=EpochNo(305) tick_slot=130118424 epoch_start=130118400 epoch_len=Some(432000) rsw=Some(172800) freeze_slot=Some(129945600) durable_tip_slot=130118358 candidate=Hash32(f241d006bc9446096cafe17dca35bd635e803f2bd2b109f196506dc7b1ab8ced) evolving=Hash32(a150cff15bceee01039daa62037c958bd076f126b39f21039a9b83bec6890fb4) prev_epoch_nonce=Hash32(151dc58480d5f19048c6a44f38d08c578a83ed85409c9a4c8b986a9268ef6496) lab=Hash32(60b3a0aea44e3977baa949c27c5053c984001dc858048e4d296ddebcf8b0dc67) last_epoch_block=None last_epoch_block_nonce=Some(Hash32(151dc58480d5f19048c6a44f38d08c578a83ed85409c9a4c8b986a9268ef6496)) computed_eta0=Hash32(74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62) promoted_view_nonce=Hash32(74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62) match=true
+ade_node --mode node: relay run-loop sync step failed (Capture("Encode(ReducedStateNotSerializable)")); failing closed (no skip-past, no fallback).
+=== exit rc=43 at 2026-08-05T12:49:24Z ===

@@ -62,20 +62,6 @@ const PREVIEW_NETWORK_MAGIC: u32 = 2;
 /// is no partial state and no fallback to the cardano-cli / JSON seed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeFirstRunError {
-    /// PREPROD-NONCE-2 (DC-EPOCH-16): the bootstrap bridge cannot durably commit `eta0(seed+1)`
-    /// because the seed point precedes the candidate-freeze slot, so the candidate it would be built
-    /// from is still tracking `evolving` and WILL change before the real boundary.
-    ///
-    /// Proven live on preprod 304→305: the bridge committed
-    /// `blake2b(candidate@SEED ‖ leb) = e3402a2b…` while cardano-node's `epochNonce(305)` is
-    /// `74f10bea… = blake2b(candidate@FROZEN ‖ leb)` — the value Ade's own boundary tick computes
-    /// correctly. A durable activation record must be a SEALED FACT, so this fails closed rather than
-    /// persist a commitment that is knowably not final.
-    BridgeNonceNotFinal {
-        target_epoch: u64,
-        seed_slot: u64,
-        candidate_freeze_slot: u64,
-    },
     /// A required native-route file (manifest / state / tables / shelley
     /// genesis) could not be read. Carries the path label + the io error kind
     /// (no path bytes).
@@ -578,20 +564,28 @@ where
         // last_epoch_block, where the combine is blake2b_256(a || b) over the two 32-byte nonces;
         // extraEntropy is Neutral on preview. The bare candidate is the WRONG input -- it omits the
         // prev-hash entropy the real chain folds in, so the N+1 header leader-VRF checks would fail.
-        // PREPROD-NONCE-2 (DC-EPOCH-16): that combine is only FINAL if the candidate for seed+1 has
-        // ALREADY frozen at the seed point. The candidate tracks `evolving` until
+        // PREPROD-NONCE-2 (DC-EPOCH-16, CE-N2-4): that combine is only FINAL if the candidate for
+        // seed+1 has ALREADY frozen at the seed point. The candidate tracks `evolving` until
         // `firstSlotNextEpoch − RSW` and freezes there; a seed BEFORE that slot yields a candidate that
-        // is guaranteed to keep moving, so committing it durably binds a value the real boundary will
-        // not reproduce.
+        // is guaranteed to keep moving, so a seed-time projection is a value the real boundary will not
+        // reproduce.
         //
-        // Proven live on preprod 304→305 (seed 129_813_427, freeze 129_945_600): the bridge committed
+        // Proven live on preprod 304→305 (seed 129_813_427, freeze 129_945_600): this projection was
         // `e3402a2b…` while cardano-node's epochNonce(305) is `74f10bea…` — which Ade's own boundary
         // tick computes CORRECTLY from the frozen candidate. The tick, the freeze rule, the operand
-        // order and the venue geometry are all reference-proven right; only this commitment was early.
-        // So fail closed here rather than persist a knowably non-final commitment: a durable activation
-        // record is a sealed fact, not a promise to fix the fact later.
+        // order and the venue geometry are all reference-proven right; only the COMMITMENT was early.
+        //
+        // A pre-freeze seed is NOT refused here: the freeze sits at 60% into the epoch on every venue,
+        // so any snapshot in the first 60% of its epoch hits this, and refusing would make correct
+        // nodes unbootstrappable. eta0(seed+1) is the BOUNDARY TICK (`epoch_wire::bind_bridge_view`
+        // takes it as a required argument and never reads the field below), so this projection cannot
+        // reach a durable activation record whether it is final or not. What IS recorded here is the
+        // decision itself, so the bootstrap receipt states on the record whether the stored value is a
+        // usable cross-check.
         {
             let sc = &output.seed_epoch_consensus_inputs;
+            // An UNDERIVABLE freeze window stays fail-closed: a node that cannot locate the freeze
+            // cannot have applied it either, so nothing downstream could be trusted.
             let rsw = ade_core::consensus::era_schedule::praos_rsw_slots(
                 sc.security_param,
                 u64::from(sc.active_slots_coeff.numer),
@@ -600,7 +594,7 @@ where
             .ok_or_else(|| {
                 NativeFirstRunError::NativeBootstrap(
                     "DC-EPOCH-16: cannot derive the candidate-freeze window (RSW) from the seed \
-                     geometry -- refusing to bind a bridge nonce whose finality cannot be proven"
+                     geometry -- refusing to bootstrap a bridge whose nonce finality cannot be decided"
                         .to_string(),
                 )
             })?;
@@ -608,22 +602,34 @@ where
             // boundary binder consume, so they can never disagree about whether a seed-time eta0 is
             // final (the desync class DC-EPOCH-16 S2 closed for the freeze WINDOW, applied here to
             // the freeze DECISION).
-            if let bb::BridgeEta0Finality::PendingUntilFreeze {
-                candidate_freeze_slot,
-            } = bb::bridge_eta0_finality(
+            match bb::bridge_eta0_finality(
                 binding.certified_point.slot,
                 sc.epoch_start_slot,
                 sc.epoch_length_slots,
                 rsw,
             ) {
-                return Err(NativeFirstRunError::BridgeNonceNotFinal {
-                    target_epoch: s1a.epoch.0 + 1,
-                    seed_slot: binding.certified_point.slot.0,
-                    candidate_freeze_slot: candidate_freeze_slot.0,
-                });
+                bb::BridgeEta0Finality::Final => crate::node_log!(
+                    "bridge-eta0-finality: target_epoch={} seed_slot={} rsw={} decision=FINAL \
+                     (seed at/after the candidate freeze -- the stored seed_time_eta0 MUST corroborate \
+                     the boundary tick)",
+                    s1a.epoch.0 + 1,
+                    binding.certified_point.slot.0,
+                    rsw,
+                ),
+                bb::BridgeEta0Finality::PendingUntilFreeze {
+                    candidate_freeze_slot,
+                } => crate::node_log!(
+                    "bridge-eta0-finality: target_epoch={} seed_slot={} rsw={} \
+                     candidate_freeze_slot={} decision=PENDING_UNTIL_FREEZE (seed precedes the freeze \
+                     -- the stored seed_time_eta0 is INERT; eta0 comes from the boundary tick)",
+                    s1a.epoch.0 + 1,
+                    binding.certified_point.slot.0,
+                    rsw,
+                    candidate_freeze_slot.0,
+                ),
             }
         }
-        let eta0_next = {
+        let seed_time_eta0 = {
             let mut buf = [0u8; 64];
             buf[0..32].copy_from_slice(&s1a.praos_nonces.candidate.0);
             buf[32..64].copy_from_slice(&s1a.praos_nonces.last_epoch_block.0);
@@ -638,7 +644,7 @@ where
             output.seed_epoch_consensus_inputs.genesis_hash.clone(),
             output.seed_epoch_consensus_inputs.protocol_params_hash.clone(),
             output.seed_epoch_consensus_inputs.active_slots_coeff,
-            ade_core::consensus::praos_state::Nonce(eta0_next),
+            ade_core::consensus::praos_state::Nonce(seed_time_eta0),
             total,
             pool_distribution,
         );

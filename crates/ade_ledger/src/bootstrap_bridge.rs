@@ -83,8 +83,19 @@ pub struct BootstrapNextEpochAuthority {
     /// `blake2b_256` of the protocol-params (protocol/profile commitment).
     pub protocol_params_hash: Hash32,
     pub active_slots_coeff: ActiveSlotsCoeff,
-    /// The seed+1 leadership nonce (eta0) -- the candidate nonce frozen for the next epoch.
-    pub epoch_nonce: Nonce,
+    /// The seed-TIME eta0 projection for seed+1: `blake2b(candidate@seed || last_epoch_block@seed)`.
+    ///
+    /// NOT the leadership nonce authority, and deliberately not named as if it were (PREPROD-NONCE-2,
+    /// DC-EPOCH-16). The candidate for seed+1 tracks `evolving` until `firstSlotNextEpoch − RSW` and
+    /// freezes there, so a bridge built from a seed BEFORE that slot projects from a candidate that is
+    /// guaranteed to keep moving. Preprod 304→305 proved it: this field held `e3402a2b…` while the real
+    /// `epochNonce(305)` was `74f10bea…`.
+    ///
+    /// eta0(seed+1) is the boundary TICK over the live chain-dep -- the same source every later
+    /// boundary uses. This value is a CROSS-CHECK operand, and only when
+    /// [`bridge_eta0_finality`] says `Final` (the seed sits at/after the freeze); then it MUST
+    /// corroborate the tick. It is never read as the bound view's nonce.
+    pub seed_time_eta0: Nonce,
     pub total_active_stake: u64,
     /// Deterministic `BTreeMap` ordering; `PoolEntry` carries the VRF keyhash (from the durable
     /// cert-state registrations -- the snapshot's own poolParams encoding differs and is not used).
@@ -124,7 +135,7 @@ pub fn bridge_canonical_commitment(
     genesis_hash: &Hash32,
     protocol_params_hash: &Hash32,
     active_slots_coeff: ActiveSlotsCoeff,
-    epoch_nonce: &Nonce,
+    seed_time_eta0: &Nonce,
     total_active_stake: u64,
     pool_distribution: &BTreeMap<Hash28, PoolEntry>,
 ) -> Hash32 {
@@ -137,7 +148,7 @@ pub fn bridge_canonical_commitment(
         genesis_hash,
         protocol_params_hash,
         active_slots_coeff,
-        epoch_nonce,
+        seed_time_eta0,
         total_active_stake,
         pool_distribution,
     );
@@ -158,7 +169,7 @@ fn encode_bridge_body(
     genesis_hash: &Hash32,
     protocol_params_hash: &Hash32,
     active_slots_coeff: ActiveSlotsCoeff,
-    epoch_nonce: &Nonce,
+    seed_time_eta0: &Nonce,
     total_active_stake: u64,
     pool_distribution: &BTreeMap<Hash28, PoolEntry>,
 ) -> Vec<u8> {
@@ -176,7 +187,7 @@ fn encode_bridge_body(
     );
     write_uint_canonical(&mut buf, active_slots_coeff.numer as u64);
     write_uint_canonical(&mut buf, active_slots_coeff.denom as u64);
-    write_bytes_canonical(&mut buf, epoch_nonce.as_bytes());
+    write_bytes_canonical(&mut buf, seed_time_eta0.as_bytes());
     write_uint_canonical(&mut buf, total_active_stake);
     let pool_count = pool_distribution.len() as u64;
     write_map_header(
@@ -207,7 +218,7 @@ pub fn build_bootstrap_next_epoch_authority(
     genesis_hash: Hash32,
     protocol_params_hash: Hash32,
     active_slots_coeff: ActiveSlotsCoeff,
-    epoch_nonce: Nonce,
+    seed_time_eta0: Nonce,
     total_active_stake: u64,
     pool_distribution: BTreeMap<Hash28, PoolEntry>,
 ) -> BootstrapNextEpochAuthority {
@@ -220,7 +231,7 @@ pub fn build_bootstrap_next_epoch_authority(
         &genesis_hash,
         &protocol_params_hash,
         active_slots_coeff,
-        &epoch_nonce,
+        &seed_time_eta0,
         total_active_stake,
         &pool_distribution,
     );
@@ -233,7 +244,7 @@ pub fn build_bootstrap_next_epoch_authority(
         genesis_hash,
         protocol_params_hash,
         active_slots_coeff,
-        epoch_nonce,
+        seed_time_eta0,
         total_active_stake,
         pool_distribution,
         canonical_commitment,
@@ -244,7 +255,7 @@ pub fn build_bootstrap_next_epoch_authority(
 ///
 /// Wire shape (v1): `array(13)[version, anchor_fp(32), target_epoch, source_kind, source_point_slot,
 /// source_point_hash(32), genesis_hash(32), protocol_params_hash(32), [asc.numer, asc.denom],
-/// epoch_nonce(32), total_active_stake, map{pool(28) => [stake, vrf(32)]}, canonical_commitment(32)]`.
+/// seed_time_eta0(32), total_active_stake, map{pool(28) => [stake, vrf(32)]}, canonical_commitment(32)]`.
 pub fn encode_bootstrap_next_epoch_authority(a: &BootstrapNextEpochAuthority) -> Vec<u8> {
     let mut buf = Vec::new();
     write_array_header(
@@ -261,7 +272,7 @@ pub fn encode_bootstrap_next_epoch_authority(a: &BootstrapNextEpochAuthority) ->
         &a.genesis_hash,
         &a.protocol_params_hash,
         a.active_slots_coeff,
-        &a.epoch_nonce,
+        &a.seed_time_eta0,
         a.total_active_stake,
         &a.pool_distribution,
     ));
@@ -298,7 +309,7 @@ pub fn decode_bootstrap_next_epoch_authority(
     let denom = read_u32_field(bytes, &mut o)?;
     let active_slots_coeff = ActiveSlotsCoeff { numer, denom };
 
-    let epoch_nonce = Nonce(read_hash32(bytes, &mut o)?);
+    let seed_time_eta0 = Nonce(read_hash32(bytes, &mut o)?);
     let total_active_stake = read_u64_field(bytes, &mut o)?;
     let pool_distribution = decode_pool_distribution(bytes, &mut o)?;
     let canonical_commitment = read_hash32(bytes, &mut o)?;
@@ -318,7 +329,7 @@ pub fn decode_bootstrap_next_epoch_authority(
         &genesis_hash,
         &protocol_params_hash,
         active_slots_coeff,
-        &epoch_nonce,
+        &seed_time_eta0,
         total_active_stake,
         &pool_distribution,
     );
@@ -335,7 +346,7 @@ pub fn decode_bootstrap_next_epoch_authority(
         genesis_hash,
         protocol_params_hash,
         active_slots_coeff,
-        epoch_nonce,
+        seed_time_eta0,
         total_active_stake,
         pool_distribution,
         canonical_commitment,

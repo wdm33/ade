@@ -27,7 +27,9 @@ use ade_types::{CardanoEra, EpochNo, Hash32, SlotNo};
 use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::events::Point;
 use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
-use ade_ledger::bootstrap_bridge::BootstrapNextEpochAuthority;
+use ade_ledger::bootstrap_bridge::{
+    bridge_eta0_finality, BootstrapNextEpochAuthority, BridgeEta0Finality,
+};
 use ade_ledger::consensus_view::PoolDistrView;
 use ade_ledger::wal::WalEntry;
 use ade_types::tx::{Coin, PoolId};
@@ -368,6 +370,27 @@ pub enum ActivationError {
     /// ECA-5: projecting the bridge view to a `PoolDistrView` (or the WAL activation-record write)
     /// failed -- terminal.
     BridgeProjection(String),
+    /// PREPROD-NONCE-2 (DC-EPOCH-16, CE-N2-4): the bridge's stored `seed_time_eta0` is provably FINAL
+    /// (the seed sits at/after the candidate freeze, so it CANNOT have moved since) yet disagrees with
+    /// the boundary-tick eta0 that is the authority. Terminal: when the stored value can be
+    /// corroborated it MUST be. This is what remains of the first-boundary cross-check that caught the
+    /// ECA-5 operand-order bug -- relocated from `node_sync` to the sole binder, where the finality
+    /// decision lives and both the live and warm-start paths pass through it.
+    BridgeNonceCrossCheck {
+        target_epoch: EpochNo,
+        seed_slot: SlotNo,
+        bridge_eta0: Hash32,
+        boundary_eta0: Hash32,
+    },
+    /// PREPROD-NONCE-2 (DC-EPOCH-16, CE-N2-4): whether the bridge's `seed_time_eta0` is final could not
+    /// be DERIVED -- the seed point is not locatable in the era schedule, or the venue RSW is absent so
+    /// the candidate freeze is INERT (`CANDIDATE_FREEZE_INERT`) and no freeze slot exists to compare
+    /// against. Never assumed final, never assumed pending: an underivable decision is terminal.
+    BridgeFinalityUnderivable {
+        target_epoch: EpochNo,
+        seed_slot: SlotNo,
+        reason: &'static str,
+    },
     /// DC-EPOCH-17 (B3): the boundary-2+ window-replay preparation failed -- the eta0 boundary tick
     /// over the live chain-dep, the C-2 window bounds, or the (not-yet-wired) beyond-seed+2 case.
     /// Terminal: there is no silent bridge fallback past seed+1.
@@ -560,6 +583,51 @@ pub fn maybe_activate_first_boundary(
     Ok(Some(outcome))
 }
 
+/// PREPROD-NONCE-2 (DC-EPOCH-16, CE-N2-4): is the bridge's stored `seed_time_eta0` FINAL at its own
+/// seed point?
+///
+/// The SOLE derivation, shared by the live promotion and the warm-start recovery, so the two can never
+/// disagree about whether the stored value may be trusted. It reads the SAME era geometry the
+/// candidate-freeze rule itself reads -- `header_validate`'s
+/// `freeze_boundary = firstSlotNextEpoch − RSW`, located at the seed point -- so the decision cannot
+/// disagree with the rule it is protecting.
+///
+/// Fail-closed both ways. An unlocatable seed point or an absent venue RSW (the freeze is then INERT,
+/// `CANDIDATE_FREEZE_INERT`) is terminal, NOT "assume pending and move on": a node that cannot decide
+/// finality also cannot have frozen the candidate correctly, so its tick is not trustworthy either.
+pub fn bridge_eta0_finality_at_seed(
+    era_schedule: &EraSchedule,
+    bridge: &BootstrapNextEpochAuthority,
+) -> Result<BridgeEta0Finality, ActivationError> {
+    let seed_slot = bridge.source_point_slot;
+    let underivable = |reason: &'static str| ActivationError::BridgeFinalityUnderivable {
+        target_epoch: bridge.target_epoch,
+        seed_slot,
+        reason,
+    };
+    let loc = era_schedule
+        .locate(seed_slot)
+        .map_err(|_| underivable("seed point is not locatable in the era schedule"))?;
+    let era = era_schedule
+        .eras()
+        .get(loc.era_index as usize)
+        .ok_or_else(|| underivable("located era index is out of range"))?;
+    let rsw = era
+        .randomness_stabilisation_window_slots
+        .ok_or_else(|| underivable("venue RSW absent -- the candidate freeze is INERT"))?;
+    let epoch_start = SlotNo(
+        seed_slot
+            .0
+            .saturating_sub(u64::from(loc.relative_slot_in_epoch)),
+    );
+    Ok(bridge_eta0_finality(
+        seed_slot,
+        epoch_start,
+        era.epoch_length_slots,
+        rsw,
+    ))
+}
+
 /// ECA-5 (DC-EPOCH-15): bind the seed+1 epoch view from the durable bootstrap BRIDGE -- the seed+1
 /// leadership projected from the imported MARK snapshot (phase = `Mark`: the seed+1 leadership IS the
 /// MARK snapshot). The SOLE bridge-binding path, shared by the LIVE promotion
@@ -567,10 +635,28 @@ pub fn maybe_activate_first_boundary(
 /// ([`maybe_recover_promoted_authority`]), so both bind the view BYTE-IDENTICALLY -- the recovery MUST
 /// reproduce the live activation record's exact identity. Returns the bound source view + its projected
 /// leadership `PoolDistrView`; a projection failure is a TERMINAL `BridgeProjection`.
+///
+/// PREPROD-NONCE-2 (CE-N2-4): the view's nonce is `final_eta0`, supplied by the caller -- the boundary
+/// TICK live, the recovered chain-dep eta0 on warm-start. It is a REQUIRED argument precisely so the
+/// bridge's stored `seed_time_eta0` has no path to becoming the bound nonce: preprod 304→305 wrote
+/// `e3402a2b…` into a durable activation record that way, 132,173 slots before the candidate froze.
+/// The stored value is now a cross-check, enforced only when `finality` is `Final`; when the seed
+/// precedes the freeze it is inert and NO equality is claimed, because it is known-stale by
+/// construction rather than merely different.
 fn bind_bridge_view(
     bridge: &BootstrapNextEpochAuthority,
     network_magic: u32,
+    final_eta0: &Hash32,
+    finality: BridgeEta0Finality,
 ) -> Result<(EpochConsensusView, PoolDistrView), ActivationError> {
+    if matches!(finality, BridgeEta0Finality::Final) && bridge.seed_time_eta0.0 != *final_eta0 {
+        return Err(ActivationError::BridgeNonceCrossCheck {
+            target_epoch: bridge.target_epoch,
+            seed_slot: bridge.source_point_slot,
+            bridge_eta0: bridge.seed_time_eta0.0.clone(),
+            boundary_eta0: final_eta0.clone(),
+        });
+    }
     let mut stake_by_pool: std::collections::BTreeMap<PoolId, Coin> =
         std::collections::BTreeMap::new();
     let mut pool_vrf_keyhashes: std::collections::BTreeMap<PoolId, Hash32> =
@@ -594,7 +680,7 @@ fn bind_bridge_view(
             hash: bridge.source_point_hash.clone(),
         },
         bridge.canonical_commitment.clone(),
-        bridge.epoch_nonce.0.clone(),
+        final_eta0.clone(),
         SnapshotPhase::Mark,
         stake_by_pool,
         pool_vrf_keyhashes,
@@ -764,9 +850,30 @@ pub fn prepare_authority_for_candidate_slot(
             candidate_epoch,
         });
     }
+    // PREPROD-NONCE-2 (DC-EPOCH-16, CE-N2-4): eta0(seed+1) is the boundary TICK over the LIVE chain-dep --
+    // the SAME `apply_nonce_input(EpochBoundary)` the frozen path above applies, and the value cardano-node
+    // computes (reference-proven on preprod 304->305: epochNonce(305) = 74f10bea.. == this tick). It is
+    // NOT the bridge's stored seed-time projection: that was taken 132,173 slots before the candidate
+    // froze and bound `e3402a2b..` into a durable activation record. The bridge remains the LEADERSHIP
+    // authority here (the imported MARK stake / pool set / VRF); it is no longer a nonce authority.
+    let ticked = ade_core::consensus::apply_nonce_input(
+        chain_dep,
+        &ade_core::consensus::NonceInput::EpochBoundary {
+            new_epoch: candidate_epoch,
+        },
+    )
+    .map_err(|e| ActivationError::BridgeProjection(format!("eta0 boundary tick: {e:?}")))?;
+    // The stored value is a CROSS-CHECK only when the seed sits at/after the candidate freeze; derived
+    // from the same era geometry the freeze rule reads, and fail-closed if that cannot be decided.
+    let finality = bridge_eta0_finality_at_seed(era_schedule, bridge)?;
     // Bind the N+1 view from the bridge via the SHARED binder (phase = Mark), so the LIVE promotion here
     // and the warm-start recovery (maybe_recover_promoted_authority) bind it BYTE-IDENTICALLY.
-    let (source, projected) = bind_bridge_view(bridge, inputs.network_magic)?;
+    let (source, projected) = bind_bridge_view(
+        bridge,
+        inputs.network_magic,
+        &ticked.epoch_nonce.0,
+        finality,
+    )?;
     // Durable-before-visible: write the WAL activation record BEFORE publishing the active view.
     let record = activation_record_for(&source);
     if !wal_write(&record) {
@@ -901,6 +1008,9 @@ pub fn maybe_recover_promoted_authority(
     next_epoch_bridge: Option<&BootstrapNextEpochAuthority>,
     epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
     recovered_epoch_nonce: RecoveredEpochNonce,
+    // PREPROD-NONCE-2 (CE-N2-4): the venue geometry the seed+1 bridge branch derives eta0 finality from
+    // -- the SAME schedule (and therefore the SAME RSW) the live loop and the candidate-freeze rule use.
+    era_schedule: &EraSchedule,
     active_view: &mut ActiveEpochAuthority,
 ) -> Result<(), ActivationError> {
     // idempotent: nothing to recover once promoted.
@@ -938,7 +1048,26 @@ pub fn maybe_recover_promoted_authority(
                 candidate_epoch: target_epoch,
             });
         }
-        let (source, projected) = bind_bridge_view(bridge, network_magic)?;
+        // PREPROD-NONCE-2 (CE-N2-4): eta0(seed+1) comes from the RECOVERED chain-dep -- which the
+        // warm-start replay ticked to the durable tip -- exactly as the frozen branch below does, NOT
+        // from the bridge's stored seed-time projection. Bind it to this target epoch first: a caller
+        // that handed a pre-boundary / wrong-epoch chain-dep is a terminal fault, never a
+        // plausible-but-wrong view. (The resolver only selects an activation at/below the tip epoch, so
+        // a seed+1 record is only resolved once the tip is in seed+1 -- this asserts that rather than
+        // assuming it.)
+        if recovered_epoch_nonce.epoch.0 != target_epoch.0 {
+            return Err(ActivationError::RecoveryNonceEpochMismatch {
+                nonce_epoch: recovered_epoch_nonce.epoch,
+                target_epoch,
+            });
+        }
+        let finality = bridge_eta0_finality_at_seed(era_schedule, bridge)?;
+        let (source, projected) = bind_bridge_view(
+            bridge,
+            network_magic,
+            &recovered_epoch_nonce.eta0,
+            finality,
+        )?;
         // EMIT-ONLY (EVIEW-R1): on a mismatch, report WHICH of the ten compared fields differ and
         // both sides' values. The terminal outcome is unchanged -- this only serialises a difference
         // already decided. Without it `EpochViewPostPromotionMismatch` says only THAT they differ,
@@ -1352,9 +1481,32 @@ mod tests {
         )
     }
 
-    // The recovery call with the constant geometry (seed epoch 100). The seed+1 BRIDGE branch reads neither
-    // the epoch-accumulator nor the recovered nonce (those are the CE-4A.3-R1 frozen-regime inputs), so they
-    // are None / a dummy here; only the record + bridge + authority vary. network_magic is 2 -- the bridges
+    /// PREPROD-NONCE-2 (CE-N2-4): a preview-shaped schedule that CARRIES the venue RSW, so the seed+1
+    /// branch can derive eta0 finality (an absent RSW is terminal `BridgeFinalityUnderivable` by
+    /// design, which is a different test). `bridge_for_epoch`'s seed slot 115_676_685 sits 73,485 into
+    /// epoch 1338, PAST the freeze at 51,840 (86,400 − 34,560) — so the fixtures below are the `Final`
+    /// case, where the stored `seed_time_eta0` must corroborate the bound nonce.
+    fn nonce2_preview_sched() -> EraSchedule {
+        EraSchedule::new(
+            ade_core::consensus::era_schedule::BootstrapAnchorHash(Hash32([0u8; 32])),
+            0,
+            vec![ade_core::consensus::era_schedule::EraSummary {
+                randomness_stabilisation_window_slots: Some(34_560),
+                era: CardanoEra::Conway,
+                start_slot: SlotNo(0),
+                start_epoch: EpochNo(0),
+                slot_length_ms: 1_000,
+                epoch_length_slots: 86_400,
+                safe_zone_slots: 25_920,
+            }],
+        )
+        .unwrap()
+    }
+
+    // The recovery call with the constant geometry (seed epoch 100). The seed+1 BRIDGE branch reads the
+    // epoch-accumulator not at all (that is the CE-4A.3-R1 frozen-regime input) so it is None; it DOES
+    // read the recovered nonce now (CE-N2-4: eta0 comes from the recovered chain-dep, not the bridge),
+    // bound to seed+1 = 101 with the value the fixtures' bridges carry. network_magic is 2 -- the bridges
     // below bind their source view with the SAME magic.
     fn call_recover(
         _fx: &RecoverFixture,
@@ -1372,9 +1524,10 @@ mod tests {
             next_epoch_bridge,
             None,
             RecoveredEpochNonce {
-                epoch: EpochNo(0),
-                eta0: Hash32([0; 32]),
+                epoch: EpochNo(101),
+                eta0: Hash32([0xEE; 32]),
             },
+            &nonce2_preview_sched(),
             active_view,
         )
     }
@@ -1387,7 +1540,7 @@ mod tests {
     fn recover_seed_plus_one_binds_the_bridge_twin_and_promotes() {
         let fx = recover_fixture();
         let bridge = bridge_for_epoch(EpochNo(101), 1_000);
-        let (source, _projected) = bind_bridge_view(&bridge, 2).unwrap();
+        let (source, _projected) = bind_bridge_view(&bridge, 2, &Hash32([0xEE; 32]), BridgeEta0Finality::Final).unwrap();
         let record = activation_record_for(&source);
         let sv = pdv();
         let mut active = ActiveEpochAuthority::seed(&sv);
@@ -1413,7 +1566,7 @@ mod tests {
     fn recover_seed_plus_one_missing_or_wrong_bridge_is_terminal() {
         let fx = recover_fixture();
         let bridge = bridge_for_epoch(EpochNo(101), 1_000);
-        let (source, _p) = bind_bridge_view(&bridge, 2).unwrap();
+        let (source, _p) = bind_bridge_view(&bridge, 2, &Hash32([0xEE; 32]), BridgeEta0Finality::Final).unwrap();
         let record = activation_record_for(&source);
 
         // (a) the bridge is absent -> terminal BridgeMissing, no fallback.
@@ -1451,7 +1604,7 @@ mod tests {
     fn recover_seed_plus_one_bridge_identity_mismatch_is_post_promotion_mismatch() {
         let fx = recover_fixture();
         let recorded = bridge_for_epoch(EpochNo(101), 1_000);
-        let (source, _p) = bind_bridge_view(&recorded, 2).unwrap();
+        let (source, _p) = bind_bridge_view(&recorded, 2, &Hash32([0xEE; 32]), BridgeEta0Finality::Final).unwrap();
         let record = activation_record_for(&source);
         let divergent = bridge_for_epoch(EpochNo(101), 2_000);
         let sv = pdv();
@@ -1498,6 +1651,7 @@ mod tests {
             None,
             None,
             RecoveredEpochNonce { epoch: EpochNo(102), eta0: Hash32([0; 32]) },
+            &nonce2_preview_sched(),
             &mut active,
         );
         assert!(
@@ -1570,6 +1724,7 @@ mod tests {
                 epoch: EpochNo(103),
                 eta0: inputs.nonce.clone(),
             },
+            &nonce2_preview_sched(),
             &mut active,
         );
         assert!(r.is_ok(), "seed+3 frozen recovery succeeds, got {r:?}");
@@ -1615,6 +1770,7 @@ mod tests {
                     epoch: EpochNo(nonce_epoch),
                     eta0: inputs.nonce.clone(),
                 },
+                &nonce2_preview_sched(),
                 &mut active,
             )
         };
@@ -1692,7 +1848,7 @@ mod tests {
         // already promoted => an idempotent no-op even with a seed+1 record + NO bridge (which would
         // be a terminal BridgeMissing without the is_promoted early-return short-circuit).
         let bridge = bridge_for_epoch(EpochNo(101), 1_000);
-        let (source, projected) = bind_bridge_view(&bridge, 2).unwrap();
+        let (source, projected) = bind_bridge_view(&bridge, 2, &Hash32([0xEE; 32]), BridgeEta0Finality::Final).unwrap();
         let record = activation_record_for(&source);
         let sv1 = pdv();
         let mut a1 = ActiveEpochAuthority::seed(&sv1);
@@ -1927,6 +2083,406 @@ mod tests {
                 );
             }
             other => panic!("bootstrap-only epoch must fail closed, got {other:?}"),
+        }
+    }
+
+    // ================= PREPROD-NONCE-2 / CE-N2-4 + DC-EPOCH-38 =================
+    //
+    // The bridge's stored `seed_time_eta0` is NOT the nonce authority. eta0(seed+1) is the boundary
+    // tick, and the stored value is a cross-check only when the seed sat at/after the candidate freeze.
+    //
+    // DC-EPOCH-38 is deliberately a SEED-POSITION x VENUE matrix, not one case per venue. The freeze
+    // sits at `1 - RSW/epoch_length` into the epoch and that ratio is 0.4 on BOTH venues, so a
+    // once-per-venue differential passes straight through this defect: preprod 304->305 and preview
+    // 1338->1339 have identical freeze geometry, and preview only ever passed because its snapshots
+    // happened to land after the freeze. Both SIDES of the freeze must be exercised for every venue.
+
+    /// The measured preprod 304->305 operands (NONCE-1). Used as the *shape* of a pre-freeze seed:
+    /// the stored projection and the boundary tick genuinely differ, as they did live.
+    const N2_SEED_TIME_ETA0: Hash32 = Hash32([0xe3; 32]); // stands for e3402a2b.. (candidate@SEED)
+    const N2_BOUNDARY_ETA0: Hash32 = Hash32([0x74; 32]); // stands for 74f10bea.. (candidate@FROZEN)
+
+    /// A venue in the CLOSED registry, with its real `(k, f)` -> the RSW the freeze rule uses.
+    struct N2Venue {
+        name: &'static str,
+        epoch_length: u32,
+        rsw: u32,
+    }
+
+    /// Driven from the SAME closed registry the node resolves `--network` against, so a venue added
+    /// there without a nonce differential is a compile-visible omission rather than a silent gap.
+    fn n2_venues() -> Vec<N2Venue> {
+        ["preview", "preprod"]
+            .into_iter()
+            .map(|name| {
+                let p = crate::bootstrap_export::resolve_network_profile(name)
+                    .expect("closed venue registry");
+                let rsw = ade_core::consensus::era_schedule::praos_rsw_slots(
+                    p.security_param,
+                    u64::from(p.active_slots_coeff.0),
+                    u64::from(p.active_slots_coeff.1),
+                )
+                .expect("venue RSW is derivable");
+                N2Venue {
+                    name,
+                    epoch_length: u32::try_from(p.epoch_length).expect("epoch length fits u32"),
+                    rsw,
+                }
+            })
+            .collect()
+    }
+
+    /// The REAL preprod 304 geometry as measured by NONCE-1 on the live venue, anchored at the actual
+    /// epoch start (129_686_400, which is Shelley-offset — not a multiple of the epoch length). Using
+    /// the measured anchor rather than a synthetic epoch-0 one is what makes the freeze slot below a
+    /// cross-check against the live trace (`freeze_slot=129945600`) instead of a restatement of the code.
+    fn n2_preprod_304_sched(rsw: Option<u32>) -> EraSchedule {
+        EraSchedule::new(
+            ade_core::consensus::era_schedule::BootstrapAnchorHash(Hash32([0u8; 32])),
+            0,
+            vec![ade_core::consensus::era_schedule::EraSummary {
+                randomness_stabilisation_window_slots: rsw,
+                era: CardanoEra::Conway,
+                start_slot: SlotNo(129_686_400),
+                start_epoch: EpochNo(304),
+                slot_length_ms: 1_000,
+                epoch_length_slots: 432_000,
+                safe_zone_slots: 129_600,
+            }],
+        )
+        .unwrap()
+    }
+
+    fn n2_sched(epoch_length: u32, rsw: Option<u32>) -> EraSchedule {
+        EraSchedule::new(
+            ade_core::consensus::era_schedule::BootstrapAnchorHash(Hash32([0u8; 32])),
+            0,
+            vec![ade_core::consensus::era_schedule::EraSummary {
+                randomness_stabilisation_window_slots: rsw,
+                era: CardanoEra::Conway,
+                start_slot: SlotNo(0),
+                start_epoch: EpochNo(0),
+                slot_length_ms: 1_000,
+                epoch_length_slots: epoch_length,
+                safe_zone_slots: epoch_length / 4,
+            }],
+        )
+        .unwrap()
+    }
+
+    /// A bridge seeded at `seed_slot` carrying `seed_time_eta0` as its stored projection.
+    fn n2_bridge(target_epoch: EpochNo, seed_slot: SlotNo, seed_time_eta0: Hash32) -> BootstrapNextEpochAuthority {
+        use ade_core::consensus::praos_state::Nonce;
+        use ade_ledger::bootstrap_bridge::{build_bootstrap_next_epoch_authority, BridgeSourceKind};
+        let mut pools = std::collections::BTreeMap::new();
+        pools.insert(
+            ade_types::Hash28([0x01; 28]),
+            ade_ledger::consensus_view::PoolEntry {
+                active_stake: 1_000,
+                vrf_keyhash: Hash32([0x07; 32]),
+            },
+        );
+        build_bootstrap_next_epoch_authority(
+            Hash32([0xAA; 32]),
+            target_epoch,
+            BridgeSourceKind::ImportedMarkSnapshot,
+            seed_slot,
+            Hash32([0xBB; 32]),
+            Hash32([0xCC; 32]),
+            Hash32([0xDD; 32]),
+            ActiveSlotsCoeff { numer: 1, denom: 20 },
+            Nonce(seed_time_eta0),
+            1_000,
+            pools,
+        )
+    }
+
+    /// CE-N2-4, the core claim: a PRE-FREEZE seed binds the BOUNDARY TICK, and the stored seed-time
+    /// projection reaches neither the view nor the durable activation record.
+    ///
+    /// This is also the CE-N2-3 regression at the level that matters. CE-N2-3 previously held by
+    /// refusing to bootstrap at all; it now holds because there is no code path from the stored field
+    /// to a durable record — `bind_bridge_view` takes the final eta0 as a required argument. Proving it
+    /// on the RECORD (`nonce_commitment`) rather than on the view is deliberate: the record is what
+    /// preprod 304->305 actually wrote `e3402a2b..` into, and what restart reads back.
+    #[test]
+    fn n2_pre_freeze_seed_binds_the_boundary_tick_not_the_stored_projection() {
+        let sched = n2_preprod_304_sched(Some(172_800));
+        // The real preprod numbers: epoch 304 starts at 129_686_400, freeze at 129_945_600, seed before it.
+        let seed = SlotNo(129_813_427);
+        let bridge = n2_bridge(EpochNo(305), seed, N2_SEED_TIME_ETA0);
+        let finality = bridge_eta0_finality_at_seed(&sched, &bridge).unwrap();
+        assert_eq!(
+            finality,
+            BridgeEta0Finality::PendingUntilFreeze { candidate_freeze_slot: SlotNo(129_945_600) },
+            "the measured preprod seed precedes the freeze"
+        );
+
+        let (source, _projected) =
+            bind_bridge_view(&bridge, 1, &N2_BOUNDARY_ETA0, finality).expect("a pending stored value is inert, not an error");
+        assert_eq!(source.nonce, N2_BOUNDARY_ETA0, "the bound view's nonce IS the boundary tick");
+        assert_ne!(
+            source.nonce, N2_SEED_TIME_ETA0,
+            "the seed-time projection must NOT be the bound nonce"
+        );
+
+        // The durable record is the thing that was wrong live. Prove it carries the tick.
+        match activation_record_for(&source) {
+            WalEntry::EpochConsensusViewActivated { target_epoch, nonce_commitment, .. } => {
+                assert_eq!(target_epoch, EpochNo(305));
+                assert_eq!(nonce_commitment, N2_BOUNDARY_ETA0, "CE-N2-4: the record commits the tick");
+                assert_ne!(
+                    nonce_commitment, N2_SEED_TIME_ETA0,
+                    "CE-N2-3: the seed-time projection can no longer reach the WAL"
+                );
+            }
+            other => panic!("expected an activation record, got {other:?}"),
+        }
+    }
+
+    /// The relocated DC-EPOCH-16 teeth: when the seed sits at/after the freeze the stored value CANNOT
+    /// have moved, so it MUST corroborate the tick — a disagreement is terminal, and the error names
+    /// BOTH operands so a failure localizes instead of saying only THAT they differ.
+    #[test]
+    fn n2_final_seed_must_corroborate_the_boundary_tick() {
+        let sched = n2_preprod_304_sched(Some(172_800));
+        let seed = SlotNo(129_945_600); // exactly the freeze slot -> Final (inclusive)
+        let bridge = n2_bridge(EpochNo(305), seed, N2_SEED_TIME_ETA0);
+        let finality = bridge_eta0_finality_at_seed(&sched, &bridge).unwrap();
+        assert_eq!(finality, BridgeEta0Finality::Final);
+
+        match bind_bridge_view(&bridge, 1, &N2_BOUNDARY_ETA0, finality) {
+            Err(ActivationError::BridgeNonceCrossCheck {
+                target_epoch,
+                seed_slot,
+                bridge_eta0,
+                boundary_eta0,
+            }) => {
+                assert_eq!(target_epoch, EpochNo(305));
+                assert_eq!(seed_slot, seed);
+                assert_eq!(bridge_eta0, N2_SEED_TIME_ETA0, "the error names the stored operand");
+                assert_eq!(boundary_eta0, N2_BOUNDARY_ETA0, "and the tick operand");
+            }
+            other => panic!("a final-but-divergent stored nonce must be terminal, got {other:?}"),
+        }
+
+        // ...and a corroborating stored value binds cleanly.
+        let agreeing = n2_bridge(EpochNo(305), seed, N2_BOUNDARY_ETA0);
+        let (source, _) = bind_bridge_view(&agreeing, 1, &N2_BOUNDARY_ETA0, BridgeEta0Finality::Final)
+            .expect("a corroborating final stored nonce binds");
+        assert_eq!(source.nonce, N2_BOUNDARY_ETA0);
+    }
+
+    /// An UNDERIVABLE finality decision is terminal — never silently "assume pending" (which would bind
+    /// an untrusted tick) and never "assume final" (which would resurrect the cross-check on a value
+    /// that may legitimately differ). An absent venue RSW means the candidate freeze itself is INERT,
+    /// so the tick that would be bound is not trustworthy either.
+    #[test]
+    fn n2_underivable_finality_is_terminal() {
+        let bridge = n2_bridge(EpochNo(305), SlotNo(129_813_427), N2_SEED_TIME_ETA0);
+
+        // (a) venue RSW absent -> the freeze is INERT -> terminal.
+        let no_rsw = n2_preprod_304_sched(None);
+        match bridge_eta0_finality_at_seed(&no_rsw, &bridge) {
+            Err(ActivationError::BridgeFinalityUnderivable { target_epoch, seed_slot, reason }) => {
+                assert_eq!(target_epoch, EpochNo(305));
+                assert_eq!(seed_slot, SlotNo(129_813_427));
+                assert!(reason.contains("RSW"), "the reason names the absent RSW: {reason}");
+            }
+            other => panic!("an absent RSW must be terminal, got {other:?}"),
+        }
+
+        // (b) a seed point the schedule cannot locate -> terminal.
+        let later_era = EraSchedule::new(
+            ade_core::consensus::era_schedule::BootstrapAnchorHash(Hash32([0u8; 32])),
+            0,
+            vec![ade_core::consensus::era_schedule::EraSummary {
+                randomness_stabilisation_window_slots: Some(172_800),
+                era: CardanoEra::Conway,
+                start_slot: SlotNo(200_000_000),
+                start_epoch: EpochNo(400),
+                slot_length_ms: 1_000,
+                epoch_length_slots: 432_000,
+                safe_zone_slots: 100_000,
+            }],
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                bridge_eta0_finality_at_seed(&later_era, &bridge),
+                Err(ActivationError::BridgeFinalityUnderivable { .. })
+            ),
+            "an unlocatable seed point must be terminal"
+        );
+    }
+
+    /// Step 4 of the slice's binding order: the LIVE promotion and the WARM-START recovery must bind
+    /// the seed+1 view BYTE-IDENTICALLY. That is the whole reason `bind_bridge_view` is the sole
+    /// binder, and CE-N2-4 moved the nonce source on BOTH sides, so it is re-proven here rather than
+    /// inherited: same bridge + same final eta0 => same canonical hash, hence the recovered view
+    /// reproduces the live record's identity.
+    #[test]
+    fn n2_live_and_recovery_bind_the_same_view_byte_identically() {
+        let sched = n2_preprod_304_sched(Some(172_800));
+        let bridge = n2_bridge(EpochNo(305), SlotNo(129_813_427), N2_SEED_TIME_ETA0);
+        let finality = bridge_eta0_finality_at_seed(&sched, &bridge).unwrap();
+
+        // LIVE: nonce from the boundary tick. RECOVERY: nonce from the recovered chain-dep. Same value
+        // by construction (the warm-start replay applies the same tick), so the same bound view.
+        let (live_source, live_projected) =
+            bind_bridge_view(&bridge, 1, &N2_BOUNDARY_ETA0, finality).unwrap();
+        let (rec_source, rec_projected) =
+            bind_bridge_view(&bridge, 1, &N2_BOUNDARY_ETA0, finality).unwrap();
+        assert_eq!(live_source.canonical_hash(), rec_source.canonical_hash());
+        assert_eq!(live_projected, rec_projected);
+        assert_eq!(activation_record_for(&live_source), activation_record_for(&rec_source));
+
+        // And a recovery handed a DIFFERENT eta0 cannot reproduce the live record -> terminal.
+        let (other, _) = bind_bridge_view(&bridge, 1, &Hash32([0x99; 32]), finality).unwrap();
+        assert_ne!(
+            live_source.canonical_hash(),
+            other.canonical_hash(),
+            "the nonce is binding-sensitive: a different eta0 is a different view"
+        );
+    }
+
+    /// CE-N2-5 at the seam: the seed+1 recovery now binds the RECOVERED chain-dep eta0, so that nonce
+    /// must be bound to the record's target epoch. A caller handing a pre-boundary chain-dep (the tip
+    /// still in the seed epoch) is terminal, never a plausible-but-wrong promoted view. Mirrors the
+    /// guard the frozen regime already had.
+    #[test]
+    fn n2_recovery_nonce_must_be_bound_to_the_target_epoch() {
+        let sched = n2_preprod_304_sched(Some(172_800));
+        let bridge = n2_bridge(EpochNo(305), SlotNo(129_813_427), N2_SEED_TIME_ETA0);
+        let finality = bridge_eta0_finality_at_seed(&sched, &bridge).unwrap();
+        let (source, _) = bind_bridge_view(&bridge, 1, &N2_BOUNDARY_ETA0, finality).unwrap();
+        let record = activation_record_for(&source);
+
+        let sv = pdv();
+        let mut active = ActiveEpochAuthority::seed(&sv);
+        let r = maybe_recover_promoted_authority(
+            Some(&record),
+            EpochNo(304),
+            1,
+            Hash32([0xCC; 32]),
+            Hash32([0xDD; 32]),
+            ActiveSlotsCoeff { numer: 1, denom: 20 },
+            Some(&bridge),
+            None,
+            // eta0 bound to the SEED epoch, not the target: a pre-boundary chain-dep.
+            RecoveredEpochNonce { epoch: EpochNo(304), eta0: N2_BOUNDARY_ETA0 },
+            &sched,
+            &mut active,
+        );
+        assert!(
+            matches!(
+                r,
+                Err(ActivationError::RecoveryNonceEpochMismatch {
+                    nonce_epoch: EpochNo(304),
+                    target_epoch: EpochNo(305)
+                })
+            ),
+            "a wrong-epoch recovered nonce is terminal on the bridge branch too, got {r:?}"
+        );
+        assert!(!active.is_promoted());
+
+        // The same call with the nonce bound to the target recovers and promotes.
+        let mut ok_active = ActiveEpochAuthority::seed(&sv);
+        maybe_recover_promoted_authority(
+            Some(&record),
+            EpochNo(304),
+            1,
+            Hash32([0xCC; 32]),
+            Hash32([0xDD; 32]),
+            ActiveSlotsCoeff { numer: 1, denom: 20 },
+            Some(&bridge),
+            None,
+            RecoveredEpochNonce { epoch: EpochNo(305), eta0: N2_BOUNDARY_ETA0 },
+            &sched,
+            &mut ok_active,
+        )
+        .expect("CE-N2-5: restart after the bridge boundary recovers the SAME value");
+        assert_eq!(
+            ok_active.active_view_identity(),
+            (EpochNo(305), Some(source.canonical_hash())),
+            "the recovered view is byte-identical to the live one"
+        );
+    }
+
+    /// DC-EPOCH-38 — multi-venue Praos nonce / candidate-freeze differential, exercised on BOTH SIDES
+    /// of the freeze for EVERY venue in the closed registry.
+    ///
+    /// Per venue this asserts, against that venue's real `k`/`f`/epoch geometry:
+    ///   - the freeze slot is `firstSlotNextEpoch - RSW` (the rule, not a restatement of the code);
+    ///   - seed BEFORE the freeze  => Pending: the stored projection is inert, the tick binds, and a
+    ///     divergent stored value is NOT an error (it is expected to differ);
+    ///   - seed AT/AFTER the freeze => Final: a divergent stored value is TERMINAL and the error
+    ///     localizes to the two operands.
+    ///
+    /// The both-sides requirement is the point. `rsw/epoch_length` is 0.4 on every venue here, so the
+    /// freeze sits at 60% into the epoch everywhere and a once-per-venue test cannot distinguish the
+    /// two sides at all — which is exactly how preprod shipped with a defect preview did not show.
+    #[test]
+    fn dc_epoch_38_bridge_nonce_freeze_differential_covers_both_sides_per_venue() {
+        let venues = n2_venues();
+        assert_eq!(venues.len(), 2, "the closed venue registry is preview|preprod");
+        for v in &venues {
+            let sched = n2_sched(v.epoch_length, Some(v.rsw));
+            // Work in epoch 3 of the venue so the arithmetic is not accidentally satisfied by zeros.
+            let epoch = 3u64;
+            let epoch_start = epoch * u64::from(v.epoch_length);
+            let first_slot_next_epoch = epoch_start + u64::from(v.epoch_length);
+            let freeze = first_slot_next_epoch - u64::from(v.rsw);
+            let target = EpochNo(epoch + 1);
+
+            // The ratio that makes a once-per-venue differential blind — asserted, not assumed.
+            assert_eq!(
+                u64::from(v.rsw) * 5,
+                u64::from(v.epoch_length) * 2,
+                "{}: rsw/epoch_length is 0.4, so the freeze is at 60% into the epoch on EVERY venue \
+                 -- this is why both sides must be exercised per venue",
+                v.name
+            );
+
+            // ---- side A: seed BEFORE the freeze (Pending) ----
+            let pre = n2_bridge(target, SlotNo(freeze - 1), N2_SEED_TIME_ETA0);
+            let pre_finality = bridge_eta0_finality_at_seed(&sched, &pre).unwrap();
+            assert_eq!(
+                pre_finality,
+                BridgeEta0Finality::PendingUntilFreeze { candidate_freeze_slot: SlotNo(freeze) },
+                "{}: one slot before the freeze is PENDING, and the decision names the freeze slot",
+                v.name
+            );
+            let (pre_source, _) = bind_bridge_view(&pre, 1, &N2_BOUNDARY_ETA0, pre_finality)
+                .unwrap_or_else(|e| panic!("{}: a pre-freeze seed must bind, not fail: {e:?}", v.name));
+            assert_eq!(
+                pre_source.nonce, N2_BOUNDARY_ETA0,
+                "{}: pre-freeze binds the boundary tick",
+                v.name
+            );
+
+            // ---- side B: seed AT the freeze (Final, inclusive) ----
+            let at = n2_bridge(target, SlotNo(freeze), N2_SEED_TIME_ETA0);
+            let at_finality = bridge_eta0_finality_at_seed(&sched, &at).unwrap();
+            assert_eq!(at_finality, BridgeEta0Finality::Final, "{}: at the freeze is FINAL", v.name);
+            match bind_bridge_view(&at, 1, &N2_BOUNDARY_ETA0, at_finality) {
+                Err(ActivationError::BridgeNonceCrossCheck { bridge_eta0, boundary_eta0, seed_slot, .. }) => {
+                    assert_eq!(seed_slot, SlotNo(freeze));
+                    assert_eq!(bridge_eta0, N2_SEED_TIME_ETA0);
+                    assert_eq!(boundary_eta0, N2_BOUNDARY_ETA0);
+                }
+                other => panic!("{}: a final-but-divergent stored nonce must be terminal, got {other:?}", v.name),
+            }
+
+            // ---- side B': seed PAST the freeze corroborating -> binds ----
+            let past = n2_bridge(target, SlotNo(first_slot_next_epoch - 1), N2_BOUNDARY_ETA0);
+            let past_finality = bridge_eta0_finality_at_seed(&sched, &past).unwrap();
+            assert_eq!(past_finality, BridgeEta0Finality::Final, "{}: past the freeze is FINAL", v.name);
+            assert!(
+                bind_bridge_view(&past, 1, &N2_BOUNDARY_ETA0, past_finality).is_ok(),
+                "{}: a corroborating post-freeze stored nonce binds",
+                v.name
+            );
         }
     }
 }

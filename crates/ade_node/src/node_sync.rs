@@ -745,17 +745,29 @@ where
                         },
                     )
                     .map_err(|e| NodeSyncError::Pump(format!("DC-EPOCH-16 epoch tick: {e:?}")))?;
-                    // The bridge source is provably Some at this first boundary
-                    // (prepare_authority_for_candidate_slot promotes only after
-                    // promote() records it); require it explicitly so a future
-                    // boundary-2+ promotion path cannot silently adopt an
-                    // un-cross-checked tick. boundary 2+ is not yet on this path.
-                    let bridge_eta0 = auth
+                    // PREPROD-NONCE-2 (CE-N2-4): this is a CONSTRUCTION POST-CONDITION, not the
+                    // bridge cross-check it used to be -- say so, because a check that reads like
+                    // a live gate while comparing a value to itself is worse than no check.
+                    // Every promotion path now binds its view nonce from THIS SAME
+                    // `apply_nonce_input(&state.receive.chain_dep, EpochBoundary{auth.epoch()})`:
+                    // the frozen path (seed+2 and beyond) always did, and the seed+1 bridge path
+                    // now does too. So the equality holds by construction, and what it still buys
+                    // is a tripwire on a FUTURE promotion path that binds a nonce from anywhere
+                    // else -- the published view and the chain-dep used for header VRF validation
+                    // must never be able to drift apart.
+                    //
+                    // The corroboration claim it USED to carry -- that the bridge's stored value
+                    // agrees -- moved to `epoch_wire::bind_bridge_view`, gated on
+                    // `BridgeEta0Finality::Final`. It had to move: the stored value is only
+                    // comparable when the seed sat at/after the candidate freeze, and this site
+                    // has no way to know that. Comparing unconditionally is exactly what halted
+                    // preprod 304->305 on a node whose tick was RIGHT.
+                    let promoted_view_nonce = auth
                         .promoted_source()
                         .map(|s| s.nonce.clone())
                         .ok_or_else(|| {
                             NodeSyncError::Pump(
-                                "DC-EPOCH-16: boundary promotion without a bridge source -- the first-boundary tick cross-check requires it".into(),
+                                "DC-EPOCH-16: boundary promotion published no source view -- the tick/view post-condition requires it".into(),
                             )
                         })?;
                     // PREPROD-NONCE-1 (emit-only): the first-boundary cross-check names two hashes
@@ -789,7 +801,7 @@ where
                              durable_tip_slot={} \
                              candidate={:?} evolving={:?} prev_epoch_nonce={:?} lab={:?} \
                              last_epoch_block={:?} last_epoch_block_nonce={:?} \
-                             computed_eta0={:?} bridge_eta0={:?} match={}",
+                             computed_eta0={:?} promoted_view_nonce={:?} match={}",
                             from_epoch,
                             auth.epoch(),
                             decoded.header_input.slot.0,
@@ -807,14 +819,14 @@ where
                             cd.last_epoch_block,
                             cd.last_epoch_block_nonce.as_ref().map(|n| n.0.clone()),
                             ticked.epoch_nonce.0,
-                            bridge_eta0,
-                            ticked.epoch_nonce.0 == bridge_eta0,
+                            promoted_view_nonce,
+                            ticked.epoch_nonce.0 == promoted_view_nonce,
                         );
                     }
-                    if ticked.epoch_nonce.0 != bridge_eta0 {
+                    if ticked.epoch_nonce.0 != promoted_view_nonce {
                         return Err(NodeSyncError::Pump(format!(
-                            "DC-EPOCH-16 epoch-tick eta0 {:?} != bridge eta0 {:?} at epoch {:?}",
-                            ticked.epoch_nonce.0, bridge_eta0, auth.epoch()
+                            "DC-EPOCH-16 epoch-tick eta0 {:?} != promoted view nonce {:?} at epoch {:?}",
+                            ticked.epoch_nonce.0, promoted_view_nonce, auth.epoch()
                         )));
                     }
                     // the promotion commitment = the new epoch nonce (eta0): the cryptographic
