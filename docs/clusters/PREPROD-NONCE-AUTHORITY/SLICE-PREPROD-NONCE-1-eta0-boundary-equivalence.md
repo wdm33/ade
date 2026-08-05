@@ -127,7 +127,86 @@ protocol and validity agreement against Haskell. If Ade cannot compute the corre
 across 304→305, then leader checks and header VRF validation around that boundary are not trustworthy
 enough for a public forge attempt. Failing closed here is right; forging on an unproven nonce is not.
 
+## DIAGNOSED 2026-08-05 — ROOT CAUSE PROVEN
+
+**The epoch-305 nonce commitment is taken at the SEED POINT, 132,173 slots before the candidate
+freezes.** Both epoch ticks are correct; they disagree because the commitment binds a candidate that
+was still moving.
+
+### The proof is arithmetic, not inferential
+
+The activation record recovered from the reproducer's WAL:
+
+```
+EpochConsensusViewActivated target_epoch=305 magic=1
+  transition_point slot = 129813427  (4153b4f5acae17be)   <- THE MITHRIL SEED POINT
+  nonce_commitment      = e3402a2b2d04d1055ccf6a6fbafc3febda97a6a7b3a4247f84d9c6070965c7a1
+```
+
+Two exact matches close it:
+
+1. `nonce_commitment` is **byte-identical** to the "bridge eta0" in the failure.
+2. `transition_point` is **the certified anchor block from the bootstrap receipt** — the seed itself.
+
+And the commitment reproduces exactly from the seed quad:
+
+```
+blake2b256( candidate@seed ‖ last_epoch_block_nonce@seed )
+  = blake2b256( 40b4ed6b… ‖ 151dc584… )
+  = e3402a2b…                                   == the committed / bridge eta0   ✓
+```
+
+while the boundary tick yields `74f10bea…` from the *frozen* candidate. `epoch_nonce' = candidate ⭒
+last_epoch_block_nonce` is applied identically on both sides (`epoch_wire.rs:703` and
+`node_sync.rs`); only the operands differ.
+
+### Everything else measured CLEAN
+
+| checked | result |
+|---|---|
+| venue `k` / `f` / RSW | `k=2160 f=1/20 store_rsw=172800 cli_rsw=172800 cross_check=agreed` — correct, and cross-checked |
+| freeze slot | 130,118,400 − 172,800 = 129,945,600 — matches the BLUE rule |
+| seed candidate == evolving | correct: they track until the freeze, and the seed precedes it |
+| seed `epoch_nonce` vs sidecar eta0 | `14ff5504…` both — the seed applied cleanly |
+| block availability | anchor precedes the freeze; sync passed it |
+
+So this is not wrong-venue-`k` (the prior preview harness defect), not a bad window, and not a missing
+block range.
+
+### CORRECTION — this is seed-position, not venue geometry
+
+The earlier framing ("preprod-specific geometry") is **wrong**, and the arithmetic shows why. The
+freeze sits at `1 − RSW/epoch_length` into the epoch, and that ratio is **identical across venues**:
+
+```
+preprod  172800/432000 = 0.4      preview  34560/86400 = 0.4      -> freeze at 60% into the epoch, both
+```
+
+The defect fires whenever the **seed lands in the first 60% of its epoch**. Snapshot 6009 sits at
+127,027 of 432,000 (29% in) → pre-freeze. Preview's proven flows evidently seeded post-freeze, or
+re-derived later. Preprod was not singled out by its geometry; it was singled out by where its
+snapshot sits.
+
+This sharpens **DC-EPOCH-38**: the missing surface is **seed-position × candidate-freeze geometry**,
+which must be exercised on BOTH sides of the freeze for every venue — not once per venue.
+
+### The ActivationAboveDurableTip consequence is now explained
+
+The restart refusal (`target_epoch: 305, durable_tip_epoch: 304`) follows directly: the activation was
+written at the seed point in epoch 304, so it was always going to sit above the durable tip until the
+tip crossed into 305. It remains **correct and unpatched**, per this slice's holds. Whether it becomes
+a no-op once the commitment moves to the freeze slot, or needs its own slice, is decided after the fix
+— not now.
+
+### Fix direction (NOT implemented in this slice)
+
+The commitment for epoch N+1 must not be captured before the candidate for N+1 is frozen at
+`firstSlotNextEpoch − RSW`. Promotion at the seed point is too early by construction whenever the seed
+precedes the freeze. The implementation choice — defer promotion, or re-derive the commitment at the
+freeze — is a separate sealed slice, because it touches activation ordering and must not be conflated
+with this diagnosis.
+
 ## Not claimed
 
-No root cause, no fix, no invariant. This records a reproducible blocker, what has been ruled out by
-measurement, and the exact operands the next pass must emit.
+No fix and no invariant yet. DC-EPOCH-38 is refined above but deliberately not opened until the fix
+lands, so the gate encodes what was proven rather than what was guessed.
