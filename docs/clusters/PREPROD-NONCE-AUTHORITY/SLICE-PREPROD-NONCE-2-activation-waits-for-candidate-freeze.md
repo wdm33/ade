@@ -169,19 +169,78 @@ pass straight through this defect.
 - No weakening `ActivationAboveDurableTip`.
 - No fallback to the seed candidate after the freeze.
 
-## Open design question for implementation
+## Open design question for implementation — RESOLVED 2026-08-05
 
 The bridge is built at import, but the freeze slot for seed+1 may lie far ahead of the seed (132,173
 slots here). So "wait for the freeze" means the seed+1 authority cannot be fully sealed at import at
-all when the seed precedes the freeze. Two shapes to weigh at implementation time:
+all when the seed precedes the freeze. Two shapes were weighed:
 
 1. **Import emits `PendingEpochAuthority` only**, and the seed+1 `ActiveEpochView` is sealed later, at
    the freeze slot, from the live fold.
 2. **Import refuses to bind seed+1 eta0** when the seed precedes the freeze, and the boundary path
    derives it, with the bridge carrying leadership only.
 
-Both satisfy the invariant; they differ in how much the bootstrap receipt can promise. This is
-resolved with evidence during implementation, not guessed here.
+**Resolved: shape 2, with the refusal expressed as a typed DEMOTION at the binder rather than a
+build-time refusal to bootstrap.** The evidence that decides it:
+
+- The seed+1 view is only ever CONSTRUCTED at the boundary (`prepare_authority_for_candidate_slot`),
+  where the tick is final by construction. There is no interval in which a seed+1 `ActiveEpochView`
+  exists carrying a non-final nonce, so shape 1's extra `PendingEpochAuthority` type would model a
+  state that never occurs. Adding a type for an unreachable state is not extra safety.
+- The frozen path (seed+2 and beyond) ALREADY sources eta0 from the boundary tick over the live
+  chain-dep (`epoch_wire.rs:703`). Making the bridge path do the same removes a special case rather
+  than adding one, and it is the reference-proven value (`74f10bea…`).
+
+So the authority split becomes explicit:
+
+| the bridge is… | for seed+1 |
+|---|---|
+| the **leadership** authority (imported MARK stake / pool set / VRF) | **yes** — its actual job |
+| the **nonce** authority | **no** — the boundary tick is, exactly as at every later boundary |
+| a nonce **cross-check** | only when `BridgeEta0Finality::Final` |
+
+### Why the build-time refusal (`81df0bac`) is replaced, not weakened
+
+`BridgeNonceNotFinal` refused the BOOTSTRAP. But a pre-freeze seed is a legitimate and common
+bootstrap position — the freeze sits at 60% into the epoch on every venue, so any Mithril snapshot
+landing in the first 60% of its epoch hits it. Refusing there makes correct nodes unbootstrappable
+rather than making wrong values impossible.
+
+The property that actually matters — *a non-final nonce never becomes authority* — moves to the point
+of use and becomes mechanical: `bind_bridge_view` (the SOLE binder) takes the final eta0 as a
+REQUIRED argument and no longer reads the bridge's stored nonce for the view at all. There is no code
+path by which a stored seed-time value can become a view nonce, so it cannot reach the durable
+activation record. That is strictly stronger than a build-time refusal, which only covered the
+FirstRun path and left the field readable as authority everywhere else.
+
+The stored field is renamed `epoch_nonce` → `seed_time_eta0` to match what it is. The rename is
+wire-neutral: the CBOR is positional, so the encoding, the canonical commitment, and every existing
+durable store are byte-unchanged.
+
+### What is fail-closed, and where
+
+| condition | outcome |
+|---|---|
+| seed at/after the freeze, stored value ≠ boundary tick | **terminal** `BridgeNonceCrossCheck` — when the stored value CAN be corroborated it MUST be |
+| seed before the freeze | stored value is inert; the tick binds; no cross-check claim is made |
+| finality underivable (seed unlocatable, or venue RSW absent ⇒ freeze INERT) | **terminal** `BridgeFinalityUnderivable` — never assumed final |
+
+Finality is derived from the SAME era geometry the candidate-freeze rule itself reads
+(`header_validate.rs` `freeze_boundary = firstSlotNextEpoch − RSW`), located at the bridge's own seed
+point, through the one shared helper both the live promotion and the warm-start recovery call — so
+the decision cannot disagree with the rule it protects, nor drift between the two paths.
+
+### Consequence for the DC-EPOCH-16 first-boundary cross-check
+
+`node_sync.rs:814` compared the tick against the promoted view's nonce. Once the view's nonce IS the
+tick, that comparison is true by construction — and it was ALREADY true by construction on the frozen
+path, where both sides come from the same `apply_nonce_input`. Left as-is it would read like a live
+gate while checking nothing.
+
+So its teeth move rather than vanish: the corroboration claim becomes the binder's `Final` arm, which
+is where the finality decision lives and where it is unit-testable without a node. The node_sync
+check is kept but restated as what it is — a construction post-condition that the published view's
+nonce and the chain-dep used for header VRF validation are the same value.
 
 ## STATE 2026-08-05 — the dangerous behaviour is BLOCKED; the durable completion remains
 
