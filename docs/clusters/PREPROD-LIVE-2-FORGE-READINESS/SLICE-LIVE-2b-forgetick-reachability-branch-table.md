@@ -7,6 +7,10 @@
 > **The ForgeTick fires — 354 of 363 probes.** Reachability was never the defect. The loop is
 > suppressed at a **SIXTH silent exit the code-read table missed**, and it is gated by a **wall-clock
 > slot ~19 days ahead of the chain**.
+>
+> **ROOT CAUSE SELECTED**: the wall-clock→slot conversion treats Byron's 20s slots as 1s. The gap is
+> exactly `86,400 × (20 − 1) = 1,641,600` slots. The peer is FRESH (2 slots off an independent
+> derivation), so this is Ade's anchor, not a stale venue. Fix not yet written.
 
 ## Intent
 
@@ -139,6 +143,34 @@ to forge there. A slot that far out is comfortably outside any KES validity wind
 **This is the more important of the two findings.** B11 is a missing typed reason; the slot derivation
 is a correctness defect on the input to leadership itself — forging on a slot 19 days ahead would be
 categorically wrong, and the only thing preventing it today is an accident of the KES range check.
+
+### ROOT CAUSE SELECTED 2026-08-06 — both discriminators run BEFORE any code change
+
+| quantity | value |
+|---|---|
+| INDEPENDENT derived slot (from genesis, **not** via `checked_millis_to_slot`) | **130,338,561** |
+| peer tip slot | **130,338,559** — 2 slots behind ⇒ **the peer is FRESH** |
+| naive derivation with Byron's 20s slots IGNORED | **131,980,161** |
+| naive − independent | **1,641,600** |
+| Ade `logical_slot` (probe) | 131,976,696 — matches the NAIVE line, offset by the elapsed time between captures |
+
+Decision-table verdict: *independent ≈ peer tip*, *Ade ≈ naive* ⇒ **wrong Ade slot anchor /
+conversion.** The peer is exonerated — `syncProgress: "100.00"` is corroborated here rather than
+trusted, because the peer sits within two slots of an independently derived venue slot.
+
+**The constant is exact, and it names the defect:**
+
+```
+86,400 byron slots × (20s − 1s) = 1,641,600 s = 1,641,600 shelley slots
+                                = the measured naive-vs-independent gap, to the second
+```
+
+The conversion treats the **Byron era as 1-second slots** — it uses the system start with the *Shelley*
+slot length and never applies the 20s Byron segment. Preprod's Byron era is 4 epochs (86,400 slots),
+which is exactly 19 days of error. Full tuple preserved as the regression fixture:
+`docs/evidence/run-stores/preprod-nonce-1/live2b-slot-authority-discriminators.txt`.
+
+### Superseded first reading
 
 **Not diagnosed, and deliberately not attributed.** It is at least two distinct possibilities —
 `checked_millis_to_slot`'s anchor (`anchor_millis` / `start_slot` / `slot_length_ms`) being wrong for

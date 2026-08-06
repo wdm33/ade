@@ -1,0 +1,42 @@
+# LIVE-2b SLOT-AUTHORITY DISCRIMINATORS — preprod, 2026-08-06
+# Run BEFORE any code change, per the required sequence. Both recorded as one measured tuple.
+
+## Discriminator 1 — INDEPENDENT venue-slot derivation
+# Computed here from genesis constants ONLY. Deliberately does NOT call checked_millis_to_slot,
+# so it is corroboration rather than the same helper agreeing with itself.
+  system_start (byron startTime == shelley systemStart)  1654041600   2022-06-01T00:00:00Z
+  byron  slot_length                                      20s  for slots 0..86400 (epochs 0-3)
+  shelley slot_length                                     1s   from slot 86400 (epoch 4)
+  shelley start (unix)                                    1655769600
+  captured wall-clock instant                             1786021800.578  2026-08-06T13:10:00Z
+  INDEPENDENT derived slot                                130338600
+  naive derivation, byron 20s IGNORED                     131980200
+  naive - independent                                     1641600
+
+## Discriminator 2 — PEER-TIP FRESHNESS
+  peer tip slot                130338559
+  peer tip block               5023785
+  peer tip hash                7542f1830e3ae88e310845858a03016ffcc8e718bb3dc1148502fd6eacc38478
+  peer reported epoch          305  (slotInEpoch 220159)
+  peer observation instant     1786021801 (same capture window as above)
+  expected venue slot then     130338600
+  slot lag (expected - peer)   41
+  time-equivalent lag          ~41 s
+  syncProgress                 "100.00"  -- CORROBORATED here, not trusted: the peer is within
+                               a couple of slots of the independently derived venue slot.
+
+## Ade, from the LIVE-2b probe (earlier instant, same run)
+  Ade logical_slot             131976696
+  Ade matches the NAIVE line (offset by the elapsed time between captures), NOT the independent one.
+
+## DECISION-TABLE VERDICT
+  independent slot  ~=  peer tip        -> the peer is FRESH, not stale or isolated
+  Ade               ~=  naive slot      -> Ade is ~1,641,600 slots (~19 days) AHEAD
+  => CLASS: wrong Ade slot anchor / conversion.
+
+## THE CONSTANT IS EXACT, WHICH NAMES THE DEFECT
+  86,400 byron slots * (20s - 1s) = 1,641,600 s = 1,641,600 shelley slots
+  == the measured naive-vs-independent gap, to the second.
+  So the conversion treats the BYRON era as 1-second slots: it uses the system start with the
+  SHELLEY slot length and never applies the 20s Byron segment. Preprod's Byron era is 4 epochs
+  (86,400 slots), hence exactly 19 days of error.
