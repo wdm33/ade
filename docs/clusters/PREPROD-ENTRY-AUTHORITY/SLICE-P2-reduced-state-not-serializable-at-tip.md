@@ -1,9 +1,12 @@
 # SLICE P2 — preprod reaches tip, then fails closed capturing a REDUCED state
 
-> **SEALED — OBSERVED, NOT DIAGNOSED.** Found 2026-08-03 03:32Z on the first successful preprod
-> bootstrap (after P1). Blocks LIVE-2 on preprod. Deliberately not investigated further at the time
-> of discovery: it is consensus-adjacent and the session was ~7 h deep with a leader slot 10 minutes
-> away — precisely the conditions under which a wrong fix gets written.
+> **DIAGNOSED 2026-08-05 — and it is TWO different defects wearing the same error.** The 08-03
+> instance was the **P3 phantom-boundary defect and is already fixed**. What remains is structural and
+> is diagnosed below. Blocks LIVE-2 on preprod.
+>
+> Original sealing note (kept): found 2026-08-03 03:32Z on the first successful preprod bootstrap
+> (after P1), deliberately not investigated at discovery — consensus-adjacent, ~7 h into a session
+> with a leader slot 10 minutes away, precisely the conditions under which a wrong fix gets written.
 
 ## What happened
 
@@ -100,6 +103,99 @@ NOT the same as this one (failure at the boundary, after ~152 clean captures). S
 between the two observations, so this run does not prove the original symptom still reproduces — only
 that the boundary-triggered variant does, and that direction 3 does not explain it.
 
+## DIAGNOSIS 2026-08-05 — the 08-03 instance is ALREADY FIXED; a second, structural one remains
+
+### (a) The 08-03 instance was the P3 phantom boundary
+
+The original observation — failure at tip, **inside** epoch 304, no boundary crossed — is explained by
+the defect P3 fixed, and `state.rs:415` names this exact chain in its own words:
+
+> *"preprod slot 130,046,891 -> 498 instead of 304 … a fictitious epoch ABOVE the real one declares a
+> phantom boundary, routes through `apply_reduced_epoch_boundary`, and leaves cert/gov/snapshots
+> permanently `ReducedUnavailable`."*
+
+A phantom boundary inside epoch 304 is precisely "no boundary crossed, yet the state went reduced,
+then the first capture failed". P3 removed the mainnet-constant epoch formula, so that instance cannot
+recur. **This is why the 08-03 symptom did not reproduce on 08-05.** Candidate directions 1–3 above
+were all aimed at that instance; none of them was the cause.
+
+### (b) What remains is structural, and every step of it is BY DESIGN
+
+The CE-N2-4 run crossed a **real** 304→305 boundary and hit the same error from a different cause:
+
+```
+mithril_native_assembly.rs:364   the native seed ledger is track_utxo: false
+                                 with cert_state: Authoritative(...)   <- captures SUCCEED
+rules.rs:202  dispatch_epoch_boundary: Conway && !track_utxo -> apply_reduced_epoch_boundary
+rules.rs:145  apply_reduced_epoch_boundary: cert_state = ReducedUnavailable
+                                            gov_state  = ReducedUnavailable   (N-RVB-1 / N-RVB-3)
+ledger.rs:69  encode_ledger_state: as_authoritative() -> None -> ReducedStateNotSerializable
+```
+
+Each line is correct in isolation, and together they are a **collision**:
+
+| | |
+|---|---|
+| RVBP requires | a `track_utxo=false` Conway follower crossing a boundary has cert/gov `ReducedUnavailable` — never a stale full `CertState` a later reader could mistake for advanced lifecycle |
+| the encoder requires | a serializable `LedgerState` to have authoritative cert/gov |
+| therefore | **a reduced follower can capture recovery checkpoints only until its first boundary, and never again** |
+
+The seed is `Authoritative`, which is why ~152 cadence captures succeeded through epoch 304 and the
+failure lands exactly at the first boundary. Nothing here is venue-specific; preprod is simply the
+first venue where a `--mode node` reduced follower actually crossed a boundary.
+
+### The fix — make the reduced projection DURABLY REPRESENTABLE, following the sibling that already is
+
+The RVBP guard is not relaxed and no cert/gov is fabricated (both forbidden by this slice). Instead the
+snapshot encoding gains the same typed treatment `EpochStakeSnapshots` **already has**:
+
+```
+epoch_state.snapshots   Authoritative -> array(3) mark/set/go     (existing, byte-identical)
+                        ReducedUnavailable -> array(0)            <- ALREADY SHIPPED (RVBP gates 1/2/3, 7)
+cert_state              Authoritative -> bytes                    (existing, byte-identical)
+                        ReducedUnavailable -> array(0)            <- ADD
+gov_state               Authoritative(Some) -> bytes              (existing, byte-identical)
+                        Authoritative(None) -> null               (existing, byte-identical)
+                        ReducedUnavailable -> array(0)            <- ADD
+```
+
+`array(0)` already MEANS "reduced" in this encoding, so the convention is inherited rather than
+invented. Properties:
+
+- **Backward compatible.** Every authoritative encoding is byte-identical, so existing snapshots
+  decode unchanged and no store is invalidated. `array(0)` is a form the encoder previously could not
+  emit (it errored instead), so it collides with nothing.
+- **Fails closed for old readers.** A pre-fix binary meeting `array(0)` where it expects `bytes` errors
+  in `read_bytes` — it cannot misread a reduced snapshot as authority.
+- **Reduced can never rehydrate as authority.** Decode maps `array(0)` → `ReducedUnavailable`, and
+  `Authoritative` is reachable only from the `bytes`/`null` forms. Consumers needing authority still go
+  through `require_full` / `as_authoritative` and fail closed.
+
+### This CHANGES A LANDED USER GATE — stated plainly, because it must not be mistaken for a relaxation
+
+`reduced_continuation_is_not_serializable_as_authority` (user gate #3) currently asserts that encoding a
+reduced continuation **errors**. Its stated property, in its own words, is that *"nothing a reduced
+follower produced across the boundary can be rehydrated or fingerprinted as authority"*. Refusing to
+encode is one way to secure that property — a blunt one that also makes the follower unrecoverable.
+
+The property is preserved and the mechanism upgraded from *refuse* to *typed round-trip*, which is the
+mechanism its sibling projection already uses. The gate is rewritten to assert the property directly
+and more strongly:
+
+1. a reduced continuation now ENCODES;
+2. it decodes back with cert AND gov `ReducedUnavailable` — never `Authoritative`;
+3. an authoritative state's bytes are UNCHANGED (no regression on the full path);
+4. an authoritative state never decodes as reduced.
+
+(1) alone would be a relaxation. (1)+(2)+(4) is the same guarantee expressed in the type system rather
+than by absence, which is the direction this codebase moves in everywhere else.
+
+### What this does NOT fix
+
+`PREPROD-NONCE-3` (warm-start replay re-validating the bridge-boundary block, `VrfCert`) is a separate
+failure on the restart path and is **not** addressed here. Order is deliberate: fix the forward path
+first so NONCE-3 is diagnosed from a clean post-boundary durable state rather than a contaminated one.
+
 ### Instrumentation gap this exposes
 
 P2's own emit-only diagnostic (`capture-refused:`, added at `node_sync.rs:966`) is attached to the
@@ -108,8 +204,20 @@ the failure that actually fires arrives as a bare `Capture("Encode(ReducedStateN
 none of the projection detail the emit was written to supply. Extending the emit to that site is the
 cheapest next step and costs nothing behaviourally.
 
+## Acceptance criteria
+
+| CE | Criterion | status |
+|---|---|---|
+| **CE-P2-1** | A reduced continuation ENCODES, and decodes back with cert AND gov `ReducedUnavailable` | open |
+| **CE-P2-2** | Authoritative encodings are BYTE-IDENTICAL to pre-fix (no existing store invalidated) | open |
+| **CE-P2-3** | An authoritative state never decodes as reduced, and a reduced one never as authoritative | open |
+| **CE-P2-4** | User gate #3's property (nothing reduced rehydrates/fingerprints as authority) still holds, by type | open |
+| **CE-P2-5** | Live: preprod crosses 304→305 and the boundary capture SUCCEEDS (no rc=43) | open |
+| **CE-P2-6** | Negative-tested: the gate FAILS when reduced is made to decode as authoritative | open |
+
 ## Not claimed
 
-No fix, no root cause, no invariant, no CE. This slice records a reproducible failure with its
-evidence so it is not re-discovered, and records that the P1 fix genuinely worked — preprod
-bootstrapped and reached tip, which had never happened before.
+No invariant and no CE flipped yet. The 08-03 instance is attributed to P3 (fixed); the remaining
+structural collision is diagnosed above with the fix direction stated. This slice records a
+reproducible failure with its evidence so it is not re-discovered, and records that the P1 fix
+genuinely worked — preprod bootstrapped and reached tip, which had never happened before.

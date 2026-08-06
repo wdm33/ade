@@ -1,0 +1,36 @@
+# PREPROD-NONCE-1 reproducer — ARCHIVED MANIFEST (store released 2026-08-05, after CE-N2-4 went green)
+#
+# The store itself is deleted; everything below is what made it evidence. chain.db and
+# reduced-checkpoint.redb were re-derivable (canonical wire blocks + a derived checkpoint);
+# the WAL activation record was NOT, so its bytes are preserved verbatim here.
+
+## Store layout at release
+  chain.db                             2149072896 bytes
+  epoch-accumulator.redb                104357888 bytes
+  reduced-checkpoint.redb              1078472704 bytes
+  wal/wal-0000.bin                        1149967 bytes
+  wal/wal-0001.bin                         397053 bytes
+  node.log                                   1721 bytes
+
+## sha256
+  baa723d42719c4d8573418114dd37155e5214f32783bf4257209d46fed2de3bf  wal/wal-0000.bin
+  2031417c9c2d535126c2a8c3292766b6eedb3350a3a40da085ac584d527c2a4e  wal/wal-0001.bin
+  85e6be8f6a415ac13982bb9d3cec564c748c76e831e9cca352f0272ba2b3eb3a  node.log
+
+## The activation record it proved (parsed)
+  WAL: /home/ts/.cardano-live1/KEEP-preprod-nonce-1-reproducer/wal/wal-0001.bin
+  AdmitBlock entries: 3451 | activation records: 1 | trailing/torn bytes: 0
+  
+  EpochConsensusViewActivated target_epoch=305 magic=1
+    transition_point slot = 129813427  (4153b4f5acae17be)
+    nonce_commitment      = e3402a2b2d04d1055ccf6a6fbafc3febda97a6a7b3a4247f84d9c6070965c7a1
+    view_canonical_hash   = b46d2a343cffcc56
+  
+    candidate freeze slot = 129945600
+    epoch 305 start       = 130118400
+    (transition_point is the MARK source s_prev, not the promotion slot -- it sits
+     -132173 slots from the freeze in a CORRECT record too, so it decides nothing here)
+  
+    => nonce_commitment == the SEED-TIME projection e3402a2b..  WRONG
+       blake2b(candidate@SEED || leb): the candidate was still tracking evolving
+       132173 slots before the freeze. This is the PREPROD-NONCE-1 defect.
