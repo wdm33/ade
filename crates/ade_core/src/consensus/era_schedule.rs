@@ -54,6 +54,110 @@ pub fn praos_rsw_slots(security_param: u64, asc_numer: u64, asc_denom: u64) -> O
     u32::try_from(num.div_ceil(asc_numer)).ok()
 }
 
+/// LIVE-2b: why a wall-clock instant could not be converted to a logical slot. Closed and structured
+/// — a conversion that cannot be justified must refuse, never return a plausible number.
+///
+/// Exists because the pre-LIVE-2b forge path did `slot = (now − systemStart) / shelley_slot_length`,
+/// which silently ignores that Byron slots were 20s. On preprod that is wrong by exactly
+/// `86_400 × (20 − 1) = 1_641_600` slots ≈ 19 days, and nothing rejected it: KES happened to refuse the
+/// resulting future slot as out-of-range, which is the right answer to the wrong question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotDerivationError {
+    /// The captured instant precedes the schedule's system start.
+    BeforeSystemStart { captured_ms: u64, system_start_ms: u64 },
+    /// The schedule has no eras.
+    EmptySchedule,
+    /// The schedule's FIRST era does not begin at slot 0, so its segments cannot be anchored to
+    /// `system_start_unix_ms` by accumulation and no start TIME is available for it.
+    ///
+    /// This is a real condition in Ade, not a defensive branch: the native-Mithril bootstrap builds a
+    /// SINGLE-era Conway schedule anchored at the snapshot epoch's absolute first slot. Such a schedule
+    /// cannot answer "what slot is it now?" from the system start alone, and a forge path must be told
+    /// that rather than handed a number derived from a mismatched anchor.
+    ScheduleDoesNotCoverSystemStart { first_era_start_slot: u64 },
+    /// A zero slot length would make the conversion undefined.
+    ZeroSlotLength { era_index: u8 },
+    /// Elapsed-time or slot arithmetic overflowed.
+    Overflow,
+}
+
+/// LIVE-2b — THE canonical wall-clock → logical-slot conversion.
+///
+/// Deterministic and total over the schedule: RED captures `captured_ms`, this GREEN function converts
+/// it, and BLUE receives an explicit `SlotNo`. It reads no clock, no filesystem, no network and no
+/// peer — the instant is an argument, which is what makes it replayable.
+///
+/// Each era segment is anchored by ACCUMULATION from the system start: segment `i+1` begins at
+/// `t_i + (start_slot_{i+1} − start_slot_i) × slot_length_i`. That is what makes Byron's 20s slots and
+/// Shelley's 1s slots compose without a venue-specific branch — the schedule carries the geometry, so
+/// mainnet, preprod, preview and any synthetic multi-era schedule take the identical code path.
+///
+/// The peer tip is deliberately NOT an input. A legitimate chain has empty slots, so `derived ≈ tip` is
+/// not a validity condition — peer lag is operational evidence, never the definition of "now".
+pub fn slot_at(
+    schedule: &EraSchedule,
+    captured_ms: u64,
+) -> Result<SlotNo, SlotDerivationError> {
+    let eras = schedule.eras();
+    let first = eras.first().ok_or(SlotDerivationError::EmptySchedule)?;
+    if first.start_slot.0 != 0 {
+        return Err(SlotDerivationError::ScheduleDoesNotCoverSystemStart {
+            first_era_start_slot: first.start_slot.0,
+        });
+    }
+    let system_start = schedule.system_start_unix_ms();
+    if captured_ms < system_start {
+        return Err(SlotDerivationError::BeforeSystemStart {
+            captured_ms,
+            system_start_ms: system_start,
+        });
+    }
+    // Walk the segments, carrying each one's start TIME. The applicable segment is the last whose
+    // start time does not exceed the captured instant.
+    let mut seg_start_ms = system_start;
+    for (i, era) in eras.iter().enumerate() {
+        if era.slot_length_ms == 0 {
+            return Err(SlotDerivationError::ZeroSlotLength { era_index: i as u8 });
+        }
+        let next_start_ms = match eras.get(i + 1) {
+            None => None,
+            Some(next) => {
+                let span_slots = next
+                    .start_slot
+                    .0
+                    .checked_sub(era.start_slot.0)
+                    .ok_or(SlotDerivationError::Overflow)?;
+                let span_ms = span_slots
+                    .checked_mul(u64::from(era.slot_length_ms))
+                    .ok_or(SlotDerivationError::Overflow)?;
+                Some(
+                    seg_start_ms
+                        .checked_add(span_ms)
+                        .ok_or(SlotDerivationError::Overflow)?,
+                )
+            }
+        };
+        let in_this_segment = match next_start_ms {
+            None => true,
+            Some(next_ms) => captured_ms < next_ms,
+        };
+        if in_this_segment {
+            let elapsed_ms = captured_ms
+                .checked_sub(seg_start_ms)
+                .ok_or(SlotDerivationError::Overflow)?;
+            let elapsed_slots = elapsed_ms / u64::from(era.slot_length_ms);
+            let slot = era
+                .start_slot
+                .0
+                .checked_add(elapsed_slots)
+                .ok_or(SlotDerivationError::Overflow)?;
+            return Ok(SlotNo(slot));
+        }
+        seg_start_ms = next_start_ms.ok_or(SlotDerivationError::Overflow)?;
+    }
+    Err(SlotDerivationError::EmptySchedule)
+}
+
 /// Pure result of `EraSchedule::locate(slot)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EraLocation {
@@ -619,5 +723,108 @@ mod tests {
                 assert_eq!(first, answers);
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod live2b_slot_authority_tests {
+    use super::*;
+    use ade_types::{CardanoEra, EpochNo};
+
+    fn era(start_slot: u64, start_epoch: u64, slot_len: u32, epoch_len: u32) -> EraSummary {
+        EraSummary {
+            era: CardanoEra::Conway,
+            start_slot: SlotNo(start_slot),
+            start_epoch: EpochNo(start_epoch),
+            slot_length_ms: slot_len,
+            epoch_length_slots: epoch_len,
+            safe_zone_slots: 1,
+            randomness_stabilisation_window_slots: None,
+        }
+    }
+    fn sched(system_start_ms: u64, eras: Vec<EraSummary>) -> EraSchedule {
+        EraSchedule::new(BootstrapAnchorHash(Hash32([0u8; 32])), system_start_ms, eras).unwrap()
+    }
+
+    /// The PRESERVED FIXTURE from the live discriminators (docs/evidence/.../
+    /// live2b-slot-authority-discriminators.txt): preprod, 2026-08-06T13:09:21Z.
+    ///
+    /// byron  slots 0..86_400 at 20s   (epochs 0-3, 21_600 slots each)
+    /// shelley from slot 86_400 at 1s
+    /// captured instant 1_786_021_761 s  =>  slot 130_338_561
+    ///
+    /// Independently derived at diagnosis time and corroborated by a FRESH peer whose tip was
+    /// 130_338_559 — two slots back, which is ordinary chain emptiness, not disagreement.
+    const PREPROD_SYSTEM_START_MS: u64 = 1_654_041_600_000;
+    const CAPTURED_MS: u64 = 1_786_021_761_000;
+    const EXPECTED_SLOT: u64 = 130_338_561;
+
+    fn preprod() -> EraSchedule {
+        sched(
+            PREPROD_SYSTEM_START_MS,
+            vec![era(0, 0, 20_000, 21_600), era(86_400, 4, 1_000, 432_000)],
+        )
+    }
+
+    #[test]
+    fn preprod_fixture_reproduces_the_measured_slot() {
+        assert_eq!(slot_at(&preprod(), CAPTURED_MS).unwrap(), SlotNo(EXPECTED_SLOT));
+    }
+
+    /// NEGATIVE CONTROL: the pre-LIVE-2b calculation — system start with the SHELLEY slot length,
+    /// Byron's 20s segment ignored — reproduces the measured error EXACTLY. This is the defect
+    /// `operator_forge.rs` shipped (`anchor_millis = slot_zero_time_unix_ms`, `start_slot = 0`,
+    /// `slot_length_ms = 1000`), pinned so it can never be reintroduced as "simpler".
+    #[test]
+    fn naive_single_slot_length_reproduces_the_1_641_600_error() {
+        let naive = (CAPTURED_MS - PREPROD_SYSTEM_START_MS) / 1_000;
+        assert_eq!(naive - EXPECTED_SLOT, 1_641_600, "the measured live gap");
+        assert_eq!(86_400 * (20 - 1), 1_641_600, "= byron slots x (20s - 1s)");
+    }
+
+    /// Era-boundary triple: last slot before the transition, the exact transition instant, and the
+    /// first slot after it. The Byron→Shelley seam is where an off-by-one hides.
+    #[test]
+    fn era_boundary_last_exact_and_first() {
+        let s = preprod();
+        let transition_ms = PREPROD_SYSTEM_START_MS + 86_400 * 20_000;
+        assert_eq!(slot_at(&s, transition_ms - 1).unwrap(), SlotNo(86_399), "last byron slot");
+        assert_eq!(slot_at(&s, transition_ms).unwrap(), SlotNo(86_400), "exact transition");
+        assert_eq!(slot_at(&s, transition_ms + 1_000).unwrap(), SlotNo(86_401), "first shelley slot");
+    }
+
+    /// Venue-independent by construction: three different geometries, one code path, no branches.
+    #[test]
+    fn multi_venue_and_synthetic_schedules_use_one_path() {
+        // mainnet-shaped: byron 0..4_492_800 at 20s, shelley from 4_492_800 at 1s.
+        let mainnet = sched(1_506_203_091_000, vec![era(0, 0, 20_000, 21_600), era(4_492_800, 208, 1_000, 432_000)]);
+        let t = 1_506_203_091_000 + 4_492_800 * 20_000 + 5_000;
+        assert_eq!(slot_at(&mainnet, t).unwrap(), SlotNo(4_492_805));
+        // preview: single 1s era from genesis (no byron segment) — must still be exact.
+        let preview = sched(1_666_656_000_000, vec![era(0, 0, 1_000, 86_400)]);
+        assert_eq!(slot_at(&preview, 1_666_656_000_000 + 12_345_000).unwrap(), SlotNo(12_345));
+        // synthetic THREE-era schedule: 20s -> 5s -> 1s.
+        let synth = sched(1_000_000, vec![era(0, 0, 20_000, 100), era(100, 1, 5_000, 100), era(200, 2, 1_000, 100)]);
+        let after_two = 1_000_000 + 100 * 20_000 + 100 * 5_000;
+        assert_eq!(slot_at(&synth, after_two).unwrap(), SlotNo(200));
+        assert_eq!(slot_at(&synth, after_two + 7_000).unwrap(), SlotNo(207));
+    }
+
+    /// Structured refusals, never a plausible number.
+    #[test]
+    fn refusals_are_structured() {
+        let s = preprod();
+        assert!(matches!(
+            slot_at(&s, PREPROD_SYSTEM_START_MS - 1),
+            Err(SlotDerivationError::BeforeSystemStart { .. })
+        ));
+        // THE Ade condition: a single-era schedule anchored mid-chain (the native-Mithril bootstrap
+        // builds exactly this) cannot be anchored from the system start, and says so.
+        let mid = sched(PREPROD_SYSTEM_START_MS, vec![era(130_118_400, 305, 1_000, 432_000)]);
+        assert!(matches!(
+            slot_at(&mid, CAPTURED_MS),
+            Err(SlotDerivationError::ScheduleDoesNotCoverSystemStart { first_era_start_slot: 130_118_400 })
+        ));
     }
 }
