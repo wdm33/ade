@@ -825,6 +825,76 @@ mod live2b_slot_authority_tests {
         assert_eq!(slot_at(&synth, after_two + 7_000).unwrap(), SlotNo(207));
     }
 
+    /// SCOPE GUARD (LIVE-2c): non-timing historical semantics MUST NOT leak into slot derivation.
+    ///
+    /// Ade is Conway-only for execution; historical eras enter solely as the minimum TIMING projection
+    /// needed to derive the current absolute slot. This makes that boundary MECHANICAL rather than
+    /// documented: holding the timing fields fixed (`system_start`, `start_slot`, `slot_length_ms`),
+    /// arbitrary changes to every NON-timing field — `era`, `start_epoch`, `epoch_length_slots`,
+    /// `safe_zone_slots`, `randomness_stabilisation_window_slots` — must not move `slot_at` for ANY
+    /// captured instant.
+    ///
+    /// If someone later teaches `slot_at` to consult era identity or epoch geometry, this fails. That is
+    /// the point: it is the difference between "we intend to stay timing-only" and "we cannot drift".
+    #[test]
+    fn non_timing_fields_cannot_influence_slot_derivation() {
+        let timing = [(0u64, 20_000u32), (86_400, 1_000)];
+        // A: the honest preprod-shaped schedule.
+        let a = sched(
+            PREPROD_SYSTEM_START_MS,
+            vec![
+                era(timing[0].0, 0, timing[0].1, 21_600),
+                era(timing[1].0, 4, timing[1].1, 432_000),
+            ],
+        );
+        // B: IDENTICAL timing, every non-timing field deliberately wrong/absurd.
+        let b = sched(
+            PREPROD_SYSTEM_START_MS,
+            vec![
+                EraSummary {
+                    era: CardanoEra::Conway,          // wrong era identity
+                    start_slot: SlotNo(timing[0].0),  // timing: fixed
+                    start_epoch: EpochNo(9_999),      // absurd
+                    slot_length_ms: timing[0].1,      // timing: fixed
+                    epoch_length_slots: 7,            // absurd
+                    safe_zone_slots: 123_456,         // absurd
+                    randomness_stabilisation_window_slots: Some(999_999),
+                },
+                EraSummary {
+                    era: CardanoEra::ByronEbb,        // wrong era identity
+                    start_slot: SlotNo(timing[1].0),  // timing: fixed
+                    start_epoch: EpochNo(0),          // absurd
+                    slot_length_ms: timing[1].1,      // timing: fixed
+                    epoch_length_slots: 1,            // absurd
+                    safe_zone_slots: 0,
+                    randomness_stabilisation_window_slots: None,
+                },
+            ],
+        );
+        let transition_ms = PREPROD_SYSTEM_START_MS + 86_400 * 20_000;
+        for t in [
+            PREPROD_SYSTEM_START_MS,
+            PREPROD_SYSTEM_START_MS + 1,
+            PREPROD_SYSTEM_START_MS + 19_999,
+            PREPROD_SYSTEM_START_MS + 20_000,
+            transition_ms - 1,
+            transition_ms,
+            transition_ms + 1,
+            transition_ms + 1_000,
+            CAPTURED_MS,
+            CAPTURED_MS + 86_400_000,
+        ] {
+            assert_eq!(
+                slot_at(&a, t),
+                slot_at(&b, t),
+                "non-timing fields changed slot_at at instant {t} -- historical era SEMANTICS have \
+                 leaked into slot derivation, which is outside Ade's Conway-only execution scope"
+            );
+        }
+        // And the shared answer is still the measured fixture, so this is not vacuous agreement.
+        assert_eq!(slot_at(&a, CAPTURED_MS).unwrap(), SlotNo(EXPECTED_SLOT));
+    }
+
     /// Structured refusals, never a plausible number.
     #[test]
     fn refusals_are_structured() {

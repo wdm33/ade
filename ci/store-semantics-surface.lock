@@ -123,3 +123,9 @@ store_semantics_version = 3
 surface_hash = "eb9e22c319e8e596f9d6329cbad611e2b74a7d060a3b310db2706b7d8b82f102"
 semantics_neutral = true
 rationale = "LIVE-2c colour correction: era_schedule.rs slot_at's doc comment is rewritten to classify it BLUE (authoritative) rather than GREEN (glue), because the SlotNo it returns selects the KES period, drives leadership evaluation, enters the block header and is signed. COMMENT ONLY -- not one line of executable code changed, so nothing a store records can differ. Declared neutral on that basis. Recorded rather than waved through because the gate exists precisely so a comment-only edit inside the hashed surface still forces the bump-or-declare decision to be stated on the record."
+
+[[entry]]
+store_semantics_version = 3
+surface_hash = "25bc0b28766df8585322c31aba4f918de93e54c376fd012454e7e64869493966"
+semantics_neutral = true
+rationale = "LIVE-2c scope guard: era_schedule.rs gains ONE test (non_timing_fields_cannot_influence_slot_derivation) inside its existing #[cfg(test)] module and nothing else. No production item added, removed or altered -- slot_at, EraSchedule, EraSummary, praos_rsw_slots, locate() are byte-identical, so nothing a store records can differ. The test asserts that holding timing fields constant, arbitrary changes to era / start_epoch / epoch_length_slots / safe_zone_slots / RSW cannot move slot_at for any instant -- making Ade's Conway-only execution boundary MECHANICAL rather than documented. Declared neutral: a test-only addition."

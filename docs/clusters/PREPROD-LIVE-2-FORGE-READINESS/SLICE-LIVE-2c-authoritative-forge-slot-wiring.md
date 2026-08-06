@@ -174,10 +174,33 @@ enum ForgeRefused {
 | **CE-L2c-9** | The live run emits a decided `ForgeOutcome` | open |
 | **CE-L2c-10** | Replaying instant + schedule + anchor + authority inputs reproduces the same slot and outcome | open |
 | **CE-L2c-11** | Negative-tested (seven mutations below) | open |
+| **CE-L2c-12** | **Scope guard**: holding timing fields constant, arbitrary changes to `era`, `start_epoch`, `epoch_length_slots`, `safe_zone_slots` and the RSW must NOT change `slot_at` for any captured instant | **MET** — `non_timing_fields_cannot_influence_slot_derivation`, negative-tested three ways (leak `epoch_length_slots`; branch on era identity; leak `safe_zone_slots`) |
+| **CE-L2c-13** | **Compact-anchor equivalence**: `full_timing_history.slot_at(t) == compact_anchor.slot_at(t)` for EVERY instant in the compact anchor's declared domain, including its FIRST instant and every transition edge | open — see below |
 
 Required mutations: restore the naive conversion; hardcode the preprod boundary; accept a truncated
 schedule as complete; node path bypasses `slot_at`; B11 restored to `None`; diagnostic path fixed while
 the node path stays old; known-pool evaluation replaced by `UnknownPool`.
+
+### CE-L2c-13 — the equivalence proof the compact anchor must carry
+
+Proof obligation 4 of the six-proof bar ("replay proves it yields the same slots as the complete
+schedule over its domain") is stated here as a mechanical property so it cannot be satisfied by
+argument:
+
+```
+for every instant t in the compact anchor's DECLARED domain:
+    slot_at(full_timing_history, t) == slot_at(compact_anchor, t)
+```
+
+Must include the domain's **first instant** and **every transition edge** it spans — those are where a
+derived anchor's rounding or off-by-one would hide, and they are exactly the instants an
+interior-only sample would miss.
+
+**Not written yet, deliberately**: the compact anchor type does not exist. Note the current shape makes
+any compact form *inexpressible* — `slot_at` refuses a schedule whose first era does not start at slot 0
+(`ScheduleDoesNotCoverSystemStart`). That refusal is not an obstacle to route around; it IS the design
+constraint the anchor must satisfy, by being derived from the full history rather than by relaxing the
+check.
 
 ## Store-semantics decision — reassess DURING wiring
 
