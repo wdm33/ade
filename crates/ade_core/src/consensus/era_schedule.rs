@@ -83,9 +83,23 @@ pub enum SlotDerivationError {
 
 /// LIVE-2b — THE canonical wall-clock → logical-slot conversion.
 ///
-/// Deterministic and total over the schedule: RED captures `captured_ms`, this GREEN function converts
-/// it, and BLUE receives an explicit `SlotNo`. It reads no clock, no filesystem, no network and no
-/// peer — the instant is an argument, which is what makes it replayable.
+/// **BLUE — authoritative, not GREEN glue.** The arithmetic is small and deterministic, which makes it
+/// tempting to call transport; it is not. The `SlotNo` this returns selects the KES period, drives VRF
+/// leadership evaluation, is written into the block header, and is signed. A wrong result here produces
+/// an invalid block, so the conversion OWNS authoritative meaning and lives in `ade_core` accordingly.
+/// GREEN may carry the captured instant in and the verdict out; it must never own this conversion, or
+/// GREEN would be affecting authoritative output.
+///
+/// The boundary is:
+/// ```text
+/// RED   capture UnixMillis
+/// BLUE  slot_at(captured_ms) -> SlotNo | SlotDerivationError
+/// BLUE  forecast / KES / leadership decisions
+/// RED   signing and transmission
+/// ```
+///
+/// Deterministic and total over the schedule. It reads no clock, no filesystem, no network and no peer
+/// — the instant is an argument, which is what makes it replayable.
 ///
 /// Each era segment is anchored by ACCUMULATION from the system start: segment `i+1` begins at
 /// `t_i + (start_slot_{i+1} − start_slot_i) × slot_length_i`. That is what makes Byron's 20s slots and

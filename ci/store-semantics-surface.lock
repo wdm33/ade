@@ -117,3 +117,9 @@ store_semantics_version = 3
 surface_hash = "c58bad6d3154e7cddc0b007bf0f634539969cc5013128174772fb343b9bcf7f3"
 semantics_neutral = true
 rationale = "LIVE-2b canonical forge-slot authority. era_schedule.rs gains slot_at() + SlotDerivationError + tests, and NOTHING existing changes: EraSchedule, EraSummary, praos_rsw_slots, locate() and every other item are byte-identical. This is an ADDITIVE wall-clock -> logical-slot conversion for the FORGE path. It changes which slot Ade may attempt to forge; it does NOT reinterpret ChainDB blocks, accumulator state, reduced checkpoints, fingerprints or WAL history, no persisted forge/tick artifact is decoded under new meaning, and replay of existing durable records is unaffected -- so no store written by the previous binary becomes invalid. Declared neutral on the explicit ruling that forge SCHEDULING changes are not by themselves a store-semantics change; this would be reassessed only if a persisted forge artifact were later decoded under new meaning."
+
+[[entry]]
+store_semantics_version = 3
+surface_hash = "eb9e22c319e8e596f9d6329cbad611e2b74a7d060a3b310db2706b7d8b82f102"
+semantics_neutral = true
+rationale = "LIVE-2c colour correction: era_schedule.rs slot_at's doc comment is rewritten to classify it BLUE (authoritative) rather than GREEN (glue), because the SlotNo it returns selects the KES period, drives leadership evaluation, enters the block header and is signed. COMMENT ONLY -- not one line of executable code changed, so nothing a store records can differ. Declared neutral on that basis. Recorded rather than waved through because the gate exists precisely so a comment-only edit inside the hashed surface still forces the bump-or-declare decision to be stated on the record."
