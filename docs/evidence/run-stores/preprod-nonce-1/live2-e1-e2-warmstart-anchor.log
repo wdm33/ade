@@ -1,0 +1,49 @@
+=== LIVE-2 run3 start 2026-08-06T06:18:42Z ===
+nonce1-freeze-window: source=durable-sidecar k=2160 f=1/20 store_rsw=Some(172800) cli_rsw=Some(172800) cross_check=agreed effective_rsw=Some(172800)
+ade_node: cardano-cli kes.skey loaded; KES VK fingerprint = fd2f1de3b35c8ea7cb26b630455d0e7361a35e2b9174906de3c87fad87c07d59 — verify this matches your opcert before block production.
+nonce1-freeze-window: source=durable-sidecar k=2160 f=1/20 store_rsw=Some(172800) cli_rsw=Some(172800) cross_check=agreed effective_rsw=Some(172800)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130313862/5022672/f4c34c19 durable_tip=130313862/5022672/f4c34c19 rollback_target=none anchor_after=130313862/5022672/f4c34c19
+follow: tip slot=130313885 behind=131 slots from peer
+follow: tip slot=130314016 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130314034 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130313862/5022672/f4c34c19 durable_tip=130314034/5022682/5489d8a9 rollback_target=none anchor_after=130313862/5022672/f4c34c19
+follow: tip slot=130314147 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314034/5022682/5489d8a9 durable_tip=130314147/5022683/1e1bbe00 rollback_target=none anchor_after=130314034/5022682/5489d8a9
+follow: tip slot=130314160 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314147/5022683/1e1bbe00 durable_tip=130314160/5022684/e0925b60 rollback_target=none anchor_after=130314147/5022683/1e1bbe00
+follow: tip slot=130314212 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314160/5022684/e0925b60 durable_tip=130314212/5022685/e38033f4 rollback_target=none anchor_after=130314160/5022684/e0925b60
+follow: tip slot=130314219 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314212/5022685/e38033f4 durable_tip=130314219/5022686/cc03de3f rollback_target=none anchor_after=130314212/5022685/e38033f4
+follow: tip slot=130314232 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314219/5022686/cc03de3f durable_tip=130314232/5022687/84dad0ec rollback_target=none anchor_after=130314219/5022686/cc03de3f
+follow: tip slot=130314330 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314232/5022687/84dad0ec durable_tip=130314330/5022688/f3d54017 rollback_target=none anchor_after=130314232/5022687/84dad0ec
+follow: tip slot=130314335 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314330/5022688/f3d54017 durable_tip=130314335/5022689/0be558cb rollback_target=none anchor_after=130314330/5022688/f3d54017
+follow: tip slot=130314345 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314335/5022689/0be558cb durable_tip=130314345/5022690/e4112759 rollback_target=none anchor_after=130314335/5022689/0be558cb
+follow: tip slot=130314361 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314345/5022690/e4112759 durable_tip=130314361/5022691/4c62465c rollback_target=none anchor_after=130314345/5022690/e4112759
+follow: tip slot=130314364 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314361/5022691/4c62465c durable_tip=130314364/5022692/055e806a rollback_target=none anchor_after=130314361/5022691/4c62465c
+follow: tip slot=130314371 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314364/5022692/055e806a durable_tip=130314371/5022693/f2c120b1 rollback_target=none anchor_after=130314364/5022692/055e806a
+follow: tip slot=130314432 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314371/5022693/f2c120b1 durable_tip=130314432/5022694/ac3a726d rollback_target=none anchor_after=130314371/5022693/f2c120b1
+follow: tip slot=130314438 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130314439 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314432/5022694/ac3a726d durable_tip=130314439/5022696/accd9c97 rollback_target=none anchor_after=130314432/5022694/ac3a726d
+follow: tip slot=130314440 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314439/5022696/accd9c97 durable_tip=130314440/5022697/a9aa7ce3 rollback_target=none anchor_after=130314439/5022696/accd9c97
+follow: tip slot=130314444 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314440/5022697/a9aa7ce3 durable_tip=130314444/5022698/a745da28 rollback_target=none anchor_after=130314440/5022697/a9aa7ce3
+follow: tip slot=130314448 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314444/5022698/a745da28 durable_tip=130314448/5022699/0645f0d3 rollback_target=none anchor_after=130314444/5022698/a745da28
+follow: tip slot=130314496 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314448/5022699/0645f0d3 durable_tip=130314496/5022700/f1208844 rollback_target=none anchor_after=130314448/5022699/0645f0d3
+follow: tip slot=130314562 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130314563 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314496/5022700/f1208844 durable_tip=130314563/5022702/c8310cc9 rollback_target=none anchor_after=130314496/5022700/f1208844
+ade_node --mode node: relay run loop exited (recovered/bootstrapped epoch=Some(304), tip slot=Some(130313862); forge CAPABLE — operator keys loaded — LIVE WirePump feed wired to ["127.0.0.1:3001"]: forge is observable when the feed is Continuing and a due leader slot is reached. Peer ACCEPT is NOT claimed — it is operator-gated (RO-LIVE-01/06), proven only by the peer's validation log. NO peer-acceptance / BA-02 claim.
+=== exit rc=0 at 2026-08-06T06:29:59Z ===

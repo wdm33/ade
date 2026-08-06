@@ -2056,9 +2056,15 @@ pub fn forge_one_from_recovered(
     // leader schedule for the operator's pool against it. The view passed
     // here is the recovered surface (`&pool_distr_view`), never a bundle —
     // so the recovered consensus inputs drive who may forge (DC-CINPUT-02b).
-    // Unknown pool / outside horizon ⇒ deterministic `ForgeNotLeader` (not an
-    // error), exactly as the diagnostic produce_mode path handles it.
-    let answer = match query_leader_schedule(
+    // LIVE-2 (CE-L2-6): a leadership schedule that CANNOT ANSWER is NOT a not-leader result.
+    //
+    // This previously read `Err(_) => ForgeNotLeader`, mirroring the produce_mode path. Both
+    // collapsed all three `LeaderScheduleError` variants into a confident "not elected", so an
+    // unestablished leadership authority reported not-elected — the CRE-S7 shape, spoken by the
+    // forge path — and a `not_leader` outcome could not be trusted as evidence that the decision
+    // path was reached. This is the AUTHORITATIVE `--mode node` path, so it matters more here than
+    // in the diagnostic one. Shared classifier, so the two can never drift apart again.
+    let raw = query_leader_schedule(
         &LeaderScheduleQuery {
             slot: SlotNo(slot),
             pool: pool_id.clone(),
@@ -2066,14 +2072,51 @@ pub fn forge_one_from_recovered(
         pool_distr_view,
         era_schedule,
         live_chain_dep,
-    ) {
-        Ok(a) => a,
-        Err(_) => {
-            // PHASE4-N-F-G-B S1: not-a-leader is fail-closed — no handoff.
+    );
+    let classified = crate::produce_mode::classify_leader_schedule(raw, pool_distr_view.pool_count());
+    // LIVE-2 E4 (emit-only): name WHICH branch decided this slot. `ForgeNotLeader` is emitted both
+    // when the configured operator pool was evaluated and lost AND when it is absent from the
+    // leadership view; only the first is LIVE-2 evidence. Distinguishable otherwise only by an
+    // all-zero vrf fingerprint sentinel, which is not a basis for an evidence claim. Never read back.
+    crate::node_log!(
+        "forge-decision: slot={} operator_pool={} pools_in_view={} branch={}          (LIVE-2 counts known_pool_evaluated ONLY)",
+        slot,
+        pool_id.0.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+        pool_distr_view.pool_count(),
+        match &classified {
+            Ok(Some(_)) => "known_pool_evaluated",
+            Ok(None) => "unknown_pool_deterministic_ineligible",
+            Err(_) => "authority_cannot_answer",
+        }
+    );
+    let answer = match classified {
+        Ok(Some(a)) => a,
+        // The operator pool is absent from a POPULATED leadership view: a deterministic
+        // ineligibility. Still ForgeNotLeader, but named above so it cannot be mistaken for
+        // LIVE-2 evidence that the producer reached the real leader decision.
+        Ok(None) => {
             return Ok((
                 CoordinatorEvent::ForgeNotLeader {
                     slot,
                     vrf_output_fingerprint: [0u8; 8],
+                },
+                None,
+            ));
+        }
+        // The authority CANNOT ANSWER (empty leadership view, or outside the forecast horizon /
+        // an HFC fault). Fail closed as a typed FAILURE — never ForgeNotLeader, never a fallback
+        // to the bridge, the seed window or a CLI oracle.
+        Err(e) => {
+            crate::node_log!(
+                "forge: leadership authority CANNOT ANSWER for slot {} (pools_in_view={}): {:?}                  -- refusing; this is NOT a not-leader result",
+                slot,
+                pool_distr_view.pool_count(),
+                e
+            );
+            return Ok((
+                CoordinatorEvent::ForgeFailed {
+                    slot,
+                    reason: ade_runtime::producer::producer_log::ForgeFailureReason::Other,
                 },
                 None,
             ));

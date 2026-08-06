@@ -1,0 +1,30 @@
+=== LIVE-2 run2 start 2026-08-06T06:12:23Z ===
+nonce1-freeze-window: source=durable-sidecar k=2160 f=1/20 store_rsw=Some(172800) cli_rsw=Some(172800) cross_check=agreed effective_rsw=Some(172800)
+ade_node: cardano-cli kes.skey loaded; KES VK fingerprint = fd2f1de3b35c8ea7cb26b630455d0e7361a35e2b9174906de3c87fad87c07d59 — verify this matches your opcert before block production.
+nonce1-freeze-window: source=durable-sidecar k=2160 f=1/20 store_rsw=Some(172800) cli_rsw=Some(172800) cross_check=agreed effective_rsw=Some(172800)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130311299/5022570/4af7ed15 durable_tip=130311299/5022570/4af7ed15 rollback_target=none anchor_after=130311299/5022570/4af7ed15
+follow: tip slot=130311313 behind=2296 slots from peer
+follow: tip slot=130313723 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130313739 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130311299/5022570/4af7ed15 durable_tip=130313739/5022664/3d9187ef rollback_target=none anchor_after=130311299/5022570/4af7ed15
+follow: tip slot=130313764 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130313739/5022664/3d9187ef durable_tip=130313764/5022665/19d172a0 rollback_target=none anchor_after=130313739/5022664/3d9187ef
+follow: tip slot=130313812 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130313813 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130313764/5022665/19d172a0 durable_tip=130313813/5022667/5b5ca6c9 rollback_target=none anchor_after=130313764/5022665/19d172a0
+follow: tip slot=130313817 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130313813/5022667/5b5ca6c9 durable_tip=130313817/5022668/86e8d417 rollback_target=none anchor_after=130313813/5022667/5b5ca6c9
+follow: tip slot=130313822 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130313817/5022668/86e8d417 durable_tip=130313822/5022669/02283df5 rollback_target=none anchor_after=130313817/5022668/86e8d417
+follow: tip slot=130313841 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130313822/5022669/02283df5 durable_tip=130313841/5022670/94998584 rollback_target=none anchor_after=130313822/5022669/02283df5
+follow: tip slot=130313857 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130313841/5022670/94998584 durable_tip=130313857/5022671/909f0baa rollback_target=none anchor_after=130313841/5022670/94998584
+follow: tip slot=130313862 -- AT PEER TIP (caught up, following live)
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130313857/5022671/909f0baa durable_tip=130313862/5022672/f4c34c19 rollback_target=none anchor_after=130313857/5022671/909f0baa
+ade_node --mode node: relay run loop exited (recovered/bootstrapped epoch=Some(304), tip slot=Some(130311299); forge CAPABLE — operator keys loaded — LIVE WirePump feed wired to ["127.0.0.1:3001"]: forge is observable when the feed is Continuing and a due leader slot is reached. Peer ACCEPT is NOT claimed — it is operator-gated (RO-LIVE-01/06), proven only by the peer's validation log. NO peer-acceptance / BA-02 claim.
+=== exit rc=0 at 2026-08-06T06:18:23Z ===
+=== LIVE-2 run1 start 2026-08-06T06:10:17Z ===
+nonce1-freeze-window: source=durable-sidecar k=2160 f=1/20 store_rsw=Some(172800) cli_rsw=Some(172800) cross_check=agreed effective_rsw=Some(172800)
+ade_node --mode node: operator-key ingress failed (incomplete operator key set: present [--cold-skey, --kes-skey, --vrf-skey, --opcert], missing [--genesis-file] -- --mode node forges only with the complete operator key set or with none of it (relay-only)); failing closed. Supply the COMPLETE operator key set (--cold-skey --kes-skey --vrf-skey --opcert --genesis-file) to forge, or none of them to run relay-only.
+=== exit rc=44 at 2026-08-06T06:11:41Z ===

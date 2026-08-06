@@ -1,0 +1,30 @@
+# LIVE-2 PRE-RUN BASELINE — recorded before the evidence run (2026-08-06)
+
+## Binary
+  commit            bef325bb (+ uncommitted LIVE-2 emit)
+  STORE_SEMANTICS   3
+
+## Store: ~/.cardano-live1/ade-preprod-s7
+  chain.db                         6175084544 bytes
+  epoch-accumulator.redb            208179200 bytes
+  reduced-checkpoint.redb          1078472704 bytes
+  wal/wal-0000.bin                    1149967 bytes
+  wal/wal-0001.bin                    1150077 bytes
+  wal/wal-0002.bin                     253920 bytes
+  accumulator sha256  b3e9a49bdae240483d231301acdb85cfe4bb88fbf67f94ffba0f0e413ae10c68
+  wal sha256          baa723d42719c4d8573418114dd37155e5214f32783bf4257209d46fed2de3bf 4b3d371c02f51795a4076953e9dd2fec0e24428791551bbd924a408029c2c8cc 8659aa6531500ddea21b93ffb6a7ec30e90582671e2c6599d03ad943a28d4fba 
+
+## Epoch-305 authority as established by CRE-S7 (from the store's own log)
+  epoch-accumulator: CROSSED boundary 304 -> 305 at slot 130118424 (mark from s_prev 130118358)
+  eta0(305) computed_eta0=Hash32(74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62)
+  activation record:
+    EpochConsensusViewActivated target_epoch=305 magic=1
+      nonce_commitment      = 74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62
+      => nonce_commitment == cardano-node epochNonce(305) 74f10bea..  CORRECT
+
+## Operator public identities (no secret material)
+  pool id (hex)     4590e0ee152ca3325b1cb00118ff02f1394b136ed8b2a23cfec8b070
+  pool id (bech32)  pool1gkgwpms49j3nykcukqq33lcz7yu5kymwmze2y087ezc8qqpt397
+  vrf  vkey cbor    582086e7dadc399949f40fa9ad7933985da221c912f0ba2a06e189f46df5c4afec61
+  kes  vkey cbor    5820fd2f1de3b35c8ea7cb26b630455d0e7361a35e2b9174906de3c87fad87c07d59
+  opcert type       NodeOperationalCertificate

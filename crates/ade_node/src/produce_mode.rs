@@ -59,7 +59,7 @@ use ade_core::consensus::errors::LeaderScheduleError;
 ///
 /// Pure and total. `Err` is the caller's signal to fail closed with a typed refusal, NEVER to fall
 /// back to the bridge, the seed window or a CLI oracle.
-fn classify_leader_schedule(
+pub(crate) fn classify_leader_schedule(
     res: Result<LeaderScheduleAnswer, LeaderScheduleError>,
     pools_in_view: usize,
 ) -> Result<Option<LeaderScheduleAnswer>, LeaderScheduleError> {
@@ -1122,6 +1122,30 @@ fn apply_effects_with_forge_handler(
                     r => classify_leader_schedule(r, evo.pool_distr_view().pool_count()),
                 };
 
+                // LIVE-2 E4 (emit-only): name WHICH decision branch this slot took.
+                //
+                // `ForgeNotLeader` is emitted by TWO structurally different situations -- the
+                // configured operator pool was evaluated and lost, and the operator pool is not in the
+                // leadership view at all (a deterministic ineligibility). Only the FIRST is LIVE-2
+                // evidence: the second proves "the system decided something", not "the configured
+                // producer reached the real leader decision". They are distinguishable today only by an
+                // all-zero `vrf_output_fingerprint` sentinel, and resting an evidence claim on a
+                // fabricated default is exactly what this project refuses elsewhere. So the branch is
+                // named explicitly. Emit-only: never read back, never alters control flow.
+                {
+                    let branch = match &answer {
+                        Ok(Some(_)) => "known_pool_evaluated",
+                        Ok(None) => "unknown_pool_deterministic_ineligible",
+                        Err(_) => "authority_cannot_answer",
+                    };
+                    crate::node_log!(
+                        "forge-decision: slot={} operator_pool={} pools_in_view={} branch={}                          (LIVE-2 counts known_pool_evaluated ONLY)",
+                        slot,
+                        pool_id.0.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+                        evo.pool_distr_view().pool_count(),
+                        branch
+                    );
+                }
                 let event = match answer {
                     // Fail closed and SAY WHY -- and crucially NOT as ForgeNotLeader. Never a
                     // fallback to the bridge, the seed window or a CLI oracle, never a silent skip.

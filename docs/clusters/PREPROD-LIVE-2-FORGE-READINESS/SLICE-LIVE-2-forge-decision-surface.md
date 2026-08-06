@@ -98,14 +98,43 @@ That is the one behaviour change LIVE-2 should need. Everything else is evidence
 
 | CE | Criterion | status |
 |---|---|---|
-| **CE-L2-1** | E1 — warm start from `ade-preprod-s7` under v3 | open |
-| **CE-L2-2** | E2 — epoch-305 anchor restored + verified; accumulator boundary CROSSED, not stalled | open |
-| **CE-L2-3** | E3 — full operator key set loads through RED custody; a partial set fails closed rc=44 | open |
-| **CE-L2-4** | E4 — the loop reaches leader evaluation and emits a decided `ForgeOutcome` | open |
+| **CE-L2-1** | E1 — warm start from `ade-preprod-s7` under v3 | **MET — LIVE**: store opens, no `StoreSemanticsVersionMismatch`, node reaches `AT PEER TIP` in epoch 305 |
+| **CE-L2-2** | E2 — epoch-305 anchor restored + verified; accumulator boundary CROSSED, not stalled | **MET — LIVE**: `recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130314448/5022699/0645f0d3` — a REAL anchor, never `anchor_absent`; store carries CRE-S7's `CROSSED boundary 304 -> 305`, 0 stalls |
+| **CE-L2-3** | E3 — full operator key set loads through RED custody; a partial set fails closed rc=44 | **MET — LIVE, both halves**: complete set → `forge CAPABLE — operator keys loaded`, and the loaded `KES VK fingerprint = fd2f1de3…` equals the baseline `kes.vkey`, binding the material to the recorded identity. Partial set (missing `--genesis-file`) → `operator-key ingress failed … rc=44` |
+| **CE-L2-4** | E4 — the loop reaches leader evaluation and emits a decided `ForgeOutcome` | **OPEN — BLOCKED**: forge-capable and at tip for ~17 min, but **zero ForgeTicks fired** (0 `forge-decision` emits, 0 forge lines). See the open question below |
 | **CE-L2-5** | E5 — every non-forge outcome is typed (`ForgeOutcome` and/or `ForgeSkipReason`) | open |
 | **CE-L2-6** | E6 — a typed refusal exists for unestablished leadership authority, and no forbidden fallback is reachable | **CODE HALF MET** — `4985a59b`; live half rides on the E1–E5 run |
 | **CE-L2-7** | E7 — restart/replay produce the same authority + forge-decision outputs | open |
 | **CE-L2-8** | Negative-tested: each new gate FAILS when its violation is introduced | open |
+
+## OPEN QUESTION blocking E4 — the ForgeTick does not fire
+
+Measured on run 3 (`live2-e1-e2-warmstart-anchor.log`): the node reports
+`forge CAPABLE — operator keys loaded`, warm-starts, restores a real anchor, reaches `AT PEER TIP` in
+epoch 305, and holds it — and emits **no forge activity whatsoever** (`grep -ci forge` = 0 beyond the
+capability line). So the loop never reaches leader evaluation, and E4 cannot be judged.
+
+This is NOT the CE-L2-6 defect (that is fixed on both paths) and NOT an authority problem — E1/E2/E3 are
+green. It is the **ForgeTick admissibility gate or the slot-tick scheduling** not producing ticks on the
+warm-started `--mode node` path. Deliberately not diagnosed here: it is a fresh thread, and the
+session that found it had already corrected its own scoping error once (below).
+
+First step when picked up: instrument or read `plan_loop_step`'s ForgeTick arm against this run — the
+node is forge-capable and at tip, so the gate's inputs are the place to look, not the keys or the
+authority. `wire_smoke.jsonl` from an earlier run shows 493 `outcome:no_tip_available`, which is the
+pre-tick skip, so the sched writer path itself works.
+
+## A scoping error this slice corrected mid-flight — recorded because it nearly shipped
+
+CE-L2-6 was first fixed in `produce_mode.rs::apply_effects_with_forge_handler`. That function is called
+**only** from `produce_mode.rs:395` — i.e. `--mode produce`, the DIAGNOSTIC path. The authoritative
+`--mode node` forge path is `node_sync.rs:2061`, and it carried the **identical** `Err(_) => ForgeNotLeader`
+collapse, with a comment saying it mirrored produce_mode deliberately.
+
+Fixing only the diagnostic path would have left the authoritative one defective while the docs claimed
+the defect closed — the worst possible outcome. Both now route through one shared
+`classify_leader_schedule`, so they cannot drift apart again. The lesson generalises: *when two paths are
+documented as mirroring each other, a fix to one is a half-fix by default.*
 
 ## Hard prohibitions
 
