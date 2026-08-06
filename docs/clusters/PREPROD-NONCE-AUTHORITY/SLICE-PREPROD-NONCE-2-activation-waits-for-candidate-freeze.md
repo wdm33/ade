@@ -1,12 +1,16 @@
 # SLICE PREPROD-NONCE-2 — epoch activation waits for candidate-freeze finality (DC-EPOCH-16)
 
-> **CE-N2-4 GREEN, LIVE-PROVEN 2026-08-05.** The bootstrap bridge now binds the boundary-tick
+> **ALL NINE CEs MET — LIVE-PROVEN 2026-08-05.** The bootstrap bridge binds the boundary-tick
 > `eta0(seed+1)`; preprod 304→305 commits `74f10bea…`, byte-identical to cardano-node's
 > `epochNonce(305)`, where it previously committed `e3402a2b…`. DC-EPOCH-38 opened with the fix.
+> CE-N2-5 closed once SLICE-P2 landed; PREPROD-NONCE-3 turned out to be a consequence of P2's missing
+> boundary snapshot rather than an independent defect, and is CLOSED.
 >
-> **CE-N2-5 remains open**, blocked behind **PREPROD-NONCE-3** (warm-start replay cannot re-validate the
-> bridge-boundary block). Preprod LIVE-2 stays blocked — on that and on the pre-existing SLICE-P2, not
-> on nonce authority.
+> **Preprod LIVE-2 is NOT unblocked by this slice.** With P2 also fixed, preprod now bootstraps,
+> crosses 304→305, catches up in epoch 305, and warm-restarts cleanly — but the epoch-accumulator's
+> boundary cross STALLS (observe-only) on `UnsupportedRatifiedAction { kind: NonExecUnitsField }`, so
+> the *leadership* authority for 305 has not crossed. That is the next blocker and it is a Conway
+> governance gap, not a nonce one.
 
 ## Intent — NARROWED after the reference proof
 
@@ -142,7 +146,7 @@ non-final eta0" unrepresentable, in the spirit of the closed `RemediationAction`
 | **CE-N2-2** | cardano-node `lastEpochBlockNonce(305)` == Ade's post-tick bookkeeping value | **MET** — both `60b3a0ae…` (see the precision note below) |
 | **CE-N2-3** | The bridge no longer commits `e3402a2b…` | **MET** — the durable WAL record of the CE-N2-4 run holds `74f10bea…`; enforcement moved from a build-time refusal to structural exclusion at the binder (see below) |
 | **CE-N2-4** | The bridge commitment resolves to `74f10bea…` | **MET — LIVE-PROVEN**, see below |
-| **CE-N2-5** | Restart after the bootstrap bridge recovers the SAME value | **BLOCKED** — mechanically proven at the seam (`n2_recovery_nonce_must_be_bound_to_the_target_epoch`), but the live restart cannot be reached: **PREPROD-NONCE-3** |
+| **CE-N2-5** | Restart after the bootstrap bridge recovers the SAME value | **MET — LIVE**, once SLICE-P2 landed. Warm-start forward-folds from the boundary anchor, the record still reads `74f10bea…`, and `recover_active_view` fails closed on any divergence — no terminal fired and the node resumed to tip. PREPROD-NONCE-3 was a consequence of P2's missing boundary snapshot, not an independent defect, and is CLOSED |
 | **CE-N2-6** | `ActivationAboveDurableTip` remains terminal | **MET** — `epoch_activation.rs` is untouched by this diff; the guard is unmodified |
 | **CE-N2-7** | Seed BEFORE freeze: no final activation record carries `candidate@SEED`; at/after freeze it carries `candidate@FROZEN` | **MET** — `n2_pre_freeze_seed_binds_the_boundary_tick_not_the_stored_projection` + `n2_final_seed_must_corroborate_the_boundary_tick`, and live on preprod |
 | **CE-N2-8** | Multi-venue differential covers seed-position × freeze geometry (seed before freeze, seed after freeze, boundary at/around the freeze) — **DC-EPOCH-38** | **MET** — `dc_epoch_38_bridge_nonce_freeze_differential_covers_both_sides_per_venue` + `ci/ci_check_bridge_nonce_freeze_differential.sh`; registry entry DC-EPOCH-38 |
