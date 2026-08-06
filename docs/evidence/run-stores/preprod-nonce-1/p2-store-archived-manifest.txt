@@ -1,0 +1,80 @@
+# ade-preprod-p2 — ARCHIVED MANIFEST (store released 2026-08-06)
+#
+# The store that proved SLICE-P2 and CE-N2-5, and that reproduced CRE-S7 seven times.
+# Released once CRE-S7 landed: it is stamped v2 and the v3 binary must reject it, so it can no
+# longer prove anything about the corrected enactment semantics. NOT migrated, NOT restamped.
+
+## 1. Store identity
+path            /home/ts/.cardano-live1/ade-preprod-p2
+venue           preprod (network magic 1)
+seed            Mithril snapshot 6009, certified slot 129813427 (epoch 304)
+durable tip     epoch 305, reached AT PEER TIP (last observed 130300930)
+built by        commit 2367f170 (SLICE-P2 fix), STORE_SEMANTICS_VERSION = 2
+
+## 2. v2 marker — VERIFIED EMPIRICALLY, not asserted
+Opening the store with the post-CRE-S7 v3 binary (commit 8b41b9e3):
+
+  ade_node --mode node: cannot open persistent ChainDb:
+    StoreSemantics(StoreSemanticsVersionMismatch { artifact: ChainDb,
+                   found: Version(2), required: 3, action: RebootstrapRequired })
+  rc=1
+
+`found: Version(2)` is read from the store's own marker. The same line is the inadmissibility
+proof in §5 — one command establishes both.
+
+## 3. Original reproducer command
+  ade node run --network preprod \
+    --bootstrap-mithril ~/.cardano-live1/preprod-snapshot-6009/manifest.json \
+    --snapshot-dir     ~/.cardano-live1/preprod-snapshot-6009 \
+    --data-dir         ~/.cardano-live1/ade-preprod-p2 \
+    --peer 127.0.0.1:3001
+(Re-running it warm-started the store; the CRE-S7 stall re-emitted on every start.)
+
+## 4. Terminal CRE-S7 failure it reproduced (7 occurrences)
+  epoch-accumulator: reduced checkpoint REWOUND onto boundary point 130118358 before sealing
+                     (it sat past it -- DC-EPOCH-32)
+  epoch-accumulator: boundary cross stalled at 130118424 (observe-only):
+    GovernanceEpochTerminal(UnsupportedRatifiedAction {
+        action_id: GovActionId {
+            tx_hash: e641ec802bb109e150e920c6c0387e85f2efd30944a46d08d08212bde540f69c,
+            index: 0 },
+        kind: NonExecUnitsField })
+Observe-only, so the follower kept running while epoch-305 leadership authority never established.
+
+## 5. Why it became inadmissible
+CRE-S7 widened Conway enactment to key 16 (minPoolCost 170,000,000 -> 75,000,000). Because
+minPoolCost is FINGERPRINTED, replaying identical blocks now yields different durable authority
+bytes, so STORE_SEMANTICS_VERSION was bumped 2 -> 3. A store whose 304->305 boundary was crossed
+under the OLD enactment rules cannot be used to prove the NEW ones — it would be a store with
+one semantics and a binary with another, which is precisely the P4 (e1de7a2e) failure this
+marker exists to prevent. There is deliberately no stamp path and no override.
+
+## 6. What it proved before release (retained in this directory)
+  SLICE-P2 CE-P2-5   first preprod run to cross 304->305 AND catch up: ce-p2-5-boundary-and-follow-green.log
+  PREPROD-NONCE-2 CE-N2-5  warm-start forward_fold, no VrfCert, resumes to tip: ce-n2-5-warmstart-green.log
+  PREPROD-NONCE-3    closed as a contaminated-store artifact using the above
+  CRE-S7             the stall + action_id that opened the slice
+
+## 7. Log hashes (sha256) — the retained evidence these claims rest on
+  bde8714e61ea5ebfb8b5f1700166c27cc6e11725660ce00241c85d090a391f90  ce-p2-5-boundary-and-follow-green.log
+  f2704b4f3911a4ce079359b8305daae9b394e6c9e98e795935d785ce907b2049  ce-p2-5-timeline.txt
+  5dabba5cdde87315380078dae1b2c793bee731a17a762ea69a3cff91026e9a73  ce-n2-5-warmstart-green.log
+  f1205ec02f52764706486f11bc36d274c170c8e10e6c8ce04e4510a8aacb1c46  ce-s7-6-accumulator-anchor-established.log
+  9feb2970ec1b53eb3a7f6a63b2e5daa7d574b769d4b04bd49ddf68f636254fe5  ce-s7-6-timeline.txt
+
+## 8. Store layout + hashes at release
+  chain.db                             7517261824 bytes
+  epoch-accumulator.redb                104357888 bytes
+  reduced-checkpoint.redb              2156408832 bytes
+  wal/wal-0000.bin                        1149967 bytes
+  wal/wal-0001.bin                        1150077 bytes
+  wal/wal-0002.bin                         204035 bytes
+  node.log                                  10276 bytes
+  baa723d42719c4d8573418114dd37155e5214f32783bf4257209d46fed2de3bf  wal/wal-0000.bin
+  4b3d371c02f51795a4076953e9dd2fec0e24428791551bbd924a408029c2c8cc  wal/wal-0001.bin
+  d747380d638701fc67a58c1a7baee220ad5667b6d44568a9bb3b91aa0bf429a9  wal/wal-0002.bin
+  68b81763dde0f26ecddd2b87413a5ba41b2971b257a0f917d1252f29a538f8ea  node.log
+
+## 9. Superseded by
+  ~/.cardano-live1/ade-preprod-s7 — v3 semantics, real 304->305 crossing, epoch-305
+  leadership anchor ESTABLISHED (0 stalls), live-tip convergence.
