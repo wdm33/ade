@@ -43,7 +43,40 @@ So the two enums are **complementary, not redundant**: `ForgeSkipReason` says *w
 before evaluating*; `ForgeOutcome::NotLeader` says *the evaluation ran and answered no*. E5 must be read
 against both, and LIVE-2's success looks like `outcome=not_leader` with `skip_reason` absent.
 
-### The gap this slice must close
+### The gap — WORSE than first written, and it had to be fixed BEFORE the evidence run
+
+The first draft of this doc said the gap was a missing typed reason. Reading the forge path showed
+something stronger:
+
+```rust
+Err(_) => None,                       // "Unknown pool / outside horizon => not a leader"
+None   => CoordinatorEvent::ForgeNotLeader { .. }
+```
+
+All three `LeaderScheduleError` variants collapsed into a confident `not_leader`. So an **unestablished
+leadership authority reported not-elected** — the CRE-S7 shape, but spoken by the forge path.
+
+The decisive consequence is evidentiary, not just diagnostic: **a `not_leader` outcome could not be
+trusted as proof that the decision path was reached**, because the identical outcome was produced when
+it was not. E4 was therefore unprovable against that code *no matter how the live run went*, which is
+why this landed before the run rather than after it.
+
+Fixed in `4985a59b` — `classify_leader_schedule(res, pools_in_view)`, pure and total:
+
+| input | outcome |
+|---|---|
+| `Ok(answer)` | evaluated; scheduled → on to the VRF leader check |
+| `UnknownPool` + populated view | evaluated; not in the set → **real not-elected** |
+| `UnknownPool` + **empty** view | authority never established → **cannot answer**, typed refusal |
+| `OutsideForecastRange` / `HFC` | could not evaluate → **cannot answer**, typed refusal |
+
+`Err` is the caller's signal to fail closed with a typed refusal naming `pools_in_view` and the error —
+never a fallback to the bridge, the seed window or a CLI oracle, and never `ForgeNotLeader`. Extracted
+as a pure function rather than left inline so the rule is unit- and mutation-testable. Negative-tested
+three ways (restore the collapse; treat an empty view as an answer; route `OutsideForecastRange` to
+not-leader) — all caught.
+
+### The original framing of the gap
 
 `forge_skip_reason(None) => None`, and its own doc comment says that case means *"no typed refusal was
 recorded and a selected tip WAS available"*. That is the honest state today — but it means a tick that
@@ -70,7 +103,7 @@ That is the one behaviour change LIVE-2 should need. Everything else is evidence
 | **CE-L2-3** | E3 — full operator key set loads through RED custody; a partial set fails closed rc=44 | open |
 | **CE-L2-4** | E4 — the loop reaches leader evaluation and emits a decided `ForgeOutcome` | open |
 | **CE-L2-5** | E5 — every non-forge outcome is typed (`ForgeOutcome` and/or `ForgeSkipReason`) | open |
-| **CE-L2-6** | E6 — a typed refusal exists for unestablished leadership authority, and no forbidden fallback is reachable | open |
+| **CE-L2-6** | E6 — a typed refusal exists for unestablished leadership authority, and no forbidden fallback is reachable | **CODE HALF MET** — `4985a59b`; live half rides on the E1–E5 run |
 | **CE-L2-7** | E7 — restart/replay produce the same authority + forge-decision outputs | open |
 | **CE-L2-8** | Negative-tested: each new gate FAILS when its violation is introduced | open |
 
