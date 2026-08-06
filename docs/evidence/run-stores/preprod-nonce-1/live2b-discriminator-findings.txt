@@ -1,0 +1,15 @@
+# LIVE-2b discriminator — run 4 (2026-08-06). Emit-only, non-authoritative.
+
+## Probe distribution (363 probes)
+    354  forge_slot_status=Due    sync_status=NoWorkReady   loop_step=ForgeTick
+      8  forge_slot_status=Due    sync_status=WorkAvailable loop_step=SyncOnce
+      1  forge_slot_status=Due    sync_status=NoWorkReady   loop_step=HaltCleanly
+
+## Downstream emits
+  forge-decision (leader evaluation reached) : 0
+  CANNOT ANSWER (typed authority refusal)    : 0
+
+## Slot arithmetic
+  Ade logical_slot (wall-clock derived) : 131976696
+  cardano-node tip slot                 : 130335017  (epoch 305)
+  gap                                   : ~1,641,607 slots (~19 days at 1s/slot)

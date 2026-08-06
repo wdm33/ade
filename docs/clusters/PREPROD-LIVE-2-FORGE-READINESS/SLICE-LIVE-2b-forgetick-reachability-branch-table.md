@@ -1,7 +1,12 @@
 # SLICE LIVE-2b — ForgeTick reachability and suppression accounting
 
-> **OPEN — FINDINGS FIRST. This is the branch table, read out of the code. No behaviour change is
-> written, and no cause is selected.** Blocks E4 and therefore LIVE-2.
+> **OPEN — DISCRIMINATOR RUN COMPLETE 2026-08-06.** The branch table below was read from code; the
+> emit-only probe then ran unchanged and **named the branch**. Two findings, neither of which was the
+> leading hypothesis. No fix is written. Blocks E4 and therefore LIVE-2.
+>
+> **The ForgeTick fires — 354 of 363 probes.** Reachability was never the defect. The loop is
+> suppressed at a **SIXTH silent exit the code-read table missed**, and it is gated by a **wall-clock
+> slot ~19 days ahead of the chain**.
 
 ## Intent
 
@@ -91,7 +96,58 @@ Add an emit-only per-iteration line at `node_lifecycle.rs:3236` naming: `forge_a
 `LoopStep` the planner returned. One warm-start run then names the exact branch, because every
 candidate is a distinct combination of those six values. Only then choose the fix.
 
-## Required design if silence exists (it does — five exits)
+## DISCRIMINATOR RESULT — run 4, 363 probes
+
+```
+  354  forge_slot_status=Due  sync_status=NoWorkReady   loop_step=ForgeTick     <- ADMITTED
+    8  forge_slot_status=Due  sync_status=WorkAvailable loop_step=SyncOnce      <- B6, transient
+    1  forge_slot_status=Due  sync_status=NoWorkReady   loop_step=HaltCleanly
+```
+
+Against the predicted table: `forge_active=true` throughout, a logical slot always present, status
+always `Due`. So **B1, B5 and B8 are eliminated by measurement**, and **B6 is confirmed but transient**
+(8 of 363 — real, and still a liveness surface worth the bound, but not the blocker).
+
+**`ForgeTick` was admitted 354 times and produced ZERO `forge-decision` emits and ZERO typed
+cannot-answer refusals.** So the suppression is *inside* the ForgeTick arm, below the planner and above
+the leader evaluation — a branch the code-read table did not reach.
+
+### B11 — the sixth silent exit, `node_lifecycle.rs:3713`
+
+```rust
+} else if let Some(kes_period) = act.coordinator_state.kes_period_for_slot(slot.0) {
+    // "Out of range => skip: no forge, no `last_forged_slot` update"
+```
+
+`kes_period_for_slot(slot) == None` skips the entire forge attempt: `forged` stays false, no
+`ForgeRefused` is recorded, nothing is emitted. It is the only path between an admitted tick and the
+typed surface that produces no evidence at all — precisely the class this slice exists to close, found
+one level deeper than the table looked.
+
+### And the reason it returns None — a SECOND, more serious finding
+
+| quantity | value |
+|---|---|
+| Ade `logical_slot` (wall-clock derived) | **131,976,696** |
+| cardano-node tip (`query tip`) | **130,335,017** (epoch 305) |
+| gap | **~1,641,607 slots ≈ 19 days** |
+
+Ade is deriving a logical slot ~19 days AHEAD of the chain it is following, and asking the KES schedule
+to forge there. A slot that far out is comfortably outside any KES validity window, so `None` is the
+*correct* answer to a *wrong question*.
+
+**This is the more important of the two findings.** B11 is a missing typed reason; the slot derivation
+is a correctness defect on the input to leadership itself — forging on a slot 19 days ahead would be
+categorically wrong, and the only thing preventing it today is an accident of the KES range check.
+
+**Not diagnosed, and deliberately not attributed.** It is at least two distinct possibilities —
+`checked_millis_to_slot`'s anchor (`anchor_millis` / `start_slot` / `slot_length_ms`) being wrong for
+this venue, or the docker preprod peer being ~19 days stale while reporting `syncProgress: "100.00"`.
+Those have opposite fixes. The discriminator is cheap: compare Ade's derived slot against the venue's
+genesis `systemStart` + slot length computed independently, and separately check the peer's real
+chain-tip age. Do that before touching either.
+
+## Required design if silence exists (it does — SIX exits, B3/B4/B5/B6/B8 and now B11)
 
 ```rust
 enum ForgeTickAdmissibility { Admit, Suppress(ForgeTickSuppression) }

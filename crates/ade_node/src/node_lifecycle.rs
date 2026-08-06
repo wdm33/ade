@@ -3279,7 +3279,47 @@ pub async fn run_relay_loop_with_sched(
             Some(act) => venue_policy(act.venue_role, &act.forge_mode),
             None => VenuePolicy::HaltOnFeedEnd,
         };
-        match plan_loop_step(loop_state, sync_status, forge_slot, shutdown_status, policy) {
+        // LIVE-2b DISCRIMINATOR (emit-only, NON-AUTHORITATIVE, operational tier).
+        //
+        // The single boundary where all six branch-table inputs coexist: the planner's verdict is
+        // computed here, and `forge`/`forge_slot`/`sync_status` are still in scope. The branch table
+        // (SLICE-LIVE-2b) found FIVE silent exits between a captured slot and the first typed
+        // surface, and a warm-started forge-capable node held tip ~17 min emitting zero forge
+        // activity — so which exit fired is not inferable from the existing logs. Each candidate is a
+        // DISTINCT combination of these values, so one run separates them.
+        //
+        // Deliberately observational: computed from values the loop already holds, with NO fallback
+        // calculation added merely to populate the event, NO key material, and no read-back — the
+        // planner verdict below is recomputed from the same inputs and cannot be influenced by this.
+        // This is a diagnostic, not an authority: it must never become a planner input.
+        //
+        // selected_tip is OMITTED on purpose. It is not in scope here (`state` is ForwardSyncState),
+        // and the two things that ARE cheap -- `recovered_anchor` and the followed PEER tip -- are
+        // different quantities. Emitting either under a `selected_tip` label would be a mislabel, and
+        // reading the ChainDb per iteration would be exactly the fallback calculation this probe is
+        // forbidden from adding. The six branch-table inputs below fully separate the candidates.
+        let planned = plan_loop_step(loop_state, sync_status, forge_slot, shutdown_status, policy);
+        {
+            let (forge_active, pending_slot, last_forged_slot) = match forge.as_deref() {
+                Some(act) => (
+                    true,
+                    act.pending_slot.map(|s| s.0),
+                    act.last_forged_slot.map(|s| s.0),
+                ),
+                None => (false, None, None),
+            };
+            crate::node_log!(
+                "live2b-tick-probe: non_authoritative=true forge_active={} logical_slot={:?}                  last_forged_slot={:?} forge_slot_status={:?} sync_status={:?} loop_state={:?}                  loop_step={:?}",
+                forge_active,
+                pending_slot,
+                last_forged_slot,
+                forge_slot,
+                sync_status,
+                loop_state,
+                planned
+            );
+        }
+        match planned {
             LoopStep::SyncOnce => {
                 // PHASE4-N-AI AI-S4b-ii: an explicitly-declared Participant venue
                 // routes the live receive path through the fork-choice follow
