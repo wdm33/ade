@@ -405,7 +405,7 @@ fn cre_s5_differential_report() {
     // ===== ITEM 6: any terminal encountered =====
     eprintln!("\nITEM 6 — terminals encountered: NONE (POST-1340 refund plan + 1095 enactment both reach a clean plan).");
     eprintln!("  The closed fail-closed surface it WOULD emit (each with the offending action_id):");
-    eprintln!("    UnsupportedRatifiedAction{{NotParameterChange|NonExecUnitsField|NoExecUnitsField|ChangedSteps|");
+    eprintln!("    UnsupportedRatifiedAction{{NotParameterChange|UnsupportedPParamField|NoEnactableField|ChangedSteps|");
     eprintln!("      OversizedUpdate|MalformedUpdate|ChainedEnactment|CompetingRatifiableActions}},");
     eprintln!("    UnversionedStateOnEnactPath, Malformed{{ReturnAddrNotRewardAccount}}, DormantRequired.");
 
@@ -470,7 +470,7 @@ fn cre_s5_differential_report() {
 #[test]
 #[ignore = "reads the local db-analyser epoch-1095 state carrying 69c948cd..#0's raw update"]
 fn cre_s4_3b_gate5_real_witness_update_decodes() {
-    use ade_ledger::governance::decode_exec_units_param_update;
+    use ade_ledger::governance::decode_enactable_param_update;
     use ade_ledger::pparams::MaxBlockExUnits;
     use ade_types::conway::governance::GovAction;
 
@@ -515,7 +515,7 @@ fn cre_s4_3b_gate5_real_witness_update_decodes() {
         "committed manifest blake2b matches the live extraction"
     );
 
-    let decoded = decode_exec_units_param_update(&update).expect("decode the REAL update bytes");
+    let decoded = decode_enactable_param_update(&update).expect("decode the REAL update bytes");
     eprintln!(
         "decoded: max_tx={:?} max_block={:?} unsupported={:?}",
         decoded.max_tx_ex_units, decoded.max_block_ex_units, decoded.unsupported_fields

@@ -1,0 +1,23 @@
+# ade-preprod — ARCHIVED MANIFEST (store released 2026-08-06)
+#
+# FINAL CLASSIFICATION: DEAD / NO BOOTABLE STATE. Produced by the CE-N2-3 guard run (81df0bac),
+# which fail-closed at rc=41 BEFORE the WAL commit-point, so it never held a bootable authority.
+# Superseded twice over: CE-N2-4 (b2546f5a) removed the refusal, SLICE-P2 (2367f170) fixed the
+# forward path. The valuable reproducer is now ~/.cardano-live1/ade-preprod-p2.
+
+run command   ade node run --network preprod --bootstrap-mithril <snapshot 6009>/manifest.json
+              --snapshot-dir <snapshot 6009> --data-dir ~/.cardano-live1/ade-preprod --peer 127.0.0.1:3001
+commit        81df0bac (CE-N2-3 guard)
+outcome       NATIVE Mithril FirstRun bootstrap failed
+              (BridgeNonceNotFinal { target_epoch: 305, seed_slot: 129813427,
+                                     candidate_freeze_slot: 129945600 }); rc=41
+retained log  docs/evidence/run-stores/preprod-nonce-1/nonce2-guard-fires-live.log
+
+## Store layout at release
+  chain.db                         2149072896 bytes
+  reduced-checkpoint.redb          1078472704 bytes
+  wal/wal-0000.bin                         78 bytes
+  node.log                                  0 bytes
+
+## activation records present (expect 0 -- terminal before the commit-point)
+  AdmitBlock entries: 0 | activation records: 0 | trailing/torn bytes: 0

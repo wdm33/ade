@@ -1,0 +1,12 @@
+# CRE-S7 CE-S7-6 -- the epoch-305 accumulator anchor ESTABLISHES (preprod, 2026-08-06).
+# Fresh bootstrap required: the fix bumps STORE_SEMANTICS_VERSION 2->3, so the old v2
+# reproducer is refused by design. Same seed (Mithril 6009), same boundary.
+
+bridge-eta0-finality: target_epoch=305 seed_slot=129813427 rsw=172800 candidate_freeze_slot=129945600 decision=PENDING_UNTIL_FREEZE (seed precedes the freeze -- the stored seed_time_eta0 is INERT; eta0 comes from the boundary tick)
+nonce1-boundary-operands: from_epoch=EpochNo(304) to_epoch=EpochNo(305) tick_slot=130118424 epoch_start=130118400 epoch_len=Some(432000) rsw=Some(172800) freeze_slot=Some(129945600) durable_tip_slot=130118358 candidate=Hash32(f241d006bc9446096cafe17dca35bd635e803f2bd2b109f196506dc7b1ab8ced) evolving=Hash32(a150cff15bceee01039daa62037c958bd076f126b39f21039a9b83bec6890fb4) prev_epoch_nonce=Hash32(151dc58480d5f19048c6a44f38d08c578a83ed85409c9a4c8b986a9268ef6496) lab=Hash32(60b3a0aea44e3977baa949c27c5053c984001dc858048e4d296ddebcf8b0dc67) last_epoch_block=None last_epoch_block_nonce=Some(Hash32(151dc58480d5f19048c6a44f38d08c578a83ed85409c9a4c8b986a9268ef6496)) computed_eta0=Hash32(74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62) promoted_view_nonce=Hash32(74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62) match=true
+epoch-accumulator: CROSSED boundary 304 -> 305 at slot 130118424 (mark from s_prev 130118358)
+follow: tip slot=130310067 -- AT PEER TIP (caught up, following live)
+
+accumulator boundary-cross stalls : 0   (was 7 on the pre-fix store)
+accumulator CROSSED boundary      : 1
+halts (Capture/failing closed/rc) : 0

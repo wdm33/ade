@@ -1,8 +1,13 @@
 # SLICE CRE-S7 — classify and handle the Conway ratified action kind `NonExecUnitsField`
 
-> **OPEN — DOC BEFORE IMPL. Step 1 (identify) and step 2 (Cardano reference effect) are DONE and
-> measured; the behaviour change is not written.** Found 2026-08-05 on the first preprod run ever to
-> cross an epoch boundary and catch up on the far side. **Top blocker for preprod LIVE-2.**
+> **ALL EIGHT CEs MET — LIVE-PROVEN 2026-08-06.** `minPoolCost` (Conway key 16) joins the enactable
+> subset; the preprod action `e641ec80…#0` now ENACTS to cardano-node's `currentPParams`, and the
+> epoch-305 accumulator anchor ESTABLISHES:
+> `epoch-accumulator: CROSSED boundary 304 -> 305 at slot 130118424` — 0 stalls, where the pre-fix
+> store stalled on all 7 attempts. Classified **`EnactedEffectful`**, not inert.
+>
+> `STORE_SEMANTICS_VERSION` bumped **2 → 3**: enacting a fingerprinted parameter changes what a replay
+> produces, so pre-fix stores are correctly refused — including this slice's own former reproducer.
 
 ## Claim
 
@@ -118,12 +123,43 @@ later as an opaque fingerprint mismatch, which is exactly the P4 failure shape.
 |---|---|---|
 | **CE-S7-1** | The ratified action is identified: id, kind, enacted epoch/slot, affected fields | **MET** — `e641ec80…#0`, enacted at the 304→305 boundary, three fields above |
 | **CE-S7-2** | Cardano reference effect determined: ledger validation / Praos-leadership / accumulator-reward-governance / inert-for-reduced-authority | **MET** — measured: no rule reads `minPoolCost`, but it is fingerprinted + persisted, so NOT inert for durable authority |
-| **CE-S7-3** | Typed classification added (`EnactedEffectful` / `EnactedInertForReducedAuthority` / `UnsupportedEffectful` / `Malformed`) — no free-form string, no bool | open |
-| **CE-S7-4** | If effectful: the authoritative state transition is implemented and compared against the Cardano reference (`minPoolCost` 170,000,000 → **75,000,000**; exec-units memory 16.5M→17.5M and 72M→77.5M with steps preserved) | open |
-| **CE-S7-5** | If inert: durable evidence recorded that it is inert for this authority surface — never a silent skip | n/a under the recommended disposition; the criterion stays so a future inert case cannot skip silently |
-| **CE-S7-6** | The epoch-305 accumulator anchor ESTABLISHES on the reproducer store, and the observe-only stall is gone | open |
-| **CE-S7-7** | Negative-tested: each new gate proven to FAIL when its violation is introduced | open |
-| **CE-S7-8** | LIVE-2 may resume only after CE-S7-6 | open |
+| **CE-S7-3** | Typed classification: the disposition is carried by the closed `UnsupportedActionKind` + the decoder's `EnactableParamUpdate` (a key is either decoded into a typed field or recorded in `unsupported_fields` — never a bool, never a string) | **MET** — `minPoolCost` classified `EnactedEffectful`, i.e. moved into the enactable subset |
+| **CE-S7-4** | Effectful: the state transition is implemented and compared against the Cardano reference (`minPoolCost` 170,000,000 → **75,000,000**; exec-units memory 16.5M→17.5M and 72M→77.5M, steps preserved) | **MET** — `cre_s7_preprod_e641ec80_enacts_to_the_cardano_reference` (decoder + `build_enacted_pparams`) and `cre_s7_preprod_action_enacts_through_the_boundary_path` (full enactment path) |
+| **CE-S7-5** | If inert: durable evidence recorded that it is inert — never a silent skip | **n/a** — classified effectful. The criterion STAYS so a future genuinely-inert case cannot skip silently |
+| **CE-S7-6** | The epoch-305 accumulator anchor ESTABLISHES, and the observe-only stall is gone | **MET — LIVE**: `epoch-accumulator: CROSSED boundary 304 -> 305 at slot 130118424 (mark from s_prev 130118358)`, 0 stalls (was 7), node at tip in 305, 0 halts |
+| **CE-S7-7** | Negative-tested: each new gate proven to FAIL when its violation is introduced | **MET** — six mutations; one initially slipped (see below) |
+| **CE-S7-8** | LIVE-2 may resume only after CE-S7-6 | **UNBLOCKED by this slice** — CE-S7-6 is green. LIVE-2 resumption is its own decision |
+
+## What shipped
+
+| | |
+|---|---|
+| decoder | `PPU_KEY_MIN_POOL_COST = 16` decoded as a bare `Coin` uint into `EnactableParamUpdate::min_pool_cost`; a duplicate is `DuplicateKey`, a non-uint is the new `MalformedCoin` |
+| enactment | `build_enacted_pparams` applies it — the field already had a working apply path, so this widened the decoded subset rather than adding ledger semantics |
+| naming | `ExecUnitsParamUpdate`→`EnactableParamUpdate`, `decode_exec_units_param_update`→`decode_enactable_param_update`, `NonExecUnitsField`→`UnsupportedPParamField`, `NoExecUnitsField`→`NoEnactableField`. The subset is `{16, 20, 21}`; "exec-units" had become actively wrong and would have sent the next reader to the wrong place |
+| diagnostic | `UnsupportedRatifiedAction` gains `unsupported_keys: CanonicalFieldSet`, and `CanonicalFieldSet` has a hand-written `Debug` rendering `minPoolCost(16)` — so **every pre-existing `{:?}` emit gains the operand without being touched** |
+| semantics | `STORE_SEMANTICS_VERSION` 2 → 3 (bump, not neutral): enacting a *fingerprinted* parameter changes what a replay produces |
+
+### The diagnostic, before and after
+
+```
+before:  UnsupportedRatifiedAction { action_id: …, kind: NonExecUnitsField }
+after:   UnsupportedRatifiedAction { action_id: …, kind: UnsupportedPParamField,
+                                     unsupported_keys: [minPoolCost(16)] }
+```
+
+Identifying the blocking field previously required an off-chain `gov-state` query plus a `previousPParams`
+/ `currentPParams` diff. It is now in the halt line.
+
+### CE-S7-7 — one mutation initially slipped
+
+Six mutations: key 16 decoded but not enacted; key 16 returned to `unsupported_fields`; the terminal
+stops carrying the keys; the renderer drops names; the preprod action refused at the boundary path;
+`minPoolCost` enacted with a wrong value. **The "terminal stops carrying the keys" mutation initially
+PASSED** — the tests asserted the decoder's `unsupported_fields` and the renderer, but nothing asserted
+the operand on the error the boundary actually returns. `cre_s4_3c_foreign_pparam_field_is_unsupported`
+now asserts it on the returned terminal, and catches it. Same shape as the CE-N2-9 miss: *a check that
+verifies a value near the thing it cares about, rather than the thing itself.*
 
 ## Hard prohibitions
 

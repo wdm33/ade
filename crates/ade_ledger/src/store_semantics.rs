@@ -60,7 +60,12 @@
 /// real `epochNonce(305)` is `74f10bea…`. Without the bump that store surfaces as an opaque
 /// `EpochViewPostPromotionMismatch` at warm-start; with it, the store is refused up front with a
 /// typed re-bootstrap terminal, which is the whole reason this constant exists.
-pub const STORE_SEMANTICS_VERSION: u32 = 2;
+/// Version 3 (CRE-S7): Conway `ParameterChange` enactment now supports `minPoolCost` (key 16), so a
+/// boundary that ratifies it ENACTS it instead of stalling. Replaying the same blocks under this binary
+/// therefore produces different protocol params — and `minPoolCost` is fingerprinted — so a store
+/// written by an earlier binary is not replay-equivalent. Proven on preprod: `e641ec80…#0` enacts
+/// `minPoolCost 170_000_000 -> 75_000_000` at the 304→305 boundary.
+pub const STORE_SEMANTICS_VERSION: u32 = 3;
 
 /// A durable artifact that carries authoritative semantics and therefore must be version-marked.
 ///

@@ -542,10 +542,10 @@ pub enum UnsupportedActionKind {
     /// halting is safe whether it is delaying (it would delay the parameter change) or simply un-enactable here.
     NotParameterChange,
     /// A ratified `ParameterChange` touching a protocol-parameter field OUTSIDE the exec-units subset {20, 21}.
-    NonExecUnitsField,
+    UnsupportedPParamField,
     /// A ratified exec-units `ParameterChange` that carried NEITHER `maxTxExUnits` nor `maxBlockExUnits` (nothing
     /// to enact).
-    NoExecUnitsField,
+    NoEnactableField,
     /// A ratified exec-units `ParameterChange` whose `steps` differs from the current bound `steps` — S4.3c is the
     /// MEMORY-ONLY subset (steps preserved); a steps change is a later slice, never a silent memory-only enactment.
     ChangedSteps,
@@ -573,7 +573,18 @@ pub enum GovernanceTerminal {
     /// subset (see [`UnsupportedActionKind`]). Terminal on BOTH the accumulator and replay paths (identical), zero
     /// mutation. This REPLACES the pre-S4.3c `PotentiallyRatifiable` threshold-pass terminal: a supported exec-units
     /// change now ENACTS atomically; every other ratified kind stays terminal until its own slice.
-    UnsupportedRatifiedAction { action_id: GovActionId, kind: UnsupportedActionKind },
+    UnsupportedRatifiedAction {
+        action_id: GovActionId,
+        kind: UnsupportedActionKind,
+        /// CRE-S7: the `protocol_param_update` keys that MADE it unsupported, named on render
+        /// (`minPoolCost(16)`). EMPTY for kinds that are not about specific fields
+        /// (`NotParameterChange`, `CompetingRatifiableActions`, `ChainedEnactment`, …).
+        ///
+        /// `kind` names the CLASS; without the operand a governance halt cost an off-chain
+        /// `gov-state` query plus a pparams diff to learn that the blocking field was `minPoolCost`
+        /// — even though the decoder had already collected exactly that and never drops it.
+        unsupported_keys: CanonicalFieldSet,
+    },
     /// A supported exec-units `ParameterChange` reached the enact path but the boundary state's `max_block_ex_units`
     /// or `prev_pparam_action` is `Unversioned` (a pre-V11 store) — fail-closed rather than fabricate the block
     /// ExUnits or the lineage root. A miswire (the enact path requires a V11 source-bound state).
@@ -721,6 +732,7 @@ pub fn plan_conway_governance_epoch(
                 return Err(GovernanceTerminal::UnsupportedRatifiedAction {
                     action_id: p.action_id.clone(),
                     kind: UnsupportedActionKind::NotParameterChange,
+                    unsupported_keys: CanonicalFieldSet::default(),
                 });
             }
         }
@@ -741,18 +753,24 @@ pub fn plan_conway_governance_epoch(
                 let unsupported = |kind| GovernanceTerminal::UnsupportedRatifiedAction {
                     action_id: winner.action_id.clone(),
                     kind,
+                    unsupported_keys: CanonicalFieldSet::default(),
                 };
                 // Bound the attacker-influenced bytes BEFORE the recursive-descent decoder (T-RESOURCE-01).
-                if !exec_units_update_within_bounds(update) {
+                if !enactable_update_within_bounds(update) {
                     return Err(unsupported(UnsupportedActionKind::OversizedUpdate));
                 }
-                let decoded = decode_exec_units_param_update(update)
+                let decoded = decode_enactable_param_update(update)
                     .map_err(|_| unsupported(UnsupportedActionKind::MalformedUpdate))?;
                 if !decoded.unsupported_fields.0.is_empty() {
-                    return Err(unsupported(UnsupportedActionKind::NonExecUnitsField));
+                    // CRE-S7: carry WHICH keys, not just that some existed.
+                    return Err(GovernanceTerminal::UnsupportedRatifiedAction {
+                        action_id: winner.action_id.clone(),
+                        kind: UnsupportedActionKind::UnsupportedPParamField,
+                        unsupported_keys: decoded.unsupported_fields.clone(),
+                    });
                 }
                 if decoded.max_tx_ex_units.is_none() && decoded.max_block_ex_units.is_none() {
-                    return Err(unsupported(UnsupportedActionKind::NoExecUnitsField));
+                    return Err(unsupported(UnsupportedActionKind::NoEnactableField));
                 }
                 // MEMORY-ONLY: every supplied `steps` must equal the current bound `steps`.
                 if let Some(tx) = decoded.max_tx_ex_units {
@@ -783,6 +801,7 @@ pub fn plan_conway_governance_epoch(
                 return Err(GovernanceTerminal::UnsupportedRatifiedAction {
                     action_id: candidates[0].action_id.clone(),
                     kind: UnsupportedActionKind::CompetingRatifiableActions,
+                    unsupported_keys: CanonicalFieldSet::default(),
                 });
             }
         };
@@ -831,6 +850,7 @@ pub fn plan_conway_governance_epoch(
                     return Err(GovernanceTerminal::UnsupportedRatifiedAction {
                         action_id: p.action_id.clone(),
                         kind: UnsupportedActionKind::ChainedEnactment,
+                        unsupported_keys: CanonicalFieldSet::default(),
                     });
                 }
             }
@@ -900,7 +920,7 @@ pub fn plan_conway_governance_epoch(
 /// value is `Bound`), so the versioned lineage is preserved.
 fn build_enacted_pparams(
     current: &crate::pparams::ProtocolParameters,
-    decoded: &ExecUnitsParamUpdate,
+    decoded: &EnactableParamUpdate,
 ) -> crate::pparams::ProtocolParameters {
     let mut pp = current.clone();
     if let Some(tx) = decoded.max_tx_ex_units {
@@ -909,15 +929,20 @@ fn build_enacted_pparams(
     if let Some(blk) = decoded.max_block_ex_units {
         pp.max_block_ex_units = crate::pparams::MaxBlockExUnits::Bound { mem: blk.mem, steps: blk.steps };
     }
+    // CRE-S7: enacted, not skipped. Inert in computation (no rule reads it) but LIVE in the
+    // fingerprint, so declining it would diverge Ade's durable authority from the chain's.
+    if let Some(c) = decoded.min_pool_cost {
+        pp.min_pool_cost = ade_types::tx::Coin(c);
+    }
     pp
 }
 
 /// Fail-closed pre-decode bound (CRE S4.3c hard boundary #3 / T-RESOURCE-01): reject a ratified
 /// `ParameterChange.update` whose byte length or CBOR nesting depth exceeds a fixed cap BEFORE the recursive
-/// `skip_item`-based [`decode_exec_units_param_update`] runs on attacker-influenced bytes, so the decoder's
+/// `skip_item`-based [`decode_enactable_param_update`] runs on attacker-influenced bytes, so the decoder's
 /// recursion can never be driven to a stack overflow. Iterative (no recursion); parses only CBOR heads. A
 /// legitimate `protocol_param_update` is a shallow map of small values — the real witness is 33 bytes, depth 3.
-fn exec_units_update_within_bounds(update: &[u8]) -> bool {
+fn enactable_update_within_bounds(update: &[u8]) -> bool {
     const MAX_LEN: usize = 4096;
     const MAX_DEPTH: usize = 16;
     if update.is_empty() || update.len() > MAX_LEN {
@@ -1042,8 +1067,16 @@ pub struct ExUnits {
 }
 
 /// The canonically-ordered set of `protocol_param_update` map keys the exec-units decoder does not support.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct CanonicalFieldSet(pub std::collections::BTreeSet<u64>);
+
+/// CRE-S7: render as `minPoolCost(16),unknown(42)` rather than a bare `{16, 42}`. Hand-written so
+/// every pre-existing `{:?}` diagnostic gains the field NAMES without being touched.
+impl std::fmt::Debug for CanonicalFieldSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}]", render_ppu_keys(self))
+    }
+}
 
 /// The closed, structured result of decoding a Conway `ParameterChange.update` for the exec-units subset (CRE
 /// S4.3b). BOTH exec-units fields are decoded COMPLETELY as `[mem, steps]`; every OTHER present key is preserved
@@ -1051,22 +1084,32 @@ pub struct CanonicalFieldSet(pub std::collections::BTreeSet<u64>);
 /// enactment consumes it, supporting an update ONLY when `unsupported_fields` is empty AND each supplied `steps`
 /// equals the current bound `steps` (a changed `steps` is `UnsupportedRatifiedAction`, not malformed).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExecUnitsParamUpdate {
+pub struct EnactableParamUpdate {
     pub max_tx_ex_units: Option<ExUnits>,
     pub max_block_ex_units: Option<ExUnits>,
+    /// CRE-S7: Conway key 16 `minPoolCost`. In the enactable subset because it is a REAL Cardano
+    /// protocol parameter that cardano-node enacts, that Ade models with a working apply path
+    /// (`pparams::apply_param_update`), and — decisively — that Ade PERSISTS and FINGERPRINTS
+    /// (`fingerprint.rs`, `snapshot/gov_state.rs`). No current ledger rule reads it, so it is inert in
+    /// COMPUTATION, but it is LIVE in the FINGERPRINT: declining to enact it would leave Ade's durable
+    /// `minPoolCost` disagreeing with the chain's forever, surfacing later as an opaque fingerprint
+    /// mismatch. That is the P4 failure shape, so "no rule reads it" is NOT grounds to skip it.
+    pub min_pool_cost: Option<u64>,
     pub unsupported_fields: CanonicalFieldSet,
 }
 
 /// A structured failure decoding a Conway `ParameterChange.update` (CRE S4.3b). No fallback parsing, no
 /// last-write-wins.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExecUnitsUpdateError {
+pub enum EnactableUpdateError {
     /// Not a well-formed definite CBOR `protocol_param_update` map (bad header, indefinite, or trailing bytes).
     Malformed,
     /// A recognized exec-units key appeared more than once.
     DuplicateKey { key: u64 },
     /// A recognized exec-units value was not a well-formed `array(2)[mem, steps]`.
     MalformedExUnits { key: u64 },
+    /// CRE-S7: a recognized Coin-valued key (e.g. `minPoolCost`) was not a well-formed uint.
+    MalformedCoin { key: u64 },
 }
 
 /// Conway `protocol_param_update` map keys for the two exec-units limits. From conway.cddl: `20 = maxTxExUnits`,
@@ -1074,66 +1117,109 @@ pub enum ExecUnitsUpdateError {
 /// S4.3b gate tests.
 const PPU_KEY_MAX_TX_EX_UNITS: u64 = 20;
 const PPU_KEY_MAX_BLOCK_EX_UNITS: u64 = 21;
+/// CRE-S7: `16 = minPoolCost` (conway.cddl). Proven against the real preprod action
+/// `e641ec80…#0`, which enacted `minPoolCost 170_000_000 -> 75_000_000` alongside the two
+/// memory-only exec-units changes at the 304→305 boundary.
+const PPU_KEY_MIN_POOL_COST: u64 = 16;
+
+/// The `protocol_param_update` keys this enactment supports, and their canonical Conway names. The
+/// SOLE place a key is turned into a name, so a diagnostic and the decoder can never disagree about
+/// what key 16 is called. Returns `None` for a key outside the subset — which is exactly what a
+/// diagnostic wants to say.
+pub fn ppu_key_name(key: u64) -> Option<&'static str> {
+    match key {
+        PPU_KEY_MIN_POOL_COST => Some("minPoolCost"),
+        PPU_KEY_MAX_TX_EX_UNITS => Some("maxTxExUnits"),
+        PPU_KEY_MAX_BLOCK_EX_UNITS => Some("maxBlockExUnits"),
+        _ => None,
+    }
+}
+
+/// Render a `protocol_param_update` key set as `name(key)` pairs for a diagnostic — named where the
+/// name is known, bare otherwise, never a silent number-only list. CRE-S7: the old
+/// `UnsupportedRatifiedAction { kind }` named the CLASS but not the OPERAND, so identifying
+/// `minPoolCost` as the blocking field required an off-chain `gov-state` query and a pparams diff.
+pub fn render_ppu_keys(keys: &CanonicalFieldSet) -> String {
+    keys.0
+        .iter()
+        .map(|k| match ppu_key_name(*k) {
+            Some(n) => format!("{n}({k})"),
+            None => format!("unknown({k})"),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
 
 /// Decode a Conway `ParameterChange.update` (a `protocol_param_update` CBOR map) for the exec-units subset,
 /// reading BOTH exec-units fields COMPLETELY as `[mem, steps]`. Every other present key is recorded in
 /// `unsupported_fields` (never silently dropped). Fail-closed: a non-map / bad header / indefinite map /
 /// trailing bytes, a duplicate recognized key, or a recognized value that is not `array(2)[mem, steps]` is a
 /// structured error. Pure; the raw `update` bytes remain the caller's. INERT (no applier in S4.3b).
-pub fn decode_exec_units_param_update(
+pub fn decode_enactable_param_update(
     update: &[u8],
-) -> Result<ExecUnitsParamUpdate, ExecUnitsUpdateError> {
+) -> Result<EnactableParamUpdate, EnactableUpdateError> {
     use ade_codec::cbor::{read_map_header, read_uint, skip_item, ContainerEncoding};
     let mut o = 0usize;
-    let n = match read_map_header(update, &mut o).map_err(|_| ExecUnitsUpdateError::Malformed)? {
+    let n = match read_map_header(update, &mut o).map_err(|_| EnactableUpdateError::Malformed)? {
         ContainerEncoding::Definite(n, _) => n,
         // An indefinite-length map is not canonical Conway wire form.
-        _ => return Err(ExecUnitsUpdateError::Malformed),
+        _ => return Err(EnactableUpdateError::Malformed),
     };
     let mut max_tx_ex_units: Option<ExUnits> = None;
     let mut max_block_ex_units: Option<ExUnits> = None;
+    let mut min_pool_cost: Option<u64> = None;
     let mut unsupported: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
     for _ in 0..n {
-        let (key, _) = read_uint(update, &mut o).map_err(|_| ExecUnitsUpdateError::Malformed)?;
+        let (key, _) = read_uint(update, &mut o).map_err(|_| EnactableUpdateError::Malformed)?;
         match key {
+            // CRE-S7: `minPoolCost` is a bare Coin (uint), not an ex-units pair.
+            PPU_KEY_MIN_POOL_COST => {
+                if min_pool_cost.is_some() {
+                    return Err(EnactableUpdateError::DuplicateKey { key });
+                }
+                let (v, _) = read_uint(update, &mut o)
+                    .map_err(|_| EnactableUpdateError::MalformedCoin { key })?;
+                min_pool_cost = Some(v);
+            }
             PPU_KEY_MAX_TX_EX_UNITS => {
                 if max_tx_ex_units.is_some() {
-                    return Err(ExecUnitsUpdateError::DuplicateKey { key });
+                    return Err(EnactableUpdateError::DuplicateKey { key });
                 }
                 max_tx_ex_units = Some(read_ex_units_value(update, &mut o, key)?);
             }
             PPU_KEY_MAX_BLOCK_EX_UNITS => {
                 if max_block_ex_units.is_some() {
-                    return Err(ExecUnitsUpdateError::DuplicateKey { key });
+                    return Err(EnactableUpdateError::DuplicateKey { key });
                 }
                 max_block_ex_units = Some(read_ex_units_value(update, &mut o, key)?);
             }
             other => {
                 // Record the unsupported key (never dropped) and skip its arbitrary value uninterpreted.
                 unsupported.insert(other);
-                skip_item(update, &mut o).map_err(|_| ExecUnitsUpdateError::Malformed)?;
+                skip_item(update, &mut o).map_err(|_| EnactableUpdateError::Malformed)?;
             }
         }
     }
     if o != update.len() {
-        return Err(ExecUnitsUpdateError::Malformed);
+        return Err(EnactableUpdateError::Malformed);
     }
-    Ok(ExecUnitsParamUpdate {
+    Ok(EnactableParamUpdate {
         max_tx_ex_units,
         max_block_ex_units,
+        min_pool_cost,
         unsupported_fields: CanonicalFieldSet(unsupported),
     })
 }
 
 /// Read a Conway `ex_units = array(2)[mem, steps]`; anything else is `MalformedExUnits`.
-fn read_ex_units_value(d: &[u8], o: &mut usize, key: u64) -> Result<ExUnits, ExecUnitsUpdateError> {
+fn read_ex_units_value(d: &[u8], o: &mut usize, key: u64) -> Result<ExUnits, EnactableUpdateError> {
     use ade_codec::cbor::{read_array_header, read_uint, ContainerEncoding};
     match read_array_header(d, o) {
         Ok(ContainerEncoding::Definite(2, _)) => {}
-        _ => return Err(ExecUnitsUpdateError::MalformedExUnits { key }),
+        _ => return Err(EnactableUpdateError::MalformedExUnits { key }),
     }
-    let (mem, _) = read_uint(d, o).map_err(|_| ExecUnitsUpdateError::MalformedExUnits { key })?;
-    let (steps, _) = read_uint(d, o).map_err(|_| ExecUnitsUpdateError::MalformedExUnits { key })?;
+    let (mem, _) = read_uint(d, o).map_err(|_| EnactableUpdateError::MalformedExUnits { key })?;
+    let (steps, _) = read_uint(d, o).map_err(|_| EnactableUpdateError::MalformedExUnits { key })?;
     Ok(ExUnits { mem, steps })
 }
 
@@ -1162,7 +1248,7 @@ mod cre_s4_3b_decoder_tests {
         ex_units(&mut u, 16_500_000, steps_tx);
         write_uint_canonical(&mut u, 21);
         ex_units(&mut u, 72_000_000, steps_block);
-        let d = decode_exec_units_param_update(&u).expect("decode");
+        let d = decode_enactable_param_update(&u).expect("decode");
         assert_eq!(d.max_tx_ex_units, Some(ExUnits { mem: 16_500_000, steps: steps_tx }));
         assert_eq!(d.max_block_ex_units, Some(ExUnits { mem: 72_000_000, steps: steps_block }));
         assert!(d.unsupported_fields.0.is_empty(), "the witness touches only the exec-units subset");
@@ -1179,7 +1265,7 @@ mod cre_s4_3b_decoder_tests {
         write_uint_canonical(&mut mixed, 44); // minFeeA value (a coin) — skipped, key recorded
         write_uint_canonical(&mut mixed, 20);
         ex_units(&mut mixed, 16_500_000, 1);
-        let d = decode_exec_units_param_update(&mixed).expect("decode");
+        let d = decode_enactable_param_update(&mixed).expect("decode");
         assert_eq!(d.max_tx_ex_units, Some(ExUnits { mem: 16_500_000, steps: 1 }));
         assert_eq!(d.max_block_ex_units, None);
         assert_eq!(d.unsupported_fields.0.iter().copied().collect::<Vec<_>>(), vec![0]);
@@ -1192,8 +1278,8 @@ mod cre_s4_3b_decoder_tests {
         write_uint_canonical(&mut dup, 20);
         ex_units(&mut dup, 3, 4);
         assert_eq!(
-            decode_exec_units_param_update(&dup),
-            Err(ExecUnitsUpdateError::DuplicateKey { key: 20 })
+            decode_enactable_param_update(&dup),
+            Err(EnactableUpdateError::DuplicateKey { key: 20 })
         );
 
         // (c) MALFORMED recognized value (not array(2)[mem, steps]).
@@ -1202,18 +1288,129 @@ mod cre_s4_3b_decoder_tests {
         write_uint_canonical(&mut bad, 21);
         write_uint_canonical(&mut bad, 999);
         assert_eq!(
-            decode_exec_units_param_update(&bad),
-            Err(ExecUnitsUpdateError::MalformedExUnits { key: 21 })
+            decode_enactable_param_update(&bad),
+            Err(EnactableUpdateError::MalformedExUnits { key: 21 })
         );
 
         // (d) a non-map input is Malformed.
-        assert_eq!(decode_exec_units_param_update(&[0x00]), Err(ExecUnitsUpdateError::Malformed));
+        assert_eq!(decode_enactable_param_update(&[0x00]), Err(EnactableUpdateError::Malformed));
 
         // (e) trailing bytes after a definite map → Malformed (no fallback).
         let mut trailing = Vec::new();
         write_map_header(&mut trailing, ContainerEncoding::Definite(0, IntWidth::Inline));
         trailing.push(0xFF);
-        assert_eq!(decode_exec_units_param_update(&trailing), Err(ExecUnitsUpdateError::Malformed));
+        assert_eq!(decode_enactable_param_update(&trailing), Err(EnactableUpdateError::Malformed));
+    }
+
+    /// CRE-S7 — the preprod `e641ec80…#0` action that STALLED the 304→305 accumulator cross, proven
+    /// against the cardano-node reference.
+    ///
+    /// PROVENANCE, stated exactly, because it differs from GATE 5 below. GATE 5 pins REAL on-chain
+    /// `update` BYTES. This test pins the action's measured EFFECT: the proposal is enacted and retired
+    /// (`proposals = []`, `futurePParams = NoPParamsUpdate`), so its raw bytes are no longer queryable
+    /// from gov-state. The three field values are read from the reference node itself —
+    /// `cardano-cli conway query gov-state --testnet-magic 1`, diffing `previousPParams` against
+    /// `currentPParams` while `prevGovActionIds.PParamUpdate.txId == e641ec80…`. The update map below is
+    /// re-encoded from those measured values in canonical Conway form.
+    ///
+    /// | field | key | prev | cur (cardano-node) |
+    /// |---|---|---|---|
+    /// | `minPoolCost` | 16 | 170_000_000 | **75_000_000** |
+    /// | `maxTxExUnits` | 20 | mem 16_500_000 / steps 10e9 | mem **17_500_000** / steps 10e9 |
+    /// | `maxBlockExUnits` | 21 | mem 72_000_000 / steps 20e9 | mem **77_500_000** / steps 20e9 |
+    ///
+    /// Before CRE-S7 key 16 landed in `unsupported_fields` and the whole action was refused
+    /// (`UnsupportedPParamField`) even though the two exec-units changes were already supported — Ade was
+    /// ONE parameter short of enacting preprod's real update.
+    #[test]
+    fn cre_s7_preprod_e641ec80_enacts_to_the_cardano_reference() {
+        use ade_codec::cbor::{write_array_header, write_map_header, write_uint_canonical, ContainerEncoding, IntWidth};
+        use crate::pparams::{MaxBlockExUnits, ProtocolParameters};
+        use ade_types::tx::Coin;
+        // The action, re-encoded canonically from the measured reference values.
+        let update = {
+            let mut b = Vec::new();
+            write_map_header(&mut b, ContainerEncoding::Definite(3, IntWidth::Inline));
+            write_uint_canonical(&mut b, 16); // minPoolCost
+            write_uint_canonical(&mut b, 75_000_000);
+            write_uint_canonical(&mut b, 20); // maxTxExUnits
+            write_array_header(&mut b, ContainerEncoding::Definite(2, IntWidth::Inline));
+            write_uint_canonical(&mut b, 17_500_000);
+            write_uint_canonical(&mut b, 10_000_000_000);
+            write_uint_canonical(&mut b, 21); // maxBlockExUnits
+            write_array_header(&mut b, ContainerEncoding::Definite(2, IntWidth::Inline));
+            write_uint_canonical(&mut b, 77_500_000);
+            write_uint_canonical(&mut b, 20_000_000_000);
+            b
+        };
+
+        let decoded = decode_enactable_param_update(&update).expect("the preprod action decodes");
+        assert_eq!(decoded.min_pool_cost, Some(75_000_000), "key 16 minPoolCost is DECODED, not skipped");
+        assert_eq!(decoded.max_tx_ex_units, Some(ExUnits { mem: 17_500_000, steps: 10_000_000_000 }));
+        assert_eq!(decoded.max_block_ex_units, Some(ExUnits { mem: 77_500_000, steps: 20_000_000_000 }));
+        // THE regression: this set was `{16}` before CRE-S7, which is what refused the whole action.
+        assert!(
+            decoded.unsupported_fields.0.is_empty(),
+            "with key 16 supported the preprod action is FULLY enactable; unsupported = {:?}",
+            decoded.unsupported_fields
+        );
+
+        // Enact it onto the reference `previousPParams` and require the reference `currentPParams`.
+        let prev = ProtocolParameters {
+            min_pool_cost: Coin(170_000_000),
+            max_tx_ex_units_mem: 16_500_000,
+            max_tx_ex_units_cpu: 10_000_000_000,
+            max_block_ex_units: MaxBlockExUnits::Bound { mem: 72_000_000, steps: 20_000_000_000 },
+            ..Default::default()
+        };
+        let enacted = build_enacted_pparams(&prev, &decoded);
+        assert_eq!(enacted.min_pool_cost, Coin(75_000_000), "minPoolCost == cardano-node currentPParams");
+        assert_eq!(enacted.max_tx_ex_units_mem, 17_500_000, "maxTxExUnits.mem == reference");
+        assert_eq!(
+            enacted.max_block_ex_units,
+            MaxBlockExUnits::Bound { mem: 77_500_000, steps: 20_000_000_000 },
+            "maxBlockExUnits == reference"
+        );
+        // MEMORY-ONLY still holds: both steps are carried through unchanged.
+        assert_eq!(enacted.max_tx_ex_units_cpu, 10_000_000_000, "maxTx steps UNCHANGED");
+        assert_eq!(
+            prev.max_block_ex_units,
+            MaxBlockExUnits::Bound { mem: 72_000_000, steps: 20_000_000_000 },
+            "sanity: prev is the reference previousPParams"
+        );
+    }
+
+    /// CRE-S7: widening the subset must NOT widen it silently. A key still outside the subset is refused
+    /// AND the error now NAMES it — the diagnostic gap that made the preprod halt cost an off-chain
+    /// gov-state query plus a pparams diff to identify `minPoolCost`.
+    #[test]
+    fn cre_s7_unsupported_key_is_refused_and_named() {
+        use ade_codec::cbor::{write_map_header, write_uint_canonical, ContainerEncoding, IntWidth};
+        let update = {
+            let mut b = Vec::new();
+            write_map_header(&mut b, ContainerEncoding::Definite(2, IntWidth::Inline));
+            write_uint_canonical(&mut b, 16); // supported
+            write_uint_canonical(&mut b, 75_000_000);
+            write_uint_canonical(&mut b, 17); // NOT supported (costModels-adjacent; outside the subset)
+            write_uint_canonical(&mut b, 1);
+            b
+        };
+        let decoded = decode_enactable_param_update(&update).expect("decodes");
+        assert_eq!(decoded.min_pool_cost, Some(75_000_000), "the supported key is still read");
+        assert_eq!(
+            decoded.unsupported_fields.0.iter().copied().collect::<Vec<_>>(),
+            vec![17],
+            "the unsupported key is RECORDED, never dropped"
+        );
+        // The rendering a diagnostic sees: names where known, bare otherwise — never a silent number list.
+        assert_eq!(render_ppu_keys(&decoded.unsupported_fields), "unknown(17)");
+        assert_eq!(
+            render_ppu_keys(&CanonicalFieldSet([16u64, 20, 21].into_iter().collect())),
+            "minPoolCost(16),maxTxExUnits(20),maxBlockExUnits(21)",
+            "every supported key renders by NAME"
+        );
+        // And the Debug used by every existing emit carries the names for free.
+        assert_eq!(format!("{:?}", decoded.unsupported_fields), "[unknown(17)]");
     }
 
     /// GATE 5 (real witness — HERMETIC): the DEFINITIVE key-20/21 validation over REAL on-chain bytes.
@@ -1236,7 +1433,7 @@ mod cre_s4_3b_decoder_tests {
             0x00, 0x15, 0x82, 0x1a, 0x04, 0x4a, 0xa2, 0x00, 0x1b, 0x00, 0x00, 0x00, 0x04, 0xa8, 0x17, 0xc8,
             0x00,
         ];
-        let decoded = decode_exec_units_param_update(WITNESS_UPDATE).expect("decode the real witness update");
+        let decoded = decode_enactable_param_update(WITNESS_UPDATE).expect("decode the real witness update");
         assert_eq!(
             decoded.max_tx_ex_units,
             Some(ExUnits { mem: 16_500_000, steps: 10_000_000_000 }),
@@ -1411,9 +1608,77 @@ mod cre_s4_3c_enactment_tests {
         update.extend_from_slice(&[0x00, 0x18, 44]); // key 0 -> uint 44
         let winner = prop(0x69, pc(Some(root.clone()), update), yes_2of3(), 1339);
         let err = plan_enact(&[winner], &pp_1095(), &PreviousPParamAction::Enacted(root)).unwrap_err();
-        assert!(matches!(
-            err, GovernanceTerminal::UnsupportedRatifiedAction { kind: UnsupportedActionKind::NonExecUnitsField, .. }
-        ), "got {err:?}");
+        // CRE-S7: the TERMINAL itself must carry WHICH key was unsupported, not just the class. Asserted on
+        // the error the boundary actually returns -- a mutation that stops populating `unsupported_keys`
+        // passed the decoder-level and renderer-level tests, so only this catches it.
+        match err {
+            GovernanceTerminal::UnsupportedRatifiedAction {
+                kind: UnsupportedActionKind::UnsupportedPParamField,
+                ref unsupported_keys,
+                ..
+            } => {
+                assert_eq!(
+                    unsupported_keys.0.iter().copied().collect::<Vec<_>>(),
+                    vec![0],
+                    "the terminal names the offending key (0 = minFeeA)"
+                );
+                assert_eq!(
+                    format!("{err:?}").contains("unknown(0)"),
+                    true,
+                    "and it renders in the diagnostic every emit already prints: {err:?}"
+                );
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    /// CRE-S7 (the preprod case, driven through the FULL enactment path rather than the decoder alone):
+    /// `e641ec80…#0` — minPoolCost + both memory-only exec-units changes — now ENACTS, and the resulting
+    /// pparams equal cardano-node's `currentPParams`. Before CRE-S7 this exact action was the terminal that
+    /// stalled the preprod 304→305 accumulator cross.
+    #[test]
+    fn cre_s7_preprod_action_enacts_through_the_boundary_path() {
+        use ade_codec::cbor::{write_array_header, write_map_header, write_uint_canonical, ContainerEncoding, IntWidth};
+        use crate::pparams::MaxBlockExUnits;
+        let root = gaid(0x60);
+        let update = {
+            let mut b = Vec::new();
+            write_map_header(&mut b, ContainerEncoding::Definite(3, IntWidth::Inline));
+            write_uint_canonical(&mut b, 16);
+            write_uint_canonical(&mut b, 75_000_000);
+            write_uint_canonical(&mut b, 20);
+            write_array_header(&mut b, ContainerEncoding::Definite(2, IntWidth::Inline));
+            write_uint_canonical(&mut b, 17_500_000);
+            write_uint_canonical(&mut b, 10_000_000_000);
+            write_uint_canonical(&mut b, 21);
+            write_array_header(&mut b, ContainerEncoding::Definite(2, IntWidth::Inline));
+            write_uint_canonical(&mut b, 77_500_000);
+            write_uint_canonical(&mut b, 20_000_000_000);
+            b
+        };
+        // The reference `previousPParams` for the 304→305 enactment.
+        let prev = ProtocolParameters {
+            min_pool_cost: Coin(170_000_000),
+            max_tx_ex_units_mem: 16_500_000,
+            max_tx_ex_units_cpu: 10_000_000_000,
+            max_block_ex_units: MaxBlockExUnits::Bound { mem: 72_000_000, steps: 20_000_000_000 },
+            ..Default::default()
+        };
+        let winner = prop(0x69, pc(Some(root.clone()), update), yes_2of3(), 1339);
+        let plan = plan_enact(&[winner], &prev, &PreviousPParamAction::Enacted(root))
+            .expect("CRE-S7: the preprod action must ENACT, not terminal");
+        match plan.pparams {
+            PParamsDelta::Set(ref pp) => {
+                assert_eq!(pp.min_pool_cost, Coin(75_000_000), "== cardano-node currentPParams.minPoolCost");
+                assert_eq!(pp.max_tx_ex_units_mem, 17_500_000);
+                assert_eq!(
+                    pp.max_block_ex_units,
+                    MaxBlockExUnits::Bound { mem: 77_500_000, steps: 20_000_000_000 }
+                );
+                assert_eq!(pp.max_tx_ex_units_cpu, 10_000_000_000, "steps unchanged");
+            }
+            ref other => panic!("expected an enacted pparams delta, got {other:?}"),
+        }
     }
 
     #[test]
