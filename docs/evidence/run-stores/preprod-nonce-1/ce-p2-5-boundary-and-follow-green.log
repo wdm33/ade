@@ -1,0 +1,69 @@
+=== CE-N2-4 live run start 2026-08-06T01:55:57Z binary=0bfefdce+dirty ===
+bridge-eta0-finality: target_epoch=305 seed_slot=129813427 rsw=172800 candidate_freeze_slot=129945600 decision=PENDING_UNTIL_FREEZE (seed precedes the freeze -- the stored seed_time_eta0 is INERT; eta0 comes from the boundary tick)
+
+=== Ade native Mithril bootstrap receipt ===
+network / profile      : preprod (magic 1)
+shelley genesis hash   : Hash32(162d29c4e1cf6b8a84f2d692e67a3ac6bc7851bc3e6e4afe64d15778bed8bd86)
+certified anchor point : slot 129813427 / block Hash32(4153b4f5acae17be10d66e90e9454c66ff2f69df52ec4cf4e34462d1eb86582c)
+seed artifact commit   : Hash32(5c7bdf6a47bc31f7329336aaeee46dc8e84189103a650355ddd0f69a5035ecc3)
+UTxO commitment        : Hash32(c9906929dfd9924943b9d12cd4436b26759f9cf03eb4490abcb59ea79960e239)
+durable ledger lineage : Hash32(fe99c63936729ec42237d07ea66cfd7aa1b15d74c824e3687a95817c175b0113)
+reduced checkpoint     : built (/home/ts/.cardano-live1/ade-preprod-p2/reduced-checkpoint.redb)
+ChainSync              : starting against 1 peer(s)
+============================================
+nonce1-seed-quad: seed_epoch=EpochNo(304) seed_slot=129813427 epoch_start_slot=129686400 epoch_len=432000 sidecar_eta0=Hash32(14ff55044c8dd7becca29519ae90aa784a455d40b5313c3b24a82572fb8c758b) start_candidate=Hash32(40b4ed6b9afebe9f778157b9b1c447f96d679ec5ee9f7aeabe3df74ec1077e16) start_evolving=Hash32(40b4ed6b9afebe9f778157b9b1c447f96d679ec5ee9f7aeabe3df74ec1077e16) start_epoch_nonce=Hash32(14ff55044c8dd7becca29519ae90aa784a455d40b5313c3b24a82572fb8c758b) start_prev_epoch_nonce=Hash32(151dc58480d5f19048c6a44f38d08c578a83ed85409c9a4c8b986a9268ef6496) start_lab=Hash32(e99090d2f96810bad05abd7435ab4fb76a8afd1817fee62019083263d2cd85b7) start_last_epoch_block=None
+nonce1-freeze-window: source=durable-sidecar k=2160 f=1/20 store_rsw=Some(172800) cli_rsw=Some(172800) cross_check=agreed effective_rsw=Some(172800)
+follow: tip slot=129813444 behind=485020 slots from peer
+follow: tip slot=129825426 behind=473064 slots from peer
+follow: tip slot=129836636 behind=461854 slots from peer
+follow: tip slot=129848166 behind=450388 slots from peer
+follow: tip slot=129859648 behind=438934 slots from peer
+follow: tip slot=129871238 behind=427386 slots from peer
+follow: tip slot=129883160 behind=415464 slots from peer
+follow: tip slot=129894579 behind=404045 slots from peer
+follow: tip slot=129906441 behind=392233 slots from peer
+follow: tip slot=129917131 behind=381552 slots from peer
+follow: tip slot=129928702 behind=369981 slots from peer
+follow: tip slot=129938854 behind=359829 slots from peer
+follow: tip slot=129950334 behind=348404 slots from peer
+follow: tip slot=129961505 behind=337233 slots from peer
+follow: tip slot=129971821 behind=326945 slots from peer
+follow: tip slot=129982521 behind=316245 slots from peer
+follow: tip slot=129993788 behind=304978 slots from peer
+follow: tip slot=130005380 behind=293386 slots from peer
+follow: tip slot=130017012 behind=281754 slots from peer
+follow: tip slot=130028468 behind=270298 slots from peer
+follow: tip slot=130040378 behind=258500 slots from peer
+follow: tip slot=130051522 behind=247356 slots from peer
+follow: tip slot=130062417 behind=236461 slots from peer
+follow: tip slot=130074457 behind=224421 slots from peer
+follow: tip slot=130086554 behind=212324 slots from peer
+follow: tip slot=130097870 behind=201079 slots from peer
+follow: tip slot=130108106 behind=190866 slots from peer
+nonce1-boundary-operands: from_epoch=EpochNo(304) to_epoch=EpochNo(305) tick_slot=130118424 epoch_start=130118400 epoch_len=Some(432000) rsw=Some(172800) freeze_slot=Some(129945600) durable_tip_slot=130118358 candidate=Hash32(f241d006bc9446096cafe17dca35bd635e803f2bd2b109f196506dc7b1ab8ced) evolving=Hash32(a150cff15bceee01039daa62037c958bd076f126b39f21039a9b83bec6890fb4) prev_epoch_nonce=Hash32(151dc58480d5f19048c6a44f38d08c578a83ed85409c9a4c8b986a9268ef6496) lab=Hash32(60b3a0aea44e3977baa949c27c5053c984001dc858048e4d296ddebcf8b0dc67) last_epoch_block=None last_epoch_block_nonce=Some(Hash32(151dc58480d5f19048c6a44f38d08c578a83ed85409c9a4c8b986a9268ef6496)) computed_eta0=Hash32(74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62) promoted_view_nonce=Hash32(74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62) match=true
+epoch-boundary yield: 304 -> 305 (eta0 Hash32(74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62))
+recovery-trace: path=recovery_admit action=reset_and_refold reason=anchor_absent anchor_before=absent durable_tip=130118424/5013815/b9885db6 rollback_target=none anchor_after=absent
+epoch-accumulator: boundary cross stalled at 130118424 (observe-only): GovernanceEpochTerminal(UnsupportedRatifiedAction { action_id: GovActionId { tx_hash: Hash32(e641ec802bb109e150e920c6c0387e85f2efd30944a46d08d08212bde540f69c), index: 0 }, kind: NonExecUnitsField })
+follow: tip slot=130118469 behind=180503 slots from peer
+follow: tip slot=130129759 behind=170486 slots from peer
+follow: tip slot=130141075 behind=159177 slots from peer
+follow: tip slot=130151831 behind=148421 slots from peer
+follow: tip slot=130162945 behind=137307 slots from peer
+follow: tip slot=130173416 behind=126836 slots from peer
+follow: tip slot=130183863 behind=116389 slots from peer
+follow: tip slot=130194921 behind=105331 slots from peer
+follow: tip slot=130206353 behind=93899 slots from peer
+follow: tip slot=130217189 behind=83099 slots from peer
+follow: tip slot=130228090 behind=72198 slots from peer
+follow: tip slot=130238995 behind=61293 slots from peer
+follow: tip slot=130250017 behind=50271 slots from peer
+follow: tip slot=130261048 behind=39240 slots from peer
+follow: tip slot=130272702 behind=27618 slots from peer
+follow: tip slot=130283450 behind=16870 slots from peer
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130118358/5013814/b954f5a0 durable_tip=130287994/5021518/6b246f98 rollback_target=none anchor_after=130118358/5013814/b954f5a0
+epoch-accumulator: reduced checkpoint REWOUND onto boundary point 130118358 before sealing (it sat past it -- DC-EPOCH-32)
+epoch-accumulator: boundary cross stalled at 130118424 (observe-only): GovernanceEpochTerminal(UnsupportedRatifiedAction { action_id: GovActionId { tx_hash: Hash32(e641ec802bb109e150e920c6c0387e85f2efd30944a46d08d08212bde540f69c), index: 0 }, kind: NonExecUnitsField })
+follow: tip slot=130288013 behind=12307 slots from peer
+follow: tip slot=130298619 behind=1829 slots from peer
+follow: tip slot=130300448 -- AT PEER TIP (caught up, following live)
+follow: tip slot=130300485 -- AT PEER TIP (caught up, following live)

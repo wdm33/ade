@@ -208,12 +208,61 @@ cheapest next step and costs nothing behaviourally.
 
 | CE | Criterion | status |
 |---|---|---|
-| **CE-P2-1** | A reduced continuation ENCODES, and decodes back with cert AND gov `ReducedUnavailable` | open |
-| **CE-P2-2** | Authoritative encodings are BYTE-IDENTICAL to pre-fix (no existing store invalidated) | open |
-| **CE-P2-3** | An authoritative state never decodes as reduced, and a reduced one never as authoritative | open |
-| **CE-P2-4** | User gate #3's property (nothing reduced rehydrates/fingerprints as authority) still holds, by type | open |
-| **CE-P2-5** | Live: preprod crosses 304→305 and the boundary capture SUCCEEDS (no rc=43) | open |
-| **CE-P2-6** | Negative-tested: the gate FAILS when reduced is made to decode as authoritative | open |
+| **CE-P2-1** | A reduced continuation ENCODES, and decodes back with cert AND gov `ReducedUnavailable` | **MET** — `reduced_continuation_is_not_serializable_as_authority` |
+| **CE-P2-2** | Authoritative encodings are BYTE-IDENTICAL to pre-fix (no existing store invalidated) | **MET** — golden hex captured from the PRE-FIX encoder and pinned in `authoritative_state_encoding_is_unchanged_and_never_decodes_reduced` |
+| **CE-P2-3** | An authoritative state never decodes as reduced, and a reduced one never as authoritative | **MET** — both directions asserted |
+| **CE-P2-4** | User gate #3's property (nothing reduced rehydrates/fingerprints as authority) still holds, by type | **MET** — `require_full` still fails closed on the decoded state |
+| **CE-P2-5** | Live: preprod crosses 304→305 and the boundary capture SUCCEEDS (no rc=43) | **MET** — see below |
+| **CE-P2-6** | Negative-tested: the gate FAILS when reduced is made to decode as authoritative | **MET** — three mutations |
+
+### CE-P2-5 — the live result, and its exact limit
+
+Fresh preprod bootstrap from snapshot 6009 on a clean data dir, followed through 304→305:
+
+```
+nonce1-boundary-operands: ... computed_eta0=74f10bea.. promoted_view_nonce=74f10bea.. match=true
+epoch-boundary yield: 304 -> 305 (eta0 Hash32(74f10bea..))      <- the B3b capture SUCCEEDED
+```
+
+`epoch-boundary yield` is logged *after* the unconditional boundary capture, so reaching it is proof
+the capture no longer fails. The boundary block **130118424 is durably admitted** (`durable_tip=
+130118424/5013815/b9885db6`) — further than any preprod run has ever reached. Zero occurrences of
+`Capture`/`failing closed`/`rc=` in the log. The run also independently reproduced CE-N2-4's
+`74f10bea…` on a second, separate store.
+
+**It then resumes following and reaches tip in epoch 305** — the first time a preprod node has crossed
+an epoch boundary and caught up on the far side:
+
+```
+follow: tip slot=130118469 behind=180503 slots from peer     <- PAST the boundary (130118424)
+follow: tip slot=130129759 behind=170486 slots from peer
+...
+follow: tip slot=130300485 -- AT PEER TIP (caught up, following live)
+```
+
+Zero `Capture` / `failing closed` / `rc=` in the whole run. Condensed timeline:
+`docs/evidence/run-stores/preprod-nonce-1/ce-p2-5-timeline.txt`.
+
+### Operational note — a ~20-minute post-boundary stall that is NOT a halt
+
+Between the yield and the first post-boundary admit the node spends ~20 minutes inside ONE
+
+```
+recovery-trace: path=recovery_admit action=reset_and_refold reason=anchor_absent
+                anchor_before=absent durable_tip=130118424/... anchor_after=absent
+```
+
+at ~84% CPU with `chain.db` and the WAL static. It is a single long refold, not a loop (exactly one
+`recovery-trace` line), and it **completes** — following resumes normally afterwards. Recorded because
+during it the node looks indistinguishable from hung, and the next person watching a preprod boundary
+will otherwise kill it at minute five and file a wrong bug.
+
+It is also **PRE-EXISTING, not caused by this fix**: the byte-identical trace — same path, action,
+`reason=anchor_absent`, `anchor_after=absent` — appears in the ORIGINAL PREPROD-NONCE-1 run log
+(`store-node.log`, `durable_tip=130118358`), before any of this cluster's changes. It was previously
+masked because the node died at the capture, or at the DC-EPOCH-16 mismatch, before the refold mattered.
+Whether a post-boundary refold should need a full rebuild at all is a performance question for the
+accumulator-anchor line ([[refold-bound]] DC-EPOCH-26..31), not a correctness one for P2.
 
 ## Not claimed
 

@@ -1,0 +1,13 @@
+# SLICE-P2 CE-P2-5 — condensed timeline of the first preprod run to cross a boundary AND reach tip.
+
+bridge-eta0-finality: target_epoch=305 seed_slot=129813427 rsw=172800 candidate_freeze_slot=129945600 decision=PENDING_UNTIL_FREEZE (seed precedes the freeze -- the stored seed_time_eta0 is INERT; eta0 comes from the boundary tick)
+certified anchor point : slot 129813427 / block Hash32(4153b4f5acae17be10d66e90e9454c66ff2f69df52ec4cf4e34462d1eb86582c)
+nonce1-freeze-window: source=durable-sidecar k=2160 f=1/20 store_rsw=Some(172800) cli_rsw=Some(172800) cross_check=agreed effective_rsw=Some(172800)
+nonce1-boundary-operands: from_epoch=EpochNo(304) to_epoch=EpochNo(305) tick_slot=130118424 epoch_start=130118400 epoch_len=Some(432000) rsw=Some(172800) freeze_slot=Some(129945600) durable_tip_slot=130118358 candidate=Hash32(f241d006bc9446096cafe17dca35bd635e803f2bd2b109f196506dc7b1ab8ced) evolving=Hash32(a150cff15bceee01039daa62037c958bd076f126b39f21039a9b83bec6890fb4) prev_epoch_nonce=Hash32(151dc58480d5f19048c6a44f38d08c578a83ed85409c9a4c8b986a9268ef6496) lab=Hash32(60b3a0aea44e3977baa949c27c5053c984001dc858048e4d296ddebcf8b0dc67) last_epoch_block=None last_epoch_block_nonce=Some(Hash32(151dc58480d5f19048c6a44f38d08c578a83ed85409c9a4c8b986a9268ef6496)) computed_eta0=Hash32(74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62) promoted_view_nonce=Hash32(74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62) match=true
+epoch-boundary yield: 304 -> 305 (eta0 Hash32(74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62))
+recovery-trace: path=recovery_admit action=reset_and_refold reason=anchor_absent anchor_before=absent durable_tip=130118424/5013815/b9885db6 rollback_target=none anchor_after=absent
+follow: tip slot=130118469 behind=180503 slots from peer
+follow: tip slot=130129759 behind=170486 slots from peer
+follow: tip slot=130300485 -- AT PEER TIP (caught up, following live)
+
+halts (Capture / failing closed / rc=): 0

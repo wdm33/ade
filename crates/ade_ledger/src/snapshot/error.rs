@@ -16,9 +16,11 @@ use ade_types::{CardanoEra, Hash32};
 pub enum SnapshotEncodeError {
     /// Pre-Conway era encountered. PHASE4-N-J ships Conway-only.
     EraNotSupported { era: CardanoEra },
-    /// The `LedgerState`'s cert/gov is a reduced projection (`ReducedUnavailable`) — a reduced follower is not
-    /// serializable as a normal full-authority snapshot (RVBP; fail closed, never a fabricated normal cert/gov).
-    ReducedStateNotSerializable,
+    // SLICE-P2 removed `ReducedStateNotSerializable`. A reduced projection is no longer un-encodable: it
+    // encodes to the typed `array(0)` marker and decodes back to `ReducedUnavailable`, so the RVBP property
+    // (nothing reduced may be rehydrated or fingerprinted AS AUTHORITY) is carried by the type rather than
+    // by refusing to write bytes at all. The refusal additionally made a `track_utxo=false` follower
+    // permanently un-snapshottable after its first epoch boundary, which was the preprod LIVE-2 blocker.
 }
 
 /// Closed snapshot-decode-error sum.
@@ -68,16 +70,12 @@ mod tests {
 
     #[test]
     fn snapshot_encode_error_round_trips_through_pattern_match() {
-        let errs = vec![
-            SnapshotEncodeError::EraNotSupported {
-                era: CardanoEra::ByronEbb,
-            },
-            SnapshotEncodeError::ReducedStateNotSerializable,
-        ];
+        let errs = vec![SnapshotEncodeError::EraNotSupported {
+            era: CardanoEra::ByronEbb,
+        }];
         for e in errs {
             match e {
                 SnapshotEncodeError::EraNotSupported { .. } => {}
-                SnapshotEncodeError::ReducedStateNotSerializable => {}
             }
         }
     }

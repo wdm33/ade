@@ -60,24 +60,31 @@ pub fn encode_ledger_state(state: &LedgerState) -> Result<Vec<u8>, SnapshotEncod
     write_uint_canonical(&mut buf, state.era as u64);
     write_uint_canonical(&mut buf, state.max_lovelace_supply);
     write_bool(&mut buf, state.track_utxo);
-    // A reduced follower's cert/gov is `ReducedUnavailable` — NOT serializable as a normal full-authority
-    // snapshot (fail closed rather than fabricate a normal CertState/gov; RVBP). Authoritative bytes are
-    // byte-identical to the pre-capability format.
-    let cert = state
-        .cert_state
-        .as_authoritative()
-        .ok_or(crate::snapshot::error::SnapshotEncodeError::ReducedStateNotSerializable)?;
-    let gov = state
-        .gov_state
-        .as_authoritative()
-        .ok_or(crate::snapshot::error::SnapshotEncodeError::ReducedStateNotSerializable)?;
     write_bytes_canonical(&mut buf, &encode_utxo_state(&state.utxo_state));
-    write_bytes_canonical(&mut buf, &encode_cert_state(cert));
+    // SLICE-P2: cert/gov are CAPABILITY-TYPED, so their encoding is too. `Authoritative` keeps the exact
+    // pre-existing bytes; `ReducedUnavailable` writes `array(0)` -- the same discriminant
+    // `EpochStakeSnapshots` already uses one field down (`write_snapshot_state`, RVBP gates 1/2/3), so the
+    // convention is inherited rather than invented.
+    //
+    // This REPLACES a fail-closed refusal, and the reason it is not a relaxation is the decoder: `array(0)`
+    // restores `ReducedUnavailable` and NOTHING restores `Authoritative` except the bytes/null forms, so a
+    // reduced follower still cannot be rehydrated or fingerprinted as authority -- the property the refusal
+    // existed for. The refusal ALSO made a reduced follower permanently un-snapshottable, which is the
+    // preprod LIVE-2 blocker: `apply_reduced_epoch_boundary` makes cert/gov `ReducedUnavailable` at the
+    // FIRST boundary a `track_utxo=false` follower crosses, so every capture after it failed.
+    match state.cert_state.as_authoritative() {
+        Some(cert) => write_bytes_canonical(&mut buf, &encode_cert_state(cert)),
+        None => write_reduced_marker(&mut buf),
+    }
     write_bytes_canonical(&mut buf, &encode_epoch_state(&state.epoch_state));
     write_bytes_canonical(&mut buf, &encode_pparams(&state.protocol_params));
-    match gov {
-        Some(g) => write_bytes_canonical(&mut buf, &encode_gov_state(g)),
-        None => write_null(&mut buf),
+    // gov has THREE states, so it needs three forms: `bytes` = Authoritative(Some), `null` =
+    // Authoritative(None) (pre-Conway / no governance), `array(0)` = ReducedUnavailable. Collapsing the last
+    // two would let a reduced crossing read back as a legitimate "no governance" full state.
+    match state.gov_state.as_authoritative() {
+        Some(Some(g)) => write_bytes_canonical(&mut buf, &encode_gov_state(g)),
+        Some(None) => write_null(&mut buf),
+        None => write_reduced_marker(&mut buf),
     }
     match &state.conway_deposit_params {
         Some(p) => write_bytes_canonical(&mut buf, &encode_conway_deposit_params(p)),
@@ -100,9 +107,14 @@ pub fn decode_ledger_state(bytes: &[u8]) -> Result<LedgerState, SnapshotDecodeEr
         let (b, _) = read_bytes(bytes, &mut o).map_err(SnapshotDecodeError::Cbor)?;
         decode_utxo_state(&b)?
     };
-    let cert_state = {
+    // SLICE-P2: `array(0)` => the state was a reduced follower's; anything else must be the authoritative
+    // `bytes` form. NEVER promoted to `Authoritative` (that is the whole guarantee).
+    let cert_state = if at_reduced_marker(bytes, o) {
+        o += 1;
+        crate::state::CertStateProjection::ReducedUnavailable
+    } else {
         let (b, _) = read_bytes(bytes, &mut o).map_err(SnapshotDecodeError::Cbor)?;
-        decode_cert_state(&b)?
+        crate::state::CertStateProjection::Authoritative(decode_cert_state(&b)?)
     };
     let epoch_state = {
         let (b, _) = read_bytes(bytes, &mut o).map_err(SnapshotDecodeError::Cbor)?;
@@ -112,21 +124,45 @@ pub fn decode_ledger_state(bytes: &[u8]) -> Result<LedgerState, SnapshotDecodeEr
         let (b, _) = read_bytes(bytes, &mut o).map_err(SnapshotDecodeError::Cbor)?;
         decode_pparams(&b)?
     };
-    let gov_state = read_opt_bstr(bytes, &mut o, decode_gov_state)?;
+    // SLICE-P2: three forms, three states -- `array(0)` is reduced, `null` is a genuine authoritative
+    // "no governance", `bytes` is live governance. Only the latter two yield `Authoritative`.
+    let gov_state = if at_reduced_marker(bytes, o) {
+        o += 1;
+        crate::state::GovStateProjection::ReducedUnavailable
+    } else {
+        crate::state::GovStateProjection::Authoritative(read_opt_bstr(
+            bytes,
+            &mut o,
+            decode_gov_state,
+        )?)
+    };
     let conway_deposit_params = read_opt_bstr(bytes, &mut o, decode_conway_deposit_params)?;
-    // A persisted snapshot is always full authority (the encoder refuses to serialize a reduced follower),
-    // so the decoded cert/gov are restored as `Authoritative` (RVBP).
     Ok(LedgerState {
         utxo_state,
         epoch_state,
         protocol_params,
         era,
         track_utxo,
-        cert_state: crate::state::CertStateProjection::Authoritative(cert_state),
+        cert_state,
         max_lovelace_supply,
-        gov_state: crate::state::GovStateProjection::Authoritative(gov_state),
+        gov_state,
         conway_deposit_params,
     })
+}
+
+/// SLICE-P2: the `ReducedUnavailable` discriminant for a capability-typed snapshot field — CBOR
+/// `array(0)`, the SAME marker `EpochStakeSnapshots` already writes for its reduced projection. Distinct
+/// from every authoritative form (`bytes` major type 2, `null` 0xF6), so it can never be confused with
+/// one, and a pre-P2 binary reading it errors in `read_bytes` rather than misinterpreting it.
+fn write_reduced_marker(buf: &mut Vec<u8>) {
+    write_array_header(buf, ContainerEncoding::Definite(0, canonical_width(0)));
+}
+
+/// Is the next item the reduced marker? Byte-exact on the canonical `array(0)` head (0x80); an
+/// indefinite or non-canonically-encoded empty array is NOT accepted as the marker and falls through to
+/// the authoritative reader, which then fails closed.
+fn at_reduced_marker(bytes: &[u8], o: usize) -> bool {
+    bytes.get(o) == Some(&0x80)
 }
 
 fn decode_era(tag: u64) -> Result<CardanoEra, SnapshotDecodeError> {
