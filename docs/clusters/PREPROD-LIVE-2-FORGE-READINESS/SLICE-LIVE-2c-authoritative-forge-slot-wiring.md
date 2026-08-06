@@ -41,6 +41,49 @@ let slot_length_ms = /* shelley */ 1000;
 Those three together **are** the naive calculation. Preprod error: exactly
 `86_400 × (20 − 1) = 1_641_600` slots ≈ 19 days.
 
+## SCOPE — this is calendar geometry, NOT era support
+
+Read this before the wording below, because "complete schedule covering system start" sounds larger
+than it is and would otherwise be misread as reopening Ade to historical eras. **It does not.**
+
+> Ade is a **Conway-active** node bootstrapped from a certified recent snapshot. It implements the
+> current Conway ledger, consensus, governance, transaction, N2N and N2C semantics required for live
+> compatibility. It does **not** replay or execute historical eras. Historical era information is
+> retained only where current Cardano semantics depend on it — such as absolute slot-time geometry,
+> immutable protocol identifiers, and hard-fork lineage.
+
+Byron appears here for one reason: **Cardano slot numbers are global and did not restart at Conway.**
+Preprod's first 86,400 slots lasted 20s; later slots last 1s. Translating "now" into today's absolute
+slot must account for the time that historical segment consumed. That is arithmetic about a calendar,
+not Byron ledger semantics — the way computing someone's age needs their birth date but not a
+reconstruction of their childhood.
+
+**The implementation already matches this scope, verifiably.** `slot_at` reads exactly four things:
+`system_start_unix_ms`, the era list, and per segment `start_slot` and `slot_length_ms`. It never reads
+`era: CardanoEra`, `start_epoch`, `epoch_length_slots`, `safe_zone_slots` or the RSW. So the authority
+this slice wires is **timing-only by construction**, and CE-L2c-3 requires timing facts, not Byron
+support:
+
+| the schedule must carry | it must NOT carry |
+|---|---|
+| system start | Byron transactions or ledger rules |
+| segment start slot | Byron block production |
+| segment slot length | Byron chain state |
+| transition into the next timing segment | any pre-Conway execution semantics |
+
+Ade still enters at an existing non-Origin Conway tip and never grows the chain from genesis (C2
+doctrine). Nothing here changes that.
+
+### What the remaining transaction work actually is
+
+Under this scope, transaction compatibility means agreement on the **Conway** ledger's current surface —
+UTxO spending, witnesses, fees and validity intervals, Conway-legal delegation/pool certificates,
+withdrawals, native scripts, Plutus V1/V2/V3 as supported in Conway, collateral, redeemers, datums,
+reference inputs and scripts, minting and multi-assets, governance proposals/votes/certificates and
+treasury operations, malformed-Conway rejection, and N2C `LocalTxSubmission` + mempool handling —
+including legacy-compatible transaction FORMS that Conway itself still accepts. It does **not** mean a
+separate Byron transaction engine.
+
 ## RULING on the truncated Mithril schedule — do NOT paper over it
 
 `ScheduleDoesNotCoverSystemStart` must **not** be solved by supplying an arbitrary first-segment start
@@ -52,12 +95,13 @@ shape.
 
 ### Preferred solution
 
-The authoritative node path receives a **complete, bootstrap-bound slotting schedule covering system
-start through the active era**, constructed once through the existing era-schedule authority — **not
-rebuilt inside `operator_forge.rs`** — from the canonical venue inputs bootstrap already admits:
+The authoritative node path receives one **bootstrap-bound TIMING schedule sufficient to map UTC to the
+current absolute slot** — i.e. covering system start through the active era in *timing segments only*
+(see the scope section above) — constructed once through the existing era-schedule authority and **not
+rebuilt inside `operator_forge.rs`**, from canonical venue inputs bootstrap already admits:
 
-- Byron genesis start + slot geometry;
-- Shelley system start + slot geometry;
+- Byron genesis start + slot geometry (timing only: start time, 20s slot length, segment length);
+- Shelley system start + slot geometry (timing only: 1s slot length);
 - canonical era-transition boundaries;
 - the network/genesis commitments bootstrap already verified.
 
@@ -75,7 +119,9 @@ A partial schedule plus an explicit segment start time is admissible **only if**
 5. no operator configuration can supply or override it;
 6. there is no second independent conversion implementation.
 
-Without those proofs, **reject that design.**
+Without those proofs, **reject that design.** Note what is NOT rejected: a compact canonical timing
+anchor *derived from and bound to* the genesis timing history is admissible — the objection is to a
+second, independently-supplied clock authority, not to compactness.
 
 ## Required transitions
 
