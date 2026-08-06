@@ -39,6 +39,36 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ade_core::consensus::errors::LeaderScheduleError;
+
+/// LIVE-2 (CE-L2-6): does a leader-schedule result represent a REAL not-elected answer, or an
+/// authority that CANNOT ANSWER?
+///
+/// The forge path previously did `Err(_) => None` and fed that to `ForgeNotLeader`, collapsing three
+/// materially different errors into one confident "not elected". Two consequences, both bad: an
+/// unestablished leadership authority reported not_leader (the CRE-S7 shape, where a follower looked
+/// healthy while epoch-305 leadership had never crossed), and a `not_leader` outcome became useless as
+/// evidence that the decision path was reached — which is exactly what LIVE-2 sets out to prove.
+///
+/// | input | meaning |
+/// |---|---|
+/// | `Ok(answer)` | evaluated; we ARE scheduled — carry on to the VRF leader check |
+/// | `UnknownPool` + a POPULATED view | evaluated; our pool is not in the set → a real not-elected |
+/// | `UnknownPool` + an EMPTY view | authority never established → cannot answer |
+/// | `OutsideForecastRange` / `HFC` | could not evaluate → cannot answer |
+///
+/// Pure and total. `Err` is the caller's signal to fail closed with a typed refusal, NEVER to fall
+/// back to the bridge, the seed window or a CLI oracle.
+fn classify_leader_schedule(
+    res: Result<LeaderScheduleAnswer, LeaderScheduleError>,
+    pools_in_view: usize,
+) -> Result<Option<LeaderScheduleAnswer>, LeaderScheduleError> {
+    match res {
+        Ok(a) => Ok(Some(a)),
+        Err(LeaderScheduleError::UnknownPool) if pools_in_view > 0 => Ok(None),
+        Err(e) => Err(e),
+    }
+}
 use ade_core::consensus::leader_check::{verify_and_evaluate_leader, LeaderCheckVerdict};
 use ade_core::consensus::leader_schedule::{
     query_leader_schedule, LeaderScheduleAnswer, LeaderScheduleQuery,
@@ -1089,17 +1119,30 @@ fn apply_effects_with_forge_handler(
                     evo.era_schedule(),
                     evo.base_chain_dep(),
                 ) {
-                    Ok(a) => Some(a),
-                    // Unknown pool / outside horizon ⇒ not a leader.
-                    Err(_) => None,
+                    r => classify_leader_schedule(r, evo.pool_distr_view().pool_count()),
                 };
 
                 let event = match answer {
-                    None => CoordinatorEvent::ForgeNotLeader {
+                    // Fail closed and SAY WHY -- and crucially NOT as ForgeNotLeader. Never a
+                    // fallback to the bridge, the seed window or a CLI oracle, never a silent skip.
+                    Err(e) => {
+                        crate::node_log!(
+                            "forge: leadership authority CANNOT ANSWER for slot {} (pools_in_view={}): \
+                             {:?} -- refusing; this is NOT a not-leader result",
+                            slot,
+                            evo.pool_distr_view().pool_count(),
+                            e
+                        );
+                        CoordinatorEvent::ForgeFailed {
+                            slot: *slot,
+                            reason: ForgeFailureReason::Other,
+                        }
+                    }
+                    Ok(None) => CoordinatorEvent::ForgeNotLeader {
                         slot: *slot,
                         vrf_output_fingerprint: [0u8; 8],
                     },
-                    Some(answer) => {
+                    Ok(Some(answer)) => {
                         let vrf_vk = shell.vrf_verification_key();
                         let ctx = ForgeRequestContext {
                             eta0: &evo.base_chain_dep().epoch_nonce,
@@ -1747,6 +1790,39 @@ mod tests {
     /// snapshot stays empty) and the handler surfaces the slot as
     /// `ForgeFailed`.
     #[test]
+    /// LIVE-2 CE-L2-6: an authority that CANNOT ANSWER must never read as "not elected".
+    ///
+    /// The pre-LIVE-2 code was `Err(_) => None` feeding `ForgeNotLeader`. That made an unestablished
+    /// leadership authority indistinguishable from a genuine non-election — the CRE-S7 shape — and it
+    /// destroyed the evidentiary value of a `not_leader` outcome, which is precisely what LIVE-2
+    /// claims to prove.
+    #[test]
+    fn live2_leader_schedule_cannot_answer_is_not_not_leader() {
+        use ade_core::consensus::errors::{LeaderScheduleError as E, OutsideForecastRange};
+
+        // (a) UnknownPool with a POPULATED leadership view => a REAL not-elected answer.
+        assert!(
+            matches!(classify_leader_schedule(Err(E::UnknownPool), 626), Ok(None)),
+            "our pool absent from a populated set IS a legitimate not-elected result"
+        );
+
+        // (b) UnknownPool with an EMPTY view => authority never established => CANNOT ANSWER.
+        assert!(
+            matches!(classify_leader_schedule(Err(E::UnknownPool), 0), Err(E::UnknownPool)),
+            "an EMPTY leadership set cannot answer -- reporting not_leader here is the CRE-S7 defect"
+        );
+
+        // (c) Non-membership errors are never an answer, however populated the view is.
+        let outside = E::OutsideForecastRange(OutsideForecastRange {
+            requested: ade_types::SlotNo(1),
+            horizon: ade_types::SlotNo(0),
+        });
+        assert!(
+            matches!(classify_leader_schedule(Err(outside), 626), Err(E::OutsideForecastRange(_))),
+            "outside the forecast horizon is a readiness failure, not a leadership answer"
+        );
+    }
+
     fn broadcast_rejects_non_self_accepted_block() {
         let corpus = ConwayValidityCorpus::load().expect("corpus loads");
         // Heaviest block: a non-empty body so a structure-preserving

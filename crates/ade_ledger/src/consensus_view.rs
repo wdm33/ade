@@ -63,6 +63,16 @@ impl PoolDistrView {
         }
     }
 
+    /// LIVE-2 (CE-L2-6): how many pools this leadership view actually carries.
+    ///
+    /// Exists to tell "our pool is not in a POPULATED leadership set" (a legitimate not-elected
+    /// answer) from "the leadership set is EMPTY" (authority that was never established, which can
+    /// answer nothing). Both make `leader_schedule_answer` return `UnknownPool`, and collapsing them
+    /// is how an unestablished authority comes to report a confident `not_leader`.
+    pub fn pool_count(&self) -> usize {
+        self.pools.len()
+    }
+
     /// The single epoch this view answers for. EPOCH-CONTINUITY-ACTIVATION ECA-3 (DC-EPOCH-14): the
     /// authority's epoch-match guard compares this to the protocol epoch implied by a block/slot
     /// context, so a wrong-epoch (missing / premature / mismatched) promotion is a structured halt.
