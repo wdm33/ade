@@ -1,0 +1,59 @@
+# ade-preprod-n2 — ARCHIVED MANIFEST (store released 2026-08-06)
+#
+# FINAL CLASSIFICATION: SUPERSEDED / CONTAMINATED. Written by an already-failed path.
+# Kept only long enough to seal PREPROD-NONCE-3, which it then turned out not to support.
+
+## What produced it
+run command   ade node run --network preprod \
+                --bootstrap-mithril ~/.cardano-live1/preprod-snapshot-6009/manifest.json \
+                --snapshot-dir     ~/.cardano-live1/preprod-snapshot-6009 \
+                --data-dir         ~/.cardano-live1/ade-preprod-n2 \
+                --peer 127.0.0.1:3001
+commit        b2546f5a (CE-N2-4 fix) -- BEFORE SLICE-P2 (2367f170)
+seed          Mithril snapshot 6009, certified slot 129813427 (epoch 304)
+
+## What it proved (and it did prove this)
+CE-N2-4       boundary 304->305 crossed with computed_eta0 == promoted_view_nonce
+              == 74f10bea..  == cardano-node epochNonce(305)
+durable tip   130118424 (first block of epoch 305)
+WAL record    EpochConsensusViewActivated target_epoch=305 nonce_commitment=74f10bea..
+
+## The two failures it then hit
+P2 halt       Capture("Encode(ReducedStateNotSerializable)") rc=43, ~1 block past the boundary
+              -> so NO BOUNDARY SNAPSHOT WAS EVER WRITTEN into this store
+restart       warm_start_recovery: Materialize(ReplayFailedAt { slot: 130118424,
+              error: Header(VrfCert(VerificationFailed)) }) rc=42
+
+## WHY IT IS CONTAMINATED (the load-bearing part)
+The P2 halt killed the node one block after the boundary, before the unconditional B3b boundary
+capture could persist a snapshot. Warm-start therefore had to materialize from a PRE-boundary
+snapshot and REPLAY ACROSS the boundary block -- a path a healthy store never takes. The
+VrfCert failure was an artifact of that missing snapshot, not a defect in the replay or in the
+bridge. PREPROD-NONCE-3 was sealed from this store and its hypothesis (the "restart half of
+ECA-5") was WRONG.
+
+## Superseded by
+The clean post-P2 run on ~/.cardano-live1/ade-preprod-p2 (commit 2367f170): same binary path,
+same seed, same boundary -- warm-start does action=forward_fold from a real anchor, zero
+VrfCert, resumes to tip. NONCE-3 closed as a non-defect on that evidence.
+Logs retained: ce-n2-4-boundary-green.log, ce-n2-5-warmstart-replay-blocked.log,
+               ce-p2-5-boundary-and-follow-green.log, ce-n2-5-warmstart-green.log
+
+## Store layout at release
+  chain.db                             2149072896 bytes
+  epoch-accumulator.redb                 69750784 bytes
+  reduced-checkpoint.redb              1078472704 bytes
+  wal/wal-0000.bin                        1149967 bytes
+  wal/wal-0001.bin                         397168 bytes
+  node.log                                   3592 bytes
+
+## sha256 (WAL + node.log)
+  baa723d42719c4d8573418114dd37155e5214f32783bf4257209d46fed2de3bf  wal/wal-0000.bin
+  fddebbb1853237eca38fb44e12b9e5cbca82760fd3a1223c6883fdcd124a2c95  wal/wal-0001.bin
+  9a3ed79234da2c48947571d09070afd6b0136752a55cd32f3c735ffaccbf4be2  node.log
+
+## Its activation record (the CE-N2-4 proof), parsed
+  AdmitBlock entries: 3452 | activation records: 1 | trailing/torn bytes: 0
+  EpochConsensusViewActivated target_epoch=305 magic=1
+    nonce_commitment      = 74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62
+    => nonce_commitment == cardano-node epochNonce(305) 74f10bea..  CORRECT
