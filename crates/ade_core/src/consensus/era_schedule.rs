@@ -172,6 +172,173 @@ pub fn slot_at(
     Err(SlotDerivationError::EmptySchedule)
 }
 
+/// LIVE-2c: a 32-byte commitment to ONE full canonical timing schedule. Binds a
+/// [`DerivedTimingAnchor`] to the exact history it was projected from, so "derived" is a checkable
+/// fact rather than a claim in a comment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleCommitment(pub Hash32);
+
+/// LIVE-2c: the canonical TIMING commitment of a schedule — `system_start_unix_ms` plus, per segment,
+/// `(start_slot, slot_length_ms)`. Deliberately covers the timing fields ONLY: two schedules that
+/// differ solely in `era` / `start_epoch` / `epoch_length_slots` / `safe_zone_slots` / RSW commit
+/// IDENTICALLY, which is the same Conway-only scope boundary CE-L2c-12 enforces for `slot_at`.
+pub fn schedule_timing_commitment(schedule: &EraSchedule) -> ScheduleCommitment {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"ade.live2c.timing-schedule.v1");
+    buf.extend_from_slice(&schedule.system_start_unix_ms().to_be_bytes());
+    buf.extend_from_slice(&(schedule.eras().len() as u64).to_be_bytes());
+    for e in schedule.eras() {
+        buf.extend_from_slice(&e.start_slot.0.to_be_bytes());
+        buf.extend_from_slice(&u64::from(e.slot_length_ms).to_be_bytes());
+    }
+    ScheduleCommitment(ade_crypto::blake2b_256(&buf))
+}
+
+/// LIVE-2c: why a [`DerivedTimingAnchor`] could not be derived or used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimingAnchorError {
+    /// The requested domain start could not be converted against the full schedule.
+    DomainStartNotDerivable(SlotDerivationError),
+    /// A captured instant precedes the anchor's DECLARED domain. The anchor answers for its domain
+    /// and refuses outside it — it is a projection, not a replacement history.
+    BeforeDomainStart { captured_ms: u64, domain_start_ms: u64 },
+    /// The anchor's segments are empty or non-monotonic.
+    MalformedSegments,
+    /// Arithmetic overflow.
+    Overflow,
+}
+
+/// LIVE-2c — a COMPACT timing projection with lineage. **Not** a schedule, and deliberately not
+/// convertible into one.
+///
+/// The Mithril bootstrap gives Ade a snapshot-local view; a schedule beginning mid-chain cannot answer
+/// "what absolute slot is it now?", and `slot_at` refuses it (`ScheduleDoesNotCoverSystemStart`). That
+/// refusal is CONSTITUTIONAL, not an inconvenience — relaxing it would create a second slot authority.
+/// This type is the sanctioned alternative: a projection that carries its own lineage.
+///
+/// The type makes five facts explicit, so none of them rests on a convention:
+///
+/// | fact | how the type carries it |
+/// |---|---|
+/// | it is NOT full history | a distinct type; no `From<EraSchedule>`, no deref, no accessor returning one |
+/// | it has a DECLARED domain | `domain_start_ms` / `domain_start_slot`, and use before it is refused |
+/// | its first binding was DERIVED, not supplied | [`DerivedTimingAnchor::derive`] is the ONLY constructor and takes the full `EraSchedule` |
+/// | it is committed to ONE canonical schedule | `source_schedule_commitment` |
+/// | it cannot be used before its domain | `BeforeDomainStart` |
+///
+/// There is no operator-facing constructor by design: an operator-entered timestamp is exactly the
+/// second, disagreeing clock authority the ruling forbids.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DerivedTimingAnchor {
+    domain_start_ms: u64,
+    domain_start_slot: SlotNo,
+    /// `(start_slot, slot_length_ms, segment_start_ms)` for the domain-start segment and every later
+    /// one. `segment_start_ms` is the segment's TRUE start time, derived from the full history — NOT
+    /// the declared domain start.
+    ///
+    /// That distinction is load-bearing and cost a real bug: anchoring the arithmetic to
+    /// `domain_start_ms` (an arbitrary instant that may fall MID-SLOT) discards the sub-slot offset and
+    /// under-counts by one across a later transition. CE-L2c-13's dense sweep caught it. The declared
+    /// domain governs ADMISSIBILITY; the segment start governs ARITHMETIC. Timing only — never era
+    /// identity or epoch geometry.
+    segments: Vec<(SlotNo, u32, u64)>,
+    source_schedule_commitment: ScheduleCommitment,
+}
+
+impl DerivedTimingAnchor {
+    /// Derive the anchor for `domain_start_ms` from the COMPLETE schedule. The sole constructor.
+    pub fn derive(
+        schedule: &EraSchedule,
+        domain_start_ms: u64,
+    ) -> Result<Self, TimingAnchorError> {
+        let domain_start_slot =
+            slot_at(schedule, domain_start_ms).map_err(TimingAnchorError::DomainStartNotDerivable)?;
+        // Walk the FULL history once, computing each segment's true start time, then keep the
+        // domain-start segment and everything after it. Earlier history is dropped only after its
+        // timing contribution has been accounted for.
+        let mut all: Vec<(SlotNo, u32, u64)> = Vec::with_capacity(schedule.eras().len());
+        let mut seg_ms = schedule.system_start_unix_ms();
+        for (i, e) in schedule.eras().iter().enumerate() {
+            if e.slot_length_ms == 0 {
+                return Err(TimingAnchorError::MalformedSegments);
+            }
+            all.push((e.start_slot, e.slot_length_ms, seg_ms));
+            if let Some(next) = schedule.eras().get(i + 1) {
+                let span = next
+                    .start_slot
+                    .0
+                    .checked_sub(e.start_slot.0)
+                    .ok_or(TimingAnchorError::MalformedSegments)?;
+                seg_ms = seg_ms
+                    .checked_add(
+                        span.checked_mul(u64::from(e.slot_length_ms))
+                            .ok_or(TimingAnchorError::Overflow)?,
+                    )
+                    .ok_or(TimingAnchorError::Overflow)?;
+            }
+        }
+        let first_idx = all
+            .iter()
+            .rposition(|(start, _, _)| start.0 <= domain_start_slot.0)
+            .ok_or(TimingAnchorError::MalformedSegments)?;
+        let segments: Vec<(SlotNo, u32, u64)> = all[first_idx..].to_vec();
+        if segments.is_empty() {
+            return Err(TimingAnchorError::MalformedSegments);
+        }
+        Ok(Self {
+            domain_start_ms,
+            domain_start_slot,
+            segments,
+            source_schedule_commitment: schedule_timing_commitment(schedule),
+        })
+    }
+
+    pub fn domain_start_ms(&self) -> u64 {
+        self.domain_start_ms
+    }
+    pub fn domain_start_slot(&self) -> SlotNo {
+        self.domain_start_slot
+    }
+    pub fn source_schedule_commitment(&self) -> &ScheduleCommitment {
+        &self.source_schedule_commitment
+    }
+    /// Is this anchor a projection of THAT schedule? The lineage check a consumer runs before trusting it.
+    pub fn is_derived_from(&self, schedule: &EraSchedule) -> bool {
+        self.source_schedule_commitment == schedule_timing_commitment(schedule)
+    }
+
+    /// Convert a captured instant within the DECLARED domain. Must agree with the full schedule
+    /// everywhere in that domain (CE-L2c-13).
+    pub fn slot_at(&self, captured_ms: u64) -> Result<SlotNo, TimingAnchorError> {
+        if captured_ms < self.domain_start_ms {
+            return Err(TimingAnchorError::BeforeDomainStart {
+                captured_ms,
+                domain_start_ms: self.domain_start_ms,
+            });
+        }
+        // Each segment carries its own TRUE start time, so this is the identical arithmetic the full
+        // history performs — no accumulation from the (possibly mid-slot) domain start.
+        for (i, (seg_slot, slot_len, seg_ms)) in self.segments.iter().enumerate() {
+            let in_this = match self.segments.get(i + 1) {
+                None => true,
+                Some((_, _, next_ms)) => captured_ms < *next_ms,
+            };
+            if in_this {
+                let elapsed = captured_ms
+                    .checked_sub(*seg_ms)
+                    .ok_or(TimingAnchorError::Overflow)?;
+                return Ok(SlotNo(
+                    seg_slot
+                        .0
+                        .checked_add(elapsed / u64::from(*slot_len))
+                        .ok_or(TimingAnchorError::Overflow)?,
+                ));
+            }
+        }
+        Err(TimingAnchorError::MalformedSegments)
+    }
+}
+
 /// Pure result of `EraSchedule::locate(slot)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EraLocation {
@@ -909,6 +1076,157 @@ mod live2b_slot_authority_tests {
         assert!(matches!(
             slot_at(&mid, CAPTURED_MS),
             Err(SlotDerivationError::ScheduleDoesNotCoverSystemStart { first_era_start_slot: 130_118_400 })
+        ));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod live2c_derived_anchor_tests {
+    use super::*;
+    use ade_types::{CardanoEra, EpochNo};
+
+    const PREPROD_SYSTEM_START_MS: u64 = 1_654_041_600_000;
+    const CAPTURED_MS: u64 = 1_786_021_761_000;
+    const EXPECTED_SLOT: u64 = 130_338_561;
+    const TRANSITION_MS: u64 = PREPROD_SYSTEM_START_MS + 86_400 * 20_000;
+
+    fn era(start_slot: u64, start_epoch: u64, slot_len: u32, epoch_len: u32) -> EraSummary {
+        EraSummary {
+            era: CardanoEra::Conway,
+            start_slot: SlotNo(start_slot),
+            start_epoch: EpochNo(start_epoch),
+            slot_length_ms: slot_len,
+            epoch_length_slots: epoch_len,
+            safe_zone_slots: 1,
+            randomness_stabilisation_window_slots: None,
+        }
+    }
+    fn full() -> EraSchedule {
+        EraSchedule::new(
+            BootstrapAnchorHash(Hash32([0u8; 32])),
+            PREPROD_SYSTEM_START_MS,
+            vec![era(0, 0, 20_000, 21_600), era(86_400, 4, 1_000, 432_000)],
+        )
+        .unwrap()
+    }
+
+    /// CE-L2c-13 — the equivalence obligation, as a UNIVERSAL property over the declared domain
+    /// rather than a few interior samples.
+    ///
+    /// Domains chosen to span the awkward cases: one BEFORE the 20s→1s transition (so the anchor must
+    /// carry the transition itself), one exactly AT it, and one well after. For each, the anchor must
+    /// agree with the full history at its first admissible instant, at every transition edge and both
+    /// sides of it, at the preserved live fixture, and across a dense sweep.
+    #[test]
+    fn ce_l2c_13_compact_anchor_equals_full_history_over_its_domain() {
+        let f = full();
+        for domain_start_ms in [
+            PREPROD_SYSTEM_START_MS,          // whole history
+            PREPROD_SYSTEM_START_MS + 1,      // just inside byron
+            TRANSITION_MS - 20_000,           // last byron slot
+            TRANSITION_MS - 1,                // byron/shelley edge, low side
+            TRANSITION_MS,                    // exactly the transition
+            TRANSITION_MS + 1,                // edge, high side
+            TRANSITION_MS + 1_000,            // first shelley slot
+            1_700_000_000_000,                // arbitrary mid-domain
+            CAPTURED_MS,                      // the live fixture instant
+        ] {
+            let a = DerivedTimingAnchor::derive(&f, domain_start_ms)
+                .unwrap_or_else(|e| panic!("derive at {domain_start_ms} failed: {e:?}"));
+            assert!(a.is_derived_from(&f), "lineage must verify against its source");
+
+            // FIRST admissible instant, every transition edge, and the fixture.
+            let mut probes = vec![
+                domain_start_ms,
+                domain_start_ms + 1,
+                TRANSITION_MS - 1,
+                TRANSITION_MS,
+                TRANSITION_MS + 1,
+                CAPTURED_MS,
+                CAPTURED_MS + 86_400_000,
+            ];
+            // A dense sweep so agreement is not an artefact of the chosen edges.
+            let mut t = domain_start_ms;
+            for _ in 0..200 {
+                probes.push(t);
+                t += 997; // deliberately not a slot multiple
+            }
+            for t in probes {
+                if t < domain_start_ms {
+                    continue; // outside the declared domain: the anchor refuses, by design
+                }
+                assert_eq!(
+                    a.slot_at(t).unwrap(),
+                    slot_at(&f, t).unwrap(),
+                    "domain_start={domain_start_ms} instant={t}: compact anchor disagrees with the \
+                     full timing history INSIDE its declared domain"
+                );
+            }
+            // Non-vacuous: the shared answer at the fixture is the measured slot.
+            assert_eq!(a.slot_at(CAPTURED_MS).unwrap(), SlotNo(EXPECTED_SLOT));
+        }
+    }
+
+    /// The anchor is a projection, not a replacement history: outside its domain it REFUSES.
+    #[test]
+    fn anchor_refuses_before_its_declared_domain() {
+        let f = full();
+        let a = DerivedTimingAnchor::derive(&f, CAPTURED_MS).unwrap();
+        assert_eq!(a.domain_start_slot(), SlotNo(EXPECTED_SLOT));
+        assert!(matches!(
+            a.slot_at(CAPTURED_MS - 1),
+            Err(TimingAnchorError::BeforeDomainStart { .. })
+        ));
+        assert!(a.slot_at(CAPTURED_MS).is_ok());
+    }
+
+    /// Lineage is checkable, and the commitment is TIMING-ONLY: a schedule differing only in
+    /// non-timing fields commits identically (the CE-L2c-12 boundary, applied to the commitment).
+    #[test]
+    fn commitment_binds_timing_and_only_timing() {
+        let f = full();
+        // Same timing, absurd non-timing fields -> SAME commitment, so lineage still verifies.
+        let same_timing = EraSchedule::new(
+            BootstrapAnchorHash(Hash32([0xAB; 32])),
+            PREPROD_SYSTEM_START_MS,
+            vec![era(0, 9_999, 20_000, 7), era(86_400, 0, 1_000, 1)],
+        )
+        .unwrap();
+        assert_eq!(schedule_timing_commitment(&f), schedule_timing_commitment(&same_timing));
+        // Different TIMING -> different commitment, so a foreign anchor cannot pass as derived.
+        let other_timing = EraSchedule::new(
+            BootstrapAnchorHash(Hash32([0u8; 32])),
+            PREPROD_SYSTEM_START_MS,
+            vec![era(0, 0, 20_000, 21_600), era(86_400, 4, 2_000, 432_000)],
+        )
+        .unwrap();
+        assert_ne!(schedule_timing_commitment(&f), schedule_timing_commitment(&other_timing));
+        let a = DerivedTimingAnchor::derive(&f, CAPTURED_MS).unwrap();
+        assert!(a.is_derived_from(&f));
+        assert!(!a.is_derived_from(&other_timing), "a foreign schedule must not claim this anchor");
+    }
+
+    /// The constitutional guard is NOT relaxed: a truncated schedule is still refused by `slot_at`,
+    /// and the anchor is the sanctioned alternative rather than a way around it.
+    #[test]
+    fn truncated_schedule_still_refused_anchor_is_the_alternative() {
+        let truncated = EraSchedule::new(
+            BootstrapAnchorHash(Hash32([0u8; 32])),
+            PREPROD_SYSTEM_START_MS,
+            vec![era(130_118_400, 305, 1_000, 432_000)],
+        )
+        .unwrap();
+        assert!(matches!(
+            slot_at(&truncated, CAPTURED_MS),
+            Err(SlotDerivationError::ScheduleDoesNotCoverSystemStart { .. })
+        ));
+        // ...and an anchor cannot be derived from it either: derivation goes through `slot_at`.
+        assert!(matches!(
+            DerivedTimingAnchor::derive(&truncated, CAPTURED_MS),
+            Err(TimingAnchorError::DomainStartNotDerivable(
+                SlotDerivationError::ScheduleDoesNotCoverSystemStart { .. }
+            ))
         ));
     }
 }
