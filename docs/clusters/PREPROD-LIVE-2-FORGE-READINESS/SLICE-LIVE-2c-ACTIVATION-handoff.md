@@ -351,6 +351,18 @@ distinguishable by instrumenting the authoritative path rather than by argument:
 Run 6 already leans C (the post-reorg fold from the epoch start, ≈272,600 slots) but leans is not
 proves, and run 5 leaned the same way for a reason run 6 refuted. Measure before fixing.
 
+**Method: attribute elapsed time across A/B/C/D within ONE complete planner iteration.** This is a
+single time-attribution pass, not four experiments — instrument one iteration end to end and see
+where the 5–8 minutes actually goes. Four separate probes would let each hypothesis be confirmed in
+isolation on different iterations, which is how a favourite hypothesis survives.
+
+**The A/B trap: "same store" is a moving target.** The store drifts from the chain whenever it is
+not running (run 5 opened 54k slots behind for exactly this reason), and run 6 left it changed again
+— chain.db 8.59 → 10.47 GB, a reorg, and a ≈272,600-slot refold. So the two arms must run
+**back-to-back from the same starting state**; a baseline arm today and a new-binary arm next week
+compare two different stores and prove nothing. If the arms cannot be run back-to-back, snapshot the
+store first and restore it between them.
+
 ### Two SEPARATE obligations — do not merge them
 
 They look like one problem ("the producer misses its slot") and are not:
