@@ -335,6 +335,36 @@ Neither surface is caused by parts 1–3, and neither is fixed by them. Recorded
 around: changing a DC-NODE-15 operand, a sync-deferral bound, or the clock's tick-consumption model
 is consensus-adjacent and needs its own census.
 
+### The B6 entry point — a CENSUS first, not a scheduling fix
+
+The A/B is baseline binary + the same store, and it exists to answer ONE question before anyone
+touches scheduling: **what consumes the 5–8 minutes per iteration?** Four candidates, mutually
+distinguishable by instrumenting the authoritative path rather than by argument:
+
+| | hypothesis | what would confirm it |
+|---|---|---|
+| **A** | one `SyncOnce` operation itself takes minutes | time inside a single `run_node_sync` call |
+| **B** | the loop processes an unbounded / batched amount of sync work per pass | blocks admitted per pass grows with backlog |
+| **C** | a downstream recovery / refold path dominates the iteration | time inside `advance_ledger_state_to_durable_tip` / the co-advancer |
+| **D** | another liveness gate prevents the planner from returning | the planner is reached late, not slowly |
+
+Run 6 already leans C (the post-reorg fold from the epoch start, ≈272,600 slots) but leans is not
+proves, and run 5 leaned the same way for a reason run 6 refuted. Measure before fixing.
+
+### Two SEPARATE obligations — do not merge them
+
+They look like one problem ("the producer misses its slot") and are not:
+
+1. **B6 bounded deferral** — due forging work may not be postponed indefinitely by sync. A liveness
+   bound. Non-consensus.
+2. **Clock catch-up semantics** — after a long deferral the producer must not replay obsolete slot
+   boundaries one at a time. **Consensus-sensitive.** "Jump to the current slot" sounds like a
+   performance fix and is not: it changes *which slot is evaluated for leadership*, and therefore
+   which slot a producer may sign. It needs its own proof obligation, not a patch under B6.
+
+Fixing (1) does not fix (2): a loop restored to ~1 iteration/s keeps up by construction, but any
+future stall re-opens the same lag. Fixing (2) without (1) leaves the starvation in place.
+
 ## Live closure path — stated honestly, because M2 changes it
 
 Parts 1–3 are necessary and mechanically provable on their own. They are **not sufficient** for
