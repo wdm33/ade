@@ -1,0 +1,15 @@
+# LIVE-2c ACTIVATION -- live preprod evidence, run 5 (2026-08-07T03:22Z)
+# Store ~/.cardano-live1/ade-preprod-s7 (v3), peer docker cardano-node-preprod 127.0.0.1:3001.
+# Binary: target/release/ade at 747b01ae (parts 1-3 landed).
+
+## The timing authority ESTABLISHED live, from the store's own durable facts
+live2c-timing-authority: source=durable-genesis-hash venue=preprod store_genesis=Hash32(162d29c4e1cf6b8a84f2d692e67a3ac6bc7851bc3e6e4afe64d15778bed8bd86) cli_network=preprod bootstrap_epoch=EpochNo(304) durable_epoch_start_slot=129686400 anchor_slot=129813427 domain_start_ms=1785496627000 cadence_ms=1000 commitment=ScheduleCommitment(Hash32(30fe202dcfbb1306af4cdd6ef5188e8ad5a912a7c0eacf5924969b38d25b45b5)) genesis_cross_check=agreed
+
+## The KES material bound to the recorded identity (E3 carry)
+ade_node: cardano-cli kes.skey loaded; KES VK fingerprint = fd2f1de3b35c8ea7cb26b630455d0e7361a35e2b9174906de3c87fad87c07d59 — verify this matches your opcert before block production.
+
+## Recovery restored a REAL anchor (E2 carry) -- forward_fold, never anchor_absent
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130335093/5023632/19316978 durable_tip=130335093/5023632/19316978 rollback_target=none anchor_after=130335093/5023632/19316978
+
+## THE MEASUREMENT: the derived slot now tracks the chain
+live2b-tick-probe: non_authoritative=true forge_active=true logical_slot=Some(130389872)                  last_forged_slot=None forge_slot_status=Due sync_status=WorkAvailable loop_state=Continuing                  loop_step=SyncOnce

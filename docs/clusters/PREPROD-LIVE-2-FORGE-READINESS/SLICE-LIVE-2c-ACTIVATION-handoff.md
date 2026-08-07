@@ -237,6 +237,59 @@ node path stays old · known-pool evaluation replaced by `UnknownPool` · **drop
 the committed history** (must fail A2) · **let `--network` select the timing history** (must fail A1)
 · **remove the per-tick refusal reset** (must fail A5).
 
+## LIVE RESULT — run 5 / run 6, preprod, 2026-08-07
+
+Store `~/.cardano-live1/ade-preprod-s7` (v3, unchanged — no semantics bump), peer docker
+`cardano-node-preprod`, binary at `747b01ae`. Raw evidence:
+`docs/evidence/run-stores/preprod-live2c/`.
+
+**The timing authority establishes live, from the store's own facts.**
+
+```
+live2c-timing-authority: source=durable-genesis-hash venue=preprod
+  store_genesis=162d29c4…bed8bd86   cli_network=preprod   genesis_cross_check=agreed
+  bootstrap_epoch=304  durable_epoch_start_slot=129686400  anchor_slot=129813427
+  domain_start_ms=1785496627000  cadence_ms=1000
+  commitment=30fe202dcfbb1306af4cdd6ef5188e8ad5a912a7c0eacf5924969b38d25b45b5
+```
+
+Three things are worth reading off that line rather than assuming:
+
+- `source=durable-genesis-hash` — the STORE selected the calendar. Both cross-checks (`--network`,
+  the operator's real `shelley-genesis.json`) agreed rather than supplied anything.
+- `durable_epoch_start_slot=129686400` — the committed calendar reproduced the store's own recorded
+  epoch-304 start. A Byron-blind calendar yields 131_328_000 and refuses.
+- The `commitment` is **byte-identical to the hermetic unit test's**, and identical again across two
+  separate process starts (runs 5 and 6). That is CE-L2c-A3's reconstruction determinism, proven on
+  the live venue and not only in a fixture.
+
+**The 19-day defect is closed live.** The node's own tick probe, against the peer read seconds later:
+
+| quantity | run 4 (before) | run 5 (after) |
+|---|---|---|
+| Ade `logical_slot` | 131,976,696 | **130,389,872** |
+| peer tip at the same moment | 130,335,017 | 130,389,946 |
+| **gap** | **+1,641,679** (≈19 days) | **−74** (seconds of read lag) |
+
+E1/E2/E3 carried through: warm start under v3, `recovery_admit action=forward_fold
+reason=forward_fold_no_reset` (a real anchor, never `anchor_absent`), KES VK fingerprint
+`fd2f1de3…` matching the recorded identity, and `AT PEER TIP` sustained.
+
+**CE-L2c-7/8/9 did NOT close, for reasons outside this slice's three parts.** Two distinct liveness
+surfaces, both out of scope, and the second one was not visible before this run:
+
+- **B12** (measured in run 4, §M2): the DC-NODE-15 gate is structurally unsatisfiable at the tip.
+  Leadership is evaluated downstream of it.
+- **B6, persistent under a catch-up backlog** (new, run 5): with the store 54k slots behind at start,
+  each loop iteration took ~60 s (dominated by the post-catch-up
+  `advance_ledger_state_to_durable_tip` reconciliation — the reduced checkpoint grew 1.08 GB →
+  2.16 GB). Blocks arrive faster than that, so `SyncStatus::WorkAvailable` preempted **every**
+  iteration and no `ForgeTick` was ever planned: 4 probes, 4 × `SyncOnce`. Run 4 saw B6 at 8/363
+  because it started at tip. So B6 is not merely transient — its severity is a function of how far
+  behind the store is, which the earlier sample could not show.
+
+Neither is caused by parts 1–3, and neither is fixed by them. Recorded rather than worked around.
+
 ## Live closure path — stated honestly, because M2 changes it
 
 Parts 1–3 are necessary and mechanically provable on their own. They are **not sufficient** for
