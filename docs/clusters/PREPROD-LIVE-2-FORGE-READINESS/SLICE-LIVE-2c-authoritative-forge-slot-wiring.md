@@ -163,17 +163,43 @@ enum ForgeRefused {
 
 | CE | Criterion | status |
 |---|---|---|
-| **CE-L2c-1** | `--mode node` calls the shared `EraSchedule::slot_at` | open |
-| **CE-L2c-2** | The naive `system_start + single slot length` conversion is UNREACHABLE from forging | open |
-| **CE-L2c-3** | Native-Mithril warm start supplies a schedule covering system start | open |
-| **CE-L2c-4** | A truncated snapshot-only schedule returns `ScheduleDoesNotCoverSystemStart` | open |
-| **CE-L2c-5** | The preserved preprod instant produces slot **130,338,561** through the ACTUAL node wiring | open |
-| **CE-L2c-6** | B11 returns a typed `ForgeRefused`, never a skip | open |
-| **CE-L2c-7** | The configured pool reaches `classify_leader_schedule` | open |
-| **CE-L2c-8** | The branch marker proves the KNOWN operator pool was evaluated | open |
-| **CE-L2c-9** | The live run emits a decided `ForgeOutcome` | open |
-| **CE-L2c-10** | Replaying instant + schedule + anchor + authority inputs reproduces the same slot and outcome | open |
-| **CE-L2c-11** | Negative-tested (seven mutations below) | open |
+| **CE-L2c-1** | `--mode node` calls the shared `EraSchedule::slot_at` | **MET** (`747b01ae`) — via `BootstrapBoundTimingAuthority::slot_at`, which projects the same accumulated geometry; ONE call site, gate-counted by occurrence |
+| **CE-L2c-2** | The naive `system_start + single slot length` conversion is UNREACHABLE from forging | **MET** (`747b01ae`) — `checked_millis_to_slot` + `SlotAlignmentError` DELETED; `millis_to_slot` survives only on a test-reachable orchestrator path, gate-pinned |
+| **CE-L2c-3** | Native-Mithril warm start supplies a schedule covering system start | **MET** (`8dd36d1c`) — reconstructed from the committed venue calendar selected by the DURABLE genesis hash, bound to the store's epoch geometry; timing facts only, no Byron ledger semantics |
+| **CE-L2c-4** | A truncated snapshot-only schedule returns `ScheduleDoesNotCoverSystemStart` | **MET** — `refusals_are_structured` + `a_truncated_calendar_cannot_establish_a_timing_authority`; the guard is pinned on BOTH conversion directions (`slot_at` and `slot_start_time_ms`) |
+| **CE-L2c-5** | The preserved preprod instant produces slot **130,338,561** through the ACTUAL node wiring | **MET** (`747b01ae`) — `ce_l2c_5_and_6_live_instant_derives_the_measured_slot_and_refuses_typed` drives the real loop and reads the slot back out of the typed refusal, so it is proven to REACH the KES gate, not merely be computed |
+| **CE-L2c-6** | B11 returns a typed `ForgeRefused`, never a skip | **MET** (`747b01ae`) — `ForgeRefused::KesWindow` + three distinct emitted reasons + `ForgeOutcome::Refused` |
+| **CE-L2c-7** | The configured pool reaches `classify_leader_schedule` | **open — blocked on B12**, not on this slice's parts |
+| **CE-L2c-8** | The branch marker proves the KNOWN operator pool was evaluated | **open — blocked on B12** |
+| **CE-L2c-9** | The live run emits a decided `ForgeOutcome` | **open — blocked on B12** |
+| **CE-L2c-10** | Replaying instant + schedule + anchor + authority inputs reproduces the same slot and outcome | **MET** (`8dd36d1c`) — `ce_l2c_a3_reconstruction_is_byte_identical_and_replayable`, `reconstruction_is_byte_identical_across_restarts` |
+| **CE-L2c-11** | Negative-tested (seven mutations below) | **MET** — nine mutations run, all caught; the gate itself negative-tested 11 ways (which found two real weaknesses in it) |
+
+### CE-L2c-A1..A5 — the activation criteria
+
+| CE | Criterion | status |
+|---|---|---|
+| **CE-L2c-A1** | The calendar is reconstructed only from bootstrap-verified inputs and is selected by the DURABLE genesis hash; no CLI value can override it | **MET** — `the_operator_cannot_choose_the_calendar` (a `--network` naming another venue is terminal; an absent one is simply no cross-check) |
+| **CE-L2c-A2** | The reconstruction reproduces the durable bootstrap facts or refuses | **MET** — preprod 304 ⇒ 129_686_400; Byron-dropped ⇒ 131_328_000 ⇒ refusal |
+| **CE-L2c-A3** | Byte-identical anchor across reconstructions; warm start verifies lineage before forging | **MET** — plus a forge-ON start with no sidecar FAILS CLOSED |
+| **CE-L2c-A4** | An altered timing schedule is rejected | **MET** — both a changed slot length (commitment moves, answer moves) and a shifted system start |
+| **CE-L2c-A5** | An admitted tick never reports a reason that is not its own | **MET** — `ce_l2c_a5_a_refusal_never_outlives_its_own_tick` |
+
+**Recorded limit** (a test, not an assumption): the durable binding pins segment BOUNDARIES, not slot
+DURATIONS. A calendar with correct boundaries but a wrong historical slot length reproduces the
+store's epoch geometry exactly and still mis-converts by the full 1_641_600 slots. Durations are held
+by the committed genesis-hash-selected table plus a fail-closed cross-check of the ACTIVE segment
+against the operator's real `shelley-genesis.json` — the same standing `security_param` /
+`active_slots_coeff` / `epoch_length` already have in the profile registry.
+
+### Why CE-L2c-7/8/9 are blocked on something this slice did not cause
+
+Decomposing run 4's own artifacts (see `SLICE-LIVE-2c-ACTIVATION-handoff.md` §M2) found a **seventh**
+exit, **B12**: the DC-NODE-15 catch-up gate refused all 354 admitted ticks with
+`local_tip_block_no − peer_tip_block_no == +1` in 354/354 samples, because the peer-advertised tip
+lags Ade's durable tip by exactly the block just delivered. Leadership is evaluated *downstream* of
+that gate, so a correct slot cannot reach it until B12 is resolved. B12 is deliberately not fixed
+here — changing a DC-NODE-15 operand or predicate is consensus-adjacent and needs its own census.
 | **CE-L2c-12** | **Scope guard**: holding timing fields constant, arbitrary changes to `era`, `start_epoch`, `epoch_length_slots`, `safe_zone_slots` and the RSW must NOT change `slot_at` for any captured instant | **MET** — `non_timing_fields_cannot_influence_slot_derivation`, negative-tested three ways (leak `epoch_length_slots`; branch on era identity; leak `safe_zone_slots`) |
 | **CE-L2c-13** | **Compact-anchor equivalence**: `full_timing_history.slot_at(t) == compact_anchor.slot_at(t)` for EVERY instant in the compact anchor's declared domain, including its FIRST instant and every transition edge | **MET** — `ce_l2c_13_compact_anchor_equals_full_history_over_its_domain` (`352dfb95`): nine domain starts spanning the transition, each probed at its first admissible instant, every edge and both sides, the live fixture, and a 200-point 997ms sweep; four mutations caught |
 

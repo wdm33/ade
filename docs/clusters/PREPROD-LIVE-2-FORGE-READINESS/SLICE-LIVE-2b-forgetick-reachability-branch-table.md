@@ -1,5 +1,43 @@
 # SLICE LIVE-2b — ForgeTick reachability and suppression accounting
 
+> ## ⚠ CORRECTED 2026-08-06 by LIVE-2c, from this slice's OWN run-4 artifacts
+>
+> Two conclusions below were reached by reading code, and decomposing `wire_smoke.jsonl` +
+> `live2-run4.log` overturned both. **No new run was needed** — the evidence was already on disk. The
+> original text is left intact underneath, because the way it went wrong is the useful part.
+>
+> **B11 did NOT fire, and the wrong slot was never caught by the KES window.** This slice concluded
+> that `kes_period_for_slot` returned `None` because *"a slot that far out is comfortably outside any
+> KES validity window"*, and that *"the only thing preventing [a 19-day-ahead forge] today is an
+> accident of the KES range check."* That accident does not exist on this venue. The operator op-cert
+> starts at KES period **970**; with `slotsPerKESPeriod = 129_600` and `maxKESEvolutions = 62`, the
+> naive slot 131_976_696 is absolute period 1018 → **evolution 48**, inside `[0, 62]`. So
+> `kes_period_for_slot` returned `Some(48)` and the wrong slot sailed through. Corroborated
+> end-to-end: all 354 `forge_result` records carry `skip_reason = "tip_mismatch"`, only written
+> *inside* the `Some(kes_period)` branch — and the **first** record already carries it, while
+> `last_forge_refused` starts `None`, so it cannot be a stale sticky value. Pinned as
+> `the_naive_19_day_ahead_slot_was_never_refused_by_the_kes_window`.
+>
+> The consequence is the opposite of what this slice recorded: nothing downstream refused the wrong
+> slot, so the correct slot derivation was the load-bearing fix and B11's typed refusal is defence in
+> depth. Both shipped in LIVE-2c (`DC-NODE-45`, `DC-NODE-46`).
+>
+> **The measured suppressor is a SEVENTH exit — B12 — not one of B1–B11.** All 354 admitted ticks
+> were refused by the DC-NODE-15 catch-up gate, with `local_tip_block_no − peer_tip_block_no == +1`
+> in **354/354** samples, on blocks Ade had fetched *from that same peer*. The followed-peer-tip
+> signal is written only from a chain-sync message's `tip` field, and the message delivering block
+> `N+1` advertises tip `N`; at the chain tip no further message arrives until the next block, so the
+> signal stays one block behind for the whole inter-block interval.
+> `durable_servable_tip == followed_peer_tip` is therefore **structurally unsatisfiable while
+> following a real cardano-node at the tip**. See
+> `SLICE-LIVE-2c-ACTIVATION-handoff.md` §M2 — B12 is deliberately unfixed there (changing a
+> DC-NODE-15 operand is consensus-adjacent and needs its own census).
+>
+> **Method note, since this slice exists to enforce it.** The branch table was built by reading, and
+> said so honestly. The failure was not the reading — it was treating a *plausible* mechanism
+> (`None` from an out-of-range KES check) as the measured one, when the run's own JSONL named a
+> different branch. The discriminator that settled it cost four minutes and no node time.
+
 > **OPEN — DISCRIMINATOR RUN COMPLETE 2026-08-06.** The branch table below was read from code; the
 > emit-only probe then ran unchanged and **named the branch**. Two findings, neither of which was the
 > leading hypothesis. No fix is written. Blocks E4 and therefore LIVE-2.
