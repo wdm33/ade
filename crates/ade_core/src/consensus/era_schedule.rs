@@ -331,6 +331,13 @@ impl DerivedTimingAnchor {
     pub fn domain_start_slot(&self) -> SlotNo {
         self.domain_start_slot
     }
+    /// The slot length of the segment the DECLARED DOMAIN starts in — the venue's active slot
+    /// cadence. Pacing only (`SystemClock`'s tick interval); never a conversion input.
+    pub fn domain_slot_length_ms(&self) -> u32 {
+        // `derive` keeps the domain-start segment first and refuses an empty segment list, so this
+        // cannot be absent; the fallback keeps the accessor total without a panic path.
+        self.segments.first().map(|(_, l, _)| *l).unwrap_or(1)
+    }
     pub fn source_schedule_commitment(&self) -> &ScheduleCommitment {
         &self.source_schedule_commitment
     }
@@ -368,6 +375,272 @@ impl DerivedTimingAnchor {
             }
         }
         Err(TimingAnchorError::MalformedSegments)
+    }
+}
+
+/// LIVE-2c — ONE timing segment of a venue's absolute slot calendar.
+///
+/// Timing and CALENDAR geometry only. There is deliberately no `era: CardanoEra` field: era identity
+/// is ledger semantics, Ade executes Conway only, and CE-L2c-12 proves `slot_at` cannot read it. Not
+/// carrying it is the difference between "we intend not to branch on the era" and "there is nothing
+/// to branch on".
+///
+/// `epoch_length_slots` is carried for exactly ONE purpose — reconstructing an epoch's absolute start
+/// slot so the committed calendar can be checked against the durable bootstrap facts
+/// ([`BootstrapTimingBinding`]). `slot_at` never reads it; CE-L2c-12 keeps that mechanical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VenueTimingSegment {
+    pub start_slot: SlotNo,
+    pub start_epoch: EpochNo,
+    pub slot_length_ms: u32,
+    pub epoch_length_slots: u32,
+}
+
+/// LIVE-2c — a venue's COMPLETE wall-clock→absolute-slot calendar, from system start.
+///
+/// Complete is load-bearing: the first segment must begin at slot 0, because that is what lets every
+/// later segment be anchored by accumulation from `system_start_unix_ms`. A snapshot-local schedule
+/// cannot answer "what absolute slot is it now?" and `slot_at` refuses it
+/// (`ScheduleDoesNotCoverSystemStart`) — that refusal is constitutional and this type satisfies it
+/// rather than routing around it.
+///
+/// Preprod needs two segments (20 s Byron slots, then 1 s); preview needs one (its Shelley hard fork
+/// is at epoch 0, so its Byron segment has ZERO slots). Both take the identical code path — the
+/// geometry is data, never a venue branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VenueTimingHistory {
+    pub system_start_unix_ms: u64,
+    pub segments: Vec<VenueTimingSegment>,
+}
+
+impl VenueTimingHistory {
+    /// Project the calendar onto the timing [`EraSchedule`] `slot_at` consumes.
+    ///
+    /// Every segment is labelled `CardanoEra::Conway` — not because the Byron segment is Conway, but
+    /// because `EraSummary` structurally requires the field and CE-L2c-12 proves no timing answer can
+    /// depend on it. A uniform value makes an era-identity branch impossible to introduce THROUGH
+    /// this constructor, which is stronger than supplying a truthful label nobody may read.
+    pub fn to_schedule(&self) -> Result<EraSchedule, HFCError> {
+        EraSchedule::new(
+            BootstrapAnchorHash(Hash32([0u8; 32])),
+            self.system_start_unix_ms,
+            self.segments
+                .iter()
+                .map(|s| EraSummary {
+                    era: CardanoEra::Conway,
+                    start_slot: s.start_slot,
+                    start_epoch: s.start_epoch,
+                    slot_length_ms: s.slot_length_ms,
+                    epoch_length_slots: s.epoch_length_slots,
+                    safe_zone_slots: s.epoch_length_slots,
+                    randomness_stabilisation_window_slots: None,
+                })
+                .collect(),
+        )
+    }
+
+    /// The absolute start slot and epoch length of `epoch`, from the calendar alone.
+    ///
+    /// The check this exists for: preprod epoch 304 must land on 129_686_400
+    /// (`86_400 + (304 − 4) × 432_000`). Drop the Byron segment and the same expression yields
+    /// 129_600_000 — off by exactly the `86_400 × 19 s` the LIVE-2b defect is made of. That is what
+    /// turns a committed constant table into a fact the store can refute.
+    pub fn epoch_geometry(&self, epoch: EpochNo) -> Option<(SlotNo, u32)> {
+        let seg = self
+            .segments
+            .iter()
+            .rev()
+            .find(|s| s.start_epoch.0 <= epoch.0)?;
+        let offset = epoch.0.checked_sub(seg.start_epoch.0)?;
+        let start = seg
+            .start_slot
+            .0
+            .checked_add(offset.checked_mul(u64::from(seg.epoch_length_slots))?)?;
+        Some((SlotNo(start), seg.epoch_length_slots))
+    }
+}
+
+/// LIVE-2c — the DURABLE bootstrap facts a reconstructed calendar must reproduce before it may be
+/// trusted as the forge's slot authority.
+///
+/// Every field is read from the store's own seed-epoch sidecar, written at import and never
+/// re-supplied by a restart CLI. That is what makes the timing authority *bootstrap-bound* rather
+/// than *configured*: a committed constant table proposes the calendar, and the store disposes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BootstrapTimingBinding {
+    /// The certified bootstrap point's slot — the anchor's DECLARED domain start. A bootstrap FACT,
+    /// never `now` (CE-L2c-14).
+    pub anchor_slot: SlotNo,
+    pub epoch: EpochNo,
+    pub epoch_start_slot: SlotNo,
+    pub epoch_length_slots: u32,
+}
+
+/// LIVE-2c — why a timing authority could not be established. Closed and structured: an authority
+/// that cannot be bound to the store must refuse, never fall back to a plausible calendar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TimingAuthorityError {
+    /// The calendar is not a well-formed schedule (empty, non-monotonic, zero geometry).
+    MalformedHistory(HFCError),
+    /// A segment transition is not epoch-aligned with the PREVIOUS segment's own epoch length, so the
+    /// table disagrees with itself about where its eras meet.
+    NonAlignedSegmentTransition {
+        segment_index: u8,
+        declared_start_slot: u64,
+        implied_start_slot: u64,
+    },
+    /// The calendar does not reach the durable bootstrap epoch.
+    EpochNotCovered { epoch: u64 },
+    /// The reconstructed epoch start disagrees with the durable one — THE check that catches a
+    /// dropped or mis-sized historical timing segment.
+    EpochStartSlotMismatch {
+        epoch: u64,
+        durable: u64,
+        reconstructed: u64,
+    },
+    EpochLengthMismatch {
+        epoch: u64,
+        durable: u32,
+        reconstructed: u32,
+    },
+    /// The bootstrap anchor slot does not lie inside the durable bootstrap epoch, so the two facts
+    /// are not from the same store.
+    AnchorSlotOutsideBootstrapEpoch {
+        anchor_slot: u64,
+        epoch_start_slot: u64,
+        epoch_end_slot: u64,
+    },
+    Anchor(TimingAnchorError),
+    /// The derived anchor does not verify against the calendar it claims to project.
+    LineageMismatch,
+}
+
+/// LIVE-2c — THE forge's wall-clock→slot authority: a [`DerivedTimingAnchor`] that has been bound to
+/// the store's own bootstrap facts.
+///
+/// The type exists so "bootstrap-bound" is a state you can only reach through
+/// [`Self::establish`], never a claim in a comment. There is no other constructor, no field is
+/// public, and the only way in carries a [`BootstrapTimingBinding`] read from durable state.
+///
+/// ```text
+/// same bootstrap lineage + same timing calendar  =>  byte-identical authority
+/// ```
+///
+/// Warm start reconstructs rather than reloads: nothing here is persisted, so nothing can drift out
+/// of agreement with the store it was checked against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapBoundTimingAuthority {
+    anchor: DerivedTimingAnchor,
+    binding: BootstrapTimingBinding,
+    slot_cadence_ms: u32,
+}
+
+impl BootstrapBoundTimingAuthority {
+    /// Reconstruct the calendar, check it against the durable bootstrap facts, and derive the anchor.
+    /// Pure, total, deterministic — no clock, no filesystem, no peer.
+    pub fn establish(
+        history: &VenueTimingHistory,
+        binding: BootstrapTimingBinding,
+    ) -> Result<Self, TimingAuthorityError> {
+        // Self-consistency FIRST: a table whose segment transition disagrees with its own epoch
+        // length would still reproduce some epoch starts by luck, so check the structure before
+        // trusting any value it yields.
+        for (i, pair) in history.segments.windows(2).enumerate() {
+            let (prev, next) = (&pair[0], &pair[1]);
+            let epochs = next
+                .start_epoch
+                .0
+                .checked_sub(prev.start_epoch.0)
+                .ok_or(TimingAuthorityError::NonAlignedSegmentTransition {
+                    segment_index: (i + 1) as u8,
+                    declared_start_slot: next.start_slot.0,
+                    implied_start_slot: prev.start_slot.0,
+                })?;
+            let implied = prev
+                .start_slot
+                .0
+                .checked_add(epochs.saturating_mul(u64::from(prev.epoch_length_slots)))
+                .unwrap_or(u64::MAX);
+            if implied != next.start_slot.0 {
+                return Err(TimingAuthorityError::NonAlignedSegmentTransition {
+                    segment_index: (i + 1) as u8,
+                    declared_start_slot: next.start_slot.0,
+                    implied_start_slot: implied,
+                });
+            }
+        }
+        let schedule = history
+            .to_schedule()
+            .map_err(TimingAuthorityError::MalformedHistory)?;
+
+        let (reconstructed_start, reconstructed_len) = history
+            .epoch_geometry(binding.epoch)
+            .ok_or(TimingAuthorityError::EpochNotCovered {
+                epoch: binding.epoch.0,
+            })?;
+        if reconstructed_start != binding.epoch_start_slot {
+            return Err(TimingAuthorityError::EpochStartSlotMismatch {
+                epoch: binding.epoch.0,
+                durable: binding.epoch_start_slot.0,
+                reconstructed: reconstructed_start.0,
+            });
+        }
+        if reconstructed_len != binding.epoch_length_slots {
+            return Err(TimingAuthorityError::EpochLengthMismatch {
+                epoch: binding.epoch.0,
+                durable: binding.epoch_length_slots,
+                reconstructed: reconstructed_len,
+            });
+        }
+        let epoch_end = binding
+            .epoch_start_slot
+            .0
+            .saturating_add(u64::from(binding.epoch_length_slots));
+        if binding.anchor_slot.0 < binding.epoch_start_slot.0 || binding.anchor_slot.0 >= epoch_end {
+            return Err(TimingAuthorityError::AnchorSlotOutsideBootstrapEpoch {
+                anchor_slot: binding.anchor_slot.0,
+                epoch_start_slot: binding.epoch_start_slot.0,
+                epoch_end_slot: epoch_end,
+            });
+        }
+
+        let anchor = DerivedTimingAnchor::derive_for_bootstrap_anchor(&schedule, binding.anchor_slot)
+            .map_err(TimingAuthorityError::Anchor)?;
+        // Lineage: the anchor must be a projection of THIS calendar. Cheap here, and it is the
+        // property a later refactor would silently break.
+        if !anchor.is_derived_from(&schedule) {
+            return Err(TimingAuthorityError::LineageMismatch);
+        }
+        let slot_cadence_ms = anchor.domain_slot_length_ms();
+        Ok(Self {
+            anchor,
+            binding,
+            slot_cadence_ms,
+        })
+    }
+
+    /// THE conversion the forge path calls. Refuses outside the anchor's declared domain rather than
+    /// returning a plausible number.
+    pub fn slot_at(&self, captured_ms: u64) -> Result<SlotNo, TimingAnchorError> {
+        self.anchor.slot_at(captured_ms)
+    }
+
+    /// The active segment's slot length. RED PACING ONLY — when to wake up, never what slot it is.
+    /// Exposed from here so the tick cadence and the slot conversion cannot come from two numbers.
+    pub fn slot_cadence_ms(&self) -> u32 {
+        self.slot_cadence_ms
+    }
+
+    pub fn anchor(&self) -> &DerivedTimingAnchor {
+        &self.anchor
+    }
+
+    pub fn binding(&self) -> &BootstrapTimingBinding {
+        &self.binding
+    }
+
+    pub fn source_schedule_commitment(&self) -> &ScheduleCommitment {
+        self.anchor.source_schedule_commitment()
     }
 }
 
@@ -1339,6 +1612,291 @@ mod live2c_derived_anchor_tests {
         let a = DerivedTimingAnchor::derive(&f, CAPTURED_MS).unwrap();
         assert!(a.is_derived_from(&f));
         assert!(!a.is_derived_from(&other_timing), "a foreign schedule must not claim this anchor");
+    }
+
+    // ================================================================================
+    // LIVE-2c ACTIVATION part 1 — the bootstrap-bound timing authority.
+    //
+    // Every constant below is a VENUE fact taken from that venue's own genesis, not folklore:
+    //   preprod byron-genesis  startTime=1654041600  slotDuration=20000  protocolConsts.k=2160
+    //                          => 21_600-slot byron epochs, shelley hard fork at epoch 4
+    //   preprod shelley-genesis systemStart=2022-06-01T00:00:00Z (the IDENTICAL instant)
+    //   preview config          TestShelleyHardForkAtEpoch=0 => ZERO byron slots
+    // and the durable store pins them: ade-preprod-s7's sidecar records epoch 304 starting at
+    // absolute slot 129_686_400 with the seed point at 129_813_427.
+    // ================================================================================
+
+    /// The committed preprod calendar. Two segments; the transition is epoch-aligned by construction.
+    fn preprod_history() -> VenueTimingHistory {
+        VenueTimingHistory {
+            system_start_unix_ms: PREPROD_SYSTEM_START_MS,
+            segments: vec![
+                VenueTimingSegment {
+                    start_slot: SlotNo(0),
+                    start_epoch: EpochNo(0),
+                    slot_length_ms: 20_000,
+                    epoch_length_slots: 21_600,
+                },
+                VenueTimingSegment {
+                    start_slot: SlotNo(86_400),
+                    start_epoch: EpochNo(4),
+                    slot_length_ms: 1_000,
+                    epoch_length_slots: 432_000,
+                },
+            ],
+        }
+    }
+
+    /// The DURABLE facts from `~/.cardano-live1/ade-preprod-s7`'s seed-epoch sidecar.
+    const S7_SEED_EPOCH: u64 = 304;
+    const S7_EPOCH_START_SLOT: u64 = 129_686_400;
+    const S7_SEED_POINT_SLOT: u64 = 129_813_427;
+
+    fn s7_binding() -> BootstrapTimingBinding {
+        BootstrapTimingBinding {
+            anchor_slot: SlotNo(S7_SEED_POINT_SLOT),
+            epoch: EpochNo(S7_SEED_EPOCH),
+            epoch_start_slot: SlotNo(S7_EPOCH_START_SLOT),
+            epoch_length_slots: 432_000,
+        }
+    }
+
+    /// CE-L2c-A2 + CE-L2c-5: the committed calendar reproduces the store's own epoch geometry, and
+    /// the authority it establishes converts the PRESERVED live instant to the measured slot.
+    ///
+    /// Non-vacuous in both directions: the calendar is checked against a fact it did not supply
+    /// (129_686_400 comes from the store), and the conversion is checked against a fact measured
+    /// live (130_338_561, corroborated at diagnosis time by a peer two slots back).
+    #[test]
+    fn ce_l2c_a2_committed_calendar_reproduces_the_durable_epoch_and_the_measured_slot() {
+        let h = preprod_history();
+        assert_eq!(
+            h.epoch_geometry(EpochNo(S7_SEED_EPOCH)),
+            Some((SlotNo(S7_EPOCH_START_SLOT), 432_000)),
+            "86_400 + (304 - 4) * 432_000 must be the store's recorded epoch-304 start"
+        );
+        let auth = BootstrapBoundTimingAuthority::establish(&h, s7_binding())
+            .unwrap_or_else(|e| panic!("the live venue's own facts must establish: {e:?}"));
+        assert_eq!(auth.slot_at(CAPTURED_MS).unwrap(), SlotNo(EXPECTED_SLOT));
+        assert_eq!(auth.slot_cadence_ms(), 1_000, "preprod's ACTIVE segment is 1s");
+        assert_eq!(auth.binding().anchor_slot, SlotNo(S7_SEED_POINT_SLOT));
+    }
+
+    /// THE mutation: drop the historical timing segment ("Ade is Conway-only, why carry Byron at
+    /// all?"). The calendar no longer reproduces the store's epoch start, so it is REFUSED instead of
+    /// yielding a plausible number.
+    #[test]
+    fn dropping_the_historical_timing_segment_is_refused_by_the_durable_binding() {
+        let naive = VenueTimingHistory {
+            system_start_unix_ms: PREPROD_SYSTEM_START_MS,
+            segments: vec![VenueTimingSegment {
+                start_slot: SlotNo(0),
+                start_epoch: EpochNo(0),
+                slot_length_ms: 1_000,
+                epoch_length_slots: 432_000,
+            }],
+        };
+        assert_eq!(
+            BootstrapBoundTimingAuthority::establish(&naive, s7_binding()),
+            Err(TimingAuthorityError::EpochStartSlotMismatch {
+                epoch: S7_SEED_EPOCH,
+                durable: S7_EPOCH_START_SLOT,
+                reconstructed: 131_328_000,
+            })
+        );
+        // ...and the slot it WOULD have handed the forge is exactly the shipped defect.
+        let naive_slot = (CAPTURED_MS - PREPROD_SYSTEM_START_MS) / 1_000;
+        assert_eq!(naive_slot - EXPECTED_SLOT, 1_641_600);
+        assert_eq!(86_400 * (20 - 1), 1_641_600);
+    }
+
+    /// What the durable epoch cross-check does NOT buy — recorded as a test so the limit is a known
+    /// fact rather than an assumption someone later leans on.
+    ///
+    /// The cross-check pins segment BOUNDARIES (start slots and epoch lengths). It cannot pin a
+    /// segment's slot DURATION: a calendar with the correct boundaries but a wrong historical slot
+    /// length reproduces the store's epoch geometry exactly, and still converts wall-clock wrongly —
+    /// here by the full 1_641_600 slots. Slot durations are therefore held by the committed
+    /// genesis-hash-selected registry plus the ACTIVE-segment cross-check against the operator's real
+    /// `shelley-genesis.json`, not by this binding.
+    #[test]
+    fn the_durable_epoch_binding_pins_boundaries_not_slot_durations() {
+        let mut wrong_duration = preprod_history();
+        wrong_duration.segments[0].slot_length_ms = 1_000; // byron at 1s, boundaries untouched
+        assert_eq!(
+            wrong_duration.epoch_geometry(EpochNo(S7_SEED_EPOCH)),
+            Some((SlotNo(S7_EPOCH_START_SLOT), 432_000)),
+            "boundaries still reproduce the durable fact -- the binding cannot see the duration"
+        );
+        let auth = BootstrapBoundTimingAuthority::establish(&wrong_duration, s7_binding())
+            .expect("the durable binding passes: this is the limit being recorded");
+        assert_eq!(
+            auth.slot_at(CAPTURED_MS).unwrap().0,
+            EXPECTED_SLOT + 1_641_600,
+            "and the answer is wrong by the whole byron segment"
+        );
+        // The commitment DOES separate them, which is what the registry review is anchored to.
+        let good = BootstrapBoundTimingAuthority::establish(&preprod_history(), s7_binding()).unwrap();
+        assert_ne!(
+            auth.source_schedule_commitment(),
+            good.source_schedule_commitment()
+        );
+    }
+
+    /// A calendar that disagrees with ITSELF is refused before any value it yields is trusted — a
+    /// mis-sized historical epoch length can otherwise still hit the right epoch start by luck.
+    #[test]
+    fn a_self_inconsistent_calendar_is_refused_at_the_transition() {
+        let mut h = preprod_history();
+        h.segments[0].epoch_length_slots = 21_599; // 4 * 21_599 = 86_396 != 86_400
+        assert_eq!(
+            BootstrapBoundTimingAuthority::establish(&h, s7_binding()),
+            Err(TimingAuthorityError::NonAlignedSegmentTransition {
+                segment_index: 1,
+                declared_start_slot: 86_400,
+                implied_start_slot: 86_396,
+            })
+        );
+    }
+
+    /// CE-L2c-A4: an altered TIMING value is rejected. Both directions are covered — a wrong slot
+    /// length changes the commitment (so a foreign anchor cannot pass as derived), and a wrong system
+    /// start moves the whole calendar off the store's epoch geometry.
+    #[test]
+    fn ce_l2c_a4_an_altered_timing_schedule_is_rejected() {
+        let good = preprod_history();
+        let auth = BootstrapBoundTimingAuthority::establish(&good, s7_binding()).unwrap();
+
+        // (a) altered historical slot length: same epoch geometry, DIFFERENT timing.
+        let mut altered = preprod_history();
+        altered.segments[0].slot_length_ms = 10_000;
+        let altered_auth = BootstrapBoundTimingAuthority::establish(&altered, s7_binding())
+            .expect("epoch geometry is unchanged, so the binding still passes");
+        assert_ne!(
+            auth.source_schedule_commitment(),
+            altered_auth.source_schedule_commitment(),
+            "a TIMING change must move the commitment"
+        );
+        assert_ne!(
+            altered_auth.slot_at(CAPTURED_MS).unwrap(),
+            SlotNo(EXPECTED_SLOT),
+            "and must move the answer -- otherwise the commitment guards nothing"
+        );
+        assert!(!auth.anchor().is_derived_from(&altered.to_schedule().unwrap()));
+
+        // (b) altered system start: the calendar no longer lands on the store's epoch.
+        let mut shifted = preprod_history();
+        shifted.system_start_unix_ms += 1_000;
+        let a = BootstrapBoundTimingAuthority::establish(&shifted, s7_binding()).unwrap();
+        assert_ne!(a.slot_at(CAPTURED_MS).unwrap(), SlotNo(EXPECTED_SLOT));
+        assert_ne!(a.source_schedule_commitment(), auth.source_schedule_commitment());
+    }
+
+    /// CE-L2c-A3 / CE-L2c-10: reconstruction is the warm-start contract. Same bootstrap lineage +
+    /// same calendar => byte-identical authority, however many times and whenever it is rebuilt.
+    #[test]
+    fn ce_l2c_a3_reconstruction_is_byte_identical_and_replayable() {
+        let a = BootstrapBoundTimingAuthority::establish(&preprod_history(), s7_binding()).unwrap();
+        let b = BootstrapBoundTimingAuthority::establish(&preprod_history(), s7_binding()).unwrap();
+        assert_eq!(a, b, "warm start must RECONSTRUCT the same authority, not mint a new one");
+        for t in [
+            CAPTURED_MS,
+            CAPTURED_MS + 1,
+            CAPTURED_MS + 999,
+            CAPTURED_MS + 1_000,
+            CAPTURED_MS + 86_400_000,
+        ] {
+            assert_eq!(a.slot_at(t).unwrap(), b.slot_at(t).unwrap());
+            // ...and it agrees with the FULL history everywhere, which is CE-L2c-13's obligation
+            // carried through the bound authority rather than restated for it.
+            assert_eq!(
+                a.slot_at(t).unwrap(),
+                slot_at(&preprod_history().to_schedule().unwrap(), t).unwrap()
+            );
+        }
+    }
+
+    /// The binding must come from ONE store: an anchor slot outside the durable bootstrap epoch means
+    /// two facts from two places, and is refused rather than reconciled.
+    #[test]
+    fn an_anchor_slot_outside_the_bootstrap_epoch_is_refused() {
+        let mut b = s7_binding();
+        b.anchor_slot = SlotNo(S7_EPOCH_START_SLOT - 1);
+        assert!(matches!(
+            BootstrapBoundTimingAuthority::establish(&preprod_history(), b),
+            Err(TimingAuthorityError::AnchorSlotOutsideBootstrapEpoch { .. })
+        ));
+        let mut b2 = s7_binding();
+        b2.anchor_slot = SlotNo(S7_EPOCH_START_SLOT + 432_000);
+        assert!(matches!(
+            BootstrapBoundTimingAuthority::establish(&preprod_history(), b2),
+            Err(TimingAuthorityError::AnchorSlotOutsideBootstrapEpoch { .. })
+        ));
+    }
+
+    /// Preview takes the identical path with no venue branch: its Shelley hard fork is at epoch 0, so
+    /// its byron segment has ZERO slots and its calendar is a single 1s segment from slot 0.
+    #[test]
+    fn preview_single_segment_calendar_uses_the_same_path() {
+        const PREVIEW_START_MS: u64 = 1_666_656_000_000;
+        let h = VenueTimingHistory {
+            system_start_unix_ms: PREVIEW_START_MS,
+            segments: vec![VenueTimingSegment {
+                start_slot: SlotNo(0),
+                start_epoch: EpochNo(0),
+                slot_length_ms: 1_000,
+                epoch_length_slots: 86_400,
+            }],
+        };
+        // preview epoch 1331 begins at 1331 * 86_400.
+        assert_eq!(
+            h.epoch_geometry(EpochNo(1331)),
+            Some((SlotNo(114_998_400), 86_400))
+        );
+        let auth = BootstrapBoundTimingAuthority::establish(
+            &h,
+            BootstrapTimingBinding {
+                anchor_slot: SlotNo(114_998_400 + 12_345),
+                epoch: EpochNo(1331),
+                epoch_start_slot: SlotNo(114_998_400),
+                epoch_length_slots: 86_400,
+            },
+        )
+        .unwrap();
+        let t = PREVIEW_START_MS + (114_998_400 + 20_000) * 1_000;
+        assert_eq!(auth.slot_at(t).unwrap(), SlotNo(114_998_400 + 20_000));
+        assert_eq!(auth.slot_cadence_ms(), 1_000);
+    }
+
+    /// The constitutional guard survives the new type: a truncated (snapshot-local) calendar cannot
+    /// establish an authority. `ScheduleDoesNotCoverSystemStart` is satisfied, never relaxed.
+    #[test]
+    fn a_truncated_calendar_cannot_establish_a_timing_authority() {
+        let truncated = VenueTimingHistory {
+            system_start_unix_ms: PREPROD_SYSTEM_START_MS,
+            segments: vec![VenueTimingSegment {
+                start_slot: SlotNo(S7_EPOCH_START_SLOT),
+                start_epoch: EpochNo(S7_SEED_EPOCH),
+                slot_length_ms: 1_000,
+                epoch_length_slots: 432_000,
+            }],
+        };
+        // The epoch binding PASSES (it is the snapshot's own epoch) -- so the refusal must come from
+        // the slot-0 coverage requirement, not from the durable cross-check.
+        assert_eq!(
+            truncated.epoch_geometry(EpochNo(S7_SEED_EPOCH)),
+            Some((SlotNo(S7_EPOCH_START_SLOT), 432_000))
+        );
+        assert_eq!(
+            BootstrapBoundTimingAuthority::establish(&truncated, s7_binding()),
+            Err(TimingAuthorityError::Anchor(
+                TimingAnchorError::DomainStartNotDerivable(
+                    SlotDerivationError::ScheduleDoesNotCoverSystemStart {
+                        first_era_start_slot: S7_EPOCH_START_SLOT
+                    }
+                )
+            ))
+        );
     }
 
     /// The constitutional guard is NOT relaxed: a truncated schedule is still refused by `slot_at`,

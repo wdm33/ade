@@ -29,6 +29,7 @@ pub mod epoch_source_window;
 pub mod epoch_wire;
 pub mod fair_merge;
 pub mod forge_intent;
+pub mod forge_timing;
 pub mod fork_switch;
 pub mod key_gen;
 pub mod lca_walk;
