@@ -16,3 +16,12 @@ recovery-trace: path=rollback_admit action=reset_to_settled reason=rollback_admi
 # ~272,600 slots. The bounded refold (DC-EPOCH-26..31) behaving as designed -- and a cost figure:
 # a reorg 272k slots into an epoch buys a fold of that length before the loop plans another tick.
 recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130118424/5013815/b9885db6 durable_tip=130391033/5026207/5aabc92f rollback_target=none anchor_after=130118424/5013815/b9885db6
+
+## A STARVED loop derives a stale slot -- +1 per ITERATION, not per second
+# SystemClock::next_tick returns the scheduled boundary and advances by exactly one slot; it never
+# skips to the current boundary. These three probes span ~15 min of wall clock (~900 slots).
+# The conversion is correct; the INSTANT is stale. Discriminator: slot delta vs iteration count,
+# NOT vs wall clock. +1 per iteration => starved clock, not a slot-authority regression.
+live2b-tick-probe: non_authoritative=true forge_active=true logical_slot=Some(130390657) last_forged_slot=None forge_slot_status=Due sync_status=WorkAvailable loop_state=Continuing loop_step=SyncOnce
+live2b-tick-probe: non_authoritative=true forge_active=true logical_slot=Some(130390658) last_forged_slot=None forge_slot_status=Due sync_status=WorkAvailable loop_state=Continuing loop_step=SyncOnce
+live2b-tick-probe: non_authoritative=true forge_active=true logical_slot=Some(130390659) last_forged_slot=None forge_slot_status=Due sync_status=WorkAvailable loop_state=Continuing loop_step=SyncOnce

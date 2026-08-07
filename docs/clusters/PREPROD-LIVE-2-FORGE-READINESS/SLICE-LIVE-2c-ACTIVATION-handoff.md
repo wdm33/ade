@@ -309,9 +309,31 @@ surfaces, both out of scope, and the second one was not visible before this run:
   epoch boundary, a reorg 272k slots into an epoch buys a fold of that length before the loop can
   plan another tick. Useful to whoever picks up B6; it changes nothing about parts 1–3.
 
+### A starved loop derives a STALE slot — and it will look like this fix regressing
+
+Recorded because the next person to see it will reasonably suspect the wrong thing.
+
+`SystemClock::next_tick` returns the *scheduled* boundary and advances by exactly one slot per call;
+it never skips forward to the current boundary. So the derived slot advances **once per loop
+iteration**, not once per second of real time. Run 6's three probes, spanning ~15 minutes of wall
+clock (≈900 slots), read `130390657 → 130390658 → 130390659` — **+1 each**.
+
+The conversion is correct and the authority is correct; the *instant handed to it* is stale, because
+a loop starved by B6 consumes ticks slower than they accrue. On a healthy loop (run 4, ~1 iteration
+per second) the two rates match by construction and this never appears.
+
+Two consequences worth stating plainly:
+
+- **A stale `logical_slot` under starvation is NOT a slot-authority regression.** The discriminator
+  is cheap: compare the probe's slot delta against the iteration count, not against wall clock. If
+  it advances +1 per iteration, the clock is starved, not wrong.
+- **Fixing B6's deferral does not automatically fix this**, and the obvious repair — skipping to the
+  current boundary — changes *which slot a producer attempts*, which is consensus-adjacent. Out of
+  scope here; named so it is a decision rather than an oversight.
+
 Neither surface is caused by parts 1–3, and neither is fixed by them. Recorded rather than worked
-around: changing a DC-NODE-15 operand or a sync-deferral bound is consensus-adjacent and needs its
-own census.
+around: changing a DC-NODE-15 operand, a sync-deferral bound, or the clock's tick-consumption model
+is consensus-adjacent and needs its own census.
 
 ## Live closure path — stated honestly, because M2 changes it
 
