@@ -280,15 +280,33 @@ surfaces, both out of scope, and the second one was not visible before this run:
 
 - **B12** (measured in run 4, §M2): the DC-NODE-15 gate is structurally unsatisfiable at the tip.
   Leadership is evaluated downstream of it.
-- **B6, persistent under a catch-up backlog** (new, run 5): with the store 54k slots behind at start,
-  each loop iteration took ~60 s (dominated by the post-catch-up
-  `advance_ledger_state_to_durable_tip` reconciliation — the reduced checkpoint grew 1.08 GB →
-  2.16 GB). Blocks arrive faster than that, so `SyncStatus::WorkAvailable` preempted **every**
-  iteration and no `ForgeTick` was ever planned: 4 probes, 4 × `SyncOnce`. Run 4 saw B6 at 8/363
-  because it started at tip. So B6 is not merely transient — its severity is a function of how far
-  behind the store is, which the earlier sample could not show.
+- **B6, and it is not merely transient** (new, runs 5 and 6): `SyncStatus::WorkAvailable` preempted
+  **every** planned iteration, so no `ForgeTick` was ever scheduled.
 
-Neither is caused by parts 1–3, and neither is fixed by them. Recorded rather than worked around.
+  | run | store at start | reduced checkpoint | loop rate | ForgeTicks |
+  |---|---|---|---|---|
+  | 4 (pre-slice) | at tip | 1.08 GB | ~1 / s | 354 of 363 probes |
+  | 5 | 54k slots behind | 1.08 → 2.16 GB | ~1 / 60 s | 0 of 4 probes |
+  | 6 | **at tip** | 2.16 GB | ~1 / 5 min | 0 of 2 probes |
+
+  Run 5 alone would have read as "the catch-up backlog made iterations slow". **Run 6 refutes that**
+  — it started at tip and was slower still. Whatever the cause, B6's severity is not a fixed small
+  fraction, and the 8/363 sample LIVE-2b recorded came from the easy case. A deferral bound
+  calibrated against that sample would be calibrated against the wrong one.
+
+  **Cause not isolated, deliberately not asserted.** The loop time is spent inside `run_node_sync`
+  and `advance_ledger_state_to_durable_tip`, both untouched by this slice, which makes the store's
+  state the likely variable — but runs 4 and 6 differ in BOTH store state and binary, so these runs
+  cannot separate them. The clean A/B (baseline binary, same store) was not run and is the next step
+  if B6 is picked up.
+
+  Run 6 also caught a real preprod reorg mid-measurement (`rollback_admit action=reset_to_settled
+  rollback_target=130390901/5026202`, `anchor_after=absent`), which Ade handled with a typed rollback
+  admission and then entered the known long `reset_and_refold`.
+
+Neither surface is caused by parts 1–3, and neither is fixed by them. Recorded rather than worked
+around: changing a DC-NODE-15 operand or a sync-deferral bound is consensus-adjacent and needs its
+own census.
 
 ## Live closure path — stated honestly, because M2 changes it
 

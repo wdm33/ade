@@ -1,0 +1,13 @@
+# LIVE-2c run 6 (2026-08-07T03:35Z) -- warm restart AT TIP, same store.
+# Purpose: reproduce run 4's condition (at tip, current checkpoint) with parts 1-3 landed.
+
+## Reconstruction determinism, LIVE across two process starts (CE-L2c-A3)
+# run 5 and run 6 are separate processes reading the same durable facts.
+live2c-timing-authority: source=durable-genesis-hash venue=preprod store_genesis=Hash32(162d29c4e1cf6b8a84f2d692e67a3ac6bc7851bc3e6e4afe64d15778bed8bd86) cli_network=preprod bootstrap_epoch=EpochNo(304) durable_epoch_start_slot=129686400 anchor_slot=129813427 domain_start_ms=1785496627000 cadence_ms=1000 commitment=ScheduleCommitment(Hash32(30fe202dcfbb1306af4cdd6ef5188e8ad5a912a7c0eacf5924969b38d25b45b5)) genesis_cross_check=agreed
+
+## B6: WorkAvailable preempted every planned iteration -- no ForgeTick scheduled
+live2b-tick-probe: non_authoritative=true forge_active=true logical_slot=Some(130390657)                  last_forged_slot=None forge_slot_status=Due sync_status=WorkAvailable loop_state=Continuing                  loop_step=SyncOnce
+live2b-tick-probe: non_authoritative=true forge_active=true logical_slot=Some(130390658)                  last_forged_slot=None forge_slot_status=Due sync_status=WorkAvailable loop_state=Continuing                  loop_step=SyncOnce
+
+## A real preprod reorg, handled with a typed rollback admission
+recovery-trace: path=rollback_admit action=reset_to_settled reason=rollback_admission anchor_before=130350114/5024325/c16626fe durable_tip=130390918/5026203/08dc0017 rollback_target=130390901/5026202/53c7278a anchor_after=absent
