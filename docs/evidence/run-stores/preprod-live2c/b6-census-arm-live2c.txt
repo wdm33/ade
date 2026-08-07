@@ -1,0 +1,96 @@
+# B6 CENSUS — arm = LIVE-2c+instr (ef310eba), preprod, 2026-08-07
+#
+# Frozen start : tip 130,390,366 (FROZEN-b6-census-s7, chmod a-w)
+# Peer at start: 130,455,593  (~65k slots ahead => pass 1 is a catch-up, pass 2+ are AT TIP)
+# Method       : ONE instrumented pass; A/B/C/D compete for the SAME elapsed time.
+
+## ATTRIBUTION
+
+=== arm=LIVE-2c+instr — 5 attributed passes ===
+
+pass  total_s  toPlan     sync    coadv   bound  blocks  dominant
+   1    229.6       0   127180   102379      10    2974  A sync (55%)
+   2    132.7       0    17752   114965       8       9  C coadvance (87%)
+   3     95.0       0    10439    84556      10       8  C coadvance (89%)
+   4    115.2       0    10436   104711      10       6  C coadvance (91%)
+   5     89.8       0    10934    78895      13       3  C coadvance (88%)
+
+--- aggregate over 5 passes (662.3s total loop time) ---
+  A  sync (run_node_sync / run_participant_sync)           176.7s   26.7%
+  C  co-advance (reduced checkpoint + accumulator)         485.5s   73.3%
+  C  epoch-boundary activation                               0.1s    0.0%
+  D  pre-planner (has_work + is_ended + next_tick)           0.0s    0.0%
+     of which next_tick (clock sleep, expected on a HEALTHY loop)       0.0s
+
+  B  blocks admitted per pass: min=3 max=2974 median=8 total=3000
+     (B is confirmed by an UNBOUNDED max, not by a large total)
+
+## attributed passes (raw)
+b6-census: non_authoritative=true iter_total_ms=229571 to_planner_ms=0 has_work_ms=0 is_ended_ms=0 next_tick_ms=0 sync_ms=127180 coadvance_ms=102379 boundary_ms=10 blocks_admitted=2974 tip_block=Some(5029226)
+b6-census: non_authoritative=true iter_total_ms=132727 to_planner_ms=0 has_work_ms=0 is_ended_ms=0 next_tick_ms=0 sync_ms=17752 coadvance_ms=114965 boundary_ms=8 blocks_admitted=9 tip_block=Some(5029235)
+
+## READING — hypothesis C, decisively
+
+  co-advance cost vs work admitted:
+      2974 blocks -> 102.4s      9 blocks -> 115.0s      8 -> 84.6s      6 -> 104.7s      3 -> 78.9s
+  A ~1000x range in work produces the same ~80-115s. The co-advance is a FIXED PER-PASS cost, not a
+  per-block one. sync IS work-proportional (0.043 s/block batched during catch-up, ~1.7 s/block at
+  tip on 3-9 blocks).
+
+  A  one sync call takes minutes      REFUTED  — at tip sync is 10-18s of a 90-133s pass
+  B  unbounded work per pass          REAL BUT NOT THE DRIVER — pass 1 took on 2974 blocks in one
+                                      dispatch, so the pass genuinely is unbounded; that explains the
+                                      catch-up pass, not the steady state
+  C  downstream recovery/refold       CONFIRMED — advance_ledger_state_to_durable_tip is 73% of all
+                                      loop time and 87-91% of every at-tip pass
+  D  planner reached late             ELIMINATED — to_planner_ms = 0 on all five passes
+
+## WHY THE STARVATION IS SELF-SUSTAINING (the B6 mechanism, now named)
+
+  measured block arrival at tip, from the census itself:
+      95.0s / 8 blocks = 11.9 s per block
+     115.2s / 6 blocks = 19.2 s per block
+      89.8s / 3 blocks = 29.9 s per block
+
+  A pass costs ~90-133s, dominated by a fixed ~80-115s co-advance. Blocks arrive every ~12-30s. So
+  3-9 blocks ALWAYS queue while a pass runs, has_work_ready() is therefore true every time the
+  planner is consulted, and the planner returns SyncOnce forever. NoWorkReady -- the state a
+  ForgeTick requires -- is unreachable while the pass costs more than the block interval.
+
+  That is why waiting longer cannot produce a ForgeTick, and it is a design-level condition rather
+  than an unlucky run: the loop cannot outrun the chain while it pays a fixed six-figure-millisecond
+  cost per pass.
+
+  Implication for the B6 slice (NOT designed here): the lever is the FIXED cost, not the deferral
+  policy. Any change that makes the co-advance proportional to work admitted -- or amortises it --
+  drops a tip pass toward the ~10-20s sync cost, which is below the block interval, at which point
+  NoWorkReady becomes reachable without touching the deferral rule at all.
+
+## startup cost NOT covered by the in-loop instrument
+# process start -> first tick probe was ~6 min. That is pre-loop recovery inside
+# run_relay_loop_with_sched (resolve_active_activation_at_tip / maybe_recover_promoted_authority),
+# which runs BEFORE 'loop {'. A one-time startup cost, not the per-iteration starvation.
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130350114/5024325/c16626fe durable_tip=130392081/5026252/0b4192e7 rollback_target=none anchor_after=130350114/5024325/c16626fe
+
+## Why the BASELINE arm was not run — established by hunk-vs-body intersection, not by argument
+
+The A/B existed to ask "did LIVE-2c cause the slowdown?". The attribution answers it more directly:
+100% of measured loop time sits inside three functions, and NONE of the slice's diff hunks fall
+inside any of them. Computed by intersecting the slice diff's +line ranges (68e62c78..ef310eba)
+against each function's body at HEAD:
+
+  run_node_sync                       node_sync.rs      lines  599-973    hunks inside: NONE
+  advance_ledger_state_to_durable_tip node_lifecycle.rs lines 2752-3011   hunks inside: NONE
+  maybe_activate_epoch_boundary       node_lifecycle.rs lines 3019-3061   hunks inside: NONE
+
+The slice's node_sync.rs hunks are at line 43 (an import), 1226-1232 (the ForgeRefused enum) and
+4956+ (the test module). Its node_lifecycle.rs hunks are the imports, the ForgeActivation struct,
+forge_skip_reason, and the loop body from 3252 on.
+
+WHAT THIS ESTABLISHES: the dominant cost is in code the slice did not modify, so LIVE-2c is not
+the cause of the slow iteration.
+
+WHAT IT DOES NOT: it is a SOURCE-level argument. It does not rule out a codegen-level effect
+(inlining, layout) from changes elsewhere in the same crate. If that residual ever matters, the
+back-to-back A/B from the frozen state is still the way to settle it -- the frozen store is kept
+for exactly that.

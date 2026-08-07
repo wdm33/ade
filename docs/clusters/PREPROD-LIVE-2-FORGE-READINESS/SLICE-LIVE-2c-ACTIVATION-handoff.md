@@ -335,6 +335,60 @@ Neither surface is caused by parts 1–3, and neither is fixed by them. Recorded
 around: changing a DC-NODE-15 operand, a sync-deferral bound, or the clock's tick-consumption model
 is consensus-adjacent and needs its own census.
 
+### B6 CENSUS — RUN 2026-08-07, and it answered. Hypothesis C.
+
+Executed exactly as designed below: frozen store (`FROZEN-b6-census-s7`, `chmod a-w`), one
+instrumented pass, all four candidates competing for the same elapsed time. Five passes, 662 s of
+loop time. Evidence: `docs/evidence/run-stores/preprod-live2c/b6-census-arm-live2c.txt`.
+
+| pass | blocks | sync | co-advance | total | dominant |
+|---|---|---|---|---|---|
+| 1 (catch-up) | 2974 | 127.2 s | 102.4 s | 229.6 s | sync 55% |
+| 2 (at tip) | 9 | 17.8 s | **115.0 s** | 132.7 s | **co-advance 87%** |
+| 3 (at tip) | 8 | 10.4 s | **84.6 s** | 95.0 s | **co-advance 89%** |
+| 4 (at tip) | 6 | 10.4 s | **104.7 s** | 115.2 s | **co-advance 91%** |
+| 5 (at tip) | 3 | 10.9 s | **78.9 s** | 89.8 s | **co-advance 88%** |
+
+**A ~1000× range in work produces the same ~80–115 s.** `advance_ledger_state_to_durable_tip` is a
+**fixed per-pass cost**, not a per-block one — 73% of all loop time, 87–91% of every at-tip pass.
+
+| | verdict |
+|---|---|
+| **A** one sync call takes minutes | **REFUTED** — at tip, sync is 10–18 s of a 90–133 s pass |
+| **B** unbounded work per pass | **REAL, NOT THE DRIVER** — pass 1 took on 2974 blocks in ONE dispatch, so the pass genuinely is unbounded; that explains the catch-up pass, not the steady state |
+| **C** downstream recovery/refold dominates | **CONFIRMED** |
+| **D** planner reached late | **ELIMINATED** — `to_planner_ms = 0` on all five passes |
+
+`next_tick_ms = 0` on every pass independently re-confirms the starved-clock finding: the clock never
+sleeps, it hands back the stale boundary immediately.
+
+#### Why the starvation is self-sustaining — the mechanism, now named
+
+Block arrival measured from the census itself: **11.9 s, 19.2 s, 29.9 s per block**. A pass costs
+~90–133 s, dominated by a fixed ~80–115 s co-advance. So 3–9 blocks *always* queue while a pass runs,
+`has_work_ready()` is therefore true every time the planner is consulted, and the planner returns
+`SyncOnce` forever. **`NoWorkReady` — the state a ForgeTick requires — is unreachable while a pass
+costs more than the block interval.** That is a design-level condition, not an unlucky run: the loop
+cannot outrun the chain while paying a fixed six-figure-millisecond cost per pass.
+
+**Implication for the B6 slice (named, not designed here): the lever is the FIXED COST, not the
+deferral policy.** Making the co-advance proportional to work admitted — or amortising it — drops a
+tip pass toward its ~10–20 s sync cost, below the block interval, at which point `NoWorkReady`
+becomes reachable *without touching the deferral rule at all*. The obligation split below still
+holds; this just says which side the evidence points at first.
+
+#### The baseline arm was NOT run, and why
+
+The A/B existed to ask "did LIVE-2c cause this?". The attribution answers it more directly: 100% of
+measured loop time sits in three functions, and **no slice hunk falls inside any of them** — computed
+by intersecting the `68e62c78..ef310eba` diff's line ranges against each body at HEAD
+(`run_node_sync` 599–973, `advance_ledger_state_to_durable_tip` 2752–3011,
+`maybe_activate_epoch_boundary` 3019–3061: **NONE**).
+
+That is a **source-level** argument. It does not rule out a codegen-level effect from changes
+elsewhere in the same crate. If that residual ever matters, the back-to-back A/B is still how to
+settle it — the frozen store is kept for exactly that.
+
 ### The B6 entry point — a CENSUS first, not a scheduling fix
 
 The A/B is baseline binary + the same store, and it exists to answer ONE question before anyone

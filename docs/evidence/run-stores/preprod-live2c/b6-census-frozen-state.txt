@@ -1,0 +1,24 @@
+# B6 CENSUS — frozen starting state, 2026-08-07T21:36:37Z
+# Both arms MUST start from a restore of this. Copy is chmod a-w to prevent accidental mutation.
+
+## provenance
+source store : ~/.cardano-live1/ade-preprod-s7 (left by LIVE-2c run 6, stopped cleanly)
+frozen copy  : ~/.cardano-live1/FROZEN-b6-census-s7
+copy method  : cp -a --sparse=always   (ext4, no reflink)
+sizes        : 8.2G actual / 12G apparent
+
+## per-file sizes (apparent bytes)
+  chain.db                     10470584320
+  epoch-accumulator.redb       154689536
+  node.log                     115973
+  reduced-checkpoint.redb      2156408832
+  wal                          4096
+
+## durable tip recorded by the run that produced this state
+tip slot=Some(130390366)
+
+## sha256 of the small, identity-bearing files
+  b1104e5df76e917f12dd2099fe59a1f092e55ada868fd60dd7b60e31411125ba  node.log
+  baa723d42719c4d8573418114dd37155e5214f32783bf4257209d46fed2de3bf  wal/wal-0000.bin
+  4b3d371c02f51795a4076953e9dd2fec0e24428791551bbd924a408029c2c8cc  wal/wal-0001.bin
+  dba5e755cdd6673dd77f9ec83c97e9feec34f84df85d8fc7ad4cb32961a29540  wal/wal-0002.bin
