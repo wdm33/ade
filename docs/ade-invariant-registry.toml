@@ -10234,3 +10234,78 @@ status = "enforced"
 evidence_notes = "Opened AFTER the diagnosis so the gate encodes what was PROVEN rather than what was guessed. NONCE-1 measured the defect live on preprod 304->305: the bridge committed blake2b(candidate@SEED || leb) = e3402a2b.. while cardano-node's epochNonce(305) is 74f10bea.. = blake2b(candidate@FROZEN || leb), with the second operand BYTE-IDENTICAL on both sides -- so the entire disagreement localized to one operand, the candidate, 132,173 slots of movement apart. The same trace independently proved the freeze machinery CORRECT (candidate != evolving at the boundary), which is why the fix touches only WHERE the commitment comes from and leaves the tick, the freeze rule, the operand order and the venue geometry untouched -- all reference-proven against cardano-node. THE SURFACE IS SEED-POSITION, NOT VENUE: rsw/epoch_length is 0.4 on preprod (172800/432000) AND preview (34560/86400), so the freeze sits at 60% into the epoch on both and a once-per-venue differential passes straight through the defect; preview only ever worked because its snapshots landed after the freeze, preprod snapshot 6009 landed 29% in. The differential therefore asserts that ratio explicitly, so a future venue with different geometry fails loudly instead of silently invalidating the matrix. Negative-tested SIX ways: the pre-freeze side removed; the ratio assertion removed; the venue list hand-copied instead of read from resolve_network_profile; the differential test deleted; the binder rebound to the stored seed-time value (the original regression); and the Final cross-check disabled. The FIRST version of this gate was TOO WEAK and passed the last two -- its `cargo test --exact` filter used a bare fn name where the full module path is required, matched ZERO tests, and cargo exits 0 on an empty filter; every test invocation now asserts a nonzero passed-count. That is the fourth gate weakness in this cluster found by mutation testing, and the second of the same shape (a check that greps or filters for something it never actually reaches)."
 introduced_in = "PREPROD-NONCE-2"
 strengthened_in = []
+
+[[rules]]
+id = "DC-NODE-45"
+tier = "derived"
+statement = """
+ONE bootstrap-bound wall-clock -> absolute-slot authority on the authoritative --mode node producer
+path. (a) SOLE AUTHORITY: the forge derives its slot ONLY through
+BootstrapBoundTimingAuthority::slot_at, which projects a DerivedTimingAnchor over the venue's COMPLETE
+timing calendar from system start. The prior single-anchor conversion
+(anchor_millis, start_slot, slot_length_ms -> checked_millis_to_slot) is REMOVED from the codebase, not
+deprecated: two reachable slot authorities are the defect class, so an unpreferred second path does not
+close it. (b) STORE-SELECTED, NEVER OPERATOR-SELECTED: the venue calendar is resolved by the DURABLE
+seed-epoch sidecar's genesis_hash; --network and the operator shelley-genesis are fail-closed
+CROSS-CHECKS only (a --network naming a different venue is terminal; an absent one is simply no
+cross-check). (c) DURABLE BINDING: establishment refuses unless the reconstructed calendar is
+self-consistent (each segment transition epoch-aligned with the previous segment's own epoch length),
+reproduces the store's recorded epoch_start_slot AND epoch_length_slots, contains seed_point_slot
+inside that epoch, and yields an anchor whose lineage verifies against the calendar
+(schedule_timing_commitment). (d) RECONSTRUCTED, NOT PERSISTED: the anchor domain is the bootstrap
+anchor SLOT (never the clock, a peer tip, or an operator timestamp), so same bootstrap lineage + same
+calendar => byte-identical authority; nothing is persisted, so no store artifact is versioned and
+recovery behaviour is unchanged (STORE_SEMANTICS_VERSION stays v3). (e) TIMING-ONLY SCOPE: the calendar
+carries no era identity; slot_at reads system_start, per-segment start_slot and slot_length_ms and
+nothing else (CE-L2c-12), so historical eras enter as calendar geometry and never as ledger semantics.
+(f) CONSTITUTIONAL REFUSAL PRESERVED: a snapshot-local schedule still yields
+ScheduleDoesNotCoverSystemStart on BOTH conversion directions (slot_at and slot_start_time_ms); the
+compact anchor satisfies that guard by derivation rather than relaxing it. (g) A forge-ON start without
+a seed-epoch sidecar FAILS CLOSED -- with no bootstrap fact to bind the calendar to, a forge whose slot
+cannot be justified must not start.
+"""
+source = "docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LIVE-2c-authoritative-forge-slot-wiring.md (ACTIVATION section, the truncated-Mithril-schedule RULING and its six-proof fallback bar); docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LIVE-2c-ACTIVATION-handoff.md. Measured live on preprod 2026-08-06: the node derived a logical slot 19 days ahead of the chain, exactly 86_400 * (20s - 1s) = 1_641_600 slots, because the conversion applied the Shelley slot length from the system start and never accounted for preprod's 20s Byron segment."
+cross_ref = ["DC-NODE-03", "DC-NODE-05", "DC-CINPUT-05", "DC-EPOCH-16", "DC-NODE-46"]
+code_locus = "crates/ade_core/src/consensus/era_schedule.rs: VenueTimingSegment/VenueTimingHistory (timing + calendar geometry only, no era field), BootstrapTimingBinding, TimingAuthorityError, BootstrapBoundTimingAuthority::establish (the sole constructor; self-consistency + durable epoch reproduction + anchor-in-epoch + lineage), DerivedTimingAnchor::domain_slot_length_ms. crates/ade_node/src/forge_timing.rs: the committed per-venue calendar with its venue-genesis provenance, venue_timing_history_for_genesis (store-selected), establish_forge_timing_authority (CLI + shelley-genesis cross-checks, emit-only provenance line). crates/ade_node/src/node_lifecycle.rs: ForgeActivation.timing replaces the (anchor_millis, start_slot, slot_length_ms) triple; the single act.timing.slot_at call site; the tick cadence and idle poll read slot_cadence_ms. crates/ade_node/src/operator_forge.rs: OperatorForgeMaterial no longer emits a conversion anchor. crates/ade_runtime/src/clock.rs: checked_millis_to_slot + SlotAlignmentError DELETED. ci/ci_check_forge_slot_authority.sh."
+tests = ["ce_l2c_a2_committed_calendar_reproduces_the_durable_epoch_and_the_measured_slot", "dropping_the_historical_timing_segment_is_refused_by_the_durable_binding", "a_self_inconsistent_calendar_is_refused_at_the_transition", "ce_l2c_a4_an_altered_timing_schedule_is_rejected", "ce_l2c_a3_reconstruction_is_byte_identical_and_replayable", "an_anchor_slot_outside_the_bootstrap_epoch_is_refused", "preview_single_segment_calendar_uses_the_same_path", "a_truncated_calendar_cannot_establish_a_timing_authority", "the_durable_epoch_binding_pins_boundaries_not_slot_durations", "ce_l2c_a1_the_live_store_facts_establish_and_convert_the_measured_instant", "the_operator_cannot_choose_the_calendar", "an_uncommitted_venue_fails_closed", "the_operator_genesis_file_cross_checks_origin_and_active_slot_length", "a_store_epoch_the_calendar_cannot_reproduce_fails_closed", "reconstruction_is_byte_identical_across_restarts", "the_timing_table_and_the_identity_registry_cannot_drift", "ce_l2c_5_and_6_live_instant_derives_the_measured_slot_and_refuses_typed", "relay_loop_forge_slot_derived_via_clock_seam", "node_forge_slot_drift_fails_closed", "millis_to_slot_cannot_express_a_multi_length_venue"]
+ci_scripts = ["ci/ci_check_forge_slot_authority.sh"]
+status = "enforced"
+authority_surface = "BLUE wall-clock -> logical-slot conversion (selects the KES period, drives VRF leadership, is signed into the header)"
+cluster = "PREPROD-LIVE-2-FORGE-READINESS"
+introduced_in = "PREPROD-LIVE-2c-ACTIVATION"
+strengthened_in = []
+evidence = ["The preserved live fixture (docs/evidence/run-stores/preprod-nonce-1/live2b-slot-authority-discriminators.txt): captured_ms 1_786_021_761_000 -> slot 130_338_561, corroborated by a peer two slots back. Driven through the REAL --mode node loop by ce_l2c_5_and_6_live_instant_derives_the_measured_slot_and_refuses_typed, which reads the slot back out of the typed refusal so the value is proven to reach the KES gate rather than merely be computed.", "The durable cross-check is non-vacuous on the live store: preprod epoch 304 must reconstruct to absolute slot 129_686_400 (= 86_400 + (304-4)*432_000), which is what ade-preprod-s7's sidecar recorded at import; dropping the Byron segment yields 131_328_000 and the authority refuses."]
+evidence_notes = "Nine mutations caught: byron segment dropped; --network selects the calendar; naive conversion restored on the node path; B11 restored to None; per-tick refusal reset removed; KES reasons collapsed; outcome collapsed to no_tip_available; durable epoch cross-check removed; the constitutional truncated-schedule guard relaxed. The gate is itself negative-tested 11 ways, and that pass found two real weaknesses in it: the call-site rule counted matching LINES (so two conversions on one line read as one) and the cargo invocations needed a NONZERO passed-count assertion (cargo exits 0 on an empty filter). RECORDED LIMIT, as a test rather than an assumption (the_durable_epoch_binding_pins_boundaries_not_slot_durations): the durable binding pins segment BOUNDARIES, not slot DURATIONS -- a calendar with correct boundaries but a wrong historical slot length reproduces the store's epoch geometry exactly and still mis-converts by the full 1_641_600 slots. Durations are held by the committed genesis-hash-selected table plus the ACTIVE-segment cross-check against the operator's real shelley-genesis, the same standing security_param / active_slots_coeff / epoch_length already have in the profile registry."
+
+[[rules]]
+id = "DC-NODE-46"
+tier = "derived"
+statement = """
+Every ADMITTED ForgeTick yields either a structured refusal or a leader-schedule decision. No admitted
+tick may disappear, and none may report a reason that is not its own. (a) TYPED KES WINDOW: the slot's
+KES evolution index is consumed as a Result -- CoordinatorState::kes_period_for_slot_checked ->
+KesSlotError{BeforeOperationalCertificateStart, AfterOperationalCertificateEnd,
+PeriodArithmeticOverflow}, each carrying the SLOT BOUND an operator can act on, routed as
+ForgeRefused::KesWindow. The `if let Some(kes_period)` skip that silently consumed the whole forge
+attempt is removed. (b) ONE DEFINITION: the Option accessor kes_period_for_slot delegates to the
+checked form, so the two can never disagree about which slots are signable. (c) FAMILIES STAY
+SEPARABLE: slot-derivation, KES-window (three distinct reasons), tip/fence and leadership failures
+project to DISTINCT emitted discriminators -- never one collapsed reason. (d) HONEST OUTCOME: an
+admitted tick that was refused emits ForgeOutcome::Refused with its reason; no_tip_available is
+narrowed to a genuinely absent tip (it was previously a catch-all that reported a KES refusal while the
+node held a perfectly good tip). (e) NO STALE REASON: last_forge_refused is cleared on entry to the
+ForgeTick arm, so a tick with nothing of its own to report says so instead of re-emitting the previous
+tick's reason and tip operands.
+"""
+source = "docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LIVE-2b-forgetick-reachability-branch-table.md (B11, the sixth silent exit); docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LIVE-2c-authoritative-forge-slot-wiring.md (part 3 error shape); docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LIVE-2c-ACTIVATION-handoff.md."
+cross_ref = ["DC-NODE-45", "DC-NODE-15", "DC-NODE-28", "CN-NODE-04"]
+code_locus = "crates/ade_runtime/src/producer/coordinator.rs: KesSlotError + kes_period_for_slot_checked (single definition; the Option form delegates). crates/ade_node/src/node_sync.rs: ForgeRefused::KesWindow. crates/ade_node/src/live_log/sched_event.rs: ForgeOutcome::Refused + ForgeSkipReason::{KesBeforeOpcertStart, KesAfterOpcertEnd, KesPeriodOverflow}. crates/ade_node/src/node_lifecycle.rs: the ForgeTick arm consumes the Result, resets last_forge_refused on entry, and emits Refused vs NoTipAvailable by whether a reason was recorded; forge_skip_reason projects the three KES reasons separately. ci/ci_check_forge_slot_authority.sh."
+tests = ["kes_period_for_slot_checked_names_the_reason_and_the_slot_bound", "the_option_accessor_never_disagrees_with_the_typed_one", "the_naive_19_day_ahead_slot_was_never_refused_by_the_kes_window", "ce_l2c_5_and_6_live_instant_derives_the_measured_slot_and_refuses_typed", "ce_l2c_a5_a_refusal_never_outlives_its_own_tick", "forge_skip_reason_projects_every_typed_refusal"]
+ci_scripts = ["ci/ci_check_forge_slot_authority.sh"]
+status = "enforced"
+authority_surface = "GREEN forge-tick admissibility projection (operational evidence; never an acceptance signal)"
+cluster = "PREPROD-LIVE-2-FORGE-READINESS"
+introduced_in = "PREPROD-LIVE-2c-ACTIVATION"
+strengthened_in = []
+evidence = ["Run 4 (2026-08-06, wire_smoke.jsonl): 354 admitted ForgeTicks emitted 354 forge_result records, all outcome=no_tip_available -- a catch-all that could not distinguish a fence refusal from an absent tip from a KES-window failure."]
+evidence_notes = "Opened AFTER decomposing run 4's own artifacts, which CORRECTED the SLICE-LIVE-2b code-read conclusion that B11 had fired. The operator op-cert starts at KES period 970; with slotsPerKESPeriod 129_600 and maxKESEvolutions 62, the naive 19-day-ahead slot 131_976_696 is absolute period 1018, evolution 48 -- comfortably INSIDE the window, so kes_period_for_slot returned Some(48) and the wrong slot was never refused there. Pinned as the_naive_19_day_ahead_slot_was_never_refused_by_the_kes_window. This makes DC-NODE-45 the load-bearing fix and DC-NODE-46 a defence-in-depth one, which is the opposite of how the branch table read it. The per-tick reset clause (e) was NARROWED by the mutation sweep: every path that does refuse overwrites the field, so the sticky harm is confined to the one path that records nothing -- which is precisely the record an operator reads when nothing is happening."
