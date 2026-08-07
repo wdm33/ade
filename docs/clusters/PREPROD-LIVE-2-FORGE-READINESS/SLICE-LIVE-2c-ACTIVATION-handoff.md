@@ -361,7 +361,15 @@ not running (run 5 opened 54k slots behind for exactly this reason), and run 6 l
 — chain.db 8.59 → 10.47 GB, a reorg, and a ≈272,600-slot refold. So the two arms must run
 **back-to-back from the same starting state**; a baseline arm today and a new-binary arm next week
 compare two different stores and prove nothing. If the arms cannot be run back-to-back, snapshot the
-store first and restore it between them.
+store first and restore it between them — and treat that as part of the experiment design, not
+cleanup.
+
+*Practical constraint on that snapshot, measured 2026-08-07.* `ade-preprod-s7` is **8.8 GB actual but
+12.8 GB apparent** — its `chain.db` / `.redb` files are sparse — against **21 GB free on a disk at
+96%**. A sparse-preserving copy (`cp --sparse=always`, `rsync -S`) costs ~8.8 GB and leaves room;
+a naive `cp -a` / `rsync` without it costs ~12.8 GB, i.e. 4 GB more than the directory appears to
+need, *before* either arm grows `chain.db` by following (run 5 added ~1.9 GB catching up 54k slots).
+Reclaim first if needed — `~/Code/rust/*/target` build caches, never the CE-4 corpus.
 
 ### Two SEPARATE obligations — do not merge them
 
