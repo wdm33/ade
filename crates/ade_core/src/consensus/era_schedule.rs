@@ -246,6 +246,38 @@ pub struct DerivedTimingAnchor {
 }
 
 impl DerivedTimingAnchor {
+    /// LIVE-2c — THE canonical constructor: derive the anchor for a BOOTSTRAP ANCHOR SLOT.
+    ///
+    /// The declared domain must come from a canonical bootstrap FACT, never from `now`. Process start
+    /// time, the current wall clock, a peer-tip observation and an operator-supplied timestamp are all
+    /// excluded, because each makes the anchor a function of WHEN the node happened to start:
+    ///
+    /// ```text
+    /// same bootstrap anchor + same timing history  =>  same DerivedTimingAnchor
+    /// ```
+    ///
+    /// A restart days later must RECONSTRUCT the same anchor, not mint a new one from that restart's
+    /// clock. That is what makes the anchor durable-bindable and replay-checkable, and it is why this
+    /// takes a `SlotNo` — a bootstrap fact — rather than a timestamp.
+    ///
+    /// The domain start TIME is then the canonical slot-start time of that slot, derived from the full
+    /// schedule (never supplied), so the arithmetic origin lands exactly on a slot boundary — the
+    /// mid-slot origin bug CE-L2c-13 caught cannot recur through this path by construction.
+    pub fn derive_for_bootstrap_anchor(
+        schedule: &EraSchedule,
+        bootstrap_anchor_slot: SlotNo,
+    ) -> Result<Self, TimingAnchorError> {
+        let domain_start_ms = slot_start_time_ms(schedule, bootstrap_anchor_slot)
+            .map_err(TimingAnchorError::DomainStartNotDerivable)?;
+        let anchor = Self::derive(schedule, domain_start_ms)?;
+        // The slot-start time must round-trip to the very slot it came from. Cheap, and it pins the
+        // inverse pair together so a future edit to either cannot silently drift.
+        if anchor.domain_start_slot != bootstrap_anchor_slot {
+            return Err(TimingAnchorError::MalformedSegments);
+        }
+        Ok(anchor)
+    }
+
     /// Derive the anchor for `domain_start_ms` from the COMPLETE schedule. The sole constructor.
     pub fn derive(
         schedule: &EraSchedule,
@@ -337,6 +369,58 @@ impl DerivedTimingAnchor {
         }
         Err(TimingAnchorError::MalformedSegments)
     }
+}
+
+/// LIVE-2c — the inverse of [`slot_at`]: the canonical START TIME of a slot, from the full schedule.
+///
+/// Exists so a domain start can be a bootstrap FACT (a slot) rather than an observed instant. Walks the
+/// same accumulated segment times `slot_at` walks, so the two are one geometry rather than two.
+pub fn slot_start_time_ms(
+    schedule: &EraSchedule,
+    slot: SlotNo,
+) -> Result<u64, SlotDerivationError> {
+    let eras = schedule.eras();
+    let first = eras.first().ok_or(SlotDerivationError::EmptySchedule)?;
+    if first.start_slot.0 != 0 {
+        return Err(SlotDerivationError::ScheduleDoesNotCoverSystemStart {
+            first_era_start_slot: first.start_slot.0,
+        });
+    }
+    let mut seg_start_ms = schedule.system_start_unix_ms();
+    for (i, era) in eras.iter().enumerate() {
+        if era.slot_length_ms == 0 {
+            return Err(SlotDerivationError::ZeroSlotLength { era_index: i as u8 });
+        }
+        let ends_at = eras.get(i + 1).map(|n| n.start_slot.0);
+        let in_this = match ends_at {
+            None => true,
+            Some(end) => slot.0 < end,
+        };
+        if in_this {
+            let offset = slot
+                .0
+                .checked_sub(era.start_slot.0)
+                .ok_or(SlotDerivationError::Overflow)?;
+            return seg_start_ms
+                .checked_add(
+                    offset
+                        .checked_mul(u64::from(era.slot_length_ms))
+                        .ok_or(SlotDerivationError::Overflow)?,
+                )
+                .ok_or(SlotDerivationError::Overflow);
+        }
+        let span = ends_at
+            .ok_or(SlotDerivationError::Overflow)?
+            .checked_sub(era.start_slot.0)
+            .ok_or(SlotDerivationError::Overflow)?;
+        seg_start_ms = seg_start_ms
+            .checked_add(
+                span.checked_mul(u64::from(era.slot_length_ms))
+                    .ok_or(SlotDerivationError::Overflow)?,
+            )
+            .ok_or(SlotDerivationError::Overflow)?;
+    }
+    Err(SlotDerivationError::EmptySchedule)
 }
 
 /// Pure result of `EraSchedule::locate(slot)`.
@@ -1165,6 +1249,56 @@ mod live2c_derived_anchor_tests {
             }
             // Non-vacuous: the shared answer at the fixture is the measured slot.
             assert_eq!(a.slot_at(CAPTURED_MS).unwrap(), SlotNo(EXPECTED_SLOT));
+        }
+    }
+
+    /// LIVE-2c DOMAIN-START RULING: the anchor is a function of a BOOTSTRAP FACT, not of `now`.
+    ///
+    /// The property that matters for restart: same bootstrap anchor + same timing history => the same
+    /// anchor, whenever it is rebuilt. A restart days later must RECONSTRUCT it, not mint a new one
+    /// from that restart's clock.
+    #[test]
+    fn anchor_is_reproducible_from_the_bootstrap_slot_not_the_clock() {
+        let f = full();
+        // The real preprod Mithril anchor slot.
+        let boot = SlotNo(129_813_427);
+        let a1 = DerivedTimingAnchor::derive_for_bootstrap_anchor(&f, boot).unwrap();
+        // "Rebuilt days later" — nothing about the rebuild references a clock.
+        let a2 = DerivedTimingAnchor::derive_for_bootstrap_anchor(&f, boot).unwrap();
+        assert_eq!(a1, a2, "same bootstrap anchor + same history must give the SAME anchor");
+        assert_eq!(a1.domain_start_slot(), boot, "the domain start IS the bootstrap slot");
+
+        // The domain start lands exactly on a slot boundary, so the mid-slot origin bug CE-L2c-13
+        // caught cannot recur through this constructor.
+        assert_eq!(slot_at(&f, a1.domain_start_ms()).unwrap(), boot);
+        assert_eq!(slot_start_time_ms(&f, boot).unwrap(), a1.domain_start_ms());
+
+        // CONTRAST: a wall-clock-derived domain is NOT reproducible — two "startups" a second apart
+        // yield different anchors. This is the shape the ruling excludes.
+        let t = 1_786_021_761_000u64;
+        let w1 = DerivedTimingAnchor::derive(&f, t).unwrap();
+        let w2 = DerivedTimingAnchor::derive(&f, t + 1_000).unwrap();
+        assert_ne!(w1, w2, "a clock-derived domain changes with startup time -- excluded by the ruling");
+
+        // And it still agrees with the full history over its domain.
+        for probe in [a1.domain_start_ms(), a1.domain_start_ms() + 1, CAPTURED_MS] {
+            assert_eq!(a1.slot_at(probe).unwrap(), slot_at(&f, probe).unwrap());
+        }
+        assert_eq!(a1.slot_at(CAPTURED_MS).unwrap(), SlotNo(EXPECTED_SLOT));
+    }
+
+    /// `slot_start_time_ms` is the exact inverse of `slot_at` on slot boundaries, across the
+    /// transition. If these two ever drift, a domain start stops landing on a boundary.
+    #[test]
+    fn slot_start_time_is_the_inverse_of_slot_at() {
+        let f = full();
+        for slot in [0u64, 1, 86_399, 86_400, 86_401, 130_118_400, EXPECTED_SLOT] {
+            let t = slot_start_time_ms(&f, SlotNo(slot)).unwrap();
+            assert_eq!(slot_at(&f, t).unwrap(), SlotNo(slot), "round-trip at slot {slot}");
+            // ...and one ms before a slot start belongs to the PREVIOUS slot.
+            if slot > 0 {
+                assert_eq!(slot_at(&f, t - 1).unwrap(), SlotNo(slot - 1), "boundary at slot {slot}");
+            }
         }
     }
 

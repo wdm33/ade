@@ -135,3 +135,9 @@ store_semantics_version = 3
 surface_hash = "450a48ef5df7f756aec3645e89c3c539aba71639bb4b8b5fb714db0d9cd09b0d"
 semantics_neutral = true
 rationale = "LIVE-2c DerivedTimingAnchor: era_schedule.rs gains an ADDITIVE compact timing projection (DerivedTimingAnchor + ScheduleCommitment + schedule_timing_commitment + TimingAnchorError) and its tests. Every pre-existing item -- EraSchedule, EraSummary, slot_at, praos_rsw_slots, locate() -- is byte-identical, and the new type is not yet wired into any production path, so nothing a store records can differ and no durable artifact gains a schedule commitment. Declared neutral. Note the reassessment trigger stands for the WIRING slice: a bump becomes required if a snapshot, checkpoint, WAL, store metadata or fingerprint later carries this commitment, or if a persisted schedule field changes meaning from snapshot-local to absolute slot authority."
+
+[[entry]]
+store_semantics_version = 3
+surface_hash = "53fe8c158c9d9fa56b47676c0b13ba83edbca027c4da4db282ce79cef7396112"
+semantics_neutral = true
+rationale = "LIVE-2c domain-start ruling: era_schedule.rs gains slot_start_time_ms (the canonical inverse of slot_at) and DerivedTimingAnchor::derive_for_bootstrap_anchor, plus tests. Additive and still UNWIRED -- every pre-existing item is byte-identical, no production path calls either yet, and no durable artifact gains a commitment, so nothing a store records can differ. Declared neutral. The purpose is determinism across restarts: the anchor domain is a function of a bootstrap FACT (the verified anchor slot) rather than of process start / wall clock / peer tip / operator input, so the same bootstrap anchor plus the same timing history reconstructs the same anchor whenever it is rebuilt. The reassessment trigger stands for the activation slice."
