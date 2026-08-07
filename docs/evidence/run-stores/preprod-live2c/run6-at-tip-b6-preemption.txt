@@ -11,3 +11,8 @@ live2b-tick-probe: non_authoritative=true forge_active=true logical_slot=Some(13
 
 ## A real preprod reorg, handled with a typed rollback admission
 recovery-trace: path=rollback_admit action=reset_to_settled reason=rollback_admission anchor_before=130350114/5024325/c16626fe durable_tip=130390918/5026203/08dc0017 rollback_target=130390901/5026202/53c7278a anchor_after=absent
+
+## Post-reorg recovery: re-anchored, then forward-folded from the EPOCH-305 START to tip
+# ~272,600 slots. The bounded refold (DC-EPOCH-26..31) behaving as designed -- and a cost figure:
+# a reorg 272k slots into an epoch buys a fold of that length before the loop plans another tick.
+recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset anchor_before=130118424/5013815/b9885db6 durable_tip=130391033/5026207/5aabc92f rollback_target=none anchor_after=130118424/5013815/b9885db6

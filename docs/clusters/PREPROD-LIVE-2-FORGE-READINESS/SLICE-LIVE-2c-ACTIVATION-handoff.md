@@ -302,7 +302,12 @@ surfaces, both out of scope, and the second one was not visible before this run:
 
   Run 6 also caught a real preprod reorg mid-measurement (`rollback_admit action=reset_to_settled
   rollback_target=130390901/5026202`, `anchor_after=absent`), which Ade handled with a typed rollback
-  admission and then entered the known long `reset_and_refold`.
+  admission. Recovery then re-anchored and forward-folded — `recovery_admit action=forward_fold
+  reason=forward_fold_no_reset anchor_before=130118424/5013815 durable_tip=130391033` — i.e. from the
+  **epoch-305 start** to the tip, ≈272,600 slots. That is the bounded refold behaving as designed
+  (`DC-EPOCH-26..31`), and it is also a concrete cost figure: with the settled rewind point at the
+  epoch boundary, a reorg 272k slots into an epoch buys a fold of that length before the loop can
+  plan another tick. Useful to whoever picks up B6; it changes nothing about parts 1–3.
 
 Neither surface is caused by parts 1–3, and neither is fixed by them. Recorded rather than worked
 around: changing a DC-NODE-15 operand or a sync-deferral bound is consensus-adjacent and needs its
