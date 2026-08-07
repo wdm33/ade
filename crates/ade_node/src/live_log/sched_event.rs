@@ -100,6 +100,14 @@ pub enum ForgeOutcome {
     /// A forge tick was scheduled but no selected tip was available, so no forge
     /// attempt ran (the relay loop's `selected_tip == None` skip).
     NoTipAvailable,
+    /// LIVE-2c part 3: the tick was ADMITTED and a typed refusal decided it — a fence, the KES
+    /// window, or a slot-derivation failure. The reason is in `skip_reason`.
+    ///
+    /// Added because `no_tip_available` was doing this job as a catch-all, and doing it dishonestly:
+    /// a KES-window refusal and a genuinely absent durable tip emitted the identical outcome, so the
+    /// evidence could not distinguish "we had nothing to build on" from "we had everything and
+    /// refused". `no_tip_available` now means what its name says.
+    Refused,
 }
 
 impl ForgeOutcome {
@@ -110,6 +118,7 @@ impl ForgeOutcome {
             Self::NotLeader => "not_leader",
             Self::Failed => "failed",
             Self::NoTipAvailable => "no_tip_available",
+            Self::Refused => "refused",
         }
     }
 }
@@ -147,6 +156,14 @@ pub enum ForgeSkipReason {
     /// sign, so the base changed underneath and the forge refused rather than sign a
     /// stale block.
     ForgeBaseChangedBeforeSign,
+    /// LIVE-2c part 3 (B11): the operational certificate is not valid for this slot YET.
+    KesBeforeOpcertStart,
+    /// LIVE-2c part 3 (B11): the operational certificate is EXHAUSTED at this slot — the operator
+    /// must rotate the KES key. Kept distinct from `KesBeforeOpcertStart` because the two look
+    /// identical as an `Option` and have opposite operator actions.
+    KesAfterOpcertEnd,
+    /// LIVE-2c part 3 (B11): KES period/slot arithmetic overflowed.
+    KesPeriodOverflow,
 }
 
 impl ForgeSkipReason {
@@ -160,6 +177,9 @@ impl ForgeSkipReason {
             Self::ReselectionPending => "reselection_pending",
             Self::ParticipantFence => "participant_fence",
             Self::ForgeBaseChangedBeforeSign => "forge_base_changed_before_sign",
+            Self::KesBeforeOpcertStart => "kes_before_opcert_start",
+            Self::KesAfterOpcertEnd => "kes_after_opcert_end",
+            Self::KesPeriodOverflow => "kes_period_overflow",
         }
     }
 }

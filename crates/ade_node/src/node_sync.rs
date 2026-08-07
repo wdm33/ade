@@ -40,7 +40,7 @@ use ade_runtime::admission::AdmissionPeerEvent;
 use ade_runtime::bootstrap::BootstrapState;
 use ade_runtime::chaindb::{ChainDb, ChainTip, SnapshotStore};
 use ade_runtime::forward_sync::{pump_block, ForwardSyncState, NoCheckpointSink, PumpTip};
-use ade_runtime::producer::coordinator::CoordinatorEvent;
+use ade_runtime::producer::coordinator::{CoordinatorEvent, KesSlotError};
 use ade_runtime::producer::producer_shell::ProducerShell;
 use ade_runtime::rollback::PersistentSnapshotCache;
 use ade_types::shelley::block::{PrevHash, ProtocolVersion};
@@ -1223,6 +1223,13 @@ pub enum ForgeRefused {
         decision_base: Option<TipPoint>,
         sign_time_tip: Option<TipPoint>,
     },
+    /// LIVE-2c part 3 (B11): the slot has no KES evolution index — the op-cert is not valid yet, is
+    /// exhausted, or the arithmetic overflowed. Previously this was an `Option` the ForgeTick arm
+    /// let vanish: `forged` stayed false, no refusal was recorded, and the tick reported
+    /// `no_tip_available` with a `null` reason — indistinguishable from a genuinely absent tip. It
+    /// is a KEY-WINDOW refusal, kept mechanically distinct from the tip fences and from a slot
+    /// derivation failure so the four families never collapse into one reason.
+    KesWindow(KesSlotError),
 }
 
 /// PHASE4-N-AI AI-S4b-ii (DC-NODE-28): the forge gate's refusal when a
@@ -4946,10 +4953,54 @@ mod tests {
 
     // ===== S2: forge-tick wiring into the relay loop (self-accept-only) =====
 
-    use ade_runtime::clock::{millis_to_slot, DeterministicClock};
+    use ade_core::consensus::era_schedule::{
+        BootstrapBoundTimingAuthority, BootstrapTimingBinding, VenueTimingHistory,
+        VenueTimingSegment,
+    };
+    use ade_runtime::clock::DeterministicClock;
     use ade_runtime::producer::coordinator::{
         CoordinatorState, GenesisAnchor, LedgerSnapshotRef, OpCertPublicMetadata,
     };
+
+    /// LIVE-2c part 2: the forge slot authority for the hermetic loop tests.
+    ///
+    /// Built through the SAME `establish` path production uses — a synthetic venue calendar bound to
+    /// synthetic durable facts — rather than a test-only back door, so these tests exercise the real
+    /// establishment rules. Geometry: system start at unix 0, 1 s slots, 432_000-slot epochs, so
+    /// `slot_at(t_ms) == t_ms / 1000` and the pre-LIVE-2c `(anchor 0, start_slot 0, 1_000)` triple's
+    /// answers are reproduced exactly.
+    ///
+    /// `anchor_slot` is the DECLARED DOMAIN start (a bootstrap fact). Instants before its start time
+    /// are refused — the successor to the old `BeforeGenesisAnchor` drift guard.
+    fn hermetic_timing(anchor_slot: u64) -> BootstrapBoundTimingAuthority {
+        hermetic_timing_ms(anchor_slot, 1_000)
+    }
+
+    /// As [`hermetic_timing`], with an explicit slot cadence — the fast-cadence loop tests drive
+    /// many ticks per test and use 10 ms slots.
+    fn hermetic_timing_ms(anchor_slot: u64, slot_length_ms: u32) -> BootstrapBoundTimingAuthority {
+        const EPOCH_LEN: u64 = 432_000;
+        let history = VenueTimingHistory {
+            system_start_unix_ms: 0,
+            segments: vec![VenueTimingSegment {
+                start_slot: SlotNo(0),
+                start_epoch: EpochNo(0),
+                slot_length_ms,
+                epoch_length_slots: EPOCH_LEN as u32,
+            }],
+        };
+        let epoch = anchor_slot / EPOCH_LEN;
+        BootstrapBoundTimingAuthority::establish(
+            &history,
+            BootstrapTimingBinding {
+                anchor_slot: SlotNo(anchor_slot),
+                epoch: EpochNo(epoch),
+                epoch_start_slot: SlotNo(epoch * EPOCH_LEN),
+                epoch_length_slots: EPOCH_LEN as u32,
+            },
+        )
+        .expect("the hermetic venue calendar binds to its own facts")
+    }
 
     /// Genesis anchor s.t. `kes_period_for_slot(small slot) == Some(0)` — so the
     /// REUSED CoordinatorState method yields a valid period for the test slot.
@@ -5029,9 +5080,7 @@ mod tests {
             L5_POOL,
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
-            SlotNo(0),
-            1_000,
+            hermetic_timing(0),
         );
 
         let tip_before = ChainDb::tip(&chaindb).unwrap();
@@ -5108,9 +5157,7 @@ mod tests {
             L5_POOL,
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
-            SlotNo(0),
-            1_000,
+            hermetic_timing(0),
         );
 
         let tip_before = ChainDb::tip(&chaindb).unwrap();
@@ -5154,10 +5201,10 @@ mod tests {
 
     #[tokio::test]
     async fn relay_loop_forge_slot_derived_via_clock_seam() {
-        // CE-E-3: the slot the forge runs at is derived ONLY through the clock
-        // seam — millis_to_slot(tick, anchor, start, slot_len). Assert the
-        // forged outcome's slot equals that pure conversion (tick 250_000 ms,
-        // 1_000 ms/slot, anchor 0, start 0 => slot 250).
+        // CE-E-3 + LIVE-2c CE-L2c-1: the slot the forge runs at is derived ONLY through the
+        // bootstrap-bound timing authority. Asserted against `timing.slot_at(tick)` -- the SAME
+        // call the loop makes -- rather than against a locally recomputed conversion, because a
+        // second local copy of the arithmetic is exactly what this slice removed.
         let dir = TempDir::new().unwrap();
         let chaindb =
             PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
@@ -5173,7 +5220,10 @@ mod tests {
         let coordinator = s2_coordinator_state();
         let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
         let view = s2_idle_view();
-        let expected = millis_to_slot(250_000, 0, SlotNo(0), 1_000);
+        let expected = hermetic_timing(0)
+            .slot_at(250_000)
+            .expect("the authority converts the tick");
+        assert_eq!(expected, SlotNo(250), "1s slots from unix 0: 250_000ms => slot 250");
         let mut clock = DeterministicClock::new(0, vec![250_000]);
         let mut act = ForgeActivation::new(
             &mut clock,
@@ -5183,9 +5233,7 @@ mod tests {
             L5_POOL,
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
-            SlotNo(0),
-            1_000,
+            hermetic_timing(0),
         );
 
         let loop_fut = run_relay_loop(
@@ -5215,7 +5263,262 @@ mod tests {
         assert_eq!(
             SlotNo(outcome_slot),
             expected,
-            "forge slot must equal the clock-seam millis_to_slot derivation"
+            "forge slot must equal the timing authority's derivation"
+        );
+    }
+
+    // ==================================================================================
+    // LIVE-2c ACTIVATION — the wiring proofs, driven through the REAL `--mode node` loop.
+    // ==================================================================================
+
+    /// The preprod venue calendar bound to `~/.cardano-live1/ade-preprod-s7`'s durable facts, built
+    /// through the PRODUCTION resolver (`forge_timing`) rather than assembled here — so what these
+    /// tests exercise is what the node establishes at startup.
+    fn preprod_live_timing() -> BootstrapBoundTimingAuthority {
+        use ade_core::consensus::praos_state::Nonce as PNonce;
+        let sidecar = ade_ledger::seed_consensus_inputs::SeedEpochConsensusInputs {
+            anchor_fp: Hash32([0u8; 32]),
+            epoch_no: EpochNo(304),
+            epoch_start_slot: SlotNo(129_686_400),
+            epoch_length_slots: 432_000,
+            epoch_nonce: PNonce(Hash32([1u8; 32])),
+            genesis_hash: crate::bootstrap_export::resolve_network_profile("preprod")
+                .expect("preprod is committed")
+                .genesis_hash,
+            protocol_params_hash: Hash32([2u8; 32]),
+            seed_point_slot: SlotNo(129_813_427),
+            seed_point_hash: Hash32([3u8; 32]),
+            active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 20 },
+            security_param: 2160,
+            total_active_stake: 0,
+            pool_distribution: BTreeMap::new(),
+        };
+        crate::forge_timing::establish_forge_timing_authority(&sidecar, "preprod", None)
+            .expect("the live store's durable facts establish the preprod calendar")
+    }
+
+    /// CE-L2c-5 + CE-L2c-6, in ONE run through the authoritative `--mode node` loop.
+    ///
+    /// The preserved live instant (1_786_021_761_000 ms, measured 2026-08-06) is fed to the loop as
+    /// a clock tick. Two things must follow, and both are read from the loop's own outputs:
+    ///
+    ///   CE-L2c-5  the loop derives slot 130_338_561 -- the independently-derived value the live
+    ///             discriminator run recorded, and NOT 131_980_161, which is what the deleted naive
+    ///             conversion produced (1_641_600 slots = 86_400 x 19s ahead).
+    ///   CE-L2c-6  that slot is outside this op-cert's KES window, and the tick emits a TYPED
+    ///             refusal naming which end of the window -- never a silent skip, and never
+    ///             `no_tip_available`, which is what B11 reported before this slice.
+    ///
+    /// The pairing is deliberate: it is the same slot flowing from the conversion into the KES gate,
+    /// so a wiring regression in either shows up here.
+    #[tokio::test]
+    async fn ce_l2c_5_and_6_live_instant_derives_the_measured_slot_and_refuses_typed() {
+        const CAPTURED_MS: u64 = 1_786_021_761_000;
+        const EXPECTED_SLOT: u64 = 130_338_561;
+        const NAIVE_SLOT: u64 = 131_980_161;
+
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        let mut state = l5_forge_spine();
+        let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
+        let mut source = NodeBlockSource::from_wire_pump(block_rx);
+        let (sd_tx, mut sd_rx) = watch::channel(false);
+        let sched = l5_era_schedule();
+        let recovered = l5_recovered_state_cold(Some(l5_recovered_inputs()));
+        let coordinator = s2_coordinator_state();
+        let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
+        let view = s2_idle_view();
+        let mut clock = DeterministicClock::new(0, vec![CAPTURED_MS]);
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &recovered,
+            &mut shell,
+            L5_POOL,
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            preprod_live_timing(),
+        );
+        let mut sched_log = crate::live_log::NodeSchedLogWriter::new(Vec::<u8>::new());
+        let loop_fut = crate::node_lifecycle::run_relay_loop_with_sched(
+            &mut state,
+            &mut source,
+            &chaindb,
+            &mut wal,
+            &sched,
+            &view,
+            &mut sd_rx,
+            Some(&mut act),
+            Some(&mut sched_log),
+            None,
+            None,
+            None,
+            None,
+            crate::node_lifecycle::RecoveryAdmissionPolicy::cardano(),
+        );
+        let driver = async {
+            let _ = sd_tx.send(true);
+        };
+        let (loop_res, _) = tokio::join!(loop_fut, driver);
+        loop_res.expect("the loop halts cleanly");
+        drop(block_tx);
+
+        // CE-L2c-5 AND CE-L2c-6 in one assertion: the typed refusal CARRIES the slot the loop
+        // derived, so this proves the conversion's answer AND that it actually reached the KES gate
+        // — not merely that it was computed somewhere. (The loop clears `pending_slot` every
+        // iteration, so post-hoc it is always None; the refusal is the durable observation.)
+        match act.last_forge_refused.as_ref() {
+            Some(ForgeRefused::KesWindow(KesSlotError::AfterOperationalCertificateEnd {
+                slot,
+                ..
+            })) => {
+                assert_eq!(
+                    *slot,
+                    SlotNo(EXPECTED_SLOT),
+                    "the node loop must derive the measured live slot"
+                );
+                assert_ne!(
+                    *slot,
+                    SlotNo(NAIVE_SLOT),
+                    "the deleted naive conversion's answer must be unreachable"
+                );
+            }
+            other => panic!("expected a typed KES-window refusal for this slot, got {other:?}"),
+        }
+        assert_eq!(NAIVE_SLOT - EXPECTED_SLOT, 1_641_600);
+        assert!(
+            act.hermetic_forge_outcomes.is_empty(),
+            "a KES-window refusal must not reach the forge"
+        );
+
+        // ...and the EMITTED record says so. `no_tip_available` here would be the pre-LIVE-2c lie:
+        // it is what B11 reported while holding a perfectly good tip.
+        let jsonl = String::from_utf8(sched_log.into_inner()).expect("utf8 transcript");
+        assert!(
+            jsonl.contains("\"outcome\":\"refused\""),
+            "an admitted-then-refused tick must emit outcome=refused; got:\n{jsonl}"
+        );
+        assert!(
+            jsonl.contains("\"skip_reason\":\"kes_after_opcert_end\""),
+            "the emitted reason must name WHICH end of the KES window; got:\n{jsonl}"
+        );
+        assert!(
+            !jsonl.contains("\"outcome\":\"no_tip_available\""),
+            "a KES refusal must NOT be reported as an absent tip; got:\n{jsonl}"
+        );
+    }
+
+    /// CE-L2c-A5: a refusal never outlives its own tick.
+    ///
+    /// `last_forge_refused` was sticky — written in eight places, cleared only on a successful
+    /// forge. The precise harm (narrowed by the mutation sweep, which is what it is for): every
+    /// path that DOES refuse overwrites the field, so the damage is confined to the one path that
+    /// records nothing — the genuine "no tip to build on" tick. That tick re-emitted the PREVIOUS
+    /// tick's reason and its tip operands, turning an honest absence into confident, wrong
+    /// evidence. Ruling that out by hand was a required step in diagnosing this slice's live run.
+    ///
+    /// So the discriminator is exactly that shape: a fenced tick, then a tick that reaches
+    /// `if !forged` with nothing of its own to say. It must report `no_tip_available` with NO
+    /// reason, not the fence it no longer has.
+    #[tokio::test]
+    async fn ce_l2c_a5_a_refusal_never_outlives_its_own_tick() {
+        // A tick INSIDE the op-cert's KES window (the hermetic 1s-slot venue, slot 250), so the KES
+        // gate passes and the tick can reach the emitter with nothing of its own to report. The
+        // preprod calendar would refuse on KES first and mask the case under test.
+        const TICK_MS: u64 = 250_000;
+
+        // A cold recovered state with NO seed-epoch inputs: `may_cold_start_forge` refuses to
+        // cold-start, and an empty ChainDb has no selected tip -- so the tick passes the gates,
+        // forges nothing, and records nothing. That is the only path that reaches the emitter with
+        // an empty refusal, and therefore the only one the sticky field could corrupt.
+        let run_tick = |pending_reselection: bool, tick_ms: u64| async move {
+            let dir = TempDir::new().unwrap();
+            let chaindb =
+                PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                    .unwrap();
+            let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+            let mut state = l5_forge_spine();
+            let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
+            let mut source = NodeBlockSource::from_wire_pump(block_rx);
+            let (sd_tx, mut sd_rx) = watch::channel(false);
+            let sched = l5_era_schedule();
+            let recovered = l5_recovered_state_cold(None);
+            let coordinator = s2_coordinator_state();
+            let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
+            let view = s2_idle_view();
+            let mut clock = DeterministicClock::new(0, vec![tick_ms]);
+            let mut act = ForgeActivation::new(
+                &mut clock,
+                &coordinator,
+                &recovered,
+                &mut shell,
+                L5_POOL,
+                ProtocolParameters::default(),
+                ProtocolVersion { major: 9, minor: 0 },
+                hermetic_timing(0),
+            );
+            act.pending_reselection = pending_reselection;
+            // Pre-load a refusal from a NOTIONAL earlier tick. This is the state the sticky field
+            // carried forward; with the per-tick reset it must not survive into this tick's record.
+            act.last_forge_refused = Some(ForgeRefused::ReselectionPending);
+            let mut sched_log = crate::live_log::NodeSchedLogWriter::new(Vec::<u8>::new());
+            let loop_fut = crate::node_lifecycle::run_relay_loop_with_sched(
+                &mut state,
+                &mut source,
+                &chaindb,
+                &mut wal,
+                &sched,
+                &view,
+                &mut sd_rx,
+                Some(&mut act),
+                Some(&mut sched_log),
+                None,
+                None,
+                None,
+                None,
+                crate::node_lifecycle::RecoveryAdmissionPolicy::cardano(),
+            );
+            let driver = async {
+                let _ = sd_tx.send(true);
+            };
+            let (loop_res, _) = tokio::join!(loop_fut, driver);
+            loop_res.expect("the loop halts cleanly");
+            drop(block_tx);
+            let recorded = act.last_forge_refused.clone();
+            (
+                String::from_utf8(sched_log.into_inner()).expect("utf8 transcript"),
+                recorded,
+            )
+        };
+
+        // (a) The fence IS set this tick: it reports itself. Baseline, so (b) is not vacuous.
+        let (fenced, fenced_recorded) = run_tick(true, TICK_MS).await;
+        assert!(
+            fenced.contains("\"skip_reason\":\"reselection_pending\""),
+            "a fenced tick must report the fence; got:\n{fenced}"
+        );
+        assert!(matches!(
+            fenced_recorded,
+            Some(ForgeRefused::ReselectionPending)
+        ));
+
+        // (b) The fence is NOT set this tick, and the tick has nothing of its own to report. The
+        // stale refusal must be gone -- not re-emitted as though it were this slot's reason.
+        let (clean, clean_recorded) = run_tick(false, TICK_MS).await;
+        assert!(
+            !clean.contains("\"skip_reason\":\"reselection_pending\""),
+            "a stale refusal must NOT be re-emitted on a later tick; got:\n{clean}"
+        );
+        assert!(
+            clean.contains("\"outcome\":\"no_tip_available\"") && clean.contains("\"skip_reason\":null"),
+            "a tick with no reason of its own must say so honestly; got:\n{clean}"
+        );
+        assert_eq!(
+            clean_recorded, None,
+            "the arm must clear the previous tick's refusal on entry"
         );
     }
 
@@ -5304,9 +5607,7 @@ mod tests {
                 L5_POOL,
                 ProtocolParameters::default(),
                 ProtocolVersion { major: 9, minor: 0 },
-                0,
-                SlotNo(0),
-                1_000,
+                hermetic_timing(0),
             );
 
             let loop_fut = run_relay_loop(
@@ -5426,9 +5727,7 @@ mod tests {
                 L5_POOL,
                 ProtocolParameters::default(),
                 ProtocolVersion { major: 9, minor: 0 },
-                0,
-                SlotNo(0),
-                1_000,
+                hermetic_timing(0),
             );
             // Keep the sender alive ONLY in the live case (Continuing feed); the
             // empty in_memory source is `is_ended` and halts before any ForgeTick.
@@ -5585,9 +5884,7 @@ mod tests {
             L5_POOL,
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
-            SlotNo(0),
-            1_000,
+            hermetic_timing(0),
         );
 
         let loop_fut = run_relay_loop(
@@ -5671,9 +5968,7 @@ mod tests {
             L5_POOL,
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
-            SlotNo(0),
-            1_000,
+            hermetic_timing(0),
         );
 
         let loop_fut = run_relay_loop(
@@ -6021,10 +6316,14 @@ mod tests {
     async fn drive_operator_forge_once(
         opdir: &std::path::Path,
         chaindir: &std::path::Path,
-        anchor_millis: u64,
+        // LIVE-2c part 2: the DECLARED DOMAIN start (a bootstrap fact), replacing the old
+        // `anchor_millis`. An instant before this slot's start time is refused -- the successor to
+        // the `BeforeGenesisAnchor` drift guard, now anchored on the store rather than on a
+        // separately-supplied genesis timestamp.
+        anchor_slot: u64,
     ) -> (
         Vec<CoordinatorEvent>,
-        Option<ade_runtime::clock::SlotAlignmentError>,
+        Option<ade_core::consensus::era_schedule::TimingAnchorError>,
     ) {
         let chaindb =
             PersistentChainDb::open(PersistentChainDbOptions::at(chaindir.join("chain.db")))
@@ -6059,9 +6358,7 @@ mod tests {
             op_pool,
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            anchor_millis,
-            SlotNo(0),
-            1_000,
+            hermetic_timing(anchor_slot),
         );
 
         let tip_before = ChainDb::tip(&chaindb).unwrap();
@@ -6097,7 +6394,7 @@ mod tests {
         );
         (
             std::mem::take(&mut act.hermetic_forge_outcomes),
-            act.last_slot_alignment_fail,
+            act.last_slot_derivation_fail,
         )
     }
 
@@ -6166,24 +6463,28 @@ mod tests {
 
     #[tokio::test]
     async fn node_forge_slot_drift_fails_closed() {
-        // CE-G-A-3 (drift): a genesis anchor AHEAD of the observed wall-clock
-        // (anchor 200_000ms > tick 100_000ms) is an implausible alignment the
-        // saturating millis_to_slot would mask to slot 0. The node forge path
-        // fails CLOSED at the RED clock seam — no forge attempt, the structured
-        // SlotAlignmentError is surfaced, and no durable tip / snapshot moves
-        // (asserted inside the helper).
+        // CE-G-A-3 (drift), carried to LIVE-2c: an observed wall-clock BEFORE the anchor's declared
+        // domain (domain starts at slot 200 = 200_000ms; the tick is 100_000ms) cannot be converted.
+        // The node forge path fails CLOSED at the RED clock seam — no forge attempt, a structured
+        // TimingAnchorError is surfaced, and no durable tip / snapshot moves (asserted inside the
+        // helper). The saturating `millis_to_slot` would have masked this to the domain start.
         let opdir = TempDir::new().unwrap();
         let chaindir = TempDir::new().unwrap();
         let (outcomes, slot_fail) =
-            drive_operator_forge_once(opdir.path(), chaindir.path(), 200_000).await;
+            drive_operator_forge_once(opdir.path(), chaindir.path(), 200).await;
         assert_eq!(
             slot_fail,
-            Some(ade_runtime::clock::SlotAlignmentError::BeforeGenesisAnchor),
-            "an anchor ahead of the wall-clock must fail closed, not mask drift"
+            Some(
+                ade_core::consensus::era_schedule::TimingAnchorError::BeforeDomainStart {
+                    captured_ms: 100_000,
+                    domain_start_ms: 200_000,
+                }
+            ),
+            "an instant before the anchor's domain must fail closed, not mask drift"
         );
         assert!(
             outcomes.is_empty(),
-            "a drift-failed slot alignment forges nothing"
+            "a refused slot derivation forges nothing"
         );
     }
 
@@ -7232,9 +7533,7 @@ mod tests {
             lead.pool_id.clone(),
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
-            SlotNo(0),
-            1_000,
+            hermetic_timing(0),
         );
         act.declare_single_producer_venue();
         act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
@@ -7287,9 +7586,7 @@ mod tests {
             lead.pool_id.clone(),
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
-            SlotNo(0),
-            1_000,
+            hermetic_timing(0),
         );
         let mut source = NodeBlockSource::in_memory(vec![]); // ENDED feed
         let (_sd_tx, mut sd_rx) = watch::channel(false);
@@ -7330,9 +7627,7 @@ mod tests {
             lead.pool_id.clone(),
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
-            SlotNo(0),
-            1_000,
+            hermetic_timing(0),
         );
         act.declare_single_producer_venue();
         act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
@@ -7378,9 +7673,7 @@ mod tests {
             lead.pool_id.clone(),
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
-            SlotNo(0),
-            1_000,
+            hermetic_timing(0),
         );
         // Single-producer extend venue, NO certificate (no cert present).
         act.declare_single_producer_venue();
@@ -7435,9 +7728,7 @@ mod tests {
             lead.pool_id.clone(),
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
-            SlotNo(0),
-            10,
+            hermetic_timing_ms(0, 10),
         );
         act.declare_single_producer_venue();
         act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
@@ -7494,9 +7785,7 @@ mod tests {
             lead.pool_id.clone(),
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
-            SlotNo(0),
-            10,
+            hermetic_timing_ms(0, 10),
         );
         // NO certificate (no cert present) — the forge base is the local tip.
         act.declare_single_producer_venue();
@@ -7572,9 +7861,7 @@ mod tests {
             lead.pool_id.clone(),
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
-            SlotNo(0),
-            1_000,
+            hermetic_timing(0),
         );
         act.declare_single_producer_venue();
         act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
@@ -7727,9 +8014,7 @@ mod tests {
             lead.pool_id.clone(),
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
-            SlotNo(0),
-            10,
+            hermetic_timing_ms(0, 10),
         );
         act.declare_single_producer_venue();
         act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
@@ -7900,9 +8185,7 @@ mod tests {
             lead.pool_id.clone(),
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
-            SlotNo(0),
-            10,
+            hermetic_timing_ms(0, 10),
         );
         act.declare_single_producer_venue();
         act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
@@ -8049,9 +8332,7 @@ mod tests {
             lead.pool_id.clone(),
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
-            SlotNo(0),
-            10,
+            hermetic_timing_ms(0, 10),
         );
         act.declare_single_producer_venue();
         act.forge_mode = forge_mode; // the warm-start-re-entry mode (NOT InitialCatchupRequired)

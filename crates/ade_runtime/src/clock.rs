@@ -93,41 +93,21 @@ pub fn millis_to_slot(
     SlotNo(start_slot.0.saturating_add(slots_since_anchor))
 }
 
-/// Closed error for the node forge-path clock→slot alignment guard
-/// (PHASE4-N-F-G-A S3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SlotAlignmentError {
-    /// The observed wall-clock millis is BEFORE the genesis anchor
-    /// (`tick < start_millis`): the slot cannot be exactly derived —
-    /// `millis_to_slot` would saturation-mask this to `start_slot`. The node
-    /// forge path fails closed here instead of forging a masked slot.
-    BeforeGenesisAnchor,
-}
-
-/// Checked `millis_to_slot` for the node forge path (PHASE4-N-F-G-A S3): fails
-/// closed on an implausible clock→slot alignment instead of saturating.
-///
-/// Returns `Err(SlotAlignmentError::BeforeGenesisAnchor)` when `tick_millis <
-/// start_millis` (the exact case the saturating [`millis_to_slot`] masks to
-/// `start_slot`); otherwise the EXACT [`millis_to_slot`] result. Pure integer
-/// arithmetic; no wall-clock, no float. The saturating `millis_to_slot` is left
-/// unchanged for the produce path (which swallows drift by design).
-pub fn checked_millis_to_slot(
-    tick_millis: u64,
-    start_millis: u64,
-    start_slot: SlotNo,
-    slot_length_ms: u32,
-) -> Result<SlotNo, SlotAlignmentError> {
-    if tick_millis < start_millis {
-        return Err(SlotAlignmentError::BeforeGenesisAnchor);
-    }
-    Ok(millis_to_slot(
-        tick_millis,
-        start_millis,
-        start_slot,
-        slot_length_ms,
-    ))
-}
+// LIVE-2c part 2 — `checked_millis_to_slot` / `SlotAlignmentError` are DELETED, not deprecated.
+//
+// They were the node forge path's wall-clock→slot conversion: a single `(start_millis, start_slot,
+// slot_length_ms)` anchor, which cannot express a venue whose slot length changed. On preprod that
+// made every derived forge slot 86_400 x (20s - 1s) = 1_641_600 slots (~19 days) fast, and nothing
+// downstream refused it (the operator op-cert covered the wrong slot too).
+//
+// The replacement is `ade_core::consensus::era_schedule::BootstrapBoundTimingAuthority`, which
+// carries the venue's whole timing calendar and is bound to the store's durable bootstrap facts.
+// Removal rather than deprecation is the point: two reachable slot authorities ARE the defect
+// class, so leaving this one merely unpreferred would not have closed it.
+//
+// `millis_to_slot` below survives for `orchestrator::leadership_session`, whose only entry point
+// (`run_node_until_shutdown`) is reachable from tests alone — no `Mode` dispatches to it. That
+// containment is asserted by `ci/ci_check_forge_slot_authority.sh`, not left to this comment.
 
 /// Production wall-clock impl. RED sub-classified — never
 /// reachable from BLUE or GREEN code paths. Lives in this file
@@ -257,30 +237,19 @@ mod tests {
         assert_eq!(millis_to_slot(99999, 0, SlotNo(42), 0), SlotNo(42));
     }
 
+    /// LIVE-2c part 2: the single-anchor conversion cannot express a venue whose slot length
+    /// changed, which is why the forge path no longer uses one. Pinned here so the limitation is a
+    /// recorded property of the surviving helper rather than a trap for its next caller.
     #[test]
-    fn checked_millis_to_slot_matches_millis_to_slot_when_aligned() {
-        // tick >= anchor: the checked map equals the exact saturating map.
-        for tick in [1000u64, 1500, 2000, 999_999] {
-            assert_eq!(
-                checked_millis_to_slot(tick, 1000, SlotNo(0), 1000),
-                Ok(millis_to_slot(tick, 1000, SlotNo(0), 1000))
-            );
-        }
-        // Boundary: tick == anchor is aligned (slot == start_slot).
+    fn millis_to_slot_cannot_express_a_multi_length_venue() {
+        // preprod: 86_400 slots of 20s, then 1s. The real slot at the preserved live instant is
+        // 130_338_561; a single 1s anchor from the system start reads 1_641_600 slots too high.
+        const SYSTEM_START_MS: u64 = 1_654_041_600_000;
+        const CAPTURED_MS: u64 = 1_786_021_761_000;
         assert_eq!(
-            checked_millis_to_slot(1000, 1000, SlotNo(0), 1000),
-            Ok(SlotNo(0))
-        );
-    }
-
-    #[test]
-    fn checked_millis_to_slot_before_anchor_fails_closed() {
-        // tick < anchor: the saturating map returns start_slot (slot 0); the
-        // checked guard fails closed instead of masking the drift.
-        assert_eq!(millis_to_slot(500, 1000, SlotNo(0), 1000), SlotNo(0));
-        assert_eq!(
-            checked_millis_to_slot(500, 1000, SlotNo(0), 1000),
-            Err(SlotAlignmentError::BeforeGenesisAnchor)
+            millis_to_slot(CAPTURED_MS, SYSTEM_START_MS, SlotNo(0), 1_000).0 - 130_338_561,
+            1_641_600,
+            "one anchor + one slot length silently mis-derives a venue with a 20s segment"
         );
     }
 }

@@ -175,8 +175,14 @@ discriminators — the families must stay separable, so KES does not become one 
 **And the outcome stops lying.** B11 was never literally silent: it fell through to
 `ForgeResult { outcome: no_tip_available, skip_reason: null }` — indistinguishable from a genuine
 absent tip. `ForgeOutcome::Refused` is added so an admitted tick that was refused reports a refusal;
-`no_tip_available` narrows to what its name says. `last_forge_refused` is reset per tick, so a
-refusal can never be re-emitted as a later tick's reason (the staleness M1 had to rule out by hand).
+`no_tip_available` narrows to what its name says.
+
+`last_forge_refused` is also reset per tick. The mutation sweep narrowed this one from how it was
+first written, and the narrower version is the true one: every path that *does* refuse overwrites the
+field, so the sticky harm was confined to the single path that records nothing — no fence, no KES
+failure, and no tip to build on. That tick re-emitted the previous tick's reason **and its tip
+operands**. Narrow, but it is precisely the record an operator reads when nothing is happening, and
+ruling it out by hand was a required step in diagnosing M1.
 
 Completed invariant: **every admitted `ForgeTick` produces either a structured refusal or a
 leader-schedule decision. No admitted tick may disappear, and none may report a reason that is not

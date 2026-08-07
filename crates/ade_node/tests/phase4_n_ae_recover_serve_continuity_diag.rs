@@ -258,6 +258,7 @@ fn forge_refused_not_caught_up() {
         ForgeRefused::ParticipantForgeBaseChangedBeforeSign { .. } => {
             panic!("expected NotCaughtUp, got ParticipantForgeBaseChangedBeforeSign")
         }
+        ForgeRefused::KesWindow(_) => panic!("expected NotCaughtUp, got KesWindow"),
     }
 }
 

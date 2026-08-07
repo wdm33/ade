@@ -114,13 +114,19 @@ pub fn load_operator_producer_shell(
 /// genesis-anchor host for the reused `kes_period_for_slot`); this module does
 /// NOT build a `CoordinatorState` (kept caller-side so custody/no-leak stays
 /// trivially gated).
+/// LIVE-2c part 2 — the naive `(anchor_millis, start_slot, slot_length_ms)` triple is REMOVED from
+/// this struct. Those three fields together WERE the defective conversion: the venue system start
+/// paired with a single (Shelley) slot length, which ignores that preprod's first 86_400 slots
+/// lasted 20 s and so ran 1_641_600 slots ≈ 19 days fast.
+///
+/// This module is operator SIGNING-MATERIAL ingress; it no longer emits a slot-conversion anchor at
+/// all, and the forge's wall-clock→slot authority is established once from durable bootstrap state
+/// (`crate::forge_timing`). The genesis clock constants survive on `genesis` for the KES anchor and
+/// as a fail-closed CROSS-CHECK of the committed calendar — never as a conversion anchor.
 pub struct OperatorForgeMaterial {
     pub shell: ProducerShell,
     pub genesis: GenesisAnchor,
     pub pool_id: Hash28,
-    pub anchor_millis: u64,
-    pub start_slot: SlotNo,
-    pub slot_length_ms: u32,
 }
 
 /// Slot at which KES period 0 begins — the genesis KES-period origin. KES periods
@@ -176,20 +182,13 @@ pub fn build_operator_forge_material(
     let shell = load_operator_producer_shell(paths, current_kes_period)?;
     // pool_id from the operator cold verification key — the one named derivation.
     let pool_id = Hash28(ade_crypto::blake2b_224(&shell.cold_vk().0).0);
-    // Clock-seam anchors (DC-NODE-03 / DC-NODE-05): slot_zero_time IS slot 0's
-    // wall-clock time, so the conversion anchor is (slot_zero_time_unix_ms,
-    // start_slot = 0, slot_length_ms). Read the Copy fields before moving genesis.
-    let anchor_millis = genesis.slot_zero_time_unix_ms;
-    let slot_length_ms = u32::try_from(genesis.slot_length_ms)
-        .unwrap_or(u32::MAX)
-        .max(1);
+    // LIVE-2c part 2: no conversion anchor is produced here. `genesis` carries the KES anchor and
+    // the clock constants the caller cross-checks against the committed venue calendar; the forge's
+    // wall-clock→slot authority is established elsewhere, from durable bootstrap state.
     Ok(OperatorForgeMaterial {
         shell,
         genesis,
         pool_id,
-        anchor_millis,
-        start_slot: SlotNo(0),
-        slot_length_ms,
     })
 }
 
@@ -408,12 +407,11 @@ mod tests {
         // pool_id derived from the operator cold vkey — the one named place.
         let expected_pool = Hash28(ade_crypto::blake2b_224(&mat.shell.cold_vk().0).0);
         assert_eq!(mat.pool_id, expected_pool);
-        // Clock-seam anchors come from the REAL shelley-genesis (clock/KES/network
-        // only; protocol_version + pparams are NOT here — they come from the
-        // recovered ledger's current protocol_params, installed by S2a).
-        assert_eq!(mat.anchor_millis, 1_654_041_600_000);
-        assert_eq!(mat.start_slot, SlotNo(0));
-        assert_eq!(mat.slot_length_ms, 1000);
+        // LIVE-2c part 2: this module no longer emits a slot-conversion anchor. The genesis clock
+        // constants survive on `genesis` for the KES anchor and as the caller's fail-closed
+        // cross-check of the committed venue calendar — never as a conversion anchor.
+        assert_eq!(mat.genesis.slot_zero_time_unix_ms, 1_654_041_600_000);
+        assert_eq!(mat.genesis.slot_length_ms, 1000);
         // PO-3: kes_anchor_slot is the proven genesis KES-period origin (0), not a
         // fabricated value nor an inherited simple-JSON field.
         assert_eq!(mat.genesis.kes_anchor_slot, 0);

@@ -34,6 +34,8 @@
 
 use std::collections::BTreeMap;
 
+use ade_types::SlotNo;
+
 use crate::producer::producer_log::{
     ForgeFailureReason, PeerDisconnectReason, PeerId, ProducerLogEvent, ShutdownReason,
     SlotMissedReason,
@@ -150,7 +152,77 @@ pub struct CoordinatorState {
     pub shutdown_in_progress: bool,
 }
 
+/// LIVE-2c part 3 (B11) — why a slot has no KES evolution index. Closed and structured.
+///
+/// Exists because the `--mode node` ForgeTick arm read `kes_period_for_slot` as an `Option` and let
+/// `None` skip the entire forge attempt: no forge, no `last_forged_slot` advance, no typed refusal
+/// recorded — the one path between an admitted tick and the typed surface that produced no reason of
+/// its own. An `Option` cannot say WHICH of three materially different things happened, and they
+/// have different operator fixes: the op-cert is not valid yet, the key is exhausted and must be
+/// rotated, or the arithmetic overflowed.
+///
+/// Each variant carries the SLOT BOUNDS, not just the periods, because "period 1018 is out of range"
+/// does not tell an operator when to act and "slots ≥ 133,747,200 need a new op-cert" does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KesSlotError {
+    /// The slot precedes the op-cert's start period (the key is not valid yet), or precedes the KES
+    /// anchor entirely.
+    BeforeOperationalCertificateStart {
+        slot: SlotNo,
+        first_supported_slot: SlotNo,
+    },
+    /// The slot is past the key's covered window — the op-cert is exhausted and must be rotated.
+    AfterOperationalCertificateEnd {
+        slot: SlotNo,
+        last_supported_slot: SlotNo,
+    },
+    /// Period or slot-bound arithmetic overflowed.
+    PeriodArithmeticOverflow { slot: SlotNo },
+}
+
 impl CoordinatorState {
+    /// LIVE-2c part 3 (B11) — the TYPED form of [`Self::kes_period_for_slot`], and the single
+    /// definition: the `Option` accessor delegates to this, so the two can never disagree about
+    /// which slots are signable.
+    ///
+    /// Same arithmetic, same bounds; only the refusal is richer. Pure and total.
+    pub fn kes_period_for_slot_checked(&self, slot: u64) -> Result<u32, KesSlotError> {
+        let s = SlotNo(slot);
+        let spk = self.genesis_anchor.slots_per_kes_period;
+        let start = u64::from(self.opcert_meta.kes_start_period);
+        // The first slot the op-cert covers: anchor + start_period * slots_per_period.
+        let first_supported = start
+            .checked_mul(spk)
+            .and_then(|o| self.genesis_anchor.kes_anchor_slot.checked_add(o))
+            .ok_or(KesSlotError::PeriodArithmeticOverflow { slot: s })?;
+        if slot < first_supported {
+            return Err(KesSlotError::BeforeOperationalCertificateStart {
+                slot: s,
+                first_supported_slot: SlotNo(first_supported),
+            });
+        }
+        if spk == 0 {
+            return Err(KesSlotError::PeriodArithmeticOverflow { slot: s });
+        }
+        let absolute_period = (slot - self.genesis_anchor.kes_anchor_slot) / spk;
+        let evolution = absolute_period - start;
+        let max = u64::from(self.genesis_anchor.kes_max_period);
+        if evolution > max {
+            // The LAST slot the op-cert covers: the final slot of evolution `max`.
+            let last_supported = start
+                .checked_add(max)
+                .and_then(|p| p.checked_mul(spk))
+                .and_then(|o| self.genesis_anchor.kes_anchor_slot.checked_add(o))
+                .and_then(|s0| s0.checked_add(spk - 1))
+                .ok_or(KesSlotError::PeriodArithmeticOverflow { slot: s })?;
+            return Err(KesSlotError::AfterOperationalCertificateEnd {
+                slot: s,
+                last_supported_slot: SlotNo(last_supported),
+            });
+        }
+        u32::try_from(evolution).map_err(|_| KesSlotError::PeriodArithmeticOverflow { slot: s })
+    }
+
     /// Compute the KES evolution index to sign a block at `slot` with.
     ///
     /// The slot's ABSOLUTE KES period is `(slot - kes_anchor_slot) /
@@ -168,21 +240,12 @@ impl CoordinatorState {
     /// period 888) yields the small relative index (3) the signer actually needs --
     /// previously this returned `None` (888 > kes_max_period), silently blocking
     /// ALL block production on any non-from-genesis chain.
+    /// LIVE-2c part 3: delegates to [`Self::kes_period_for_slot_checked`] so there is ONE definition
+    /// of which slots are signable. Retained for the non-forge callers that only need the value; the
+    /// authoritative `--mode node` ForgeTick arm consumes the `Result`, because an admitted tick must
+    /// never disappear into a `None`.
     pub fn kes_period_for_slot(&self, slot: u64) -> Option<u32> {
-        if slot < self.genesis_anchor.kes_anchor_slot {
-            return None;
-        }
-        let offset = slot - self.genesis_anchor.kes_anchor_slot;
-        let absolute_period = offset / self.genesis_anchor.slots_per_kes_period;
-        let start = self.opcert_meta.kes_start_period as u64;
-        if absolute_period < start {
-            return None;
-        }
-        let evolution = absolute_period - start;
-        if evolution > self.genesis_anchor.kes_max_period as u64 {
-            return None;
-        }
-        Some(evolution as u32)
+        self.kes_period_for_slot_checked(slot).ok()
     }
 }
 
@@ -709,6 +772,99 @@ mod tests {
         let (gs, _) = coordinator_init(test_cfg());
         assert_eq!(gs.kes_period_for_slot(0), Some(0));
         assert_eq!(gs.kes_period_for_slot(3 * SPK), Some(3));
+    }
+
+    /// LIVE-2c part 3 (B11): the typed form says WHICH of three things happened, and names the SLOT
+    /// bound an operator can act on — not just a period number.
+    #[test]
+    fn kes_period_for_slot_checked_names_the_reason_and_the_slot_bound() {
+        const SPK: u64 = 129_600;
+        let mut cfg = test_cfg();
+        cfg.genesis_anchor.kes_max_period = 62;
+        cfg.opcert_meta.kes_start_period = 885;
+        let (state, _) = coordinator_init(cfg);
+
+        assert_eq!(state.kes_period_for_slot_checked(115_092_757), Ok(3));
+        assert_eq!(state.kes_period_for_slot_checked(885 * SPK), Ok(0));
+        assert_eq!(state.kes_period_for_slot_checked((885 + 62) * SPK), Ok(62));
+
+        // Not valid yet -> the FIRST slot the op-cert covers.
+        assert_eq!(
+            state.kes_period_for_slot_checked(884 * SPK),
+            Err(KesSlotError::BeforeOperationalCertificateStart {
+                slot: SlotNo(884 * SPK),
+                first_supported_slot: SlotNo(885 * SPK),
+            })
+        );
+        // Exhausted -> the LAST slot the op-cert covers (the final slot of evolution 62, not its
+        // first: an operator rotating a key needs the deadline, not the period's start).
+        assert_eq!(
+            state.kes_period_for_slot_checked((885 + 63) * SPK),
+            Err(KesSlotError::AfterOperationalCertificateEnd {
+                slot: SlotNo((885 + 63) * SPK),
+                last_supported_slot: SlotNo((885 + 62) * SPK + SPK - 1),
+            })
+        );
+        // The boundary is exact on both sides.
+        assert!(state
+            .kes_period_for_slot_checked((885 + 62) * SPK + SPK - 1)
+            .is_ok());
+        assert!(state.kes_period_for_slot_checked((885 + 62) * SPK + SPK).is_err());
+    }
+
+    /// The `Option` accessor and the typed one are ONE definition: for every probe, `Some` iff `Ok`
+    /// and the values agree. A future edit to either that changes which slots are signable fails here.
+    #[test]
+    fn the_option_accessor_never_disagrees_with_the_typed_one() {
+        const SPK: u64 = 129_600;
+        let mut cfg = test_cfg();
+        cfg.genesis_anchor.kes_max_period = 62;
+        cfg.opcert_meta.kes_start_period = 970; // the LIVE preprod operator op-cert
+        let (state, _) = coordinator_init(cfg);
+        for slot in [
+            0u64,
+            1,
+            969 * SPK,
+            970 * SPK - 1,
+            970 * SPK,
+            970 * SPK + 1,
+            130_338_561, // the corrected live slot
+            131_976_696, // the naive 19-day-ahead slot
+            (970 + 62) * SPK + SPK - 1,
+            (970 + 63) * SPK,
+            u64::MAX,
+        ] {
+            assert_eq!(
+                state.kes_period_for_slot(slot),
+                state.kes_period_for_slot_checked(slot).ok(),
+                "the two accessors disagree at slot {slot}"
+            );
+        }
+    }
+
+    /// M1, as a regression: the LIVE-2b conclusion that the 19-day-ahead slot was refused by the KES
+    /// window is FALSE for this venue's op-cert, and this pins why.
+    ///
+    /// preprod slotsPerKESPeriod = 129_600, maxKESEvolutions = 62; the operator op-cert
+    /// (`ade-ops/preprod/ade-pool/keys/node.opcert`) starts at period 970. The naive slot
+    /// 131_976_696 is absolute period 1018 -> evolution 48, comfortably INSIDE the window. So the
+    /// KES check did NOT catch the wrong slot; nothing downstream did. That is why the slot
+    /// derivation had to be fixed rather than relied on being caught.
+    #[test]
+    fn the_naive_19_day_ahead_slot_was_never_refused_by_the_kes_window() {
+        const SPK: u64 = 129_600;
+        let mut cfg = test_cfg();
+        cfg.genesis_anchor.kes_anchor_slot = 0;
+        cfg.genesis_anchor.slots_per_kes_period = SPK;
+        cfg.genesis_anchor.kes_max_period = 62;
+        cfg.opcert_meta.kes_start_period = 970;
+        let (state, _) = coordinator_init(cfg);
+
+        assert_eq!(state.kes_period_for_slot_checked(131_976_696), Ok(48));
+        assert_eq!(state.kes_period_for_slot_checked(130_338_561), Ok(35));
+        // Both inside the window: the KES gate cannot distinguish the wrong slot from the right one.
+        assert_eq!(131_976_696u64 / SPK - 970, 48);
+        assert_eq!(130_338_561u64 / SPK - 970, 35);
     }
 
     #[test]

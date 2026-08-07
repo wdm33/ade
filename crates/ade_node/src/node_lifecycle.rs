@@ -84,12 +84,14 @@ use tokio::sync::{mpsc, watch};
 use ade_core::consensus::ledger_view::LedgerView;
 use ade_ledger::pparams::ProtocolParameters;
 use ade_ledger::receive::ReceiveState;
-use ade_runtime::clock::{checked_millis_to_slot, Clock, SlotAlignmentError, SystemClock};
+use ade_core::consensus::era_schedule::{BootstrapBoundTimingAuthority, TimingAnchorError};
+use ade_runtime::clock::{Clock, SystemClock};
 use ade_runtime::forward_sync::{
     pump_block, ForwardSyncState, NoCheckpointSink, PumpError, PumpTip, SnapshotSink,
 };
 use ade_runtime::producer::coordinator::{
-    coordinator_init, CoordinatorConfig, CoordinatorEvent, CoordinatorState, LedgerSnapshotRef,
+    coordinator_init, CoordinatorConfig, CoordinatorEvent, CoordinatorState, KesSlotError,
+    LedgerSnapshotRef,
 };
 use ade_runtime::producer::producer_shell::ProducerShell;
 use ade_runtime::rollback::{ChainDbBlockSource, PersistentSnapshotCache, SnapshotCadence};
@@ -863,9 +865,6 @@ async fn run_node_lifecycle_inner(
                 mut shell,
                 genesis,
                 pool_id,
-                anchor_millis,
-                start_slot,
-                slot_length_ms,
             } = operator_forge::build_operator_forge_material(
                 &paths,
                 // OP-OPS-04: the recovered durable tip slot anchors the operator
@@ -1022,8 +1021,34 @@ async fn run_node_lifecycle_inner(
             } else {
                 NodeBlockSource::in_memory(Vec::new())
             };
-            // The injected clock is the SOLE wall-clock observation (DC-NODE-03).
-            let mut clock = SystemClock::new(slot_length_ms);
+            // LIVE-2c ACTIVATION part 1 — establish the ONE bootstrap-bound wall-clock→slot
+            // authority, BEFORE the clock exists, so there is never a moment where a forge-capable
+            // node holds a clock but no bound calendar. The venue calendar is selected by the
+            // DURABLE genesis hash (the operator cannot choose it); `--network` and the operator's
+            // real shelley-genesis are fail-closed cross-checks only.
+            //
+            // A forge-ON start REQUIRES the sidecar: without it there is no bootstrap fact to bind
+            // the calendar to, and a forge whose slot cannot be justified must not start at all
+            // (the same fail-closed posture `recovered_node_schedule` and the recovered
+            // `ledger_view` already take on this path).
+            let forge_timing = {
+                let sidecar = state.seed_epoch_consensus_inputs.as_ref().ok_or(
+                    NodeLifecycleError::FeedMissingRecoveredConsensusInputs,
+                )?;
+                crate::forge_timing::establish_forge_timing_authority(
+                    sidecar,
+                    &cli.network,
+                    Some(crate::forge_timing::GenesisTimingCrossCheck {
+                        system_start_unix_ms: genesis.slot_zero_time_unix_ms,
+                        active_slot_length_ms: u32::try_from(genesis.slot_length_ms)
+                            .unwrap_or(u32::MAX),
+                    }),
+                )
+                .map_err(|e| NodeLifecycleError::ForgeKeyIngress(format!("{e}")))?
+            };
+            // The injected clock is the SOLE wall-clock observation (DC-NODE-03). Its cadence comes
+            // from the timing authority's active segment -- one slot-length number on this path.
+            let mut clock = SystemClock::new(forge_timing.slot_cadence_ms());
             // S2: protocol_version + pparams come from the recovered ledger's
             // current protocol_params (installed by S2a) — the single truthful
             // source, consumed here, never fabricated or re-derived.
@@ -1075,9 +1100,7 @@ async fn run_node_lifecycle_inner(
                 pool_id,
                 current_pparams,
                 current_protocol_version,
-                anchor_millis,
-                start_slot,
-                slot_length_ms,
+                forge_timing,
             );
             // PHASE4-N-AF (DC-NODE-18): when the operator declares an explicitly
             // single-producer venue, enable extend-own-spine behind the fence.
@@ -1642,8 +1665,8 @@ pub async fn run_node_serve_task(
 /// here is a new semantic source.
 pub struct ForgeActivation<'a> {
     /// Injected clock — the sole wall-clock observation. RED `now_millis` /
-    /// `next_tick` is converted to a `SlotNo` via `millis_to_slot`; only the
-    /// `SlotNo` crosses into the planner / forge call (clock seam, DC-NODE-03).
+    /// `next_tick` is converted to a `SlotNo` by [`Self::timing`]; only the `SlotNo` crosses into
+    /// the planner / forge call (clock seam, DC-NODE-03).
     pub clock: &'a mut dyn Clock,
     /// Genesis-anchor host for the REUSED `kes_period_for_slot` — no new GREEN
     /// helper, no slot->KES reimplementation.
@@ -1656,10 +1679,17 @@ pub struct ForgeActivation<'a> {
     pub pool_id: Hash28,
     pub pparams: ProtocolParameters,
     pub protocol_version: ProtocolVersion,
-    /// `millis_to_slot` anchor (SystemStart + era slot length).
-    pub anchor_millis: u64,
-    pub start_slot: SlotNo,
-    pub slot_length_ms: u32,
+    /// LIVE-2c part 2 — THE forge's wall-clock→slot authority, and the only one.
+    ///
+    /// This replaced the naive `(anchor_millis, start_slot, slot_length_ms)` triple, which anchored
+    /// the venue's system start to a SINGLE slot length and so ignored that preprod's first 86_400
+    /// slots lasted 20 s — wrong by exactly `86_400 × (20 − 1) = 1_641_600` slots, ~19 days. The
+    /// triple is not deprecated here, it is GONE: two reachable slot authorities are the defect
+    /// class, so "prefer the new one" would not have closed it.
+    ///
+    /// Bootstrap-bound: it can only be built by binding a committed venue calendar to the store's
+    /// own durable facts, so a restart RECONSTRUCTS it rather than minting a new one.
+    pub timing: BootstrapBoundTimingAuthority,
     /// Monotonic forge-slot guard state — updated ONLY after an actual
     /// `forge_one_from_recovered` attempt (never on skip / forge-off).
     last_forged_slot: Option<SlotNo>,
@@ -1670,11 +1700,12 @@ pub struct ForgeActivation<'a> {
     /// In-memory hermetic test observation ONLY. Not persisted, not logged, not
     /// replay authority, not BA-02 / RO-LIVE evidence.
     pub hermetic_forge_outcomes: Vec<CoordinatorEvent>,
-    /// S3: the last clock→slot alignment fail-closed (set when the wall-clock is
-    /// before the genesis anchor, cleared on a successful alignment). A structured
-    /// LOCAL node-forge observation surface — in-memory, not persisted, not logged,
-    /// not evidence — that makes the fail-closed visible (never a silent `NotDue`).
-    pub last_slot_alignment_fail: Option<SlotAlignmentError>,
+    /// LIVE-2c part 2: the last wall-clock→slot derivation fail-closed (set when the captured
+    /// instant precedes the anchor's declared domain, cleared on a successful derivation). A
+    /// structured LOCAL observation surface — in-memory, not persisted, not evidence — that makes
+    /// the fail-closed visible (never a silent `NotDue`). Replaces `last_slot_alignment_fail`: the
+    /// guard is now the anchor's own domain rather than a separately-supplied genesis anchor.
+    pub last_slot_derivation_fail: Option<TimingAnchorError>,
     /// PHASE4-N-AE.A (DC-NODE-15): the last forge-on-followed-tip refusal
     /// (`ForgeRefused::NotCaughtUp`), set when the admissibility gate prevented
     /// a forge (durable servable tip != followed peer tip) and cleared when a
@@ -1766,9 +1797,7 @@ impl<'a> ForgeActivation<'a> {
         pool_id: Hash28,
         pparams: ProtocolParameters,
         protocol_version: ProtocolVersion,
-        anchor_millis: u64,
-        start_slot: SlotNo,
-        slot_length_ms: u32,
+        timing: BootstrapBoundTimingAuthority,
     ) -> Self {
         Self {
             clock,
@@ -1778,13 +1807,11 @@ impl<'a> ForgeActivation<'a> {
             pool_id,
             pparams,
             protocol_version,
-            anchor_millis,
-            start_slot,
-            slot_length_ms,
+            timing,
             last_forged_slot: None,
             pending_slot: None,
             hermetic_forge_outcomes: Vec::new(),
-            last_slot_alignment_fail: None,
+            last_slot_derivation_fail: None,
             last_forge_refused: None,
             forge_mode: ForgeMode::InitialCatchupRequired,
             venue_role: VenueRole::Unknown,
@@ -1891,6 +1918,14 @@ fn forge_skip_reason(refused: Option<&ForgeRefused>) -> Option<crate::live_log::
         Some(ForgeRefused::ParticipantForgeBaseChangedBeforeSign { .. }) => {
             Some(R::ForgeBaseChangedBeforeSign)
         }
+        // LIVE-2c part 3 (B11): the three KES-window reasons stay SEPARATE. Collapsing them would
+        // reproduce the defect one level up — an operator reading `kes_window` still could not tell
+        // "not valid yet" from "rotate the key now".
+        Some(ForgeRefused::KesWindow(e)) => Some(match e {
+            KesSlotError::BeforeOperationalCertificateStart { .. } => R::KesBeforeOpcertStart,
+            KesSlotError::AfterOperationalCertificateEnd { .. } => R::KesAfterOpcertEnd,
+            KesSlotError::PeriodArithmeticOverflow { .. } => R::KesPeriodOverflow,
+        }),
         None => None,
     }
 }
@@ -3237,27 +3272,35 @@ pub async fn run_relay_loop_with_sched(
             None => ForgeSlotStatus::NotDue,
             Some(act) => {
                 act.pending_slot = None; // reset so a stale slot can never forge
+                // LIVE-2c part 2 (CE-L2c-1): THE wall-clock→slot conversion, and the only one
+                // reachable from forging. The naive triple that stood here is deleted, not
+                // deprecated — `checked_millis_to_slot` no longer exists.
                 match act.clock.next_tick() {
-                    Some(now_ms) => match checked_millis_to_slot(
-                        now_ms,
-                        act.anchor_millis,
-                        act.start_slot,
-                        act.slot_length_ms,
-                    ) {
+                    Some(now_ms) => match act.timing.slot_at(now_ms) {
                         Ok(slot) => {
-                            act.last_slot_alignment_fail = None;
+                            act.last_slot_derivation_fail = None;
                             act.pending_slot = Some(slot);
                             forge_slot_status(act.last_forged_slot, slot)
                         }
-                        // S3 (CE-G-A-3): an implausible clock→slot alignment (the
-                        // wall-clock is before the genesis anchor) FAILS CLOSED at
-                        // the RED clock seam — no forge, no `last_forged_slot`
-                        // advance, `pending_slot` stays None; surfaced as a
-                        // structured local outcome (`last_slot_alignment_fail`).
-                        // NotDue to the planner; the relay loop keeps syncing
-                        // (forge stays subordinate to the sync spine, DC-NODE-05).
+                        // The captured instant precedes the anchor's declared domain (or the
+                        // arithmetic refused). FAIL CLOSED at the RED clock seam — no forge, no
+                        // `last_forged_slot` advance, `pending_slot` stays None; surfaced as a
+                        // structured local outcome AND emitted, because a conversion that cannot
+                        // be justified must leave a reason behind rather than a silent NotDue.
+                        // NotDue to the planner; the relay loop keeps syncing (forge stays
+                        // subordinate to the sync spine, DC-NODE-05).
                         Err(e) => {
-                            act.last_slot_alignment_fail = Some(e);
+                            if act.last_slot_derivation_fail.as_ref() != Some(&e) {
+                                crate::node_log!(
+                                    "live2c-slot-derivation-refused: captured_ms={} reason={:?} \
+                                     domain_start_ms={} domain_start_slot={} -- NO forge this tick",
+                                    now_ms,
+                                    e,
+                                    act.timing.anchor().domain_start_ms(),
+                                    act.timing.anchor().domain_start_slot().0
+                                );
+                            }
+                            act.last_slot_derivation_fail = Some(e);
                             ForgeSlotStatus::NotDue
                         }
                     },
@@ -3702,15 +3745,34 @@ pub async fn run_relay_loop_with_sched(
                 let slot = act
                     .pending_slot
                     .expect("ForgeTick implies a derived forge slot");
-                // KES period via the REUSED CoordinatorState method (no
-                // reimplementation). Out of range => skip: no forge, no
-                // `last_forged_slot` update (S3b proves the fail-closed path).
+                // LIVE-2c part 3 (CE-L2c-A5): clear the previous tick's refusal FIRST. It was
+                // sticky — written in eight places and cleared only on a successful forge. Every
+                // path that DOES refuse overwrites it, so the harm was confined to the one path
+                // that records nothing (no fence, no KES failure, and no tip to build on): that
+                // tick re-emitted the PREVIOUS tick's reason and tip operands, turning an honest
+                // absence into confident, wrong evidence. Narrow, but it is exactly the case an
+                // operator reads when nothing is happening, and ruling it out by hand was a
+                // required step in diagnosing this slice's live run.
+                act.last_forge_refused = None;
+                // KES period via the REUSED CoordinatorState method (no reimplementation). LIVE-2c
+                // part 3: the `Result` form — an admitted tick may not disappear into a `None`.
                 let mut forged = false;
                 if let Some(refusal) = pending_reselection_forge_refusal(act.pending_reselection) {
                     // DC-NODE-28: a fork-choice re-selection is unresolved -- refuse
                     // the forge (typed), never forge on the stale pre-resolution tip.
                     act.last_forge_refused = Some(refusal);
-                } else if let Some(kes_period) = act.coordinator_state.kes_period_for_slot(slot.0) {
+                } else if let Some(kes_period) =
+                    match act.coordinator_state.kes_period_for_slot_checked(slot.0) {
+                        Ok(p) => Some(p),
+                        // B11 CLOSED: the op-cert does not cover this slot. A typed, structured
+                        // refusal naming WHICH of the three conditions fired and the slot bound an
+                        // operator can act on — never a skip, never `no_tip_available`.
+                        Err(e) => {
+                            act.last_forge_refused = Some(ForgeRefused::KesWindow(e));
+                            None
+                        }
+                    }
+                {
                     // PHASE4-N-AE.A (DC-NODE-15): the forge base is the DURABLE
                     // servable tip — `ChainDb::tip()`. The recovered snapshot
                     // anchor is NEVER a forge base (the `recovered.tip` fallback
@@ -4049,8 +4111,8 @@ pub async fn run_relay_loop_with_sched(
                                 // outcome, read before the move-push. Operational
                                 // tier — never an acceptance / BA-02 signal.
                                 let forge_outcome = forge_outcome_of(&event);
-                                // A forge was admitted: clear any stale refusal.
-                                act.last_forge_refused = None;
+                                // (The per-tick reset at the top of this arm already cleared any
+                                // earlier refusal — LIVE-2c CE-L2c-A5.)
                                 // Local hermetic observation only — never persisted
                                 // / served / admitted / applied; the durable tip is
                                 // untouched by this arm. `last_forged_slot` advances
@@ -4111,14 +4173,22 @@ pub async fn run_relay_loop_with_sched(
                     }
                 }
                 if !forged {
-                    // Considered, but no forge ran (KES period out of range or no
-                    // selected tip) — the closed off-tip skip outcome.
+                    // LIVE-2c part 3: the tick was ADMITTED and no forge ran. The outcome now says
+                    // which of the two things happened instead of collapsing both into
+                    // `no_tip_available`: a typed refusal was recorded (a fence, the KES window)
+                    // => `refused` with that reason; nothing was recorded => there really was no
+                    // selected tip to build on. `skip_reason` is this tick's own (the arm resets it
+                    // on entry), so the reason and its operands always describe THIS slot.
+                    let skip_reason = forge_skip_reason(act.last_forge_refused.as_ref());
                     if let Some(s) = sched.as_deref_mut() {
                         s.record(&crate::live_log::NodeSchedEvent::ForgeResult {
-                            outcome: crate::live_log::ForgeOutcome::NoTipAvailable,
+                            outcome: match skip_reason {
+                                Some(_) => crate::live_log::ForgeOutcome::Refused,
+                                None => crate::live_log::ForgeOutcome::NoTipAvailable,
+                            },
                             self_admit_via_pump_block: false,
                             entered_forge_mode: forge_mode_kind(&act.forge_mode),
-                            skip_reason: forge_skip_reason(act.last_forge_refused.as_ref()),
+                            skip_reason,
                             compared_tips: forge_compared_tips(act.last_forge_refused.as_ref()),
                         });
                     }
@@ -4140,10 +4210,13 @@ pub async fn run_relay_loop_with_sched(
                 // clock schedule (the sleep paces; the clock decides slots).
                 match loop_state {
                     LoopState::Ending => {
+                        // LIVE-2c part 2: the wake cadence comes from the SAME authority the slot
+                        // conversion does (the active segment's own slot length), so there is no
+                        // second slot-length number anywhere on this path.
                         let poll = std::time::Duration::from_millis(
                             forge
                                 .as_deref()
-                                .map(|a| u64::from(a.slot_length_ms))
+                                .map(|a| u64::from(a.timing.slot_cadence_ms()))
                                 .unwrap_or(1_000),
                         );
                         tokio::select! {
@@ -9019,6 +9092,17 @@ mod tests {
     /// folds a block forward — the sole consumer of era_schedule/ledger_view
     /// — so those placeholders are provably unconsumed.
     fn put_tip_and_snapshot(chaindb: &PersistentChainDb, slot: u64) {
+        put_tip_and_snapshot_with_anchor(chaindb, slot, WARM_ANCHOR_SLOT)
+    }
+
+    /// As above, with an explicit AK-S1 anchor-point slot. LIVE-2c: a fixture placed on a real
+    /// venue calendar needs its anchor point on the SAME calendar -- the resolver prefers that
+    /// record, so a stale anchor slot lands the recovered tip in a different KES period.
+    fn put_tip_and_snapshot_with_anchor(
+        chaindb: &PersistentChainDb,
+        slot: u64,
+        anchor_slot: u64,
+    ) {
         chaindb
             .put_block(&StoredBlock {
                 hash: Hash32([0xBB; 32]),
@@ -9035,7 +9119,14 @@ mod tests {
         // servable tip present, `resolve_live_follow_start` still returns that
         // tip (the anchor is below it) — these tests' tip assertions are
         // unchanged; the record only lets the warm-start load succeed.
-        put_warm_anchor_point(chaindb);
+        let ap = RecoveredAnchorPoint {
+            anchor_fp: WARM_ANCHOR_FP,
+            slot: SlotNo(anchor_slot),
+            block_hash: WARM_ANCHOR_HASH,
+        };
+        chaindb
+            .put_recovered_anchor_point(&WARM_ANCHOR_FP, &encode_recovered_anchor_point(&ap))
+            .unwrap();
     }
 
     /// PHASE4-N-U S2: a REALISTIC durable tip — a block, its WAL `AdmitBlock`,
@@ -9717,6 +9808,21 @@ mod tests {
         std::path::PathBuf,
         std::path::PathBuf,
     ) {
+        write_node_operator_material_for_slot(dir, WARM_TIP_SLOT)
+    }
+
+    /// As above, with the op-cert anchored at the ABSOLUTE KES period of `tip_slot` (delta 0), so a
+    /// fixture can place its tip anywhere on a venue's real calendar (LIVE-2c).
+    fn write_node_operator_material_for_slot(
+        dir: &std::path::Path,
+        tip_slot: u64,
+    ) -> (
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
         use std::io::Write as _;
         fn hexe(bytes: &[u8]) -> String {
             let mut s = String::with_capacity(bytes.len() * 2);
@@ -9752,7 +9858,18 @@ mod tests {
         // (WARM_TIP_SLOT / slotsPerKESPeriod = 23_013_663 / 129_600 = 177), so the
         // injected current period 177 lands at the opcert start (delta 0). CBOR
         // uint 177 = 0x18 0xB1.
-        ocbor.extend_from_slice(&[0x18, 177]); // kes_period 177
+        // LIVE-2c: computed from `tip_slot` rather than hardcoded, so a preprod-calendar fixture can
+        // sit at a real absolute slot. Minimal canonical CBOR uint.
+        let opcert_period = tip_slot / 129_600;
+        if opcert_period < 24 {
+            ocbor.push(opcert_period as u8);
+        } else if opcert_period < 256 {
+            ocbor.extend_from_slice(&[0x18, opcert_period as u8]);
+        } else if opcert_period < 65_536 {
+            ocbor.extend_from_slice(&[0x19, (opcert_period >> 8) as u8, opcert_period as u8]);
+        } else {
+            unreachable!("fixture KES periods stay under 65_536");
+        }
         ocbor.extend_from_slice(&[0x58, 0x40]);
         ocbor.extend_from_slice(&[0u8; 64]); // sigma
         ocbor.extend_from_slice(&[0x58, 0x20]);
@@ -9776,6 +9893,48 @@ mod tests {
         (cold, kes, vrf, opcert, genesis)
     }
 
+    /// LIVE-2c: preprod-COHERENT warm fixture for the forge-ON path.
+    ///
+    /// `warm_sample_record` is calendar-incoherent by construction (`epoch_start_slot = epoch *
+    /// 432_000` with a tip slot from a different epoch) — harmless for the relay-only tests that use
+    /// it, but a forge-ON start now binds its slot authority to these exact facts and must refuse a
+    /// store it cannot reconstruct. So the forge-ON fixture mirrors the REAL live venue:
+    /// `~/.cardano-live1/ade-preprod-s7`'s own genesis hash, epoch 304 starting at absolute slot
+    /// 129_686_400, seed point 129_813_427. That makes this test exercise the production binding
+    /// rather than a shape no venue has.
+    const WARM_PREPROD_EPOCH: EpochNo = EpochNo(304);
+    const WARM_PREPROD_EPOCH_START_SLOT: u64 = 129_686_400;
+    const WARM_PREPROD_SEED_POINT_SLOT: u64 = 129_813_427;
+
+    fn warm_preprod_record(anchor_fp: Hash32) -> SeedEpochConsensusInputs {
+        let mut record = warm_sample_record(anchor_fp, WARM_PREPROD_EPOCH);
+        record.genesis_hash = crate::bootstrap_export::resolve_network_profile("preprod")
+            .expect("preprod is a committed venue")
+            .genesis_hash;
+        record.epoch_start_slot = SlotNo(WARM_PREPROD_EPOCH_START_SLOT);
+        record.seed_point_slot = SlotNo(WARM_PREPROD_SEED_POINT_SLOT);
+        record
+    }
+
+    fn warm_preprod_fixture(d: &WarmDirs) {
+        let record = warm_preprod_record(WARM_ANCHOR_FP);
+        let bytes = encode_seed_epoch_consensus_inputs(&record);
+        let (chaindb, mut wal) = open_warm_stores(d);
+        chaindb
+            .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
+            .unwrap();
+        append_seed_epoch_provenance(&mut wal, &WARM_ANCHOR_FP, WARM_PREPROD_EPOCH, &bytes).unwrap();
+        // The AK-S1 anchor-point record is the resolver's PREFERRED tip source, so it must sit on
+        // the same calendar as everything else here — otherwise the recovered tip lands in a
+        // different KES period than the fixture's op-cert covers.
+        put_tip_and_snapshot_with_anchor(
+            &chaindb,
+            WARM_PREPROD_SEED_POINT_SLOT,
+            WARM_PREPROD_SEED_POINT_SLOT,
+        );
+        drop(seal_warm_leadership(d, &record));
+    }
+
     fn warm_fixture(d: &WarmDirs) {
         let record = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
         let bytes = encode_seed_epoch_consensus_inputs(&record);
@@ -9797,9 +9956,14 @@ mod tests {
         // operator-material-backed activation on that recovered state, enter
         // run_relay_loop with Some(..) — and halt cleanly on the empty source
         // (forge CAPABLE, not observable; no second bootstrap, no Mithril call).
+        //
+        // LIVE-2c: also proves the forge-ON start ESTABLISHES its bootstrap-bound slot authority —
+        // the preprod-coherent fixture's durable facts must reconstruct through the committed venue
+        // calendar, or this returns ForgeKeyIngress instead of halting cleanly.
         let d = fresh_warm_dirs();
-        warm_fixture(&d);
-        let (cold, kes, vrf, opcert, genesis) = write_node_operator_material(d._dir.path());
+        warm_preprod_fixture(&d);
+        let (cold, kes, vrf, opcert, genesis) =
+            write_node_operator_material_for_slot(d._dir.path(), WARM_PREPROD_SEED_POINT_SLOT);
         let mut cli = warm_cli(&d);
         cli.cold_skey = Some(cold);
         cli.kes_skey = Some(kes);
