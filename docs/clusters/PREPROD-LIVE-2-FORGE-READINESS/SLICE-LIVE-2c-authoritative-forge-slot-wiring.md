@@ -175,11 +175,22 @@ enum ForgeRefused {
 | **CE-L2c-10** | Replaying instant + schedule + anchor + authority inputs reproduces the same slot and outcome | open |
 | **CE-L2c-11** | Negative-tested (seven mutations below) | open |
 | **CE-L2c-12** | **Scope guard**: holding timing fields constant, arbitrary changes to `era`, `start_epoch`, `epoch_length_slots`, `safe_zone_slots` and the RSW must NOT change `slot_at` for any captured instant | **MET** — `non_timing_fields_cannot_influence_slot_derivation`, negative-tested three ways (leak `epoch_length_slots`; branch on era identity; leak `safe_zone_slots`) |
-| **CE-L2c-13** | **Compact-anchor equivalence**: `full_timing_history.slot_at(t) == compact_anchor.slot_at(t)` for EVERY instant in the compact anchor's declared domain, including its FIRST instant and every transition edge | open — see below |
+| **CE-L2c-13** | **Compact-anchor equivalence**: `full_timing_history.slot_at(t) == compact_anchor.slot_at(t)` for EVERY instant in the compact anchor's declared domain, including its FIRST instant and every transition edge | **MET** — `ce_l2c_13_compact_anchor_equals_full_history_over_its_domain` (`352dfb95`): nine domain starts spanning the transition, each probed at its first admissible instant, every edge and both sides, the live fixture, and a 200-point 997ms sweep; four mutations caught |
 
 Required mutations: restore the naive conversion; hardcode the preprod boundary; accept a truncated
 schedule as complete; node path bypasses `slot_at`; B11 restored to `None`; diagnostic path fixed while
 the node path stays old; known-pool evaluation replaced by `UnknownPool`.
+
+### CE-L2c-14 — domain-start determinism (CLOSED, `8cf14529`)
+
+| CE | Criterion | status |
+|---|---|---|
+| **CE-L2c-14** | The anchor domain comes from a canonical bootstrap FACT — never process start, wall clock, peer tip or operator input — so `same bootstrap anchor + same timing history ⇒ byte-identical anchor` | **MET** — `derive_for_bootstrap_anchor` takes a `SlotNo` and no timestamp; `anchor_is_reproducible_from_the_bootstrap_slot_not_the_clock` also asserts the CONTRAST (two clock-derived domains 1s apart differ) |
+| **CE-L2c-15** | `slot_start_time_ms` is the exact inverse of `slot_at` on slot boundaries, across transitions | **MET** — `slot_start_time_is_the_inverse_of_slot_at`; the shared accumulated geometry is what makes the mid-slot origin bug structurally impossible via this constructor |
+
+Mutation note: removing the derive-time round-trip guard is an **observationally equivalent** edit when
+both conversions are correct (the inverse-drift mutation covers that condition directly), so its
+survival is a correct non-catch, not missing coverage. The guard stays as defence in depth.
 
 ### CE-L2c-13 — the equivalence proof the compact anchor must carry
 
@@ -202,6 +213,32 @@ any compact form *inexpressible* — `slot_at` refuses a schedule whose first er
 constraint the anchor must satisfy, by being derived from the full history rather than by relaxing the
 check.
 
+## ACTIVATION SLICE — the remaining authority handoff, in three connected parts
+
+Everything above is closed. What remains is one handoff, deliberately kept together because splitting
+it would leave two reachable slot authorities mid-way.
+
+**1. Bootstrap binding.** Construct the complete timing history ONLY from already-verified venue
+inputs, then derive the anchor from the verified bootstrap slot. Required result:
+`same bootstrap lineage + same timing inputs ⇒ byte-identical timing anchor`. Warm start must restore
+or reconstruct that same authority **and verify its source commitment before forging becomes active**.
+
+**2. Producer wiring.** `--mode node` receives the derived anchor and calls `anchor.slot_at(captured_ms)`.
+The naive triple must be **removed or made unreachable** — merely *preferring* the new path is
+insufficient, because two reachable slot authorities recreate the original defect class.
+
+**3. B11 closure.** `Result<KesPeriod, KesSlotError>` propagated as `ForgeRefused::KesWindow(..)`.
+Completed invariant: **every admitted `ForgeTick` produces either a structured refusal or a
+leader-schedule decision. No admitted tick may disappear.**
+
+### Closure criteria for activation
+
+timing history bootstrap-bound · anchor domain from the verified bootstrap slot · warm restart verifies
+identical lineage · an altered timing schedule is rejected · `--mode node` uses ONLY the derived anchor ·
+the naive conversion is unreachable · B11 emits a typed refusal · a live corrected slot reaches the
+configured pool's leadership evaluation · a decided `ForgeOutcome` is emitted · replay of the captured
+instant and restored authority reproduces the same slot and outcome.
+
 ## Store-semantics decision — reassess DURING wiring
 
 Keeping v3 was correct for `31f7c754`. For this slice:
@@ -211,6 +248,11 @@ Keeping v3 was correct for `31f7c754`. For this slice:
 - **Bump required** if the snapshot, checkpoint, WAL, store metadata or fingerprint gains a schedule
   commitment, **or** if an existing persisted schedule field changes meaning from "snapshot-local" to
   "absolute slot authority".
+
+Sharpened: **do not pre-commit to a bump.** Reconstructing the anchor from existing durable bootstrap
+inputs can remain store-neutral. *Persisting* a new anchor or commitment versions THAT ARTIFACT. A
+global `STORE_SEMANTICS_VERSION` bump is required only if existing stored data gains a new
+interpretation or recovery behaviour changes — not because forging now uses the correct slot.
 
 The decision turns on **durable interpretation**, not on how much code moved.
 
