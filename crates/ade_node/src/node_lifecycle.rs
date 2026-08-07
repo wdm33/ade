@@ -3249,21 +3249,39 @@ pub async fn run_relay_loop_with_sched(
     // per-boundary append produced (byte-identical). A no-op when the recovery kept the seed.
     extend_schedule_to_epoch(&mut era_schedule, authority.epoch());
     loop {
+        // B6 CENSUS (emit-only, NON-AUTHORITATIVE, operational tier).
+        //
+        // LIVE-2c measured the planner returning once per ~5-8 minutes on this venue while preprod
+        // produces a block every ~20-90s, so `has_work_ready()` never goes false and no ForgeTick is
+        // ever scheduled. That is a starvation condition, and four explanations fit it: (A) one
+        // sync call takes minutes, (B) the pass processes an unbounded amount of work, (C) a
+        // downstream recovery/refold dominates, (D) the planner is reached late rather than slowly.
+        //
+        // They compete for the SAME elapsed time, so they are timed inside ONE pass rather than by
+        // four separate probes -- four probes would let each hypothesis look true on a different
+        // iteration. `Instant` is monotonic and used for DURATIONS only; it never reaches the slot
+        // conversion, and none of these values is ever read back by the planner.
+        let iter_t0 = std::time::Instant::now();
         let shutdown_status = if *shutdown.borrow() {
             ShutdownStatus::ShutdownRequested
         } else {
             ShutdownStatus::Running
         };
+        let t_has_work = std::time::Instant::now();
         let sync_status = if source.has_work_ready() {
             SyncStatus::WorkAvailable
         } else {
             SyncStatus::NoWorkReady
         };
+        let ms_has_work = t_has_work.elapsed().as_millis();
+        let t_is_ended = std::time::Instant::now();
         let loop_state = if source.is_ended() {
             LoopState::Ending
         } else {
             LoopState::Continuing
         };
+        let ms_is_ended = t_is_ended.elapsed().as_millis();
+        let t_next_tick = std::time::Instant::now();
         // PHASE4-N-F-E S2: forge-slot scheduling. RED observes the injected
         // clock; only the derived `SlotNo` crosses into the GREEN monotonic
         // guard + planner. Forge OFF (`None`) => always `NotDue` => the planner
@@ -3309,6 +3327,11 @@ pub async fn run_relay_loop_with_sched(
                 }
             }
         };
+        // B6 CENSUS: `SystemClock::next_tick` SLEEPS to the slot boundary when the loop is ahead,
+        // and returns immediately when it is behind — so this is the one pre-planner cost that is
+        // expected to be large on a HEALTHY loop and ~0 on a starved one. Measuring it separates
+        // "waiting for the next slot" from "the planner is reached late" (hypothesis D).
+        let ms_next_tick = t_next_tick.elapsed().as_millis();
         // PHASE4-N-F-G-J S1: was a forge slot due THIS iteration? Captured before
         // the (unchanged) planner call so the HaltCleanly arm can emit the
         // forge_tick_skipped diagnostic without consulting the planner output.
@@ -3342,6 +3365,8 @@ pub async fn run_relay_loop_with_sched(
         // reading the ChainDb per iteration would be exactly the fallback calculation this probe is
         // forbidden from adding. The six branch-table inputs below fully separate the candidates.
         let planned = plan_loop_step(loop_state, sync_status, forge_slot, shutdown_status, policy);
+        // B6 CENSUS hypothesis D: was the planner reached LATE, or is it the dispatch that is slow?
+        let ms_to_planner = iter_t0.elapsed().as_millis();
         {
             let (forge_active, pending_slot, last_forged_slot) = match forge.as_deref() {
                 Some(act) => (
@@ -3364,6 +3389,19 @@ pub async fn run_relay_loop_with_sched(
         }
         match planned {
             LoopStep::SyncOnce => {
+                // B6 CENSUS: the four candidates all live in this arm. `blocks_before` vs
+                // `blocks_after` is hypothesis B's operand (how much work one pass takes on), and it
+                // is also what makes the two A/B arms comparable — the chain moves between them, so
+                // iterations must be compared at equal work, not by wall time alone.
+                let census_blocks_before = ChainDbServedSource::new(chaindb).tip().map(|(_, _, b)| b);
+                // Deliberately UNINITIALISED: both the participant and node branches must assign it,
+                // so a future third branch that forgets to instrument the sync call fails to compile
+                // rather than silently reporting 0 ms and exonerating hypothesis A.
+                let census_ms_sync: u128;
+                // These two are node-branch only (the participant path calls neither), so 0 is a
+                // truthful "did not run", not a missing measurement.
+                let mut census_ms_coadvance: u128 = 0;
+                let mut census_ms_boundary: u128 = 0;
                 // PHASE4-N-AI AI-S4b-ii: an explicitly-declared Participant venue
                 // routes the live receive path through the fork-choice follow
                 // (detector + rollback-apply); every other venue keeps the
@@ -3384,6 +3422,7 @@ pub async fn run_relay_loop_with_sched(
                             ))
                         }
                     };
+                    let t_census_sync = std::time::Instant::now();
                     run_participant_sync(
                         source,
                         state,
@@ -3408,6 +3447,7 @@ pub async fn run_relay_loop_with_sched(
                         }
                         other => NodeLifecycleError::RelaySync(format!("{other:?}")),
                     })?;
+                    census_ms_sync = t_census_sync.elapsed().as_millis();
                     // PHASE4-N-AO S4+S6 (DC-NODE-37 / CE-AO-6): consume the provisional
                     // decision S3 may have set. When a network magic is configured,
                     // LIVE-BlockFetch the winning branch from the winning peer
@@ -3666,6 +3706,7 @@ pub async fn run_relay_loop_with_sched(
                         .as_deref()
                         .map(|a| a.security_param)
                         .unwrap_or_else(|| RecoveryAdmissionPolicy::cardano().security_param);
+                    let t_census_sync = std::time::Instant::now();
                     let sync_outcome = run_node_sync(
                         source,
                         state,
@@ -3684,6 +3725,7 @@ pub async fn run_relay_loop_with_sched(
                     )
                         .await
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                    census_ms_sync = t_census_sync.elapsed().as_millis();
                     // B3b yield-at-boundary (DC-EPOCH-17): if the pass YIELDED on a durable boundary
                     // promotion, surface the structured crossing (never a bare bool). Whether it yielded
                     // or the feed ended, the next steps are identical AND deliberate -- advance the
@@ -3710,6 +3752,7 @@ pub async fn run_relay_loop_with_sched(
                     // accumulator CROSSES instead of stalling. The checkpoint advances are fail-closed
                     // (EVIEW currency); the accumulator is observe-only (a stall/fault never halts the
                     // follow). None/None -> byte-identical no-op.
+                    let t_census_coadv = std::time::Instant::now();
                     advance_ledger_state_to_durable_tip(
                         reduced_checkpoint,
                         epoch_accumulator,
@@ -3717,11 +3760,13 @@ pub async fn run_relay_loop_with_sched(
                         &era_schedule,
                         &recovery_policy,
                     )?;
+                    census_ms_coadvance = t_census_coadv.elapsed().as_millis();
                     // EPOCH-CONTINUITY-ACTIVATION ECA-1 (DC-EPOCH-13): the AUTOMATIC first-boundary
                     // activation (no arming flag). A strict no-op (byte-identical) until EVIEW is
                     // configured + the seed epoch completes; then it derives the bound view
                     // (durable window replay) + atomically promotes the ONE authority
                     // (Seed->Promoted; both consumers then read the N+1 view). Terminal halt on failure.
+                    let t_census_bnd = std::time::Instant::now();
                     maybe_activate_epoch_boundary(
                         eview_activation,
                         reduced_checkpoint,
@@ -3730,6 +3775,32 @@ pub async fn run_relay_loop_with_sched(
                         wal,
                         &mut authority,
                     )?;
+                    census_ms_boundary = t_census_bnd.elapsed().as_millis();
+                }
+                // B6 CENSUS: one line, one pass, all four candidates competing for the same elapsed
+                // time. `to_planner_ms` is hypothesis D (reached LATE); `sync_ms` is A; `blocks` is
+                // B; `coadvance_ms` + `boundary_ms` are C. Emit-only; never read back.
+                {
+                    let blocks_after = ChainDbServedSource::new(chaindb).tip().map(|(_, _, b)| b);
+                    let admitted = match (census_blocks_before, blocks_after) {
+                        (Some(a), Some(b)) => b.saturating_sub(a),
+                        _ => 0,
+                    };
+                    crate::node_log!(
+                        "b6-census: non_authoritative=true iter_total_ms={} to_planner_ms={} \
+                         has_work_ms={} is_ended_ms={} next_tick_ms={} sync_ms={} coadvance_ms={} \
+                         boundary_ms={} blocks_admitted={} tip_block={:?}",
+                        iter_t0.elapsed().as_millis(),
+                        ms_to_planner,
+                        ms_has_work,
+                        ms_is_ended,
+                        ms_next_tick,
+                        census_ms_sync,
+                        census_ms_coadvance,
+                        census_ms_boundary,
+                        admitted,
+                        blocks_after
+                    );
                 }
             }
             LoopStep::ForgeTick => {
