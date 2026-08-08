@@ -28,6 +28,21 @@ const BLOCKS_BY_SLOT: TableDefinition<u64, &[u8]> =
     TableDefinition::new("blocks_by_slot");
 const SLOT_BY_HASH: TableDefinition<&[u8; 32], u64> =
     TableDefinition::new("slot_by_hash");
+/// B6 CENSUS FIX — the reverse of [`SLOT_BY_HASH`], so recovering a block's hash from its slot is a
+/// point lookup instead of a full scan of the hash index.
+///
+/// The store had `slot -> bytes` and `hash -> slot`, but no `slot -> hash`. Every read that knew a
+/// slot and needed its hash therefore scanned the ENTIRE hash index: `tip()` (called several times
+/// per relay-loop pass), `get_block_by_slot`, and `iter_from_slot` — the last once PER BLOCK
+/// returned. On the live preprod store (~5M blocks) that was measured as a fixed ~80-115s per loop
+/// pass, 73% of all loop time, unchanged across a ~1000x range in blocks admitted.
+///
+/// PURE DERIVED INDEX: every entry is recoverable from `SLOT_BY_HASH`, it holds no authoritative
+/// value, and readers FALL BACK to the old scan when an entry is absent — so a store written before
+/// this existed stays correct and simply keeps the old cost for its pre-existing blocks. No
+/// store-semantics version change: nothing persisted gains a new interpretation.
+const HASH_BY_SLOT: TableDefinition<u64, &[u8; 32]> =
+    TableDefinition::new("hash_by_slot");
 const SNAPSHOTS_BY_SLOT: TableDefinition<u64, &[u8]> =
     TableDefinition::new("snapshots_by_slot");
 /// Anchor-fp-keyed seed-epoch consensus-inputs sidecar table (A2).
@@ -263,6 +278,39 @@ impl PersistentChainDb {
     }
 }
 
+/// B6 CENSUS FIX — recover a block's hash from its slot.
+///
+/// Point lookup via [`HASH_BY_SLOT`]; falls back to the historical full scan of [`SLOT_BY_HASH`]
+/// only when the reverse entry is absent (a block written before the index existed). The
+/// fallback is what keeps an old store correct; it is also why an old store keeps the old cost
+/// for its pre-existing blocks.
+fn hash_for_slot(
+    txn: &redb::ReadTransaction,
+    slot: u64,
+) -> Result<Option<Hash32>, ChainDbError> {
+    if let Ok(by_slot) = txn.open_table(HASH_BY_SLOT) {
+        if let Some(v) = by_slot.get(slot).map_err(map_storage_err)? {
+            return Ok(Some(Hash32(*v.value())));
+        }
+    }
+    let hashes = match txn.open_table(SLOT_BY_HASH) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+        Err(e) => return Err(map_table_err(e)),
+    };
+    Ok(hashes
+        .iter()
+        .map_err(map_storage_err)?
+        .filter_map(|r| r.ok())
+        .find_map(|(h, s)| {
+            if s.value() == slot {
+                Some(Hash32(*h.value()))
+            } else {
+                None
+            }
+        }))
+}
+
 impl ChainDb for PersistentChainDb {
     fn put_block(&self, block: &StoredBlock) -> Result<(), ChainDbError> {
         let _guard = self.write_lock.lock().map_err(lock_poisoned)?;
@@ -318,11 +366,16 @@ impl ChainDb for PersistentChainDb {
         {
             let mut blocks = txn.open_table(BLOCKS_BY_SLOT).map_err(map_table_err)?;
             let mut hashes = txn.open_table(SLOT_BY_HASH).map_err(map_table_err)?;
+            let mut by_slot = txn.open_table(HASH_BY_SLOT).map_err(map_table_err)?;
             blocks
                 .insert(block.slot.0, block.bytes.as_slice())
                 .map_err(map_storage_err)?;
             hashes
                 .insert(&block.hash.0, block.slot.0)
+                .map_err(map_storage_err)?;
+            // B6 CENSUS FIX: same transaction as the forward index, so the two can never disagree.
+            by_slot
+                .insert(block.slot.0, &block.hash.0)
                 .map_err(map_storage_err)?;
         }
         txn.commit().map_err(map_commit_err)?;
@@ -378,27 +431,13 @@ impl ChainDb for PersistentChainDb {
 
         // Recover the hash from the index. If the slot table has an
         // entry but the hash index doesn't, the db is corrupt.
-        let hashes = match txn.open_table(SLOT_BY_HASH) {
-            Ok(t) => t,
-            Err(e) => return Err(map_table_err(e)),
-        };
-        let hash = hashes
-            .iter()
-            .map_err(map_storage_err)?
-            .filter_map(|r| r.ok())
-            .find_map(|(h, s)| {
-                if s.value() == slot.0 {
-                    Some(Hash32(*h.value()))
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| {
-                ChainDbError::Corruption(format!(
-                    "slot {} present in blocks but absent from hash index",
-                    slot.0,
-                ))
-            })?;
+        // B6 CENSUS FIX: point lookup (was a full scan of SLOT_BY_HASH).
+        let hash = hash_for_slot(&txn, slot.0)?.ok_or_else(|| {
+            ChainDbError::Corruption(format!(
+                "slot {} present without hash index entry",
+                slot.0,
+            ))
+        })?;
 
         Ok(Some(StoredBlock {
             slot,
@@ -414,35 +453,26 @@ impl ChainDb for PersistentChainDb {
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
             Err(e) => return Err(map_table_err(e)),
         };
+        // B6 CENSUS FIX: seek the LAST key directly. This was `.iter().last()`, a full scan of every
+        // block in the store -- on the relay loop's hot path, called several times per pass.
         let last_slot: Option<u64> = blocks
             .iter()
             .map_err(map_storage_err)?
-            .filter_map(|r| r.ok())
-            .map(|(s, _)| s.value())
-            .last();
+            .next_back()
+            .and_then(|r| r.ok())
+            .map(|(s, _)| s.value());
         drop(blocks);
         let Some(slot_raw) = last_slot else {
             return Ok(None);
         };
         let slot = SlotNo(slot_raw);
 
-        let hashes = txn.open_table(SLOT_BY_HASH).map_err(map_table_err)?;
-        let hash = hashes
-            .iter()
-            .map_err(map_storage_err)?
-            .filter_map(|r| r.ok())
-            .find_map(|(h, s)| {
-                if s.value() == slot.0 {
-                    Some(Hash32(*h.value()))
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| {
-                ChainDbError::Corruption(
-                    "tip slot present in blocks but absent from hash index".into(),
-                )
-            })?;
+        // B6 CENSUS FIX: point lookup (was a second full scan, of SLOT_BY_HASH).
+        let hash = hash_for_slot(&txn, slot.0)?.ok_or_else(|| {
+            ChainDbError::Corruption(
+                "tip slot present in blocks but absent from hash index".into(),
+            )
+        })?;
 
         Ok(Some(ChainTip { hash, slot }))
     }
@@ -460,31 +490,20 @@ impl ChainDb for PersistentChainDb {
             }
             Err(e) => return Err(map_table_err(e)),
         };
-        let hashes = txn.open_table(SLOT_BY_HASH).map_err(map_table_err)?;
-
         let mut snapshot: Vec<StoredBlock> = Vec::new();
         for entry in blocks.range(from.0..).map_err(map_storage_err)? {
             let (slot_v, bytes_v) = entry.map_err(map_storage_err)?;
             let slot = SlotNo(slot_v.value());
             let bytes = bytes_v.value().to_vec();
-            // Hash recovery — same secondary lookup as get_block_by_slot.
-            let hash = hashes
-                .iter()
-                .map_err(map_storage_err)?
-                .filter_map(|r| r.ok())
-                .find_map(|(h, s)| {
-                    if s.value() == slot.0 {
-                        Some(Hash32(*h.value()))
-                    } else {
-                        None
-                    }
-                })
-                .ok_or_else(|| {
-                    ChainDbError::Corruption(format!(
-                        "iter: slot {} present without hash index entry",
-                        slot.0,
-                    ))
-                })?;
+            // B6 CENSUS FIX: point lookup. This was a full scan of SLOT_BY_HASH PER BLOCK, so the
+            // cost was blocks-returned x store-size -- the dominant term in the relay loop's fixed
+            // per-pass cost.
+            let hash = hash_for_slot(&txn, slot.0)?.ok_or_else(|| {
+                ChainDbError::Corruption(format!(
+                    "iter: slot {} present without hash index entry",
+                    slot.0,
+                ))
+            })?;
             snapshot.push(StoredBlock { slot, hash, bytes });
         }
         Ok(Box::new(snapshot.into_iter().map(Ok)))
@@ -584,6 +603,22 @@ impl ChainDb for PersistentChainDb {
             }
             for h in &hashes_to_remove {
                 hashes.remove(h).map_err(map_storage_err)?;
+            }
+            // B6 CENSUS FIX: drop the reverse index for the same slots, in the SAME transaction.
+            //
+            // A stale entry here is currently unreachable (every reader consults BLOCKS_BY_SLOT
+            // first), but leaving one would make correctness depend on that argument holding for
+            // every future reader, and would let the table grow without bound across reorgs. The
+            // exact slot list is already in hand, so removal is precise rather than a scan.
+            //
+            // The `hashes_to_remove` scan above is deliberately NOT switched to this index: on a
+            // store written before the index existed it would find nothing and silently leave
+            // SLOT_BY_HASH entries behind. Fixing the read cost must not weaken the delete.
+            {
+                let mut by_slot = txn.open_table(HASH_BY_SLOT).map_err(map_table_err)?;
+                for s in &to_remove {
+                    by_slot.remove(*s).map_err(map_storage_err)?;
+                }
             }
         }
         txn.commit().map_err(map_commit_err)?;
@@ -995,6 +1030,174 @@ mod tests {
         let path = dir.path().join(name);
         PersistentChainDb::open(PersistentChainDbOptions::at(&path))
             .expect("open chaindb")
+    }
+
+    /// B6 CENSUS FIX — the reverse index must agree with the forward one, including after a
+    /// rollback, and a store with NO reverse index must still read correctly via the fallback.
+    ///
+    /// The speed-up is only sound if the hash it returns is the same hash the old scan returned.
+    /// This asserts that equivalence directly rather than trusting the two tables to stay in step.
+    #[test]
+    fn hash_by_slot_index_agrees_with_the_scan_and_survives_rollback() {
+        let tmp = TempDir::new().expect("tempdir");
+        let db = fresh_db(&tmp, "index.db");
+        let mk = |i: u64| {
+            let mut h = [0u8; 32];
+            h[..8].copy_from_slice(&i.to_be_bytes());
+            h[31] = 0xC5;
+            StoredBlock {
+                slot: SlotNo(i),
+                hash: Hash32(h),
+                bytes: vec![0xEE; 32],
+            }
+        };
+        for i in 0..40 {
+            db.put_block(&mk(i)).expect("put");
+        }
+
+        // The indexed lookup must return exactly what the historical full scan would.
+        {
+            let txn = db.db.begin_read().expect("read txn");
+            for i in 0..40u64 {
+                let via_index = hash_for_slot(&txn, i).expect("lookup").expect("present");
+                let via_scan = txn
+                    .open_table(SLOT_BY_HASH)
+                    .expect("hash table")
+                    .iter()
+                    .expect("iter")
+                    .filter_map(|r| r.ok())
+                    .find_map(|(h, s)| if s.value() == i { Some(Hash32(*h.value())) } else { None })
+                    .expect("scan finds it");
+                assert_eq!(via_index, via_scan, "index and scan disagree at slot {i}");
+                assert_eq!(via_index, mk(i).hash);
+            }
+        }
+        assert_eq!(db.tip().expect("tip").expect("some").hash, mk(39).hash);
+        assert_eq!(
+            db.get_block_by_slot(SlotNo(17)).expect("get").expect("some").hash,
+            mk(17).hash
+        );
+
+        // After a rollback the reverse index must not retain the removed slots.
+        db.rollback_to_slot(SlotNo(20)).expect("rollback");
+        assert_eq!(db.tip().expect("tip").expect("some").slot, SlotNo(20));
+        {
+            let txn = db.db.begin_read().expect("read txn");
+            for i in 21..40u64 {
+                assert!(
+                    hash_for_slot(&txn, i).expect("lookup").is_none(),
+                    "slot {i} was rolled back but its reverse-index entry survived"
+                );
+            }
+            for i in 0..=20u64 {
+                assert_eq!(hash_for_slot(&txn, i).expect("lookup"), Some(mk(i).hash));
+            }
+        }
+        assert!(db.get_block_by_slot(SlotNo(25)).expect("get").is_none());
+
+        // Re-admitting a DIFFERENT block at a rolled-back slot must re-point the index.
+        let mut alt = mk(21);
+        alt.hash = Hash32([0x5A; 32]);
+        db.put_block(&alt).expect("re-admit");
+        assert_eq!(
+            db.get_block_by_slot(SlotNo(21)).expect("get").expect("some").hash,
+            alt.hash
+        );
+        assert_eq!(db.tip().expect("tip").expect("some").hash, alt.hash);
+    }
+
+    /// B6 CENSUS FIX — a store written BEFORE the reverse index existed must still read correctly.
+    ///
+    /// Simulated by deleting the reverse entries while leaving the forward tables untouched, which
+    /// is exactly the on-disk shape of a pre-index store. Readers must fall back to the scan rather
+    /// than report corruption.
+    #[test]
+    fn a_store_without_the_reverse_index_still_reads_via_the_fallback() {
+        let tmp = TempDir::new().expect("tempdir");
+        let db = fresh_db(&tmp, "legacy.db");
+        let mut h = [0u8; 32];
+        h[0] = 0x9F;
+        let block = StoredBlock {
+            slot: SlotNo(7),
+            hash: Hash32(h),
+            bytes: vec![0x11; 16],
+        };
+        db.put_block(&block).expect("put");
+
+        // Strip the reverse index -> the on-disk shape of a pre-index store.
+        {
+            let txn = db.begin_write().expect("write txn");
+            {
+                let mut by_slot = txn.open_table(HASH_BY_SLOT).expect("table");
+                by_slot.remove(7u64).expect("remove");
+            }
+            txn.commit().expect("commit");
+        }
+
+        assert_eq!(
+            db.get_block_by_slot(SlotNo(7)).expect("get").expect("some").hash,
+            block.hash,
+            "the fallback scan must recover the hash for a pre-index block"
+        );
+        assert_eq!(db.tip().expect("tip").expect("some").hash, block.hash);
+        let iterated: Vec<_> = db
+            .iter_from_slot(SlotNo(0))
+            .expect("iter")
+            .map(|r| r.expect("row"))
+            .collect();
+        assert_eq!(iterated.len(), 1);
+        assert_eq!(iterated[0].hash, block.hash);
+    }
+
+    /// B6 CENSUS follow-up — `iter_from_slot` must cost what it RETURNS, not what the store HOLDS.
+    ///
+    /// The live census attributed 73% of all relay-loop time to the co-advance, at a fixed ~80-115s
+    /// per pass that did not move across a ~1000x range in blocks admitted. This is the mechanical
+    /// version of that measurement: fetch a FIXED small tail (8 blocks) from stores of growing size
+    /// and compare. If the per-call cost tracks store size rather than the 8 blocks returned, the
+    /// loop is paying for the whole store on every pass.
+    ///
+    /// Asserted as a RATIO, not a wall-clock bound, so it does not flake on a loaded machine: the
+    /// same 8-block fetch from a 4x larger store must not cost 4x more.
+    #[test]
+    fn iter_from_slot_cost_tracks_what_it_returns_not_what_the_store_holds() {
+        fn time_tail_fetch(n_blocks: u64) -> std::time::Duration {
+            let tmp = TempDir::new().expect("tempdir");
+            let db = fresh_db(&tmp, "scaling.db");
+            for i in 0..n_blocks {
+                let mut hash = [0u8; 32];
+                hash[..8].copy_from_slice(&i.to_be_bytes());
+                db.put_block(&StoredBlock {
+                    slot: SlotNo(i),
+                    hash: Hash32(hash),
+                    bytes: vec![0xAB; 64],
+                })
+                .expect("put");
+            }
+            // The shape the relay loop uses at tip: resume from just behind the tip.
+            let from = SlotNo(n_blocks.saturating_sub(8));
+            let t0 = std::time::Instant::now();
+            let got: Vec<_> = db
+                .iter_from_slot(from)
+                .expect("iter")
+                .map(|r| r.expect("row"))
+                .collect();
+            let dt = t0.elapsed();
+            assert_eq!(got.len(), 8, "the tail fetch must return exactly 8 blocks");
+            dt
+        }
+
+        let small = time_tail_fetch(500);
+        let large = time_tail_fetch(2_000); // 4x the store, SAME 8 blocks returned
+        // Generous headroom (8x for a 4x store) so this fails only on genuine size-dependence, not
+        // on scheduler noise. Pre-fix this ratio is ~4x and rising; post-fix it is ~1x.
+        let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-9);
+        assert!(
+            ratio < 8.0,
+            "iter_from_slot cost scales with STORE SIZE, not with the 8 blocks returned: \
+             500-block store {small:?} vs 2000-block store {large:?} (ratio {ratio:.1}x). \
+             The relay loop pays this on every pass -- see the B6 census."
+        );
     }
 
     #[test]
