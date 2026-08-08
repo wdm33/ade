@@ -2773,9 +2773,19 @@ fn advance_ledger_state_to_durable_tip(
     // to the unlabelled (fresh) log line, never to a halt.
     let tip_epoch = era_schedule.locate(tip.slot).ok().map(|l| l.epoch);
 
-    // Hoist the reorg reset for BOTH stores so the segmented walk below is purely forward.
+    // B6 CENSUS II — split the co-advance into its three constituent calls.
+    //
+    // The first census attributed 73% of loop time to this function as a whole. The slot->hash index
+    // fix then took the at-tip pass from 115.0s to 90.2s on the SAME 9 blocks: real, but only ~22%,
+    // so ~78% of the fixed cost is elsewhere INSIDE here. Splitting it is the same discipline that
+    // named C in the first place -- attribute before fixing, do not guess twice.
+    let t_reset = std::time::Instant::now();
     reduced_checkpoint_reset_if_ahead(reduced_checkpoint, &tip)?;
+    let ms_reset = t_reset.elapsed().as_millis();
+    let t_recover = std::time::Instant::now();
     accumulator_recover_admit(epoch_accumulator, chaindb, &tip, policy)?;
+    let ms_recover = t_recover.elapsed().as_millis();
+    let t_accum_loop = std::time::Instant::now();
 
     // The boundary-segmented accumulator cross loop (observe-only). Skipped when no accumulator is
     // configured -> the EVIEW-only advance below is byte-identical to the pre-S3 path.
@@ -3004,9 +3014,20 @@ fn advance_ledger_state_to_durable_tip(
         }
     }
 
+    let ms_accum_loop = t_accum_loop.elapsed().as_millis();
     // GUARANTEE the EVIEW checkpoint reaches the durable tip (fail-closed), regardless of the accumulator
     // outcome. Forward-only -- the reorg reset was hoisted above.
+    let t_cp_forward = std::time::Instant::now();
     advance_reduced_checkpoint_forward_to(reduced_checkpoint, chaindb, tip.slot)?;
+    let ms_cp_forward = t_cp_forward.elapsed().as_millis();
+    crate::node_log!(
+        "b6-census-coadv: non_authoritative=true reset_ms={} recover_admit_ms={} \
+         accumulator_loop_ms={} checkpoint_forward_ms={}",
+        ms_reset,
+        ms_recover,
+        ms_accum_loop,
+        ms_cp_forward
+    );
     Ok(())
 }
 
