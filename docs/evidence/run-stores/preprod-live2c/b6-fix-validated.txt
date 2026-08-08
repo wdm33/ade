@@ -1,0 +1,32 @@
+# B6 FIX — VALIDATED LIVE, preprod 2026-08-07, from the frozen store (a42c686d)
+
+## the at-tip pass, same 7-9 blocks, byte-identical frozen start
+#   unfixed              coadvance 115.0s   pass 132.7s
+#   + slot->hash index   coadvance  90.2s   pass 103.0s
+#   + retry suppression  coadvance   0.3s   pass  11.0s   <- ~350x
+
+## B6: from TOTAL starvation to a 2.4% transient
+#   before:  0 ForgeTicks; 363/363 (run 4) and 7/7 (this arm, pre-fix) WorkAvailable -> SyncOnce
+#   after:      488 sync_status=NoWorkReady
+#   after:       15 sync_status=WorkAvailable
+#              488 loop_step=ForgeTick
+#               15 loop_step=SyncOnce
+
+#   449 ForgeTicks fired. B6 is back to the benign shape LIVE-2b first recorded (8/363),
+#   which is what it always should have been.
+
+## the clock is no longer starved
+#   next_tick_ms=999 now appears -- SystemClock SLEEPS to the slot boundary again. Under
+#   starvation it was 0 on every pass (it returned the stale boundary immediately), which was
+#   the +1-per-iteration stale-slot signature recorded in LIVE-2c.
+
+## LIVE-2c part 3, working as designed
+#       488 "outcome":"refused"
+#       488 "skip_reason":"tip_mismatch"
+#   Every admitted tick yields a TYPED refusal. Pre-slice this was the no_tip_available
+#   catch-all with a null reason.
+
+## B12 is now the SOLE remaining barrier, and is confirmed on a healthy loop
+#   local_tip_block_no - peer_tip_block_no == +1 in 465/465 records (run 4: 354/354).
+#   The DC-NODE-15 exact-equality gate is unsatisfiable at the tip; leadership evaluation
+#   sits downstream of it, so CE-L2c-7/8/9 remain blocked on B12 alone.
