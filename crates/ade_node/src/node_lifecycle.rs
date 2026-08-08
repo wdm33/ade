@@ -2750,6 +2750,28 @@ fn crossing_is_refold(tip_epoch: Option<EpochNo>, to_epoch: EpochNo) -> bool {
 }
 
 
+/// B6 FIX (DC-EPOCH-33) — the boundary attempt that already stalled, remembered for this process.
+///
+/// The boundary arm is expensive by construction: it rewinds the reduced checkpoint onto the
+/// boundary point, replays it, and sums the per-credential mark. That is the right price to pay
+/// ONCE. It was being paid on EVERY pass, because the crossing fails observe-only
+/// (`InvalidTxCarriesAuthorityEffect`), the arm breaks, and the end-of-function forward advance then
+/// puts the checkpoint back at the tip -- undoing the positioning, so the next pass starts over.
+/// Measured: 55.5s (99.8%) and 69.5s (99.7%) of the accumulator loop, on 2 and 3,723 blocks alike.
+///
+/// Keyed on BOTH the boundary slot and the accumulator's cursor, so anything that could change the
+/// outcome -- a rollback that moves the cursor, or a different boundary -- retries. A restart also
+/// retries, deliberately: the memo is in-memory and never durable.
+///
+/// This suppresses a RETRY, never a first attempt, and the suppressed work is observe-only: a failed
+/// pass leaves the same durable state as a skipped one, because the rewind it performs is undone by
+/// the forward advance at the end of the same call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StalledBoundary {
+    boundary_slot: SlotNo,
+    cursor: Option<SlotNo>,
+}
+
 /// B6 CENSUS IV: accumulate the boundary arm's elapsed time on EVERY exit path, including the
 /// several `break`s inside it. A plain `elapsed()` at the end of the arm would miss them and report
 /// zero for exactly the branch that costs the most.
@@ -2769,6 +2791,27 @@ fn advance_ledger_state_to_durable_tip(
     chaindb: &dyn ChainDb,
     era_schedule: &EraSchedule,
     policy: &RecoveryAdmissionPolicy,
+) -> Result<(), NodeLifecycleError> {
+    // No memo: every caller outside the relay loop attempts the boundary exactly once per call.
+    advance_ledger_state_to_durable_tip_memo(
+        reduced_checkpoint,
+        epoch_accumulator,
+        chaindb,
+        era_schedule,
+        policy,
+        &mut None,
+    )
+}
+
+/// B6 FIX: as above, but carrying the [`StalledBoundary`] memo across relay-loop passes so a boundary
+/// that already stalled is not re-attempted at full cost every pass.
+fn advance_ledger_state_to_durable_tip_memo(
+    reduced_checkpoint: Option<&ade_runtime::chaindb::ReducedUtxoCheckpoint>,
+    epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
+    chaindb: &dyn ChainDb,
+    era_schedule: &EraSchedule,
+    policy: &RecoveryAdmissionPolicy,
+    stalled_boundary: &mut Option<StalledBoundary>,
 ) -> Result<(), NodeLifecycleError> {
     use ade_runtime::chaindb::{
         advance_accumulator_over_chaindb, cross_accumulator_over_boundary_block,
@@ -2854,6 +2897,16 @@ fn advance_ledger_state_to_durable_tip(
                             start: t_bnd,
                             acc: &mut census_ms_boundary_arm,
                         };
+                        // B6 FIX: this exact boundary already stalled at this cursor, so the rewind
+                        // + replay + mark below would reproduce the same failure at the same price.
+                        // Skip BEFORE spending it. Not silent: the suppression was announced once,
+                        // when the memo was set.
+                        let cursor_now = store.last_advanced_slot().ok().flatten();
+                        if stalled_boundary.as_ref().is_some_and(|m| {
+                            m.boundary_slot == s_bb && m.cursor == cursor_now
+                        }) {
+                            break;
+                        }
                         // s_prev: the accumulator's cursor after the within-epoch fold -- the boundary point
                         // (the last within-epoch block of the closing epoch).
                         let s_prev = match store.last_advanced_slot() {
@@ -3021,10 +3074,17 @@ fn advance_ledger_state_to_durable_tip(
                             }
                             Ok(AccumulatorBoundaryOutcome::Stalled { slot, reason }) => {
                                 crate::node_log!(
-                                    "epoch-accumulator: boundary cross stalled at {} (observe-only): {}",
+                                    "epoch-accumulator: boundary cross stalled at {} (observe-only): {} \
+                                     -- SUPPRESSING re-attempt until the boundary or the cursor moves \
+                                     (B6: this attempt costs a checkpoint rewind + replay + mark, and \
+                                     was being paid on EVERY pass)",
                                     slot.0,
                                     reason
                                 );
+                                *stalled_boundary = Some(StalledBoundary {
+                                    boundary_slot: s_bb,
+                                    cursor: store.last_advanced_slot().ok().flatten(),
+                                });
                                 break;
                             }
                             Err(e) => {
@@ -3311,6 +3371,11 @@ pub async fn run_relay_loop_with_sched(
     // to N+1 (or beyond), extend the owned schedule to match -- deriving the SAME summaries the live
     // per-boundary append produced (byte-identical). A no-op when the recovery kept the seed.
     extend_schedule_to_epoch(&mut era_schedule, authority.epoch());
+    // B6 FIX: carried ACROSS passes -- that is the whole point. A boundary that stalled once will
+    // stall identically until the boundary or the accumulator cursor moves, and re-attempting it
+    // costs a checkpoint rewind + replay + mark (measured 55.5-69.5s, ~99.8% of the loop's cost).
+    // In-memory only: a restart deliberately re-attempts once.
+    let mut stalled_boundary: Option<StalledBoundary> = None;
     loop {
         // B6 CENSUS (emit-only, NON-AUTHORITATIVE, operational tier).
         //
@@ -3816,12 +3881,13 @@ pub async fn run_relay_loop_with_sched(
                     // (EVIEW currency); the accumulator is observe-only (a stall/fault never halts the
                     // follow). None/None -> byte-identical no-op.
                     let t_census_coadv = std::time::Instant::now();
-                    advance_ledger_state_to_durable_tip(
+                    advance_ledger_state_to_durable_tip_memo(
                         reduced_checkpoint,
                         epoch_accumulator,
                         chaindb,
                         &era_schedule,
                         &recovery_policy,
+                        &mut stalled_boundary,
                     )?;
                     census_ms_coadvance = t_census_coadv.elapsed().as_millis();
                     // EPOCH-CONTINUITY-ACTIVATION ECA-1 (DC-EPOCH-13): the AUTOMATIC first-boundary
