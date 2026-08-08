@@ -34,13 +34,17 @@ const SLOT_BY_HASH: TableDefinition<&[u8; 32], u64> =
 /// The store had `slot -> bytes` and `hash -> slot`, but no `slot -> hash`. Every read that knew a
 /// slot and needed its hash therefore scanned the ENTIRE hash index: `tip()` (called several times
 /// per relay-loop pass), `get_block_by_slot`, and `iter_from_slot` — the last once PER BLOCK
-/// returned. On the live preprod store (~5M blocks) that was measured as a fixed ~80-115s per loop
-/// pass, 73% of all loop time, unchanged across a ~1000x range in blocks admitted.
+/// returned. So a walk of k blocks over a store holding N costs k x N index reads. On the live
+/// preprod store (~15,400 blocks held — 5,029,xxx is a block NUMBER, not a count) a per-pass walk
+/// from the seed is ~225M index reads, measured as a fixed ~80-115s per loop pass: 73% of all loop
+/// time, unchanged across a ~1000x range in blocks admitted.
 ///
 /// PURE DERIVED INDEX: every entry is recoverable from `SLOT_BY_HASH`, it holds no authoritative
-/// value, and readers FALL BACK to the old scan when an entry is absent — so a store written before
-/// this existed stays correct and simply keeps the old cost for its pre-existing blocks. No
-/// store-semantics version change: nothing persisted gains a new interpretation.
+/// value, and readers FALL BACK to the old scan when an entry is absent. A pre-index store is
+/// BACKFILLED once on open ([`PersistentChainDb::backfill_hash_by_slot`]) so the fallback is a
+/// safety net rather than the steady state — leaving it as the steady state was measured 8x SLOWER
+/// than the code it replaced. No store-semantics version change: nothing persisted gains a new
+/// interpretation.
 const HASH_BY_SLOT: TableDefinition<u64, &[u8; 32]> =
     TableDefinition::new("hash_by_slot");
 const SNAPSHOTS_BY_SLOT: TableDefinition<u64, &[u8]> =
@@ -152,7 +156,59 @@ impl PersistentChainDb {
             write_lock: Mutex::new(()),
         };
         me.init_or_check_schema()?;
+        me.backfill_hash_by_slot()?;
         Ok(me)
+    }
+
+    /// B6 CENSUS FIX — build [`HASH_BY_SLOT`] once for a store written before it existed.
+    ///
+    /// Without this the fallback IS the steady state on every pre-existing store: each lookup misses
+    /// the index and pays the historical full scan anyway, plus the cost of missing. Measured live:
+    /// the fallback-on-every-block shape was ~8x SLOWER than the original code (951s vs 115s for one
+    /// at-tip pass), because the per-block path also re-opened tables the original hoisted.
+    ///
+    /// One pass over `SLOT_BY_HASH` (which already holds every pair) in one write transaction.
+    /// Idempotent and cheap to re-check: skipped entirely once the two tables agree in length.
+    /// Fail-soft -- a backfill fault leaves the fallback in place, which is correct but slow, never
+    /// wrong.
+    fn backfill_hash_by_slot(&self) -> Result<(), ChainDbError> {
+        let pairs: Vec<(u64, [u8; 32])> = {
+            let txn = self.db.begin_read().map_err(map_txn_err)?;
+            let hashes = match txn.open_table(SLOT_BY_HASH) {
+                Ok(t) => t,
+                Err(_) => return Ok(()),
+            };
+            // redb's len() is on ReadableTableMetadata; compare counts to decide whether the
+            // index is already complete. Cheap (no scan) and makes re-open a no-op.
+            use redb::ReadableTableMetadata;
+            let have = match txn.open_table(HASH_BY_SLOT) {
+                Ok(t) => t.len().map_err(map_storage_err)?,
+                Err(_) => 0,
+            };
+            let want = hashes.len().map_err(map_storage_err)?;
+            if have >= want {
+                return Ok(());
+            }
+            hashes
+                .iter()
+                .map_err(map_storage_err)?
+                .filter_map(|r| r.ok())
+                .map(|(h, sl)| (sl.value(), *h.value()))
+                .collect()
+        };
+        if pairs.is_empty() {
+            return Ok(());
+        }
+        let _guard = self.write_lock.lock().map_err(lock_poisoned)?;
+        let txn = self.begin_write()?;
+        {
+            let mut by_slot = txn.open_table(HASH_BY_SLOT).map_err(map_table_err)?;
+            for (slot, hash) in &pairs {
+                by_slot.insert(*slot, hash).map_err(map_storage_err)?;
+            }
+        }
+        txn.commit().map_err(map_commit_err)?;
+        Ok(())
     }
 
     fn init_or_check_schema(&self) -> Result<(), ChainDbError> {
@@ -490,20 +546,45 @@ impl ChainDb for PersistentChainDb {
             }
             Err(e) => return Err(map_table_err(e)),
         };
+        // B6 CENSUS FIX: open BOTH indexes ONCE, outside the loop. The original hoisted the
+        // SLOT_BY_HASH open; an earlier version of this fix moved it into a per-block helper and was
+        // measured 8x SLOWER on a store whose blocks predate the index, because every block then
+        // paid two table opens on top of the scan it was already paying.
+        let by_slot = txn.open_table(HASH_BY_SLOT).ok();
+        let hashes = txn.open_table(SLOT_BY_HASH).map_err(map_table_err)?;
+
         let mut snapshot: Vec<StoredBlock> = Vec::new();
         for entry in blocks.range(from.0..).map_err(map_storage_err)? {
             let (slot_v, bytes_v) = entry.map_err(map_storage_err)?;
             let slot = SlotNo(slot_v.value());
             let bytes = bytes_v.value().to_vec();
-            // B6 CENSUS FIX: point lookup. This was a full scan of SLOT_BY_HASH PER BLOCK, so the
-            // cost was blocks-returned x store-size -- the dominant term in the relay loop's fixed
-            // per-pass cost.
-            let hash = hash_for_slot(&txn, slot.0)?.ok_or_else(|| {
-                ChainDbError::Corruption(format!(
-                    "iter: slot {} present without hash index entry",
-                    slot.0,
-                ))
-            })?;
+            let indexed = match &by_slot {
+                Some(t) => t
+                    .get(slot.0)
+                    .map_err(map_storage_err)?
+                    .map(|v| Hash32(*v.value())),
+                None => None,
+            };
+            let hash = match indexed {
+                Some(h) => h,
+                None => hashes
+                    .iter()
+                    .map_err(map_storage_err)?
+                    .filter_map(|r| r.ok())
+                    .find_map(|(h, sl)| {
+                        if sl.value() == slot.0 {
+                            Some(Hash32(*h.value()))
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or_else(|| {
+                        ChainDbError::Corruption(format!(
+                            "iter: slot {} present without hash index entry",
+                            slot.0,
+                        ))
+                    })?,
+            };
             snapshot.push(StoredBlock { slot, hash, bytes });
         }
         Ok(Box::new(snapshot.into_iter().map(Ok)))
@@ -1147,6 +1228,89 @@ mod tests {
             .collect();
         assert_eq!(iterated.len(), 1);
         assert_eq!(iterated[0].hash, block.hash);
+    }
+
+    /// B6 CENSUS FIX — a store written BEFORE the index must be BACKFILLED on open, not left on the
+    /// fallback.
+    ///
+    /// THIS IS THE TEST WHOSE ABSENCE SHIPPED A REGRESSION. The first version of the index fix was
+    /// verified only against a FRESH store, where the index is always present and the fallback never
+    /// executes. On the live preprod store — every block written before the index existed — the
+    /// fallback ran for EVERY block and the change measured **8x SLOWER** than the code it replaced
+    /// (951s vs 115s for one at-tip pass). Correctness of the fallback had been tested; its COST had
+    /// not, and the real-world store is 100% fallback until backfilled.
+    ///
+    /// So this asserts the fallback is not the steady state: after reopening a store whose reverse
+    /// index was stripped, every entry must be present again.
+    #[test]
+    fn a_pre_index_store_is_backfilled_on_open_so_the_fallback_is_not_the_steady_state() {
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("legacy-backfill.db");
+        let mk = |i: u64| {
+            let mut h = [0u8; 32];
+            h[..8].copy_from_slice(&i.to_be_bytes());
+            h[31] = 0x7E;
+            StoredBlock {
+                slot: SlotNo(i),
+                hash: Hash32(h),
+                bytes: vec![0x22; 24],
+            }
+        };
+        {
+            let db = PersistentChainDb::open(PersistentChainDbOptions::at(&path)).expect("open");
+            for i in 0..64 {
+                db.put_block(&mk(i)).expect("put");
+            }
+            // Strip the reverse index -> exactly the on-disk shape of a pre-index store.
+            let txn = db.begin_write().expect("write txn");
+            {
+                let mut by_slot = txn.open_table(HASH_BY_SLOT).expect("table");
+                for i in 0..64u64 {
+                    by_slot.remove(i).expect("remove");
+                }
+            }
+            txn.commit().expect("commit");
+            {
+                let r = db.db.begin_read().expect("read");
+                use redb::ReadableTableMetadata;
+                assert_eq!(
+                    r.open_table(HASH_BY_SLOT).expect("t").len().expect("len"),
+                    0,
+                    "precondition: the store now looks pre-index"
+                );
+            }
+        }
+
+        // Reopen: the backfill must restore every entry, so no read falls back.
+        let db = PersistentChainDb::open(PersistentChainDbOptions::at(&path)).expect("reopen");
+        {
+            let r = db.db.begin_read().expect("read");
+            use redb::ReadableTableMetadata;
+            assert_eq!(
+                r.open_table(HASH_BY_SLOT).expect("t").len().expect("len"),
+                64,
+                "open must BACKFILL the reverse index for a pre-index store"
+            );
+            for i in 0..64u64 {
+                let v = r
+                    .open_table(HASH_BY_SLOT)
+                    .expect("t")
+                    .get(i)
+                    .expect("get")
+                    .map(|v| Hash32(*v.value()));
+                assert_eq!(v, Some(mk(i).hash), "backfilled hash wrong at slot {i}");
+            }
+        }
+        // ...and the values it serves are unchanged.
+        assert_eq!(db.tip().expect("tip").expect("some").hash, mk(63).hash);
+        assert_eq!(
+            db.get_block_by_slot(SlotNo(9)).expect("get").expect("some").hash,
+            mk(9).hash
+        );
+        // Re-open again: idempotent, and must not duplicate or corrupt.
+        drop(db);
+        let db = PersistentChainDb::open(PersistentChainDbOptions::at(&path)).expect("reopen 2");
+        assert_eq!(db.tip().expect("tip").expect("some").hash, mk(63).hash);
     }
 
     /// B6 CENSUS follow-up — `iter_from_slot` must cost what it RETURNS, not what the store HOLDS.
