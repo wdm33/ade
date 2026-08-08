@@ -2749,6 +2749,20 @@ fn crossing_is_refold(tip_epoch: Option<EpochNo>, to_epoch: EpochNo) -> bool {
     tip_epoch.is_some_and(|te| te.0 > to_epoch.0)
 }
 
+
+/// B6 CENSUS IV: accumulate the boundary arm's elapsed time on EVERY exit path, including the
+/// several `break`s inside it. A plain `elapsed()` at the end of the arm would miss them and report
+/// zero for exactly the branch that costs the most.
+struct BoundaryArmTimer<'a> {
+    start: std::time::Instant,
+    acc: &'a mut u128,
+}
+impl Drop for BoundaryArmTimer<'_> {
+    fn drop(&mut self) {
+        *self.acc += self.start.elapsed().as_millis();
+    }
+}
+
 fn advance_ledger_state_to_durable_tip(
     reduced_checkpoint: Option<&ade_runtime::chaindb::ReducedUtxoCheckpoint>,
     epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
@@ -2786,25 +2800,42 @@ fn advance_ledger_state_to_durable_tip(
     accumulator_recover_admit(epoch_accumulator, chaindb, &tip, policy)?;
     let ms_recover = t_recover.elapsed().as_millis();
     let t_accum_loop = std::time::Instant::now();
+    // B6 CENSUS III: inside the accumulator loop, separate the PER-BLOCK walk from the
+    // ONCE-PER-PASS ReachedTip bookkeeping. The at-tip pass costs ~66s here on 2 blocks, so the
+    // cost is not the walk's per-block work -- this says which of the two it actually is.
+    let mut census_ms_walk: u128 = 0;
+    let mut census_ms_settle: u128 = 0;
+    // B6 CENSUS IV: walk + settle accounted for only 129ms of a 61,473ms block, so the cost is in
+    // the untimed remainder. Time EVERY statement in the block rather than reason about which of
+    // them "looks cheap" -- that reasoning has been wrong twice in this investigation.
+    let mut census_ms_seed_slot: u128 = 0;
+    let mut census_ms_boundary_arm: u128 = 0;
 
     // The boundary-segmented accumulator cross loop (observe-only). Skipped when no accumulator is
     // configured -> the EVIEW-only advance below is byte-identical to the pre-S3 path.
     if let Some(store) = epoch_accumulator {
         // Skip-if-unsealed: a present-but-unsealed store is malformed (never fold from slot 0 over a seed
         // that already absorbed those blocks). The checkpoint still reaches tip below.
-        if let Ok(Some(seed_slot)) = store.seed_slot() {
+        let t_seed = std::time::Instant::now();
+        let seed_slot_probe = store.seed_slot();
+        census_ms_seed_slot = t_seed.elapsed().as_millis();
+        if let Ok(Some(seed_slot)) = seed_slot_probe {
             loop {
-                match advance_accumulator_over_chaindb(
+                let t_walk = std::time::Instant::now();
+                let walk_outcome = advance_accumulator_over_chaindb(
                     store,
                     chaindb,
                     era_schedule,
                     seed_slot,
                     tip.slot,
-                ) {
+                );
+                census_ms_walk += t_walk.elapsed().as_millis();
+                match walk_outcome {
                     Ok(AccumulatorChaindbOutcome::ReachedTip { .. }) => {
                         // ACCUMULATOR-REFOLD-BOUND S1: roll the bounded rewind buffer now that the
                         // accumulator is current. Observe-only -- a fault here only means the next
                         // rollback refolds from bootstrap as it did pre-slice.
+                        let t_settle = std::time::Instant::now();
                         if let Ok(Some(tip_pt)) = resolve_canonical_point(chaindb, tip.slot) {
                             if let Err(e) = store
                                 .roll_settled_rewind_point(tip_pt.block_no, policy.security_param.0)
@@ -2814,9 +2845,15 @@ fn advance_ledger_state_to_durable_tip(
                                 );
                             }
                         }
+                        census_ms_settle += t_settle.elapsed().as_millis();
                         break;
                     }
                     Ok(AccumulatorChaindbOutcome::StalledAt { slot: s_bb, reason }) => {
+                        let t_bnd = std::time::Instant::now();
+                        let _census_bnd = BoundaryArmTimer {
+                            start: t_bnd,
+                            acc: &mut census_ms_boundary_arm,
+                        };
                         // s_prev: the accumulator's cursor after the within-epoch fold -- the boundary point
                         // (the last within-epoch block of the closing epoch).
                         let s_prev = match store.last_advanced_slot() {
@@ -3022,10 +3059,15 @@ fn advance_ledger_state_to_durable_tip(
     let ms_cp_forward = t_cp_forward.elapsed().as_millis();
     crate::node_log!(
         "b6-census-coadv: non_authoritative=true reset_ms={} recover_admit_ms={} \
-         accumulator_loop_ms={} checkpoint_forward_ms={}",
+         accumulator_loop_ms={} (seed_slot_ms={} walk_ms={} settle_ms={} boundary_arm_ms={}) \
+         checkpoint_forward_ms={}",
         ms_reset,
         ms_recover,
         ms_accum_loop,
+        census_ms_seed_slot,
+        census_ms_walk,
+        census_ms_settle,
+        census_ms_boundary_arm,
         ms_cp_forward
     );
     Ok(())

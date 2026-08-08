@@ -1,0 +1,30 @@
+# B6 CENSUS II — the co-advance DECOMPOSED, preprod, 2026-08-07 (686c961f)
+# Frozen start 130,390,366. Timers bracket advance_ledger_state_to_durable_tip's four calls.
+
+## the four components sum to the bracket (no accounting gap)
+#   0 + 4 + 71612 + 14036 = 85652  vs bracketed coadvance_ms = 85658
+
+## FIXED COST CONFIRMED: 1850x difference in work, same cost
+
+#   component              catch-up(3695)      AT TIP(2)
+#   accumulator loop                71.6s          66.3s
+#   checkpoint forward              14.0s          12.4s
+#   recover_admit                     4ms            0ms
+#   reorg reset                       0ms            0ms
+
+#   per block: accumulator 19.4 ms/blk (catch-up) vs 33,130 ms/blk (at tip) -- a 1700x
+#   divergence, i.e. the cost does not track blocks at all.
+
+## what this narrows the fix to
+#   ~78s of fixed per-pass cost, split ~66s accumulator loop + ~12s checkpoint forward.
+#   The slot->hash index fix (82b2e8f3/1175ba20) already removed ~25%; what remains is NOT
+#   the hash scan. Next split: inside the accumulator loop, separate the per-block walk
+#   (advance_accumulator_over_chaindb) from the once-per-pass ReachedTip bookkeeping
+#   (resolve_canonical_point + roll_settled_rewind_point).
+
+## raw
+b6-census-coadv: non_authoritative=true reset_ms=0 recover_admit_ms=0 accumulator_loop_ms=66822 checkpoint_forward_ms=5007
+b6-census-coadv: non_authoritative=true reset_ms=0 recover_admit_ms=4 accumulator_loop_ms=71612 checkpoint_forward_ms=14036
+b6-census: non_authoritative=true iter_total_ms=204280 to_planner_ms=0 has_work_ms=0 is_ended_ms=0 next_tick_ms=0 sync_ms=118620 coadvance_ms=85658 boundary_ms=0 blocks_admitted=3695 tip_block=Some(5029947)
+b6-census-coadv: non_authoritative=true reset_ms=0 recover_admit_ms=0 accumulator_loop_ms=66261 checkpoint_forward_ms=12434
+b6-census: non_authoritative=true iter_total_ms=91982 to_planner_ms=0 has_work_ms=0 is_ended_ms=0 next_tick_ms=0 sync_ms=13284 coadvance_ms=78696 boundary_ms=0 blocks_admitted=2 tip_block=Some(5029949)

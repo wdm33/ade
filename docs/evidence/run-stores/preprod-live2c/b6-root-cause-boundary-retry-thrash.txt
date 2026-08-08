@@ -1,0 +1,47 @@
+# B6 ROOT CAUSE — a FAILING boundary crossing, retried at full cost every pass
+# preprod, 2026-08-07, frozen start 130,390,366. Four successive decompositions.
+
+## the attribution, narrowed one level at a time
+#   census I    co-advance is 73% of loop time            (vs sync / pre-planner / work-per-pass)
+#   census II   accumulator loop is 84-93% of co-advance   (vs checkpoint-forward / reset / recover-admit)
+#   census III  walk 101-206ms, settle 0ms                 -> NOT the per-block walk, NOT the bookkeeping
+#   census IV   boundary arm 55,508ms = 99.8%              <- HERE
+
+## the final line
+b6-census-coadv: non_authoritative=true reset_ms=0 recover_admit_ms=0 accumulator_loop_ms=55610 (seed_slot_ms=0 walk_ms=101 settle_ms=0 boundary_arm_ms=55508) checkpoint_forward_ms=4988
+
+## what the boundary arm is doing, every pass
+epoch-accumulator: reduced checkpoint REWOUND onto boundary point 130350114 before sealing (it sat past it -- DC-EPOCH-32)
+epoch-accumulator: boundary cross stalled at 130350133 (observe-only): InvalidTxCarriesAuthorityEffect { tx_index: 0 }
+
+## THE MECHANISM — a thrash, and a permanent one
+#   1. the accumulator walks and STALLS at the boundary block (slot 130,350,133)
+#   2. the boundary arm REWINDS the reduced checkpoint onto boundary point 130,350,114 and
+#      replays it, then sums the per-credential mark  -> this is the ~55s
+#   3. cross_accumulator_over_boundary_block STALLS:
+#        InvalidTxCarriesAuthorityEffect { tx_index: 0 }        (observe-only, so no halt)
+#   4. break
+#   5. at the END of the function, advance_reduced_checkpoint_forward_to puts the checkpoint
+#      back at the TIP -- undoing step 2
+#   6. next pass: the accumulator is still at the same boundary, so it stalls again, rewinds
+#      again, replays again, fails again. Forever.
+#
+#   The cost is fixed because it is the SAME boundary being re-attempted at full price on every
+#   pass, which is exactly why it does not track blocks admitted (2 blocks and 3,723 blocks both
+#   pay it).
+
+## TWO SEPARATE DEFECTS — do not conflate them
+#   (a) CORRECTNESS: the boundary crossing genuinely fails with
+#       InvalidTxCarriesAuthorityEffect { tx_index: 0 } at slot 130,350,133. Observe-only today,
+#       so it never halts -- it just never succeeds. The accumulator is therefore permanently
+#       stuck one boundary behind, which is its own problem independent of speed.
+#
+#   (b) LIVENESS (this is B6): a failed, expensive boundary attempt is retried at FULL cost on
+#       every pass, with no memory that it just failed and no backoff -- and step 5 actively
+#       undoes the positioning work step 2 did, guaranteeing the next attempt pays again.
+#
+#   B6's fix is (b): do not re-attempt a known-failed boundary every pass. That alone drops a
+#   tip pass from ~90s to roughly its ~13s sync cost, which is at/below the 12-30s block
+#   interval -- i.e. NoWorkReady becomes reachable and ForgeTicks can fire.
+#   (a) must be fixed for the accumulator to ever cross, but it is a ledger/compat question and
+#   does not block the liveness repair.
