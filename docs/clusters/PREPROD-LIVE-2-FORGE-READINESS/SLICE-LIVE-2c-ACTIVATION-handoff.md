@@ -420,6 +420,7 @@ five candidates below are mechanically distinguished.
 | durable tip | whether local "selected" and "durable" agree |
 | accumulator authority point | whether leadership authority is aligned to that prefix |
 | **whether the peer value is sampled BEFORE or AFTER local admission** | the observation-order question, and the cheapest thing to get wrong |
+| **B12's own verdict on that tuple** | makes the record SELF-CHECKING: the verdict must be derivable from the operands beside it. Without it the next reader infers what the gate did instead of reading it, which is how a wrong operand set survives review. |
 
 **The five candidates for `local − peer == +1`:**
 
