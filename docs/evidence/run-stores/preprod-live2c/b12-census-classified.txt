@@ -1,0 +1,124 @@
+# B12 CENSUS — CLASSIFIED (a): benign observation order. preprod, 2026-08-09.
+#
+# One instrumented run from the frozen store, 762 admitted ForgeTicks, 6 distinct tip tuples,
+# every discriminator unanimous. The gate was NOT touched. Evidence for the five-way split the
+# LIVE-2c handoff ("The B12 entry point") required before any B12 work may proceed.
+
+## PROVENANCE
+start / stop     2026-08-09T14:35:13Z .. 14:50:58Z (clean SIGINT at a loop boundary)
+binary           ed5cab43 + the B12 census instrument (emit-only, non-authoritative)
+store            ~/.cardano-live1/ade-preprod-s7, restored from FROZEN-b6-census-s7 in 20 s
+                 (rm -rf; cp -a --sparse=always; chmod -R u+w). Durable tip at restore 130,390,366.
+peer             docker cardano-node-preprod 127.0.0.1:3001 (N2N, the gate's own feed)
+2nd instrument   `cardano-cli query tip --testnet-magic 1` over the N2C socket of the SAME container,
+                 every 5 s, 173 samples. INDEPENDENT of Ade: it reads what the peer HOLDS, where the
+                 gate reads what the peer ANNOUNCES. Joined to the census by BLOCK HASH (the node log
+                 carries no clock; hashes are unique, so no timestamp correlation is needed).
+catch-up         ~213k slots / ~9,800 blocks (the frozen store was 2.4 days stale)
+
+## THINGS THAT HAD TO WORK FIRST, AND DID (not the census's subject; recorded because they are new)
+timing authority commitment 30fe202dcfbb1306af4cdd6ef5188e8ad5a912a7c0eacf5924969b38d25b45b5 —
+                 byte-identical to runs 5/6 and to the hermetic unit test. Third independent process
+                 start. CE-L2c-A3 still holding.
+B6 fix           at-tip pass 9.5 s, coadvance 139 ms (unfixed: 132.7 s / 115.0 s). The known-failed
+                 boundary was re-attempted EXACTLY ONCE PER MEMO SCOPE — once in the startup reconcile
+                 (which passes `&mut None` by design), once when the loop set its own memo — and
+                 announced both times. Never silent, never per-pass.
+FIRST live 305 -> 306 epoch crossing for this store, and it SUCCEEDED:
+                 epoch_start=130550400 freeze_slot=130377600
+                 computed_eta0       = 59d6c17aca1ed65bbe74b408345da3d61d45a49c73b59990ed4feea6d6f06a2b
+                 promoted_view_nonce = 59d6c17aca1ed65bbe74b408345da3d61d45a49c73b59990ed4feea6d6f06a2b
+                 match=true
+                 Prior runs never crossed a boundary. This one did, and the promoted view's nonce
+                 equals the independently computed eta0.
+
+## THE OPERAND TUPLE — 762/762 ForgeTicks, unanimous on every field
+local_minus_peer          1                              (reproduces 354/354 run 4, 465/465 post-B6)
+verdict                   tip_mismatch                   <- read off `last_forge_refused`
+gate_recheck              TipMismatch                    <- pure classifier on the operands PRINTED
+SELF-CHECK                762/762 agree                  <- the tuple in evidence IS the tuple the
+                                                            gate decided on, not a reconstruction
+proceed_to_forge          false
+durable_eq_serve          true                           <- ChainDb::tip == the serve projection;
+                                                            no lag between the two reads of "local"
+peer_tip_on_our_chain     yes                            <- the announced point is ON our canonical
+                                                            chain, at the block_no it claims
+local_parent_is_peer_tip  yes                            <- the announced hash IS our tip's prev_hash
+order                     pre_admit                      <- announcement recorded BEFORE the pass
+                                                            that admitted our tip began
+announcements_since_admit 0                              <- the peer has said NOTHING since our admit
+acc_epochs_behind_tip     1                              (acc_epoch 305, tip_epoch 306)
+acc_cursor                130350114/5024325/c16626fe     <- pinned at the failed crossing
+acc_stalled_boundary      130350133@cursor=130350114
+acc_settled_rewind        130118424/5013815
+acc_complete              true
+authority_epoch           306
+
+## COVERAGE CROSS-CHECK — no admitted tick escaped either record
+The operator transcript (`--log`) and the census were written by different code paths on the same
+ticks, and they agree exactly: 762 `forge_result` records, ALL `outcome=refused skip_reason=tip_mismatch`,
+against 762 `b12-census` lines. One-to-one. A census that silently skipped a tick — e.g. one refused
+upstream by KES or by the reselection fence, which emit no census line — would show as a shortfall
+here. There is none, which also re-confirms LIVE-2c part 3's completed invariant on live traffic:
+every admitted ForgeTick produced a structured refusal.
+
+## THE SIX TUPLES, AND WHAT THE SECOND INSTRUMENT SAW
+  local=5036049 peer=5036048 x462   peer REALLY had our tip: YES
+  local=5036050 peer=5036049 x73    peer REALLY had our tip: YES
+  local=5036052 peer=5036051 x77    peer REALLY had our tip: YES
+  local=5036053 peer=5036052 x48    peer REALLY had our tip: YES
+  local=5036054 peer=5036053 x63    peer REALLY had our tip: YES
+  local=5036055 peer=5036054 x39    peer REALLY had our tip: YES
+peer real tip range (out of band) 5036030 .. 5036058
+local tip at ForgeTicks           5036049 .. 5036055
+ForgeTicks where our local tip EXCEEDED the peer's highest REAL tip: 0
+
+## VERBATIM — first and last census line
+b12-census: non_authoritative=true forge_slot=130603052 local_slot=130603493 local_block=5036049 local_hash=cc388271f12d6f9d00bc4857ce6853ec5411f3c6a221ed8b226dc752bd808baf durable_eq_serve=true peer_slot=130603474 peer_block=5036048 peer_hash=ea08d8178a897e44dcccf98c08bcb4ada3c1b64f7b37bab396ed2b333300e832 local_minus_peer=1 peer_tip_on_our_chain=yes local_parent_hash=ea08d8178a897e44dcccf98c08bcb4ada3c1b64f7b37bab396ed2b333300e832 local_parent_is_peer_tip=yes peer_announcements=9798 peer_advances=13 peer_age_ms=7666 peer_displaced=130603472/5036047 order=pre_admit admit_pass_end_age_ms=146 announcements_since_admit=0 acc_cursor=130350114/5024325/c16626fe acc_epoch=Some(305) tip_epoch=Some(306) acc_epochs_behind_tip=1 acc_settled_rewind=130118424/5013815 acc_complete=true acc_stalled_boundary=130350133@cursor=130350114 authority_epoch=306 verdict=tip_mismatch proceed_to_forge=false gate_recheck=TipMismatch
+
+b12-census: non_authoritative=true forge_slot=130603819 local_slot=130603778 local_block=5036055 local_hash=99ce56c5f0294c505e51ebdfd3850c4899bdcdc9de21f84509b204c5b96c70e4 durable_eq_serve=true peer_slot=130603714 peer_block=5036054 peer_hash=5e1929f92d292a6f3c8408228442b1aa239b86b2782439105d7acf0b3d9ac404 local_minus_peer=1 peer_tip_on_our_chain=yes local_parent_hash=5e1929f92d292a6f3c8408228442b1aa239b86b2782439105d7acf0b3d9ac404 local_parent_is_peer_tip=yes peer_announcements=9804 peer_advances=19 peer_age_ms=40000 peer_displaced=130603665/5036053 order=pre_admit admit_pass_end_age_ms=24378 announcements_since_admit=0 acc_cursor=130350114/5024325/c16626fe acc_epoch=Some(305) tip_epoch=Some(306) acc_epochs_behind_tip=1 acc_settled_rewind=130118424/5013815 acc_complete=true acc_stalled_boundary=130350133@cursor=130350114 authority_epoch=306 verdict=tip_mismatch proceed_to_forge=false gate_recheck=TipMismatch
+
+## THE VERDICT: (a) BENIGN OBSERVATION ORDER — and each rival is refuted by a NAMED operand
+
+| | candidate | refuted by | |
+|---|---|---|---|
+| d | chain-selection mismatch | `local_parent_is_peer_tip=yes` — the announced hash IS our tip's `prev_hash`; and independently `peer_tip_on_our_chain=yes`. Our tip is the immediate successor of the announced point on ONE chain. | REFUTED (twice) |
+| c | local legitimately ahead | the SECOND instrument observed the peer's REAL tip AT OUR EXACT LOCAL HASH for all six tuples; ForgeTicks where our tip exceeded the peer's highest real tip: 0. The peer possesses every block the gate says we are "ahead" on — it served them to us. | REFUTED (independent instrument) |
+| b | stale peer-tip cache | `announcements_since_admit=0` on every tick: no newer announcement has arrived and been ignored. Over the ForgeTick window `peer_announcements` +6 and `peer_advances` +6 for 6 new blocks — EXACTLY one announcement per block, and every one of them moved the value. The signal repeats nothing and drops nothing. | REFUTED |
+| e | symptom of the BND boundary defect | the accumulator IS impaired (cursor pinned at 130350114, stall at 130350133, one epoch behind the tip, while the authority is at epoch 306) — but NEITHER gate operand is derived from it. `durable_servable_tip` comes from the serve projection of the durable ChainDb; `followed_peer_tip` comes from the wire. The `+1` is fully accounted for by the announcement being our parent on our own chain, and would be identical with a current accumulator. | REFUTED AS THE CAUSE (the co-occurrence is real, and is BND's own defect) |
+| **a** | **benign observation order** | `order=pre_admit` 762/762: the value in the signal was recorded BEFORE the pass that admitted the tip it is compared against. Corroborated by two independent ages on the same line — the last line shows the announcement heard 40,000 ms ago against an admit pass that ended 24,378 ms ago. | **CONFIRMED** |
+
+### One qualification, so "benign" is not read as "transient"
+It is STRUCTURAL, not a race that resolves. The peer announces its tip exactly once per block and the
+value it carries is the PARENT of the header it is delivering; it then says nothing until the next
+block. That is why the condition is 762/762 rather than intermittent, and why `peer_age_ms` reaches a
+full inter-block interval (40 s on the last line). `durable_servable_tip == followed_peer_tip` is
+therefore unsatisfiable while following this peer at the tip — measured now, where LIVE-2c inferred it.
+
+## WHAT THIS DOES NOT LICENSE — the SUPERSEDED ruling STANDS, and the census strengthened it
+(a) places B12 in the "gate over-strict" half of the split. It does NOT authorise relaxing the gate,
+because the SAME tuple that classified the `+1` also measured the reason not to:
+
+    acc_cursor=130350114/5024325 (pinned at a crossing that FAILS), acc_epochs_behind_tip=1,
+    authority_epoch=306
+
+The gate is the last thing standing between a correct slot and leadership evaluation, and the
+frozen-leadership authority's durable point is one boundary below the chain the forge would build on.
+Making the gate satisfiable in that state is exactly what the supersession warned against. The census
+answers WHICH branch B12 is; it does not answer WHETHER B12 may move first. It may not.
+
+**Ordering that follows from the operands: BND moves next, B12 after it.**
+Nothing here justifies the "served-or-advertised" signal change yet — that remains a separate sealed
+slice, and its precondition is a healthy accumulator, not a classification.
+
+## OPEN QUESTION HANDED TO BND (raised by this census, deliberately NOT answered here)
+The stall point 130,350,133 is NOT an epoch start under `epoch_start(304)=129,686,400 + k*432,000`,
+which yields 130,118,400 and 130,550,400 — it sits mid-epoch-305. The failure is
+`InvalidTxCarriesAuthorityEffect { tx_index: 0 }`, a tx-level crossing failure, and the surrounding
+code calls the point a "boundary". Either the accumulator's segmentation means something other than
+the era-schedule epoch boundary here, or the label is wrong. Whichever it is, it is load-bearing for
+BND and is recorded as a question rather than asserted, because the arithmetic and the label disagree.
+
+## NOT CLAIMED
+No gate change. No leadership evaluation reached. No forge, no peer acceptance. No BND fix. No CLK
+work. CE-L2c-7/8/9 remain blocked — now on BND first and B12 second, with the reason measured.

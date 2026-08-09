@@ -2772,6 +2772,267 @@ pub(crate) struct StalledBoundary {
     cursor: Option<SlotNo>,
 }
 
+/// B12 CENSUS (emit-only, NON-AUTHORITATIVE): the sync pass that last ADVANCED the local durable
+/// tip, bracketed. `block_no` is the tip that pass left behind, `peer_announcements_at_end` is how
+/// many peer-tip announcements the signal had absorbed by then — so a later ForgeTick can say how
+/// many the peer has made SINCE our admission, which is what separates "we heard it before we
+/// admitted" from "the peer has spoken since and is still behind us".
+#[derive(Debug, Clone, Copy)]
+struct CensusAdmitStamp {
+    pass_start: std::time::Instant,
+    pass_end: std::time::Instant,
+    block_no: u64,
+    peer_announcements_at_end: u64,
+}
+
+/// B12 CENSUS (emit-only, NON-AUTHORITATIVE): bracket the sync pass that just advanced the local
+/// durable tip. Called immediately after the sync call returns, so `pass_end` is the tightest
+/// no-cost upper bound on the admit instant. A pass that admitted nothing leaves the previous stamp
+/// intact — the ordering question is always about the tip being compared NOW.
+fn census_stamp_admit(
+    stamp: &mut Option<CensusAdmitStamp>,
+    pass_start: std::time::Instant,
+    chaindb: &dyn ChainDb,
+    source: &NodeBlockSource,
+) {
+    let Some((_, _, block_no)) = ChainDbServedSource::new(chaindb).tip() else {
+        return;
+    };
+    if stamp.as_ref().map(|s| s.block_no) == Some(block_no) {
+        return;
+    }
+    *stamp = Some(CensusAdmitStamp {
+        pass_start,
+        pass_end: std::time::Instant::now(),
+        block_no,
+        peer_announcements_at_end: source.followed_peer_tip_signal().census().announcements,
+    });
+}
+
+fn hex32(h: &Hash32) -> String {
+    h.0.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// B12 CENSUS (emit-only): the two lineage facts that decide candidate (d), a chain-selection
+/// mismatch — is the peer's ANNOUNCED tip a point on OUR canonical chain, and is our tip its
+/// IMMEDIATE successor? Both need a durable read + CBOR decode, so they are memoised on the
+/// `(local, peer)` hash pair they were derived from: the gate re-runs every ForgeTick, the pair
+/// moves only when a block is admitted, and paying fixed per-tick work forever is precisely the
+/// shape B6 turned out to be.
+struct B12LineageMemo {
+    key: (Option<Hash32>, Option<Hash32>),
+    rendered: String,
+}
+
+fn b12_lineage(chaindb: &dyn ChainDb, local: Option<&TipPoint>, peer: Option<&TipPoint>) -> String {
+    // `yes` means our tip and the peer's announcement are on ONE chain and ours is the longer
+    // prefix. `diverged` would mean they are competing chains — the only reading under which the
+    // exact-equality gate is protecting a real disagreement rather than a snapshot skew.
+    let peer_on_chain = match peer {
+        None => "no_peer_tip".to_string(),
+        Some(p) => match resolve_canonical_point(chaindb, p.slot) {
+            Ok(Some(cp)) if cp.hash == p.hash && cp.block_no.0 == p.block_no => "yes".to_string(),
+            Ok(Some(cp)) => format!("diverged(ours={}@{})", hex_prefix8(&cp.hash), cp.block_no.0),
+            Ok(None) => "absent_from_our_chain".to_string(),
+            Err(_) => "read_fault".to_string(),
+        },
+    };
+    let (parent, parent_is_peer) = match local
+        .and_then(|l| chaindb.get_block_by_slot(l.slot).ok().flatten())
+    {
+        Some(sb) => match decode_block(&sb.bytes) {
+            Ok(d) => {
+                let ph = d.header_input.prev_hash;
+                let is_peer = peer.map(|p| p.hash == ph).unwrap_or(false);
+                (hex32(&ph), if is_peer { "yes" } else { "no" })
+            }
+            Err(_) => ("decode_fault".to_string(), "unknown"),
+        },
+        None => ("absent".to_string(), "unknown"),
+    };
+    format!(
+        "peer_tip_on_our_chain={peer_on_chain} local_parent_hash={parent} \
+         local_parent_is_peer_tip={parent_is_peer}"
+    )
+}
+
+/// B12 CENSUS (emit-only, NON-AUTHORITATIVE, operational tier): the exact operand tuple the
+/// DC-NODE-15 gate compared on this admitted ForgeTick, with the gate's OWN verdict beside it.
+///
+/// Five candidates explain the measured `local_block − peer_block == +1` (354/354 in run 4,
+/// 465/465 post-B6-fix): (a) benign observation order, (b) a stale peer-tip cache, (c) local
+/// legitimately ahead, (d) a chain-selection mismatch, (e) a symptom of the still-open failed
+/// boundary crossing. (a)–(c) would make the gate over-strict; (d)–(e) mean the gate is CORRECT and
+/// the fix is upstream of it. They are printed on ONE line, from ONE tick, for the same reason B6's
+/// four hypotheses were timed inside one pass: separate probes let each candidate look true on a
+/// different iteration.
+///
+/// The line is SELF-CHECKING. `verdict` is what the gate actually recorded (`last_forge_refused`,
+/// projected through the same `forge_skip_reason` the operator transcript uses); `gate_recheck` is
+/// the pure classifier re-applied to the two operands PRINTED HERE. If they ever disagree, the
+/// printed operand set is not the set the gate decided on — which is itself the census finding, not
+/// a formatting detail.
+#[allow(clippy::too_many_arguments)]
+fn b12_census_line(
+    era_schedule: &EraSchedule,
+    epoch_accumulator: Option<&ade_runtime::chaindb::EpochAccumulatorStore>,
+    stalled_boundary: &Option<StalledBoundary>,
+    authority_epoch: EpochNo,
+    forge_slot: u64,
+    selected_tip: Option<&ade_runtime::chaindb::ChainTip>,
+    durable_servable_tip: &Option<TipPoint>,
+    followed_peer_tip: &Option<TipPoint>,
+    peer_census: &crate::node_sync::FollowedPeerTipCensus,
+    admit: &Option<CensusAdmitStamp>,
+    verdict: Option<crate::live_log::ForgeSkipReason>,
+    proceed_to_forge: bool,
+    lineage: &str,
+) -> String {
+    let now = std::time::Instant::now();
+    // OPERAND 1 + 4 — what the gate compares from OUR side, and whether the SERVE PROJECTION it
+    // actually reads agrees with the durable ChainDb tip the forge would build on. They are two
+    // different reads of "local"; a lag between them would be a defect of its own.
+    let (local_slot, local_block, local_hash) = match durable_servable_tip {
+        Some(t) => (
+            t.slot.0.to_string(),
+            t.block_no.to_string(),
+            hex32(&t.hash),
+        ),
+        None => ("absent".into(), "absent".into(), "absent".into()),
+    };
+    let durable_eq_serve = match (selected_tip, durable_servable_tip) {
+        (Some(s), Some(d)) => (s.slot == d.slot && s.hash == d.hash).to_string(),
+        (None, None) => "both_absent".to_string(),
+        _ => "false_one_absent".to_string(),
+    };
+    // OPERAND 2 — what it compares from THEIRS.
+    let (peer_slot, peer_block, peer_hash) = match followed_peer_tip {
+        Some(t) => (
+            t.slot.0.to_string(),
+            t.block_no.to_string(),
+            hex32(&t.hash),
+        ),
+        None => ("absent".into(), "absent".into(), "absent".into()),
+    };
+    let delta = match (durable_servable_tip, followed_peer_tip) {
+        (Some(l), Some(p)) => (l.block_no as i128 - p.block_no as i128).to_string(),
+        _ => "n/a".to_string(),
+    };
+    // OPERAND 3 — is the announcement CURRENT? `announcements` counts every concrete TipUpdate
+    // absorbed, `advances` only those that moved the value: equal counts mean the peer never
+    // repeats itself, a gap means it re-announced a tip we already held.
+    let peer_age_ms = peer_census
+        .latest_at
+        .map(|t| now.duration_since(t).as_millis().to_string())
+        .unwrap_or_else(|| "never".to_string());
+    let displaced = match &peer_census.displaced {
+        Some(d) => format!("{}/{}", d.slot.0, d.block_no),
+        None => "none".to_string(),
+    };
+    // OPERAND 6 — ordering. `pre_admit` = the peer said this BEFORE the pass that admitted our tip
+    // even started; `post_admit` = it has spoken since that pass ended and is STILL behind us;
+    // `during_admit_pass` = inside the bracket, which the census refuses to resolve either way.
+    let (order, admit_age_ms, announcements_since_admit) = match admit {
+        None => ("no_local_admit_yet", "n/a".to_string(), "n/a".to_string()),
+        Some(a) => {
+            let since = peer_census
+                .announcements
+                .saturating_sub(a.peer_announcements_at_end);
+            let cls = match peer_census.latest_at {
+                None => "no_peer_announcement",
+                Some(at) if at < a.pass_start => "pre_admit",
+                Some(at) if at > a.pass_end => "post_admit",
+                Some(_) => "during_admit_pass",
+            };
+            (
+                cls,
+                now.duration_since(a.pass_end).as_millis().to_string(),
+                since.to_string(),
+            )
+        }
+    };
+    // OPERAND 5 — THE DECISIVE ONE. Is the leadership authority aligned to the prefix the gate is
+    // being asked to admit a forge on? The durable accumulator's cursor is the frozen-leadership
+    // authority's own position; `stalled_boundary` names a crossing that FAILED and was suppressed
+    // from retry, which is the BND defect in its live form.
+    let tip_epoch = durable_servable_tip
+        .as_ref()
+        .and_then(|t| era_schedule.locate(t.slot).ok())
+        .map(|l| l.epoch.0);
+    let (acc_cursor, acc_epoch, acc_settled, acc_complete) = match epoch_accumulator {
+        None => (
+            "no_store".to_string(),
+            None,
+            "no_store".to_string(),
+            "no_store".to_string(),
+        ),
+        Some(store) => {
+            let cursor = match store.last_advanced_point() {
+                Ok(Some(p)) => format!("{}/{}/{}", p.slot.0, p.block_no.0, hex_prefix8(&p.header_hash)),
+                Ok(None) => "uncertified".to_string(),
+                Err(e) => format!("fault({e:?})"),
+            };
+            let epoch = store
+                .last_advanced_slot()
+                .ok()
+                .flatten()
+                .and_then(|s| era_schedule.locate(s).ok())
+                .map(|l| l.epoch.0);
+            let settled = match store.settled_rewind_point() {
+                Ok(Some(p)) => format!("{}/{}", p.slot.0, p.block_no.0),
+                Ok(None) => "none".to_string(),
+                Err(e) => format!("fault({e:?})"),
+            };
+            let complete = match store.is_complete() {
+                Ok(v) => v.to_string(),
+                Err(e) => format!("fault({e:?})"),
+            };
+            (cursor, epoch, settled, complete)
+        }
+    };
+    let acc_behind = match (tip_epoch, acc_epoch) {
+        (Some(t), Some(a)) => (t as i128 - a as i128).to_string(),
+        _ => "n/a".to_string(),
+    };
+    let stalled = match stalled_boundary {
+        None => "none".to_string(),
+        Some(s) => format!(
+            "{}@cursor={}",
+            s.boundary_slot.0,
+            s.cursor.map(|c| c.0.to_string()).unwrap_or_else(|| "none".into())
+        ),
+    };
+    // OPERAND 7 — the gate's own verdict, plus the pure classifier re-applied to the operands
+    // printed above. `verdict` is what it DID; `gate_recheck` is what the printed tuple IMPLIES.
+    let gate_recheck = match forge_followed_tip_admission(
+        durable_servable_tip.clone(),
+        followed_peer_tip.clone(),
+    ) {
+        ForgeFollowedTipAdmission::CaughtUp => "caught_up".to_string(),
+        ForgeFollowedTipAdmission::NotCaughtUp { reason } => format!("{reason:?}"),
+    };
+    format!(
+        "b12-census: non_authoritative=true forge_slot={forge_slot} \
+         local_slot={local_slot} local_block={local_block} local_hash={local_hash} \
+         durable_eq_serve={durable_eq_serve} \
+         peer_slot={peer_slot} peer_block={peer_block} peer_hash={peer_hash} \
+         local_minus_peer={delta} {lineage} \
+         peer_announcements={ann} peer_advances={adv} peer_age_ms={peer_age_ms} \
+         peer_displaced={displaced} \
+         order={order} admit_pass_end_age_ms={admit_age_ms} \
+         announcements_since_admit={announcements_since_admit} \
+         acc_cursor={acc_cursor} acc_epoch={acc_epoch:?} tip_epoch={tip_epoch:?} \
+         acc_epochs_behind_tip={acc_behind} acc_settled_rewind={acc_settled} \
+         acc_complete={acc_complete} acc_stalled_boundary={stalled} \
+         authority_epoch={authority_epoch} \
+         verdict={verdict} proceed_to_forge={proceed_to_forge} gate_recheck={gate_recheck}",
+        ann = peer_census.announcements,
+        adv = peer_census.advances,
+        authority_epoch = authority_epoch.0,
+        verdict = verdict.map(|v| v.as_str()).unwrap_or("none_recorded"),
+    )
+}
+
 /// B6 CENSUS IV: accumulate the boundary arm's elapsed time on EVERY exit path, including the
 /// several `break`s inside it. A plain `elapsed()` at the end of the arm would miss them and report
 /// zero for exactly the branch that costs the most.
@@ -3376,6 +3637,15 @@ pub async fn run_relay_loop_with_sched(
     // costs a checkpoint rewind + replay + mark (measured 55.5-69.5s, ~99.8% of the loop's cost).
     // In-memory only: a restart deliberately re-attempts once.
     let mut stalled_boundary: Option<StalledBoundary> = None;
+    // B12 CENSUS (emit-only, NON-AUTHORITATIVE): when the local durable tip last ADVANCED, so the
+    // peer-tip announcement can be ordered against it. A tip value cannot say when it was heard, and
+    // "the peer was sampled before we admitted" is the cheapest of the five B12 candidates to assert
+    // and the cheapest to get wrong. Bracketed (`pass_start` .. `pass_end`) rather than a single
+    // instant because the admit happens INSIDE `run_node_sync`: an announcement before `pass_start`
+    // is unambiguously pre-admission, one after `pass_end` is unambiguously post-admission, and the
+    // census refuses to collapse the ambiguous middle into either.
+    let mut census_admit: Option<CensusAdmitStamp> = None;
+    let mut census_b12_lineage: Option<B12LineageMemo> = None;
     loop {
         // B6 CENSUS (emit-only, NON-AUTHORITATIVE, operational tier).
         //
@@ -3576,6 +3846,7 @@ pub async fn run_relay_loop_with_sched(
                         other => NodeLifecycleError::RelaySync(format!("{other:?}")),
                     })?;
                     census_ms_sync = t_census_sync.elapsed().as_millis();
+                    census_stamp_admit(&mut census_admit, t_census_sync, chaindb, source);
                     // PHASE4-N-AO S4+S6 (DC-NODE-37 / CE-AO-6): consume the provisional
                     // decision S3 may have set. When a network magic is configured,
                     // LIVE-BlockFetch the winning branch from the winning peer
@@ -3854,6 +4125,7 @@ pub async fn run_relay_loop_with_sched(
                         .await
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
                     census_ms_sync = t_census_sync.elapsed().as_millis();
+                    census_stamp_admit(&mut census_admit, t_census_sync, chaindb, source);
                     // B3b yield-at-boundary (DC-EPOCH-17): if the pass YIELDED on a durable boundary
                     // promotion, surface the structured crossing (never a bare bool). Whether it yielded
                     // or the feed ended, the next steps are identical AND deliberate -- advance the
@@ -4196,6 +4468,46 @@ pub async fn run_relay_loop_with_sched(
                         }
                         None => true,
                     };
+                    // B12 CENSUS (emit-only, NON-AUTHORITATIVE): every operand the DC-NODE-15 gate
+                    // just decided on, and the verdict it reached, on ONE line. Placed HERE — after
+                    // the gate ran, before the forge branch — because the verdict must be READ off
+                    // `last_forge_refused` rather than inferred: a census that re-derives what it
+                    // claims to observe cannot detect an operand set that is wrong.
+                    {
+                        let key = (
+                            durable_servable_tip.as_ref().map(|t| t.hash.clone()),
+                            followed_peer_tip.as_ref().map(|t| t.hash.clone()),
+                        );
+                        if census_b12_lineage.as_ref().map(|m| &m.key) != Some(&key) {
+                            census_b12_lineage = Some(B12LineageMemo {
+                                rendered: b12_lineage(
+                                    chaindb,
+                                    durable_servable_tip.as_ref(),
+                                    followed_peer_tip.as_ref(),
+                                ),
+                                key,
+                            });
+                        }
+                        let line = b12_census_line(
+                            &era_schedule,
+                            epoch_accumulator,
+                            &stalled_boundary,
+                            authority.epoch(),
+                            slot.0,
+                            selected_tip.as_ref(),
+                            &durable_servable_tip,
+                            &followed_peer_tip,
+                            source.followed_peer_tip_signal().census(),
+                            &census_admit,
+                            forge_skip_reason(act.last_forge_refused.as_ref()),
+                            proceed_to_forge && sign_time_ok,
+                            census_b12_lineage
+                                .as_ref()
+                                .map(|m| m.rendered.as_str())
+                                .unwrap_or(""),
+                        );
+                        crate::node_log!("{}", line);
+                    }
                     if proceed_to_forge
                         && sign_time_ok
                         && (cold_start_permitted || selected_tip.is_some())

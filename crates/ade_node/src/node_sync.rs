@@ -165,6 +165,7 @@ impl NodeBlockSource {
                 .collect(),
             followed_peer_tip: FollowedPeerTipSignal {
                 latest: followed_peer_tip,
+                census: FollowedPeerTipCensus::default(),
             },
         }
     }
@@ -1276,17 +1277,47 @@ pub enum NodeForgeOutcome {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FollowedPeerTipSignal {
     latest: Option<TipPoint>,
+    /// B12 CENSUS (emit-only, NON-AUTHORITATIVE): the provenance of `latest`.
+    /// `forge_followed_tip_admission` reads NEITHER of these — it takes two
+    /// `Option<TipPoint>` by value and cannot see this struct at all — so the gate
+    /// stays the same pure function it was. They exist to answer the ONE question a
+    /// tip value cannot answer about itself: WHEN it was heard, relative to the
+    /// local admission it is being compared against.
+    census: FollowedPeerTipCensus,
+}
+
+/// B12 CENSUS (emit-only, NON-AUTHORITATIVE): announcement provenance for
+/// [`FollowedPeerTipSignal`]. `announcements` counts every concrete `TipUpdate`
+/// absorbed (including repeats of a tip already held); `advances` counts only those
+/// that CHANGED the value. Their difference separates "the peer says nothing between
+/// blocks" from "the peer keeps repeating a tip it has already superseded".
+/// `latest_at` is a monotonic `Instant` used for DURATIONS ONLY — it never reaches a
+/// slot conversion, a ledger rule, or the gate.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FollowedPeerTipCensus {
+    pub announcements: u64,
+    pub advances: u64,
+    pub latest_at: Option<std::time::Instant>,
+    pub displaced: Option<TipPoint>,
 }
 
 impl FollowedPeerTipSignal {
     /// A signal that has observed no followed peer tip yet.
     pub fn new() -> Self {
-        Self { latest: None }
+        Self {
+            latest: None,
+            census: FollowedPeerTipCensus::default(),
+        }
     }
 
     /// The latest observed followed peer tip, or `None` if none observed yet.
     pub fn tip(&self) -> Option<TipPoint> {
         self.latest.clone()
+    }
+
+    /// B12 CENSUS (emit-only): the provenance of the value `tip()` returns.
+    pub fn census(&self) -> &FollowedPeerTipCensus {
+        &self.census
     }
 
     /// Record an observed followed peer tip from the wire stream's `TipUpdate`.
@@ -1296,11 +1327,18 @@ impl FollowedPeerTipSignal {
     /// stream and never influences which block `next_block` yields.
     fn observe(&mut self, tip: &Tip) {
         if let Point::Block { slot, hash } = &tip.point {
-            self.latest = Some(TipPoint {
+            let observed = TipPoint {
                 slot: *slot,
                 hash: hash.clone(),
                 block_no: tip.block_no,
-            });
+            };
+            self.census.announcements = self.census.announcements.saturating_add(1);
+            self.census.latest_at = Some(std::time::Instant::now());
+            if self.latest.as_ref() != Some(&observed) {
+                self.census.advances = self.census.advances.saturating_add(1);
+                self.census.displaced = self.latest.take();
+            }
+            self.latest = Some(observed);
         }
     }
 }

@@ -434,6 +434,50 @@ Only (1)–(3) would make the gate over-strict. (4) and (5) mean the gate is COR
 upstream of it. That is why the operand table includes the accumulator authority point: it is what
 separates "the gate is too tight" from "the authority is stale and the gate caught it."
 
+### B12 CENSUS — RUN 2026-08-09, and it answered. Candidate (1).
+
+Executed as designed: frozen store restored, one instrumented run, all seven operands plus the gate's
+own verdict on ONE line per admitted ForgeTick. **762 ForgeTicks, 6 distinct tip tuples, every
+discriminator unanimous.** The gate was not touched. Evidence:
+`docs/evidence/run-stores/preprod-live2c/b12-census-classified.txt`.
+
+| operand | value, 762/762 | which candidate it kills |
+|---|---|---|
+| `local_parent_is_peer_tip` | **yes** — the announced hash IS our tip's `prev_hash` | **(4)** — one chain, immediate successor |
+| `peer_tip_on_our_chain` | **yes** — on our canonical chain at the block_no it claims | **(4)**, independently |
+| peer's REAL tip, out of band | observed **at our exact local hash** for all six tuples; 0 ticks where we exceeded the peer's highest real tip | **(3)** — the peer possesses every block we are "ahead" on; it served them to us |
+| `announcements_since_admit` | **0**; over the window announcements +6 and advances +6 for 6 blocks | **(2)** — exactly one announcement per block, every one moved the value; nothing repeated, nothing ignored |
+| `acc_cursor` / `acc_epochs_behind_tip` | pinned `130350114/5024325`, **1** behind, `authority_epoch=306` | **(5) as the CAUSE** — the accumulator is impaired, but NEITHER gate operand derives from it; the `+1` would be identical with a current accumulator |
+| `order` | **pre_admit** — the value was recorded BEFORE the pass that admitted the tip it is compared against | **(1) CONFIRMED** |
+| `verdict` / `gate_recheck` | `tip_mismatch` / `TipMismatch`, **762/762 agree** | the tuple in evidence IS the tuple the gate decided on |
+
+The second instrument is what makes (3) refutable rather than arguable: `cardano-cli query tip` over
+the same container's N2C socket reads what the peer **holds**, where the gate reads only what it
+**announces**. Joined by block hash, no clock needed.
+
+**It is structural, not a race.** The peer announces once per block, carrying the PARENT of the header
+it is delivering, then says nothing until the next block — hence 762/762 and a `peer_age_ms` that
+reaches a full inter-block interval. §M2 inferred this mechanism from `wire_pump.rs`; it is now
+measured.
+
+**The supersession above STANDS, and this census strengthened it.** (1) puts B12 in the "gate
+over-strict" half — but the same line that classified the `+1` also measured the reason not to act on
+it: the frozen-leadership authority's durable point is one boundary below the chain a forge would
+build on, pinned at a crossing that fails. The census answers WHICH branch B12 is. It does not answer
+whether B12 may move first, and the operands say it may not.
+
+**Order that follows from the operands: BND next, B12 after it.** The `served-or-advertised` signal
+remains unimplemented and its precondition is a healthy accumulator, not a classification.
+
+One question handed to BND, raised here and deliberately not answered: the stall point **130,350,133
+is not an epoch start** under `129,686,400 + k × 432,000` (which gives 130,118,400 and 130,550,400) —
+it sits mid-epoch-305, and the failure is a tx-level `InvalidTxCarriesAuthorityEffect { tx_index: 0 }`.
+The arithmetic and the "boundary" label disagree; that is load-bearing for BND.
+
+Also proven incidentally, because this run had to reach the tip from a 2.4-day-stale store: the
+**first live 305 → 306 epoch crossing** for this store, with `computed_eta0 == promoted_view_nonce`
+(`59d6c17a…`, `match=true`). Prior runs never crossed a boundary.
+
 ### Tier split for the remaining work
 
 | tier | statement |
