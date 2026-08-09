@@ -71,7 +71,22 @@ operand or predicate is a consensus-adjacent mutation that needs its own census 
 tests. It is recorded because it determines the live closure path (below), and because leaving it
 undiagnosed would let a future session re-derive it at cost.
 
-Candidate fix, named but NOT taken here: the signal is under-truthful, not the predicate.
+> ### ⚠ SUPERSEDED 2026-08-09 — do NOT implement the candidate fix below as written
+>
+> The paragraph that follows assumes B12 is an over-strict gate whose signal merely needs to be made
+> more truthful. **That assumption is now unsafe.** The failed boundary crossing
+> (`InvalidTxCarriesAuthorityEffect` at slot 130,350,133) leaves the accumulator **permanently one
+> boundary behind**, and the accumulator is the frozen-leadership authority. Making the gate
+> satisfiable while that holds could admit leadership evaluation against authority that is not
+> aligned to the selected canonical chain — which is precisely what the gate exists to prevent.
+>
+> **B12 must be investigated AS A GATE, not assumed to be an unnecessary one.** It is the next
+> runtime gate, not a confirmed defect. The `+1` may be benign observation order — or it may be a
+> symptom of the still-open boundary defect, in which case the gate is doing its job and the fix
+> belongs upstream.
+
+Candidate fix, named but NOT taken here (see the supersession above): the signal is under-truthful,
+not the predicate.
 `FollowedPeerTipSignal` records only what a peer *says*; a block that peer *served and Ade durably
 admitted* is stronger evidence that the peer has it. A signal of "highest block this peer has
 demonstrably served **or** advertised" keeps the equality predicate intact, cannot let Ade forge while
@@ -388,6 +403,49 @@ by intersecting the `68e62c78..ef310eba` diff's line ranges against each body at
 That is a **source-level** argument. It does not rule out a codegen-level effect from changes
 elsewhere in the same crate. If that residual ever matters, the back-to-back A/B is still how to
 settle it — the frozen store is kept for exactly that.
+
+### The B12 entry point — findings-first, ONE planner iteration, five-way discriminator
+
+Same method that resolved B6: capture the operands B12 actually compares, in a SINGLE instrumented
+planner iteration, and let the combination name the branch. Do not touch the equality gate until the
+five candidates below are mechanically distinguished.
+
+**Operands to capture in one iteration:**
+
+| operand | why |
+|---|---|
+| local selected tip — point / hash / block_no | what the gate compares from our side |
+| peer-announced tip — point / hash / block_no | what it compares from theirs |
+| ChainSync cursor / intersection state | whether the announcement is current |
+| durable tip | whether local "selected" and "durable" agree |
+| accumulator authority point | whether leadership authority is aligned to that prefix |
+| **whether the peer value is sampled BEFORE or AFTER local admission** | the observation-order question, and the cheapest thing to get wrong |
+
+**The five candidates for `local − peer == +1`:**
+
+1. benign observation-order difference (peer sampled before local admission);
+2. a stale peer-tip cache;
+3. local durable state legitimately one block ahead;
+4. a chain-selection mismatch;
+5. a symptom of the still-open failed-boundary / refold defect.
+
+Only (1)–(3) would make the gate over-strict. (4) and (5) mean the gate is CORRECT and the fix is
+upstream of it. That is why the operand table includes the accumulator authority point: it is what
+separates "the gate is too tight" from "the authority is stale and the gate caught it."
+
+### Tier split for the remaining work
+
+| tier | statement |
+|---|---|
+| **True** | No leadership evaluation from authority that is not aligned to the selected canonical chain. |
+| **Derived** | Cardano forge readiness must bind slot, selected tip, and leadership authority to the SAME chain prefix. |
+| **Release** | CE-L2c-7/8/9 require a real known-pool decision on the live `--mode node` path. |
+| **Operational** | The large refold cost is operational ONLY if it cannot alter authoritative state. Because the crossing currently FAILS and leaves the accumulator behind, that part is a **correctness** issue, not merely performance. |
+
+That last row is the one to keep. B6's cost looked purely operational right up until the decomposition
+showed the cost was a failing crossing — at which point the same measurement became a correctness
+finding. The remaining refold work inherits that: it is not a performance item while the crossing
+fails.
 
 ### The B6 entry point — a CENSUS first, not a scheduling fix
 
