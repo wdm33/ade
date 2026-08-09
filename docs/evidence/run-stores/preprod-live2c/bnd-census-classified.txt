@@ -1,0 +1,113 @@
+# BND CENSUS — the pinned crossing is NOT a boundary. preprod, 2026-08-09.
+#
+# Two questions were asked SEPARATELY because they could have been one defect and are not:
+#   Q1  why is slot 130,350,133 treated as a boundary-related transition when it is not an epoch start?
+#   Q2  why does tx 0 trigger InvalidTxCarriesAuthorityEffect at that point?
+# Both are answered below from ONE instrumented stall, measured in situ on the real durable store.
+# `InvalidTxCarriesAuthorityEffect` was NOT changed.
+
+## PROVENANCE
+run              2026-08-09T17:45:27Z .. 17:55:23Z (clean SIGINT), binary fcbabb67 + BND instrument
+store            ~/.cardano-live1/ade-preprod-s7 — the SAME store the B12 census left, accumulator still
+                 pinned at 130,350,114. The stall fires in the pre-loop warm-start reconcile, so no
+                 catch-up is needed to reproduce it.
+peer             docker cardano-node-preprod 127.0.0.1:3001
+
+## THE DISCRIMINATOR LINE (verbatim, one instrumented stall)
+bnd-census: non_authoritative=true stall_slot=130350133 cursor_slot=Some(130350114) stall_block_epoch=Some(305) cursor_epoch=Some(305) detected_transition=false stall_reason=InvalidTxCarriesAuthorityEffect { tx_index: 0 } tx_count=1 tx0[invalid=true certs=false wdl=2 votes=false proposals=false collateral=None]
+
+| field | value |
+|---|---|
+| slot | 130,350,133 |
+| expected_epoch (stall block) | **305** |
+| previous_epoch (accumulator cursor 130,350,114) | **305** |
+| detected_transition? | **false — SAME EPOCH** |
+| transition_reason | none. The arm was entered because the WALK returned `StalledAt`, which it returns for ANY apply error |
+| tx0 authority-effect class | phase-2 **invalid**, **2 withdrawals** (body key 5); NO certs, NO votes, NO proposals; `total_collateral` **absent** |
+| accumulator cursor before / after | `130350114/5024325/c16626fe` / **`130350114/5024325/c16626fe` — unchanged** |
+
+Cursor before/after is corroborated independently by the same run's recovery trace:
+`anchor_before=130350114/5024325/c16626fe ... anchor_after=130350114/5024325/c16626fe`
+and by the B12 census, where `acc_cursor` was identical on all 762 ForgeTicks.
+
+## Q1 — ANSWERED: 130,350,133 IS NOT A BOUNDARY. The control-flow LABEL is wrong.
+
+`detected_transition=false`: the stalling block and the accumulator's cursor are BOTH in epoch 305.
+Under `epoch_start(304)=129,686,400 + k×432,000` the epoch starts are 130,118,400 and 130,550,400 —
+130,350,133 sits mid-epoch. The arithmetic the B12 census flagged is confirmed against the schedule
+the code itself uses (`era_schedule.locate`), not against hand arithmetic.
+
+The mechanism, and it is a two-step mislabel:
+
+  1. `advance_accumulator_over_block` maps **every** `apply_selected_block` error to
+     `AdvanceOutcome::Stalled` (`Err(e) => Ok(AdvanceOutcome::Stalled { .. })`). Its own doc says the
+     stall means "a boundary the mark is withheld for, OR a byte-uncertain block" — two causes, one
+     variant, no discriminator.
+  2. The relay-loop arm treats **every** `StalledAt` as a boundary: it rewinds the reduced checkpoint
+     onto a "boundary point", sums the per-credential SNAP mark, and calls
+     `cross_accumulator_over_boundary_block`.
+
+So an ordinary within-epoch apply failure is routed into boundary-only validation. This is scenario
+(2) of the split: `detected_transition=false` while the code still runs the boundary path.
+
+**And that mislabel is what B6's cost actually was.** From the same pass:
+
+    walk_ms=195     boundary_arm_ms=84,783     checkpoint_forward_ms=23,389
+
+195 ms to find the failure; **84.8 s of boundary machinery for a non-boundary**, plus 23.4 s of
+forward advance undoing the rewind. The B6 memo made this once-per-scope instead of once-per-pass, so
+the liveness bleed is fixed — but the work being suppressed was never appropriate work in the first
+place. The cross re-attempt fails with the SAME error, which is expected once the label is understood:
+the tx scan runs regardless of `boundary_mark`, so supplying a mark cannot change the outcome.
+
+## Q2 — ANSWERED: the WITHDRAWAL limb fired, and the guard is firing on a REAL condition.
+
+`InvalidTxCarriesAuthorityEffect { tx_index }` is raised from THREE places and carries only the index,
+so the error alone never said which fired:
+  * `apply_tx_scan` — invalid tx with certs (key 4) **or withdrawals (key 5)**
+  * `apply_one_tx_governance` — invalid tx with votes (field 19) or proposals (field 20)
+
+Measured: `certs=false votes=false proposals=false`, **`wdl=2`**. It is the **withdrawal** limb of
+`apply_tx_scan`. The governance guard is not involved.
+
+The condition is real, not a false positive: block 130,350,133 contains exactly one tx, that tx IS in
+the block's `invalid_transactions` set, and it DOES carry two withdrawals. Per the standing
+prohibition, nothing about `InvalidTxCarriesAuthorityEffect` was changed — the census establishes only
+what the block contains.
+
+### A THIRD fact that constrains the fix — `total_collateral` is ABSENT
+
+`collateral=None`. Body key 17 is not present on this tx. The phase-2-invalid branch of `apply_tx_scan`
+needs it immediately after the guard:
+
+    let collateral = tx.total_collateral.ok_or(InvalidTxCollateralNeedsUtxo { tx_index })?;
+
+So **relaxing the withdrawal guard alone moves the failure down one line, it does not clear it.** The
+accumulator cannot price a phase-2-invalid tx whose `total_collateral` is undeclared without resolving
+its collateral inputs (key 13) against a UTxO it does not hold. That is a structural INPUT gap, not a
+labelling problem, and it means "repair the authority defect" is at least two pieces of work.
+
+## THE TWO DEFECTS, KEPT APART
+
+| | defect | kind | where |
+|---|---|---|---|
+| **BND-1** | any within-epoch apply error is labelled a boundary stall and routed into boundary-only validation | control flow / classification | `advance_accumulator_over_block` (single `Stalled` variant for two causes) + the relay-loop `StalledAt` arm |
+| **BND-2** | a phase-2-invalid tx carrying withdrawals halts the fold; and its fee contribution is unpriceable because `total_collateral` is absent | ledger semantics + missing input | `apply_tx_scan` (withdrawal guard, then `InvalidTxCollateralNeedsUtxo`) |
+
+They compound but are independently repairable, and BND-1 is the cheaper and safer of the two: giving
+the stall a discriminated cause (boundary-withheld vs apply-failed) stops a within-epoch failure from
+consuming the boundary path at all, and costs no ledger semantics. It does NOT by itself let the
+accumulator progress — BND-2 is what pins the cursor.
+
+## WHAT IS STILL OPEN — stated as a question, because the block bytes cannot settle it
+Whether HALTING is the correct response to a phase-2-invalid tx that carries withdrawals is a Conway
+rules question, not a block-contents question, and this census did not answer it. The code's own
+comment says the discarded-effect byte-semantics are "gated to S3, never silently applied" — i.e. the
+guard was written as a deliberate fail-closed over an unimplemented semantic, not as a claim that the
+block is invalid. Establishing what cardano-ledger does with such a tx's body effects, and what the
+accumulator must do to stay byte-exact, is the entry point for the BND repair slice. Until then the
+error stands.
+
+## NOT CLAIMED
+No fix. No change to `InvalidTxCarriesAuthorityEffect` or to any guard. No B12 change. The accumulator
+still cannot cross; CE-L2c-7/8/9 remain blocked, now with both blocking defects named and separated.

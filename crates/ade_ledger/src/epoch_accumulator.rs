@@ -1116,6 +1116,14 @@ struct TxScan {
     has_certs: bool,
     /// Withdrawn reward-account credentials (key 5 map keys).
     withdrawals: Vec<StakeCredential>,
+    /// BND CENSUS (diagnostic only): whether the body carries voting procedures (key 19).
+    /// `apply_tx_scan` never reads this — the governance guard in `apply_one_tx_governance` is the
+    /// authority for fields 19/20. It is recorded HERE so ONE body walk can report every
+    /// authority-effect class a tx carries, rather than a second parser that could disagree.
+    has_votes: bool,
+    /// BND CENSUS (diagnostic only): whether the body carries proposal procedures (key 20). Same
+    /// contract as `has_votes` — recorded, never read by a rule.
+    has_proposals: bool,
 }
 
 /// Scan the block's tx bodies once, returning `(Σ fees, withdrawn reward-account credentials of VALID
@@ -1180,6 +1188,8 @@ fn scan_one_tx(data: &[u8], offset: &mut usize) -> Result<TxScan, LedgerTransiti
         total_collateral: None,
         has_certs: false,
         withdrawals: Vec::new(),
+        has_votes: false,
+        has_proposals: false,
     };
     match cbor::read_map_header(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)? {
         cbor::ContainerEncoding::Definite(n, _) => {
@@ -1286,12 +1296,101 @@ fn read_one_tx_field(
                 cbor::read_uint(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)?;
             tx.total_collateral = Some(tc);
         }
+        // BND CENSUS: record the presence of the governance authority fields in the SAME walk. The
+        // value is skipped exactly as the `_` arm skipped it before, so the parse is byte-for-byte
+        // the walk it already was; only the two booleans are new, and no rule reads them.
+        19 => {
+            let _ =
+                cbor::skip_item(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)?;
+            tx.has_votes = true;
+        }
+        20 => {
+            let _ =
+                cbor::skip_item(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)?;
+            tx.has_proposals = true;
+        }
         _ => {
             let _ =
                 cbor::skip_item(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)?;
         }
     }
     Ok(())
+}
+
+/// BND CENSUS (diagnostic, read-only, NON-AUTHORITATIVE): what authority effects each tx of ONE durable
+/// block carries, and whether that tx is phase-2 INVALID.
+///
+/// `InvalidTxCarriesAuthorityEffect { tx_index }` is raised from TWO places — the fee scan's
+/// cert/withdrawal guard ([`apply_tx_scan`]) and the governance guard ([`apply_one_tx_governance`],
+/// fields 19/20) — and the error carries only the index, so the error alone cannot say WHICH class of
+/// effect the tx carried. This reports it.
+///
+/// It derives every field from the SAME decoders the rule uses ([`decode_selected_block`],
+/// [`decode_invalid_tx_indices_canonical`], [`scan_one_tx`]) rather than re-parsing the body, so a
+/// diagnostic that disagrees with the rule is not representable. It answers only "what is in the
+/// block" — never whether the rejection is correct, which is a Conway-rules question the block bytes
+/// cannot settle on their own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TxAuthorityEffectScan {
+    pub tx_index: u64,
+    /// Whether the block's `invalid_transactions` set lists this index (phase-2 invalid).
+    pub phase2_invalid: bool,
+    /// Body key 4 present.
+    pub has_certs: bool,
+    /// Body key 5 entry count.
+    pub withdrawal_count: usize,
+    /// Body key 19 present (voting procedures).
+    pub has_votes: bool,
+    /// Body key 20 present (proposal procedures).
+    pub has_proposals: bool,
+    /// Body key 17 (declared total collateral) — the value an invalid tx contributes as its fee.
+    pub total_collateral: Option<u64>,
+}
+
+/// Scan one durable block's txs for [`TxAuthorityEffectScan`]. Pure; reads nothing but the bytes.
+pub fn scan_block_tx_authority_effects(
+    block_bytes: &[u8],
+) -> Result<Vec<TxAuthorityEffectScan>, LedgerTransitionError> {
+    use ade_codec::cbor;
+    let (_era, block) = decode_selected_block(block_bytes)?;
+    let invalid = decode_invalid_tx_indices_canonical(block.invalid_txs.as_deref(), block.tx_count)?;
+    let mut out: Vec<TxAuthorityEffectScan> = Vec::new();
+    if block.tx_count == 0 {
+        return Ok(out);
+    }
+    let data: &[u8] = &block.tx_bodies;
+    let mut offset = 0usize;
+    let mut index: u64 = 0;
+    let push = |tx: TxScan, index: u64, out: &mut Vec<TxAuthorityEffectScan>| {
+        out.push(TxAuthorityEffectScan {
+            tx_index: index,
+            phase2_invalid: invalid.contains(&index),
+            has_certs: tx.has_certs,
+            withdrawal_count: tx.withdrawals.len(),
+            has_votes: tx.has_votes,
+            has_proposals: tx.has_proposals,
+            total_collateral: tx.total_collateral,
+        });
+    };
+    match cbor::read_array_header(data, &mut offset)
+        .map_err(|_| LedgerTransitionError::MalformedBlock)?
+    {
+        cbor::ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                let tx = scan_one_tx(data, &mut offset)?;
+                push(tx, index, &mut out);
+                index += 1;
+            }
+        }
+        cbor::ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)? {
+                let tx = scan_one_tx(data, &mut offset)?;
+                push(tx, index, &mut out);
+                index += 1;
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Project a Shelley reward account (`header ‖ 28-byte credential`) to a `StakeCredential`. The header

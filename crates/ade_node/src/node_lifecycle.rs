@@ -3168,6 +3168,79 @@ fn advance_ledger_state_to_durable_tip_memo(
                         }) {
                             break;
                         }
+                        // BND CENSUS (emit-only, NON-AUTHORITATIVE): the discriminator table, emitted on a
+                        // REAL attempt only (past the memo, so once per memo scope — never per pass; a full
+                        // block decode on every pass is the exact shape B6 turned out to be).
+                        //
+                        // `advance_accumulator_over_block` maps EVERY `apply_selected_block` error to
+                        // `Stalled`, and this arm treats every `StalledAt` as a boundary. So the label and
+                        // the cause can disagree, and the two must be measured apart:
+                        //   * `detected_transition=true`  at a slot whose epoch EQUALS the cursor's ⇒ the
+                        //     boundary classifier is wrong.
+                        //   * `detected_transition=false` while control still routes into the boundary-only
+                        //     path ⇒ the control-flow label is wrong and the failure is downstream.
+                        // It reports what the block CONTAINS and which epochs the schedule assigns. Whether
+                        // the rejection is correct under Conway is NOT decided here.
+                        {
+                            let ep = |s: SlotNo| {
+                                era_schedule.locate(s).ok().map(|l| l.epoch.0)
+                            };
+                            let stall_epoch = ep(s_bb);
+                            let cursor_epoch = cursor_now.and_then(ep);
+                            let detected_transition = match (stall_epoch, cursor_epoch) {
+                                (Some(a), Some(b)) => (a != b).to_string(),
+                                _ => "unknown".to_string(),
+                            };
+                            let txs = match chaindb.get_block_by_slot(s_bb) {
+                                Ok(Some(sb)) => {
+                                    match ade_ledger::epoch_accumulator::scan_block_tx_authority_effects(
+                                        &sb.bytes,
+                                    ) {
+                                        Ok(scan) => {
+                                            let n = scan.len();
+                                            let carriers: Vec<String> = scan
+                                                .iter()
+                                                .filter(|t| {
+                                                    t.phase2_invalid
+                                                        || t.has_certs
+                                                        || t.withdrawal_count > 0
+                                                        || t.has_votes
+                                                        || t.has_proposals
+                                                })
+                                                .map(|t| {
+                                                    format!(
+                                                        "tx{}[invalid={} certs={} wdl={} votes={} proposals={} collateral={:?}]",
+                                                        t.tx_index,
+                                                        t.phase2_invalid,
+                                                        t.has_certs,
+                                                        t.withdrawal_count,
+                                                        t.has_votes,
+                                                        t.has_proposals,
+                                                        t.total_collateral
+                                                    )
+                                                })
+                                                .collect();
+                                            format!("tx_count={} {}", n, carriers.join(" "))
+                                        }
+                                        Err(e) => format!("scan_fault({e:?})"),
+                                    }
+                                }
+                                Ok(None) => "no_durable_block".to_string(),
+                                Err(e) => format!("read_fault({e:?})"),
+                            };
+                            crate::node_log!(
+                                "bnd-census: non_authoritative=true stall_slot={} cursor_slot={:?} \
+                                 stall_block_epoch={:?} cursor_epoch={:?} detected_transition={} \
+                                 stall_reason={} {}",
+                                s_bb.0,
+                                cursor_now.map(|c| c.0),
+                                stall_epoch,
+                                cursor_epoch,
+                                detected_transition,
+                                reason,
+                                txs
+                            );
+                        }
                         // s_prev: the accumulator's cursor after the within-epoch fold -- the boundary point
                         // (the last within-epoch block of the closing epoch).
                         let s_prev = match store.last_advanced_slot() {
