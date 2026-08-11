@@ -120,7 +120,12 @@ fn co_advance(
     loop {
         match advance_accumulator_over_chaindb(store, chaindb, sched, seed_slot, tip.slot) {
             Ok(AccumulatorChaindbOutcome::ReachedTip { .. }) => break,
-            Ok(AccumulatorChaindbOutcome::StalledAt { slot: s_bb, reason }) => {
+            // BND-1 (DC-EPOCH-39): only a genuine crossing drives the boundary work below. An
+            // apply failure is a distinct state and must not be routed here.
+            Ok(AccumulatorChaindbOutcome::ApplyFailedAt { slot, error }) => {
+                panic!("within-epoch apply failed at {}: {error:?}", slot.0);
+            }
+            Ok(AccumulatorChaindbOutcome::BoundaryRequiredAt { slot: s_bb, .. }) => {
                 let s_prev = store.last_advanced_slot().expect("cursor").expect("durable cursor");
                 advance_reduced_checkpoint_over_chaindb(
                     cp,
@@ -150,7 +155,7 @@ fn co_advance(
                     Ok(AccumulatorBoundaryOutcome::Crossed { from_epoch, to_epoch, slot }) => {
                         let _ = store.clear_boundary_mark();
                         eprintln!(
-                            "  CROSSED {} -> {} at slot {} (mark from s_prev {}, reason: {reason})",
+                            "  CROSSED {} -> {} at slot {} (mark from s_prev {})",
                             from_epoch.0, to_epoch.0, slot.0, s_prev.0
                         );
                     }

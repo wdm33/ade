@@ -3152,52 +3152,28 @@ fn advance_ledger_state_to_durable_tip_memo(
                         census_ms_settle += t_settle.elapsed().as_millis();
                         break;
                     }
-                    Ok(AccumulatorChaindbOutcome::StalledAt { slot: s_bb, reason }) => {
-                        let t_bnd = std::time::Instant::now();
-                        let _census_bnd = BoundaryArmTimer {
-                            start: t_bnd,
-                            acc: &mut census_ms_boundary_arm,
-                        };
-                        // B6 FIX: this exact boundary already stalled at this cursor, so the rewind
-                        // + replay + mark below would reproduce the same failure at the same price.
-                        // Skip BEFORE spending it. Not silent: the suppression was announced once,
-                        // when the memo was set.
+                    // BND-1 (DC-EPOCH-39): a within-epoch block that fail-closed is NOT a boundary and
+                    // must not touch the boundary machinery. It is announced once per (slot, cursor) —
+                    // the same memo shape the boundary arm uses, so a permanently-stuck block does not
+                    // reprint every pass — and then the walk stops, observe-only, cursor unchanged.
+                    // No checkpoint rewind, no mark capture, no cross: those are a crossing's work, and
+                    // running them here is precisely the defect the BND census measured.
+                    Ok(AccumulatorChaindbOutcome::ApplyFailedAt { slot: s_bb, error }) => {
                         let cursor_now = store.last_advanced_slot().ok().flatten();
-                        if stalled_boundary.as_ref().is_some_and(|m| {
-                            m.boundary_slot == s_bb && m.cursor == cursor_now
-                        }) {
-                            break;
-                        }
-                        // BND CENSUS (emit-only, NON-AUTHORITATIVE): the discriminator table, emitted on a
-                        // REAL attempt only (past the memo, so once per memo scope — never per pass; a full
-                        // block decode on every pass is the exact shape B6 turned out to be).
-                        //
-                        // `advance_accumulator_over_block` maps EVERY `apply_selected_block` error to
-                        // `Stalled`, and this arm treats every `StalledAt` as a boundary. So the label and
-                        // the cause can disagree, and the two must be measured apart:
-                        //   * `detected_transition=true`  at a slot whose epoch EQUALS the cursor's ⇒ the
-                        //     boundary classifier is wrong.
-                        //   * `detected_transition=false` while control still routes into the boundary-only
-                        //     path ⇒ the control-flow label is wrong and the failure is downstream.
-                        // It reports what the block CONTAINS and which epochs the schedule assigns. Whether
-                        // the rejection is correct under Conway is NOT decided here.
-                        {
-                            let ep = |s: SlotNo| {
-                                era_schedule.locate(s).ok().map(|l| l.epoch.0)
-                            };
-                            let stall_epoch = ep(s_bb);
-                            let cursor_epoch = cursor_now.and_then(ep);
-                            let detected_transition = match (stall_epoch, cursor_epoch) {
-                                (Some(a), Some(b)) => (a != b).to_string(),
-                                _ => "unknown".to_string(),
-                            };
+                        let already_announced = stalled_boundary
+                            .as_ref()
+                            .is_some_and(|m| m.boundary_slot == s_bb && m.cursor == cursor_now);
+                        if !already_announced {
+                            // BND-2 entry data (emit-only): what the failing block CONTAINS, on the
+                            // announce path only — once per (slot, cursor), never per pass. The
+                            // classification itself is now in the TYPE, so this exists to feed the
+                            // reference-semantics work, not to decide control flow.
                             let txs = match chaindb.get_block_by_slot(s_bb) {
                                 Ok(Some(sb)) => {
                                     match ade_ledger::epoch_accumulator::scan_block_tx_authority_effects(
                                         &sb.bytes,
                                     ) {
                                         Ok(scan) => {
-                                            let n = scan.len();
                                             let carriers: Vec<String> = scan
                                                 .iter()
                                                 .filter(|t| {
@@ -3220,7 +3196,7 @@ fn advance_ledger_state_to_durable_tip_memo(
                                                     )
                                                 })
                                                 .collect();
-                                            format!("tx_count={} {}", n, carriers.join(" "))
+                                            format!("tx_count={} {}", scan.len(), carriers.join(" "))
                                         }
                                         Err(e) => format!("scan_fault({e:?})"),
                                     }
@@ -3229,17 +3205,39 @@ fn advance_ledger_state_to_durable_tip_memo(
                                 Err(e) => format!("read_fault({e:?})"),
                             };
                             crate::node_log!(
-                                "bnd-census: non_authoritative=true stall_slot={} cursor_slot={:?} \
-                                 stall_block_epoch={:?} cursor_epoch={:?} detected_transition={} \
-                                 stall_reason={} {}",
+                                "epoch-accumulator: WITHIN-EPOCH apply failed at {} (observe-only, NOT a \
+                                 boundary -- no rewind, no mark, no cross): {:?} cursor={:?} {}",
                                 s_bb.0,
+                                error,
                                 cursor_now.map(|c| c.0),
-                                stall_epoch,
-                                cursor_epoch,
-                                detected_transition,
-                                reason,
                                 txs
                             );
+                            *stalled_boundary = Some(StalledBoundary {
+                                boundary_slot: s_bb,
+                                cursor: cursor_now,
+                            });
+                        }
+                        break;
+                    }
+                    Ok(AccumulatorChaindbOutcome::BoundaryRequiredAt {
+                        slot: s_bb,
+                        from_epoch: bnd_from,
+                        to_epoch: bnd_to,
+                    }) => {
+                        let t_bnd = std::time::Instant::now();
+                        let _census_bnd = BoundaryArmTimer {
+                            start: t_bnd,
+                            acc: &mut census_ms_boundary_arm,
+                        };
+                        // B6 FIX: this exact boundary already stalled at this cursor, so the rewind
+                        // + replay + mark below would reproduce the same failure at the same price.
+                        // Skip BEFORE spending it. Not silent: the suppression was announced once,
+                        // when the memo was set.
+                        let cursor_now = store.last_advanced_slot().ok().flatten();
+                        if stalled_boundary.as_ref().is_some_and(|m| {
+                            m.boundary_slot == s_bb && m.cursor == cursor_now
+                        }) {
+                            break;
                         }
                         // s_prev: the accumulator's cursor after the within-epoch fold -- the boundary point
                         // (the last within-epoch block of the closing epoch).
@@ -3247,18 +3245,20 @@ fn advance_ledger_state_to_durable_tip_memo(
                             Ok(Some(s)) => s,
                             _ => {
                                 crate::node_log!(
-                                    "epoch-accumulator: boundary at {} but no durable cursor (observe-only stall): {}",
-                                    s_bb.0,
-                                    reason
+                                    "epoch-accumulator: boundary {} -> {} at {} but no durable cursor (observe-only stall)",
+                                    bnd_from.0,
+                                    bnd_to.0,
+                                    s_bb.0
                                 );
                                 break;
                             }
                         };
                         let Some(cp) = reduced_checkpoint else {
                             crate::node_log!(
-                                "epoch-accumulator: boundary at {} but no reduced checkpoint -> observe-only stall: {}",
-                                s_bb.0,
-                                reason
+                                "epoch-accumulator: boundary {} -> {} at {} but no reduced checkpoint -> observe-only stall",
+                                bnd_from.0,
+                                bnd_to.0,
+                                s_bb.0
                             );
                             break;
                         };

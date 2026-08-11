@@ -1,0 +1,99 @@
+# BND-1 — LIVE PROOF. The boundary path no longer runs for a non-boundary. preprod, 2026-08-11.
+#
+# Slice: docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-BND-1-typed-accumulator-stall-cause.md
+# Rule:  DC-EPOCH-39 (enforced).  Gate: ci/ci_check_bnd_typed_stall_cause.sh
+# Entry evidence: bnd-census-classified.txt (941f98a2).
+
+## THE OBLIGATION (CE-BND1-5 + CE-BND1-6)
+Same block, same accumulator error, same pinned cursor — and ZERO boundary-path execution.
+Stated that way deliberately: a slice that made the symptom disappear by changing the verdict, or by
+letting the cursor move, would be a regression dressed as a fix.
+
+## BEFORE (2026-08-09, commit 941f98a2 — the BND census run)
+epoch-accumulator: reduced checkpoint REWOUND onto boundary point 130350114 before sealing (DC-EPOCH-32)
+epoch-accumulator: boundary cross stalled at 130350133 (observe-only): InvalidTxCarriesAuthorityEffect { tx_index: 0 }
+b6-census-coadv: accumulator_loop_ms=84978 (walk_ms=195 boundary_arm_ms=84783) checkpoint_forward_ms=23389
+
+## AFTER (2026-08-11, this slice) — same store, same block
+epoch-accumulator: WITHIN-EPOCH apply failed at 130350133 (observe-only, NOT a boundary -- no rewind, no mark, no cross): InvalidTxCarriesAuthorityEffect { tx_index: 0 } cursor=Some(130350114) tx_count=1 tx0[invalid=true certs=false wdl=2 votes=false proposals=false collateral=None]
+b6-census-coadv: non_authoritative=true reset_ms=0 recover_admit_ms=1 accumulator_loop_ms=269 (seed_slot_ms=0 walk_ms=269 settle_ms=0 boundary_arm_ms=0) checkpoint_forward_ms=0
+
+recovery-trace: anchor_before=130350114/5024325/c16626fe  durable_tip=130614672/5036546/7462de0e
+                anchor_after =130350114/5024325/c16626fe
+
+| quantity | before | after |
+|---|---|---|
+| `boundary_arm_ms` | 84,783 | **0** |
+| `checkpoint_forward_ms` (undoing the rewind) | 23,389 | **0** |
+| `accumulator_loop_ms` | 84,978 | **269** |
+| `REWOUND onto boundary point` lines | 1 per memo scope | **0** |
+| `boundary cross stalled` lines | 1 per memo scope | **0** |
+| the error | `InvalidTxCarriesAuthorityEffect { tx_index: 0 }` | **identical** |
+| accumulator cursor | `130350114/5024325/c16626fe` | **identical** |
+
+108,367 ms of wrong-path work per memo scope became 269 ms of the walk that was always the real work.
+Nothing else moved: the verdict is the same typed error and the cursor is pinned exactly where it was.
+
+The table above compares the STARTUP RECONCILE in both runs — like for like, since that scope does the
+same work in each. The relay loop's own scope confirms it independently:
+
+b6-census-coadv: ... accumulator_loop_ms=930 (walk_ms=930 settle_ms=0 boundary_arm_ms=0) checkpoint_forward_ms=16454
+
+`boundary_arm_ms=0` there too. The 16,454 ms of `checkpoint_forward` in THAT pass is NOT the undo of a
+rewind — it is the reduced checkpoint genuinely advancing across ~112k slots of catch-up
+(130,614,672 → 130,727,193), which is real forward work and was always correct. Recorded explicitly so
+the number is not later mistaken for the wrong-path cost coming back.
+
+Exactly TWO `WITHIN-EPOCH apply failed` announcements were emitted for the whole run — one per memo
+scope (the startup reconcile, which passes `&mut None` by design, and the loop). Announced once and
+then silent, not once per pass.
+
+## WHAT WAS PROVEN, AND HOW
+
+**CE-BND1-1 / CE-BND1-4** — `a_within_epoch_apply_failure_is_apply_failed_not_a_boundary`: a block in
+the accumulator's own epoch whose apply fail-closes yields `ApplyFailed` carrying the ledger's typed
+error, compared BY VALUE (`LedgerTransitionError::EraMismatch { .. }`), not by substring.
+
+**CE-BND1-2** — `a_crossing_is_classified_from_the_epochs_even_when_the_apply_would_fail`: a block one
+epoch ahead is `BoundaryMarkRequired { from, to }` even when its apply WOULD have failed. Under the old
+error-derived classification that case was indistinguishable from an ordinary apply failure. This is
+the test that pins the predicate as positive rather than inferred.
+
+**CE-BND1-3** — the gate extracts the apply-failure arm and asserts it calls NONE of
+`position_reduced_checkpoint_at_boundary`, `sum_base_credential_stake`,
+`cross_accumulator_over_boundary_block`, `bind_boundary_mark`.
+
+**CE-BND1-7 — both halves NEGATIVE-TESTED, not asserted:**
+  * predicate `>` → `>=`: fails the new test AND 5 pre-existing ones (the comparison is load-bearing,
+    not decorative).
+  * `sum_base_credential_stake` put back into the apply-failure arm: the gate catches it.
+  * The gate also asserts a NONZERO passing-test count, so it cannot pass vacuously (14 tests ran).
+
+## A GATE-SCOPING CORRECTION WORTH RECORDING
+The gate's first draft grepped the whole file for `Stalled` / `format!("{e:?}")` and failed on
+`AccumulatorBoundaryOutcome::Stalled` — a DIFFERENT enum (the outcome of an actual cross attempt) that
+this slice legitimately leaves alone. The checks are now scoped to the two enum bodies that were split
+and to the advancer function. A gate that fails on correct code is not a stricter gate; it is a gate
+that gets disabled.
+
+## WHAT THIS DOES NOT DO — stated so the numbers are not misread
+The cursor is STILL PINNED at 130,350,114 and the accumulator still cannot cross 130,350,133. BND-1
+removed a wrong control-flow path; it did not touch the semantics that block progress. The 108 s figure
+is a CONSEQUENCE of separating the two failure classes, not the reason for doing it — the slice would
+have been worth landing at zero time saved, because a within-epoch failure masquerading as a boundary
+failure is a correctness defect regardless of what it costs.
+
+**BND-2 remains the authority blocker**, unchanged and deliberately untouched:
+`tx0[invalid=true certs=false wdl=2 votes=false proposals=false collateral=None]` — the withdrawal
+limb, and behind it the undeclared-collateral input gap. Its entry point is reference-semantics
+extraction against cardano-ledger (which body effects a phase-2-invalid Conway tx discards, and how the
+consumed collateral is determined when `total_collateral` is absent), NOT implementation. The
+sufficiency contract to preserve while answering it: `EpochAccumulator + reduced UTxO authority +
+canonical block` — the open question is how the accumulator obtains a DETERMINISTIC collateral delta
+from the UTxO authority, never whether it should become a second UTxO owner.
+
+`InvalidTxCarriesAuthorityEffect` is unchanged. B12 is unchanged.
+
+## VERIFICATION
+cargo test -p ade_ledger -p ade_runtime -p ade_node: 2241 passed, 0 failed, 86 suites.
+ci/ci_check_bnd_typed_stall_cause.sh: PASS (14 tests ran).

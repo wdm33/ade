@@ -21,12 +21,18 @@
 //! byte-exact gate. The exclusion is enforced by this type: a caller cannot hand the advancer a mark.
 //!
 //! Observe-only stall (PO-6): in S2 the accumulator is NOT yet the consensus/leadership authority (S4
-//! flips it), so an apply failure — a boundary the mark is withheld for, or a byte-uncertain block — does
-//! NOT halt the follow. It returns [`AdvanceOutcome::Stalled`]: the store is left at its last good slot, so
-//! `LAST_SLOT < wal_tail` becomes the durable stall signal and the store's readiness gate fail-closes any
-//! authoritative read until S3 resolves it. A genuine STORE fault (durability I/O) is distinct — it is an
-//! [`AdvanceError`], a real error the caller must not paper over.
+//! flips it), so a failure to advance does NOT halt the follow: the store is left at its last good slot,
+//! so `LAST_SLOT < wal_tail` becomes the durable stall signal and the store's readiness gate fail-closes
+//! any authoritative read until it is resolved. A genuine STORE fault (durability I/O) is distinct — it
+//! is an [`AdvanceError`], a real error the caller must not paper over.
+//!
+//! BND-1 (DC-EPOCH-39): the two reasons an advance does not happen are SEPARATE STATES —
+//! [`AdvanceOutcome::BoundaryMarkRequired`] (a real crossing is due, decided from the epochs before the
+//! apply) and [`AdvanceOutcome::ApplyFailed`] (a within-epoch block fail-closed, carrying the ledger's
+//! own typed error). They were one `Stalled` variant, and the caller consequently ran boundary machinery
+//! for ordinary within-epoch failures.
 
+use ade_ledger::epoch_accumulator::LedgerTransitionError;
 use std::collections::BTreeMap;
 
 use ade_core::consensus::era_schedule::EraSchedule;
@@ -64,18 +70,40 @@ pub struct WithinEpochCtx {
     pub header_hash: Hash32,
 }
 
-/// The outcome of advancing the accumulator over one block. `Advanced` / `AlreadyApplied` / `Stalled` are
-/// all NON-error outcomes — the follow continues regardless (the accumulator is observe-only in S2).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The outcome of advancing the accumulator over one block. Every variant is a NON-error outcome — the
+/// follow continues regardless (the accumulator is observe-only in S2).
+///
+/// BND-1 (DC-EPOCH-39): the two ways an advance can fail to happen are DISTINCT STATES, not one. They
+/// were a single `Stalled { reason: String }` whose own doc named both causes for it — "a boundary the
+/// mark is withheld for, or a byte-uncertain block" — and the caller, having no way to tell them apart,
+/// treated every one as a boundary: rewind the reduced checkpoint, sum a per-credential mark, attempt a
+/// cross. Measured live, that ran 84,783 ms of boundary machinery plus 23,389 ms undoing its own rewind
+/// for a block the walk had classified in 195 ms and which is not on a boundary at all
+/// (`docs/evidence/run-stores/preprod-live2c/bnd-census-classified.txt`).
+#[derive(Debug, Clone, PartialEq)]
 pub enum AdvanceOutcome {
     /// The accumulator applied this within-epoch block and the store advanced to `slot` (epoch `epoch`).
     Advanced { slot: SlotNo, epoch: EpochNo },
     /// The block is at or before the accumulator's tip (a re-announce / replay) — no-op.
     AlreadyApplied { slot: SlotNo, last: SlotNo },
-    /// OBSERVE-ONLY STALL: `apply_selected_block` fail-closed (a boundary the mark is withheld for, or a
-    /// byte-uncertain block). The store is untouched (stays at its last good slot); the follow continues.
-    /// `reason` is the contract's structured error rendered for the log — not read by any authority path.
-    Stalled { slot: SlotNo, reason: String },
+    /// A GENUINE epoch crossing is due: this block's epoch is strictly ahead of the accumulator's, so the
+    /// within-epoch path (which withholds the boundary mark by construction) cannot apply it. The ONLY
+    /// state permitted to reach the boundary machinery. Decided BEFORE the apply, from canonical data on
+    /// both sides — never inferred from an error.
+    BoundaryMarkRequired {
+        slot: SlotNo,
+        from_epoch: EpochNo,
+        to_epoch: EpochNo,
+    },
+    /// OBSERVE-ONLY: the block is within the accumulator's own epoch (or below it) and
+    /// `apply_selected_block` fail-closed on it. The store is untouched (stays at its last good slot) and
+    /// the follow continues. Carries the ledger's OWN typed error, not a rendered string, so a caller
+    /// compares a value rather than parsing prose. This is NOT a boundary and must never reach the
+    /// boundary machinery.
+    ApplyFailed {
+        slot: SlotNo,
+        error: LedgerTransitionError,
+    },
 }
 
 /// A REAL fault advancing the accumulator (distinct from an observe-only stall).
@@ -113,15 +141,32 @@ pub fn advance_accumulator_over_block(
         });
     }
 
+    // BND-1 (DC-EPOCH-39): decide "is a crossing due?" HERE, positively, from the block's epoch against
+    // the accumulator's own — before any apply, so the answer cannot be an inference from a failure.
+    //
+    // It predicts exactly what the authority does: `apply_selected_block_core` crosses
+    // `acc.epoch + 1 ..= block_epoch`, so that loop fires IFF `block_epoch > acc.epoch`. Strictly
+    // greater, never `>=`: an equal epoch is the ordinary within-epoch case and crosses nothing. A
+    // block BELOW the accumulator's epoch is left to the apply, which returns the ledger's own typed
+    // `BoundaryGap` — a real fail-closed, and correctly NOT a boundary.
+    let acc_epoch = acc.epoch_state.epoch;
+    if ctx.block_epoch.0 > acc_epoch.0 {
+        return Ok(AdvanceOutcome::BoundaryMarkRequired {
+            slot: ctx.block_slot,
+            from_epoch: acc_epoch,
+            to_epoch: ctx.block_epoch,
+        });
+    }
+
     let selected_ctx = SelectedBlockCtx {
         era: ctx.era,
         block_epoch: ctx.block_epoch,
         block_slot: ctx.block_slot,
         issuer_pool: ctx.issuer_pool.clone(),
-        // S2: the boundary is structurally excluded — a crossing fail-closes MissingBoundaryStake → Stalled.
+        // S2: the boundary is structurally excluded. Unreachable now that a crossing is classified
+        // above, and kept `None` so this path can never seal a mark it was not given.
         boundary_mark: None,
-        // Within-epoch: no boundary fires here (a crossing fail-closes on `boundary_mark = None`
-        // before the reward calc reads the eta denominator), so this is never consumed — carry 0.
+        // Within-epoch: no boundary fires here, so this is never consumed — carry 0.
         active_slots_per_epoch: 0,
     };
 
@@ -135,23 +180,38 @@ pub fn advance_accumulator_over_block(
                 epoch: ctx.block_epoch,
             })
         }
-        Err(e) => Ok(AdvanceOutcome::Stalled {
+        Err(error) => Ok(AdvanceOutcome::ApplyFailed {
             slot: ctx.block_slot,
-            reason: format!("{e:?}"),
+            error,
         }),
     }
 }
 
 /// The outcome of reconciling the accumulator over a durable ChainDB prefix (LIVE-LEDGER-EPOCH-
-/// TRANSITION S2 / DC-EPOCH-20). Both arms are NON-error: `ReachedTip` walked the whole `(from, to_slot]`
-/// prefix; `StalledAt` hit an observe-only boundary stall and STOPPED at the last good within-epoch slot
-/// (the store froze there). A genuine fault is the `Err` arm.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// TRANSITION S2 / DC-EPOCH-20). Every arm is NON-error: `ReachedTip` walked the whole `(from, to_slot]`
+/// prefix; the other two stopped at the last good within-epoch slot (the store froze there). A genuine
+/// fault is the `Err` arm.
+///
+/// BND-1 (DC-EPOCH-39): the stop mirrors [`AdvanceOutcome`]'s split. `BoundaryRequiredAt` is the ONLY
+/// state whose caller may run boundary machinery; `ApplyFailedAt` is an ordinary within-epoch
+/// fail-closed and must not.
+#[derive(Debug, Clone, PartialEq)]
 pub enum AccumulatorChaindbOutcome {
     /// Walked the full prefix; the store now sits at `last_slot` (None only if it never advanced).
     ReachedTip { last_slot: Option<SlotNo> },
-    /// An observe-only boundary stall stopped the walk; the store stays at its prior slot.
-    StalledAt { slot: SlotNo, reason: String },
+    /// A genuine epoch crossing is due at `slot`; the store stays at its prior slot until the caller
+    /// supplies the boundary mark.
+    BoundaryRequiredAt {
+        slot: SlotNo,
+        from_epoch: EpochNo,
+        to_epoch: EpochNo,
+    },
+    /// The walk hit a within-epoch block that fail-closed. Observe-only: the store stays at its prior
+    /// slot and the follow continues. Carries the ledger's typed error.
+    ApplyFailedAt {
+        slot: SlotNo,
+        error: LedgerTransitionError,
+    },
 }
 
 /// A REAL fault reconciling the accumulator over the ChainDB (never an observe-only stall).
@@ -227,8 +287,19 @@ pub fn advance_accumulator_over_chaindb(
             .map_err(AccumulatorChaindbError::Advance)?
         {
             AdvanceOutcome::Advanced { .. } | AdvanceOutcome::AlreadyApplied { .. } => {}
-            AdvanceOutcome::Stalled { slot, reason } => {
-                return Ok(AccumulatorChaindbOutcome::StalledAt { slot, reason });
+            AdvanceOutcome::BoundaryMarkRequired {
+                slot,
+                from_epoch,
+                to_epoch,
+            } => {
+                return Ok(AccumulatorChaindbOutcome::BoundaryRequiredAt {
+                    slot,
+                    from_epoch,
+                    to_epoch,
+                });
+            }
+            AdvanceOutcome::ApplyFailed { slot, error } => {
+                return Ok(AccumulatorChaindbOutcome::ApplyFailedAt { slot, error });
             }
         }
     }
@@ -510,16 +581,93 @@ mod tests {
         };
         let outcome = advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx).unwrap();
         match outcome {
-            AdvanceOutcome::Stalled { slot, reason } => {
+            // BND-1 (CE-BND1-2): a genuine crossing is now named by BOTH epochs, decided before the
+            // apply — a strictly stronger assertion than matching an error string, and one that no
+            // longer passes if the classification comes from a failure.
+            AdvanceOutcome::BoundaryMarkRequired {
+                slot,
+                from_epoch,
+                to_epoch,
+            } => {
                 assert_eq!(slot, SlotNo(43_000_000));
-                assert!(
-                    reason.contains("MissingBoundaryStake"),
-                    "expected the boundary stall reason, got {reason}"
-                );
+                assert_eq!(from_epoch, EpochNo(500));
+                assert_eq!(to_epoch, EpochNo(501));
             }
-            other => panic!("expected a boundary Stall, got {other:?}"),
+            other => panic!("expected BoundaryMarkRequired, got {other:?}"),
         }
         // Observe-only: the store is untouched — LAST_SLOT stays at the seed (the durable stall signal).
+        assert_eq!(s.last_advanced_slot().unwrap(), Some(SlotNo(42_000_000)));
+    }
+
+    /// BND-1 / CE-BND1-1 + CE-BND1-4 (DC-EPOCH-39). A block in the accumulator's OWN epoch whose apply
+    /// fail-closes is an `ApplyFailed` carrying the ledger's typed error — NEVER a boundary state.
+    ///
+    /// This is the shape the live preprod store has been stuck in since LIVE-2c: slot 130,350,133,
+    /// epoch 305, accumulator cursor 130,350,114, also epoch 305 — measured in
+    /// `docs/evidence/run-stores/preprod-live2c/bnd-census-classified.txt`. Before this slice the two
+    /// states were one, so this block drove a checkpoint rewind, a per-credential mark sum and a cross
+    /// attempt: 84,783 ms of boundary machinery for a block that is not on a boundary.
+    ///
+    /// The era MISMATCH is used as the failure trigger deliberately: it is a fail-closed the contract
+    /// reaches without needing a hand-built phase-2-invalid block, and the assertion is on the CLASS of
+    /// outcome and the typed error value, not on which error it is.
+    #[test]
+    fn a_within_epoch_apply_failure_is_apply_failed_not_a_boundary() {
+        let tmp = TempDir::new().unwrap();
+        let s = sealed_store_at_epoch_500(&tmp, SlotNo(42_000_000));
+        let ctx = WithinEpochCtx {
+            era: CardanoEra::Babbage, // disagrees with the block envelope ⇒ the contract fail-closes
+            block_epoch: EpochNo(500), // SAME epoch as the accumulator — not a boundary
+            block_slot: SlotNo(43_000_000),
+            issuer_pool: pool(0x77),
+            block_no: BlockNo(1),
+            header_hash: Hash32([0x77; 32]),
+        };
+        let outcome = advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx).unwrap();
+        match outcome {
+            AdvanceOutcome::ApplyFailed { slot, error } => {
+                assert_eq!(slot, SlotNo(43_000_000));
+                // CE-BND1-4: the ledger's own typed error survives, compared BY VALUE — a rendered
+                // string would make this assertion a substring match on prose.
+                assert_eq!(
+                    error,
+                    LedgerTransitionError::EraMismatch {
+                        ctx: CardanoEra::Babbage as u64,
+                        block: CardanoEra::Conway as u64,
+                    }
+                );
+            }
+            other => panic!("a within-epoch apply failure must not be a boundary state, got {other:?}"),
+        }
+        // Observe-only and cursor-preserving, exactly as the old flattened state was.
+        assert_eq!(s.last_advanced_slot().unwrap(), Some(SlotNo(42_000_000)));
+    }
+
+    /// BND-1 / CE-BND1-2. The boundary classification is POSITIVE — taken from the epochs before the
+    /// apply — so it holds even when the block would ALSO have failed to apply. Under the old
+    /// error-derived classification this case was indistinguishable from an ordinary apply failure.
+    #[test]
+    fn a_crossing_is_classified_from_the_epochs_even_when_the_apply_would_fail() {
+        let tmp = TempDir::new().unwrap();
+        let s = sealed_store_at_epoch_500(&tmp, SlotNo(42_000_000));
+        let ctx = WithinEpochCtx {
+            era: CardanoEra::Babbage,  // would fail-close inside the contract...
+            block_epoch: EpochNo(501), // ...but a crossing is due, and that is decided FIRST
+            block_slot: SlotNo(43_000_000),
+            issuer_pool: pool(0x77),
+            block_no: BlockNo(1),
+            header_hash: Hash32([0x77; 32]),
+        };
+        match advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx).unwrap() {
+            AdvanceOutcome::BoundaryMarkRequired {
+                from_epoch,
+                to_epoch,
+                ..
+            } => {
+                assert_eq!((from_epoch, to_epoch), (EpochNo(500), EpochNo(501)));
+            }
+            other => panic!("expected BoundaryMarkRequired ahead of the apply, got {other:?}"),
+        }
         assert_eq!(s.last_advanced_slot().unwrap(), Some(SlotNo(42_000_000)));
     }
 
@@ -734,14 +882,15 @@ mod tests {
         )
         .unwrap();
         match outcome {
-            AccumulatorChaindbOutcome::StalledAt { slot, reason } => {
+            AccumulatorChaindbOutcome::BoundaryRequiredAt {
+                slot,
+                from_epoch,
+                to_epoch,
+            } => {
                 assert_eq!(slot, SlotNo(43_086_000));
-                assert!(
-                    reason.contains("MissingBoundaryStake"),
-                    "expected the boundary stall reason, got {reason}"
-                );
+                assert_eq!(from_epoch.0 + 1, to_epoch.0, "one crossing is due");
             }
-            other => panic!("expected a boundary StalledAt, got {other:?}"),
+            other => panic!("expected BoundaryRequiredAt, got {other:?}"),
         }
         // Observe-only: the store stayed at the seed (it never folded the boundary block).
         assert_eq!(s.last_advanced_slot().unwrap(), Some(SlotNo(42_000_000)));

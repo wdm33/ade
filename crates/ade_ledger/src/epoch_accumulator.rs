@@ -348,7 +348,11 @@ pub struct SelectedBlockCtx {
 /// Closed, fail-closed error sum for the authority transition. A malformed block, an unknown
 /// cert/governance variant on the authority path, an arithmetic overflow, a missing required input, or
 /// a boundary gap is TERMINAL — never a silent partial accumulator, never a fabricated default.
-#[derive(Debug)]
+/// BND-1 (DC-EPOCH-39): `Clone + PartialEq` are derived so a caller can carry and COMPARE the error by
+/// value instead of rendering it to a string. `Eq` is deliberately NOT derived — `CertApply` wraps
+/// [`LedgerError`], which is `PartialEq` but not `Eq`, and widening that across the ledger's error
+/// surface is not this slice's business. The derives are additive and change no transition behaviour.
+#[derive(Debug, Clone, PartialEq)]
 pub enum LedgerTransitionError {
     /// The block bytes failed to decode (envelope or era body).
     MalformedBlock,

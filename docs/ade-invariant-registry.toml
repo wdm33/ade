@@ -10309,3 +10309,28 @@ introduced_in = "PREPROD-LIVE-2c-ACTIVATION"
 strengthened_in = []
 evidence = ["Run 4 (2026-08-06, wire_smoke.jsonl): 354 admitted ForgeTicks emitted 354 forge_result records, all outcome=no_tip_available -- a catch-all that could not distinguish a fence refusal from an absent tip from a KES-window failure."]
 evidence_notes = "Opened AFTER decomposing run 4's own artifacts, which CORRECTED the SLICE-LIVE-2b code-read conclusion that B11 had fired. The operator op-cert starts at KES period 970; with slotsPerKESPeriod 129_600 and maxKESEvolutions 62, the naive 19-day-ahead slot 131_976_696 is absolute period 1018, evolution 48 -- comfortably INSIDE the window, so kes_period_for_slot returned Some(48) and the wrong slot was never refused there. Pinned as the_naive_19_day_ahead_slot_was_never_refused_by_the_kes_window. This makes DC-NODE-45 the load-bearing fix and DC-NODE-46 a defence-in-depth one, which is the opposite of how the branch table read it. The per-tick reset clause (e) was NARROWED by the mutation sweep: every path that does refuse overwrites the field, so the sticky harm is confined to the one path that records nothing -- which is precisely the record an operator reads when nothing is happening."
+
+[[rules]]
+id = "DC-EPOCH-39"
+tier = "derived"
+statement = """
+A stall's CAUSE is typed, and only a real epoch transition may enter boundary machinery. Advancing the
+durable accumulator over one block yields exactly one of: Advanced, AlreadyApplied, BoundaryMarkRequired
+(the block's epoch is STRICTLY ahead of the accumulator's -- a crossing is genuinely due), or ApplyFailed
+(carrying the ledger's own LedgerTransitionError by value, never a rendered string). The boundary
+decision is POSITIVE and taken BEFORE the apply, from the block's epoch against the accumulator's own --
+never inferred from an error variant or message. A within-epoch apply failure MUST NOT cause a reduced-
+checkpoint rewind, a boundary-mark capture, or a boundary cross to be attempted.
+"""
+source = "docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-BND-1-typed-accumulator-stall-cause.md (INV-BND-1)"
+cross_ref = ["DC-EPOCH-20", "DC-EPOCH-22", "DC-EPOCH-32"]
+code_locus = "crates/ade_runtime/src/chaindb/epoch_accumulator_advance.rs: AdvanceOutcome::{BoundaryMarkRequired, ApplyFailed} + AccumulatorChaindbOutcome::{BoundaryRequiredAt, ApplyFailedAt}; the strict epoch comparison in advance_accumulator_over_block, evaluated before apply_selected_block. crates/ade_ledger/src/epoch_accumulator.rs: LedgerTransitionError derives Clone + PartialEq so the cause is carried and compared by value. crates/ade_node/src/node_lifecycle.rs: the relay loop routes BoundaryRequiredAt into the boundary arm and ApplyFailedAt into an announced-once observe-only stop. Gate ci/ci_check_bnd_typed_stall_cause.sh."
+tests = ["a_within_epoch_apply_failure_is_apply_failed_not_a_boundary", "a_crossing_is_classified_from_the_epochs_even_when_the_apply_would_fail", "boundary_crossing_block_stalls_observe_only", "over_chaindb_stops_at_boundary_observe_only"]
+ci_scripts = ["ci/ci_check_bnd_typed_stall_cause.sh"]
+status = "enforced"
+authority_surface = "GREEN accumulator-advance classification over the BLUE apply contract (observe-only; never a consensus verdict)"
+cluster = "PREPROD-LIVE-2-FORGE-READINESS"
+introduced_in = "PREPROD-LIVE-2-BND-1"
+strengthened_in = []
+evidence = ["BND census 2026-08-09 (941f98a2): stall_slot=130350133 stall_block_epoch=305 cursor_epoch=305 detected_transition=false -- the block that pinned the accumulator is ordinary within-epoch traffic, yet consumed the full boundary path.", "BND-1 live proof 2026-08-11: same store, same block, same typed error, same pinned cursor 130350114/5024325/c16626fe -- boundary_arm_ms 84,783 -> 0, checkpoint_forward_ms 23,389 -> 0, accumulator_loop_ms 84,978 -> 269, zero REWOUND/cross lines."]
+evidence_notes = "The gate asserts STRUCTURE, not merely that tests exist: the flattened Stalled/StalledAt variants cannot return to either enum (scoped to those two enum bodies -- AccumulatorBoundaryOutcome::Stalled is a different type and is legitimately untouched), the epoch predicate must textually PRECEDE the apply call, the typed error must not be re-rendered inside the advancer, and the apply-failure arm must call none of position_reduced_checkpoint_at_boundary / sum_base_credential_stake / cross_accumulator_over_boundary_block / bind_boundary_mark. Both halves were negative-tested: mutating the predicate from > to >= fails a_within_epoch_apply_failure_is_apply_failed_not_a_boundary plus 5 pre-existing tests, and re-introducing sum_base_credential_stake into the apply-failure arm is caught by the gate. The gate also asserts a NONZERO passing-test count so it cannot pass vacuously. SCOPE: this rule separates the two failure classes; it does NOT let the accumulator cross 130,350,133 -- that is BND-2 (phase-2-invalid tx body-effect semantics + the undeclared-collateral input gap), which is gated on reference-semantics extraction and deliberately unimplemented here."
