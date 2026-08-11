@@ -65,7 +65,18 @@
 /// therefore produces different protocol params — and `minPoolCost` is fingerprinted — so a store
 /// written by an earlier binary is not replay-equivalent. Proven on preprod: `e641ec80…#0` enacts
 /// `minPoolCost 170_000_000 -> 75_000_000` at the 304→305 boundary.
-pub const STORE_SEMANTICS_VERSION: u32 = 3;
+/// Version 4 (BND-2a): the UTxO effect of a transaction is now gated by its phase-2 validity. A
+/// phase-2-INVALID transaction removes only its COLLATERAL inputs and adds only its collateral
+/// return; its ordinary inputs survive and its ordinary outputs are never created
+/// (`Cardano.Ledger.Babbage.Rules.Utxo`, `Phase2Invalid`). Earlier binaries applied every
+/// transaction's ordinary inputs and outputs regardless of validity and never consumed collateral,
+/// so replaying the SAME canonical blocks under this binary produces a different reduced UTxO — and
+/// therefore a different stake view, which seals frozen leadership at every boundary. A store written
+/// by an earlier binary is not replay-equivalent and MUST NOT be silently reinterpreted: it is
+/// refused up front with the typed re-bootstrap terminal. Measured on preprod block 130,350,133,
+/// whose single tx is phase-2 invalid: v3 spends `b9fede11…#1/#3` and creates 4 outputs that Cardano
+/// never creates, while leaving the collateral input `0326ab20…#1` unspent.
+pub const STORE_SEMANTICS_VERSION: u32 = 4;
 
 /// A durable artifact that carries authoritative semantics and therefore must be version-marked.
 ///

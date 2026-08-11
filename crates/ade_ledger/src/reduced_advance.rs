@@ -32,7 +32,7 @@ use ade_types::CardanoEra;
 
 use crate::error::LedgerError;
 use crate::reduced_utxo::{reduce_txout, ReducedStakeRef};
-use crate::rules::extract_inputs_outputs_from_tx;
+use crate::rules::extract_tx_utxo_effect;
 
 /// The bounded per-block reduced UTxO delta: inputs spent + reduced outputs produced.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -60,15 +60,21 @@ pub fn reduced_block_delta(
     }
     let data = &block.tx_bodies;
     let mut offset = 0usize;
+    // BND-2a: the block's own phase-2 verdicts, from canonical durable bytes. The effect RULE lives
+    // in `extract_tx_utxo_effect`; this loop only supplies the tx index.
+    let invalid = crate::plutus_eval::decode_invalid_tx_indices(block.invalid_txs.as_deref());
+    let mut tx_index: u64 = 0;
     match cbor::read_array_header(data, &mut offset)? {
         cbor::ContainerEncoding::Definite(n, _) => {
             for _ in 0..n {
-                process_one_tx(data, &mut offset, era, &mut spent, &mut produced)?;
+                process_one_tx(data, &mut offset, era, &invalid, tx_index, &mut spent, &mut produced)?;
+                tx_index += 1;
             }
         }
         cbor::ContainerEncoding::Indefinite => {
             while !cbor::is_break(data, offset)? {
-                process_one_tx(data, &mut offset, era, &mut spent, &mut produced)?;
+                process_one_tx(data, &mut offset, era, &invalid, tx_index, &mut spent, &mut produced)?;
+                tx_index += 1;
             }
         }
     }
@@ -81,21 +87,24 @@ pub fn reduced_block_delta(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_one_tx(
     data: &[u8],
     offset: &mut usize,
     era: CardanoEra,
+    invalid: &std::collections::BTreeSet<u64>,
+    tx_index: u64,
     spent: &mut Vec<TxIn>,
     produced: &mut BTreeMap<TxIn, (Coin, ReducedStakeRef)>,
 ) -> Result<(), LedgerError> {
     let body_start = *offset;
-    let (inputs, outputs) = extract_inputs_outputs_from_tx(data, offset, era)?;
+    let effect = extract_tx_utxo_effect(data, offset, era, invalid.contains(&tx_index))?;
     let body_end = *offset;
     let wire_bytes = &data[body_start..body_end];
 
     // Inputs are processed BEFORE this tx's outputs are added (mirrors track_utxo's
     // remove-then-insert per tx), so a tx can only cancel outputs from EARLIER txs.
-    for input in inputs {
+    for input in effect.spends {
         if produced.remove(&input).is_none() {
             // not produced earlier in this block -> a real prior-checkpoint spend.
             spent.push(input);
@@ -104,10 +113,10 @@ fn process_one_tx(
     }
     // tx_hash = Blake2b-256(tx_body_wire_bytes) -- identical to track_utxo.
     let tx_hash = ade_crypto::blake2b::blake2b_256(wire_bytes);
-    for (idx, out) in outputs.into_iter().enumerate() {
+    for (idx, out) in effect.produces {
         let txin = TxIn {
             tx_hash: tx_hash.clone(),
-            index: idx as u16,
+            index: idx,
         };
         produced.insert(txin, reduce_txout(&out));
     }
@@ -199,7 +208,7 @@ mod tests {
         let mut off = 0usize;
         let _ = cbor::read_array_header(data, &mut off).unwrap();
         let tx1_start = off;
-        let _ = extract_inputs_outputs_from_tx(data, &mut off, era).unwrap();
+        let _ = crate::rules::extract_inputs_outputs_from_tx(data, &mut off, era).unwrap();
         let tx1_bytes = data[tx1_start..off].to_vec();
         let tx1_hash = ade_crypto::blake2b::blake2b_256(&tx1_bytes);
 

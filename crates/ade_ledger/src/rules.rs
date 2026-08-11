@@ -503,29 +503,32 @@ pub(crate) fn track_utxo(
     let mut offset = 0;
     let data = &block.tx_bodies;
     let enc = cbor::read_array_header(data, &mut offset)?;
+    // BND-2a: the block's own phase-2 verdicts. Read from canonical durable bytes; the effect rule
+    // itself lives in `extract_tx_utxo_effect`, so this loop never branches on validity.
+    let invalid = crate::plutus_eval::decode_invalid_tx_indices(block.invalid_txs.as_deref());
+    let mut tx_index: u64 = 0;
 
-    let mut process_one = |data: &[u8], offset: &mut usize| -> Result<(), LedgerError> {
+    let mut process_one = |data: &[u8], offset: &mut usize, tx_index: u64| -> Result<(), LedgerError> {
         let body_start = *offset;
 
-        // Decode tx body and extract inputs + outputs
-        let (inputs, outputs) = extract_inputs_outputs_from_tx(data, offset, era)?;
+        let effect = extract_tx_utxo_effect(data, offset, era, invalid.contains(&tx_index))?;
 
         let body_end = *offset;
         let wire_bytes = &data[body_start..body_end];
 
         // Consume inputs: remove from UTxO if present
-        for input in &inputs {
+        for input in &effect.spends {
             utxo.utxos.remove(input);
         }
 
         // Compute tx hash = Blake2b-256(tx_body_wire_bytes)
         let tx_hash = ade_crypto::blake2b_256(wire_bytes);
 
-        // Produce outputs
-        for (idx, out) in outputs.into_iter().enumerate() {
+        // Produce outputs at their AUTHORITATIVE indices (not positional).
+        for (idx, out) in effect.produces {
             let tx_in = ade_types::tx::TxIn {
                 tx_hash: tx_hash.clone(),
-                index: idx as u16,
+                index: idx,
             };
             utxo.utxos.insert(tx_in, out);
         }
@@ -536,12 +539,14 @@ pub(crate) fn track_utxo(
     match enc {
         cbor::ContainerEncoding::Definite(n, _) => {
             for _ in 0..n {
-                process_one(data, &mut offset)?;
+                process_one(data, &mut offset, tx_index)?;
+                tx_index += 1;
             }
         }
         cbor::ContainerEncoding::Indefinite => {
             while !cbor::is_break(data, offset)? {
-                process_one(data, &mut offset)?;
+                process_one(data, &mut offset, tx_index)?;
+                tx_index += 1;
             }
         }
     }
@@ -1808,6 +1813,21 @@ fn accumulate_tx_certs(
 fn locate_alonzo_plus_output_slices(
     body_bytes: &[u8],
 ) -> Result<Vec<(usize, usize)>, LedgerError> {
+    Ok(locate_alonzo_plus_slices(body_bytes)?.outputs)
+}
+
+/// BND-2a: the byte slices of BOTH output-bearing body fields, captured in the SAME single walk —
+/// field 1 (ordinary outputs) and field 16 (the collateral return).
+///
+/// The collateral return is an output like any other and must keep its byte-exact wire form for the
+/// same reason field 1's do (`TxOut::AlonzoPlus.raw`). Capturing it here rather than re-encoding the
+/// parsed value is what keeps a phase-2-invalid transaction's produced UTxO entry byte-faithful.
+struct AlonzoPlusSlices {
+    outputs: Vec<(usize, usize)>,
+    collateral_return: Option<(usize, usize)>,
+}
+
+fn locate_alonzo_plus_slices(body_bytes: &[u8]) -> Result<AlonzoPlusSlices, LedgerError> {
     let mut off = 0;
     let enc = cbor::read_map_header(body_bytes, &mut off)?;
     let map_len = match enc {
@@ -1822,6 +1842,7 @@ fn locate_alonzo_plus_output_slices(
     };
 
     let mut slices: Vec<(usize, usize)> = Vec::new();
+    let mut collateral_return: Option<(usize, usize)> = None;
     for _ in 0..map_len {
         let (key, _) = cbor::read_uint(body_bytes, &mut off)?;
         if key == 1 {
@@ -1847,9 +1868,19 @@ fn locate_alonzo_plus_output_slices(
             // Keep scanning — we've captured the outputs; skip other keys.
             continue;
         }
+        if key == 16 {
+            // collateral return — ONE output, sliced verbatim.
+            let start = off;
+            let _ = cbor::skip_item(body_bytes, &mut off)?;
+            collateral_return = Some((start, off));
+            continue;
+        }
         let _ = cbor::skip_item(body_bytes, &mut off)?;
     }
-    Ok(slices)
+    Ok(AlonzoPlusSlices {
+        outputs: slices,
+        collateral_return,
+    })
 }
 
 /// Extract inputs and outputs from a decoded tx body.
@@ -1887,6 +1918,104 @@ pub fn apply_conway_tx_to_utxo(
         );
     }
     Ok(new_utxo)
+}
+
+/// BND-2a (INV-BND-2a): the UTxO effect of ONE transaction — the single authoritative derivation.
+///
+/// Consumers apply `spends` and `produces` and are **validity-blind**: they never receive the
+/// phase-2 flag, so they cannot branch on it and cannot drift from each other. The whole rule lives
+/// in [`extract_tx_utxo_effect`].
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TxUtxoEffect {
+    /// The inputs this tx REMOVES from the UTxO. The ordinary inputs (field 0) for a phase-2-valid
+    /// tx; the COLLATERAL inputs (field 13) for a phase-2-invalid one.
+    pub spends: Vec<ade_types::tx::TxIn>,
+    /// The outputs this tx ADDS, each with its AUTHORITATIVE output index — not a positional
+    /// `enumerate()`. `0..n` for a valid tx. For an invalid tx: empty, or the single collateral
+    /// return at index `len(ordinary outputs)`, matching cardano-ledger's `mkCollateralTxIn`.
+    pub produces: Vec<(u16, crate::utxo::TxOut)>,
+}
+
+/// BND-2a: derive [`TxUtxoEffect`] for one tx, gated by its phase-2 validity.
+///
+/// Reference (`Cardano.Ledger.Babbage.Rules.Utxo`, `Phase2Invalid`):
+/// ```text
+/// let !(utxoKeep, utxoDel) = extractKeys (unUTxO utxo) (txBody ^. collateralInputsTxBodyL)
+///     UTxO collouts = collOuts txBody
+///  in utxosUtxo = UTxO (Map.union utxoKeep collouts)
+/// ```
+/// i.e. an invalid tx removes ONLY its collateral inputs and adds ONLY `collOuts`. Its ordinary
+/// inputs survive and its ordinary outputs are never created. Ade previously applied the ordinary
+/// inputs/outputs of EVERY tx regardless of validity and never consumed collateral, which diverged
+/// from Cardano on the stake authority silently
+/// (`docs/evidence/run-stores/preprod-live2c/bnd2-existing-code-authority-census.md`).
+///
+/// `total_collateral` (field 17) is deliberately NOT read: per the reference it is a declared
+/// assertion the UTXO rule checks, never the source of truth for the consumed amount.
+pub(crate) fn extract_tx_utxo_effect(
+    data: &[u8],
+    offset: &mut usize,
+    era: CardanoEra,
+    phase2_invalid: bool,
+) -> Result<TxUtxoEffect, LedgerError> {
+    if !phase2_invalid {
+        let (inputs, outputs) = extract_inputs_outputs_from_tx(data, offset, era)?;
+        return Ok(TxUtxoEffect {
+            spends: inputs,
+            produces: outputs
+                .into_iter()
+                .enumerate()
+                .map(|(i, o)| (i as u16, o))
+                .collect(),
+        });
+    }
+    match era {
+        // Phase-2 validity exists only from Alonzo (Plutus) onward. A pre-Alonzo era cannot carry an
+        // `invalid_transactions` field, so being told one of its txs is invalid means the caller and
+        // the block disagree. Fail closed rather than silently applying the valid rule.
+        CardanoEra::Alonzo | CardanoEra::Babbage | CardanoEra::Conway => {}
+        _ => {
+            return Err(ade_codec::error::CodecError::InvalidCborStructure {
+                offset: *offset,
+                detail: "phase-2-invalid transaction in a pre-Alonzo era",
+            }
+            .into());
+        }
+    }
+    let body_start = *offset;
+    let tx = ade_codec::conway::tx::decode_conway_tx_body(data, offset)?;
+    let body_end = *offset;
+    let body_bytes = &data[body_start..body_end];
+    let slices = locate_alonzo_plus_slices(body_bytes)?;
+
+    let spends: Vec<ade_types::tx::TxIn> = tx
+        .collateral_inputs
+        .map(|c| c.into_iter().collect())
+        .unwrap_or_default();
+
+    // The collateral return's index is the count of ORDINARY outputs — they are not created, but
+    // they still occupy the index space (cardano-ledger: `mkTxIxPartial (length outputsTxBodyL)`).
+    let produces = match (tx.collateral_return, slices.collateral_return) {
+        (Some(out), Some((s, e))) => vec![(
+            tx.outputs.len() as u16,
+            crate::utxo::TxOut::AlonzoPlus {
+                raw: body_bytes[s..e].to_vec(),
+                address: out.address,
+                coin: out.coin,
+            },
+        )],
+        // Decoded a collateral return but could not slice its bytes (or vice versa): the two views
+        // of the same field disagree, so refuse rather than fabricate a raw form.
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(ade_codec::error::CodecError::InvalidCborStructure {
+                offset: body_start,
+                detail: "collateral return present in one view and absent in the other",
+            }
+            .into());
+        }
+        (None, None) => Vec::new(),
+    };
+    Ok(TxUtxoEffect { spends, produces })
 }
 
 pub(crate) fn extract_inputs_outputs_from_tx(
