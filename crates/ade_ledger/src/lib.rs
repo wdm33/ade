@@ -19,6 +19,7 @@ pub mod bootstrap_anchor;
 pub mod bootstrap_manifest;
 pub mod byron;
 pub mod cert_classify;
+pub mod collateral;
 pub mod consensus_input_extract;
 pub mod consensus_view;
 pub mod conway;

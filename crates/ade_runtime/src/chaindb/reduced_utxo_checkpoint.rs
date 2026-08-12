@@ -1036,3 +1036,23 @@ mod tests {
         assert!(matches!(cp.fingerprint(), Err(ReducedCheckpointError::Incomplete)));
     }
 }
+
+/// BND-2b (INV-BND-2b): the reduced UTxO authority answers the ledger rule's collateral question.
+///
+/// This is the whole handoff: the BLUE rule declares what it needs
+/// (`ade_ledger::collateral::CollateralValueResolver`) and the storage layer answers it over the
+/// EXISTING [`ReducedUtxoCheckpoint::get`]. No new storage, no new query path, and the accumulator
+/// gains no UTxO access — it receives a single resolved `Coin`.
+///
+/// The reduced form is sufficient by construction, not by luck: `collAdaBalance` is defined over
+/// ADA only (`sumAllCoin` / `coinTxOutL`), and ADA `Coin` is exactly what this checkpoint retains
+/// per entry.
+///
+/// A storage fault collapses to `None` deliberately. `None` is the caller's REFUSAL signal, so an
+/// unreadable entry and an absent entry both fail closed; neither can become a fabricated value.
+impl ade_ledger::collateral::CollateralValueResolver for ReducedUtxoCheckpoint {
+    fn collateral_value(&self, txin: &TxIn) -> Option<Coin> {
+        self.get(txin).ok().flatten().map(|(coin, _stake_ref)| coin)
+    }
+}
+
