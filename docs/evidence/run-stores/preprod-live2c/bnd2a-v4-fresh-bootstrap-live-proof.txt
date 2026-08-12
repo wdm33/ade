@@ -1,0 +1,104 @@
+# BND-2a — LIVE PROOF on a FRESH v4 store. preprod, 2026-08-12. Slice CLOSED.
+#
+# Slice: docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-BND-2a-phase2-invalid-utxo-effect.md
+# Code:  d619ebda   Rule: DC-LEDGER-01   Gate: ci/ci_check_phase2_invalid_utxo_effect.sh
+# The six acceptance criteria were fixed BEFORE the run and are answered one by one below.
+
+## PROVENANCE
+binary        d619ebda (STORE_SEMANTICS_VERSION = 4)
+store         ~/.cardano-live1/ade-preprod-v4 — created FRESH by this run; 6.4 GB at close
+bootstrap     native Mithril, ~/.cardano-live1/preprod-snapshot-6009
+              certified anchor slot 129,813,427 / block 4153b4f5…
+              shelley genesis 162d29c4…  UTxO commitment c9906929…  lineage fe99c639…
+peer          docker cardano-node-preprod 127.0.0.1:3001
+bootstrap run 00:42:24Z .. 01:34:51Z (clean SIGINT), reached slot 130,544,277
+warm restart  01:36:44Z .. 01:38:30Z, NO --bootstrap-mithril and NO --snapshot-dir
+
+The anchor is BELOW the target block 130,350,133, so the follow had to walk through it. That was the
+point of bootstrapping rather than restoring.
+
+## THE SIX CRITERIA
+
+**1. Bootstrap creates a v4 store from canonical inputs — MET.**
+Native Mithril receipt above; reduced checkpoint built fresh at
+`ade-preprod-v4/reduced-checkpoint.redb`. No v3 input was available to it: both v3 stores were
+retired before the run (`MANIFEST-v3-stores-retired-at-v4.md`).
+
+**2. Follow reaches and passes 130,350,133 in the reduced UTxO path — MET.**
+`follow: tip slot=130544277`, i.e. ~194k slots BEYOND the target. The reduced checkpoint
+forward-folded across it (`checkpoint_forward_ms` non-zero on the passes that crossed it).
+
+**3. The reduced checkpoint applies the Phase2Invalid delta there — MET, as scoped.**
+Stated precisely rather than overclaimed: the delta itself is pinned by the unit differential in
+`bnd2a_phase2_invalid_utxo_effect.rs`, which runs `reduced_block_delta` over the REAL bytes of this
+block and asserts spent == {`0326ab20…#1`}, produced == ∅, ordinary inputs surviving — and which
+DISCRIMINATES (treating the tx as valid fails it; positional indexing fails it). The live leg's
+contribution is that this same code path executed over this block in a real store, advancing to the
+tip without divergence or halt. The live run did NOT independently re-derive the delta, and a second
+checkpoint replay was deliberately not built to do so — the differential already pins it.
+
+**4. No v3 artifact silently adopted — MET.**
+Fresh data-dir; zero `StoreSemantics` / `RebootstrapRequired` lines in either run. Proven separately
+and directly: the v3 store, before retirement, was REFUSED by this binary —
+`StoreSemanticsVersionMismatch { artifact: ChainDb, found: Version(3), required: 4,
+action: RebootstrapRequired }`, exit 1.
+
+**5. Warm restart reproduces the same reduced state — MET.**
+Restarted from the data-dir alone. Recovery took `action=forward_fold reason=forward_fold_no_reset`
+— no reset, no refold — and the anchor is byte-identical across the restart:
+```
+anchor_before=130350114/5024325/c16626fe   durable_tip=130739648/5042282/7477fc0c
+anchor_after =130350114/5024325/c16626fe
+```
+Zero store-semantics errors, zero `EpochViewPostPromotionMismatch`. (What is compared here is the
+persisted anchor + the recovery action + the reproduced halt; no separate state fingerprint was
+computed.)
+
+**6. The accumulator STILL fails closed — MET. This is the load-bearing one.**
+```
+epoch-accumulator: WITHIN-EPOCH apply failed at 130350133 (observe-only, NOT a boundary --
+no rewind, no mark, no cross): InvalidTxCarriesAuthorityEffect { tx_index: 0 }
+cursor=Some(130350114) tx_count=1 tx0[invalid=true certs=false wdl=2 votes=false
+proposals=false collateral=None]
+```
+Identical on the bootstrap run and again after the warm restart. BND-2a did NOT weaken the halting
+authority. The intended intermediate state — silent UTxO/stake divergence fixed, accumulator still
+stopping — is exactly what the venue shows.
+
+## TWO RESULTS STRONGER THAN THE CRITERIA REQUIRED
+
+**A. The pinned cursor reproduced INDEPENDENTLY, byte for byte.** The retired v3 store was pinned at
+`130350114/5024325/c16626fe`. A store that shares nothing with it — different bootstrap, different
+semantics version, built from the Mithril snapshot in this run — pins at the SAME point, the same
+block number, the SAME hash. The halt is a property of the chain and the rules, not of accumulated
+store state. Nothing in the six criteria asked for this; it falls out of having rebuilt.
+
+**B. BND-1's discrimination is now proven POSITIVELY, not only by absence.** On this one run:
+```
+epoch-accumulator: CROSSED boundary 304 -> 305 at slot 130118424 (mark from s_prev 130118358)
+b6-census-coadv: ... boundary_arm_ms=16355 ...        <- a GENUINE boundary, legitimately served
+epoch-accumulator: WITHIN-EPOCH apply failed at 130350133 (NOT a boundary -- no rewind/mark/cross)
+```
+A real crossing entered the boundary arm and CROSSED; the within-epoch failure did no boundary work
+at all. The earlier BND-1 proof only had the negative half (`boundary_arm_ms 84,783 -> 0`). A
+non-zero `boundary_arm_ms` here is CORRECT and is the positive control the earlier run could not
+provide.
+
+Also incidental: the fresh store crossed BOTH epoch boundaries with eta0 agreement — 304→305
+`74f10bea2b467cac73efbd02b36307fe12a123b098a94cfcfe4c33ce4ef10b62` and 305→306
+`59d6c17aca1ed65bbe74b408345da3d61d45a49c73b59990ed4feea6d6f06a2b` — the latter byte-identical to
+the value the retired v3 store computed for the same boundary.
+
+## WHAT IS STILL TRUE AFTER THIS RUN
+The accumulator cursor is STILL PINNED at 130,350,114 and still cannot cross 130,350,133. That is
+the correct outcome of BND-2a and not a shortfall: this slice fixed the SILENT authority. The
+halting one is BND-2b (the `collAdaBalance` scalar and the resolver contract) and BND-2c (guard
+retirement). `InvalidTxCarriesAuthorityEffect`, `InvalidTxCollateralNeedsUtxo` and B12 are all
+unchanged.
+
+Non-goals held for this run, as required: no collAdaBalance work, no guard retirement, no B12 touch.
+Nothing new surfaced before the known halt that needed separate classification.
+
+## VERIFICATION
+cargo test -p ade_ledger -p ade_runtime -p ade_node: 2241 passed, 0 failed (86 suites) at d619ebda.
+ci/ci_check_phase2_invalid_utxo_effect.sh: PASS (4 differential tests ran).
