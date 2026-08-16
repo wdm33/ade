@@ -36,7 +36,9 @@ contribute **nothing** to any accumulator authority state — not because they a
 Cardano discards them. When no resolver is supplied the transition refuses (the value is genuinely
 unknowable), and that refusal is about the MISSING VALUATION, never about the tx "carrying effects".
 
-Registry: **DC-LEDGER-03** (derived). Related: DC-LEDGER-01, DC-LEDGER-02, DC-EPOCH-39.
+Registry: **DC-LEDGER-PHASE2-03** (derived). Related: DC-LEDGER-PHASE2-01, DC-LEDGER-PHASE2-02,
+DC-EPOCH-39. (Recorded first as `DC-LEDGER-03`, an id already held; re-issued in BND-2d — the older
+holder keeps the id.)
 
 ## What retires, and precisely why
 
