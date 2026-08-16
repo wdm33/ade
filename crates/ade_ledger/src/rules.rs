@@ -1667,6 +1667,10 @@ pub(crate) fn process_block_certificates(
     era: CardanoEra,
     state: &LedgerState,
 ) -> Result<(crate::delegation::CertState, Option<crate::state::ConwayGovState>), LedgerError> {
+    // BND-2c: a phase-2-INVALID tx's certificates are DISCARDED by Cardano, so they must not reach
+    // `accumulate_tx_certs`. This walk previously applied every tx's certs and depended on a caller
+    // fail-closing first; that guard is gone, so the gate lives HERE, at the single cert walk.
+    let invalid = crate::plutus_eval::decode_invalid_tx_indices(block.invalid_txs.as_deref());
     // This path runs only at track_utxo=true (full state present) — require the authoritative cert/gov and fail
     // closed rather than accommodate a reduced projection (RVBP; cert/gov unavailable by type on the reduced plane).
     if block.tx_count == 0 {
@@ -1691,7 +1695,9 @@ pub(crate) fn process_block_certificates(
     let enc = cbor::read_array_header(data, &mut offset)?;
     let key_deposit = state.protocol_params.key_deposit;
 
-    let mut process_one = |data: &[u8], offset: &mut usize| -> Result<(), LedgerError> {
+    let mut process_one = |data: &[u8], offset: &mut usize, tx_index: u64| -> Result<(), LedgerError> {
+        // BND-2c: skip a discarded tx's body entirely -- its certs contribute nothing.
+        let skip_certs = invalid.contains(&tx_index);
         // Read the tx body map to find key 4 (certs)
         let map_enc = cbor::read_map_header(data, offset)?;
         let map_len = match map_enc {
@@ -1709,7 +1715,7 @@ pub(crate) fn process_block_certificates(
 
         for _ in 0..map_len {
             let (key, _) = cbor::read_uint(data, offset)?;
-            if key == 4 {
+            if key == 4 && !skip_certs {
                 // Capture cert bytes and accumulate fail-closed: a decode or
                 // apply error halts the block transition (this path runs only at
                 // track_utxo, i.e. with full state present — there is no
@@ -1735,15 +1741,18 @@ pub(crate) fn process_block_certificates(
         Ok(())
     };
 
+    let mut tx_index: u64 = 0;
     match enc {
         cbor::ContainerEncoding::Definite(n, _) => {
             for _ in 0..n {
-                process_one(data, &mut offset)?;
+                process_one(data, &mut offset, tx_index)?;
+                tx_index += 1;
             }
         }
         cbor::ContainerEncoding::Indefinite => {
             while !cbor::is_break(data, offset)? {
-                process_one(data, &mut offset)?;
+                process_one(data, &mut offset, tx_index)?;
+                tx_index += 1;
             }
         }
     }

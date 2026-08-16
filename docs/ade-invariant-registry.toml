@@ -10388,3 +10388,32 @@ introduced_in = "PREPROD-LIVE-2-BND-2b"
 strengthened_in = []
 evidence = ["Reference rule quoted verbatim from Cardano.Ledger.Babbage.Collateral (collAdaBalance / collOuts) and the totalCollateral check (validateCollateralEqBalance / IncorrectTotalCollateralField) -- docs/evidence/run-stores/preprod-live2c/bnd2-oracle-extraction.md.", "The gating fact was CHECKED, not assumed: ReducedUtxoCheckpoint::get already resolves an arbitrary TxIn, and the checkpoint retains EVERY entry (ReducedStakeRef is Base|NonContributing), keeping ADA Coin -- exactly and only what collAdaBalance needs."]
 evidence_notes = "CAPABILITY-ONLY BY DESIGN: this slice introduces the resolver and the computation and changes NO existing behaviour. The accumulator's guards (InvalidTxCarriesAuthorityEffect, InvalidTxCollateralNeedsUtxo) still fire and its cursor stays pinned at 130,350,114; electing to trust the resolved result is BND-2c, which is also where the real-block value differential (CE-2b-7) belongs -- during the accumulator's walk the reduced checkpoint is positioned AT the block, so the collateral input resolves, whereas in isolation after the fact it has already been spent. NEGATIVE-TESTED both ways the rule is cheap to get wrong: treating an unresolved input as zero fails 3 tests AND is caught structurally by the gate (it greps the isolated function body for unwrap_or / unwrap_or_default and requires UnresolvedCollateralInput to remain raised); dropping one collateral input from the sum fails 5 of 6 tests. The gate also checks total_collateral against CODE ONLY, stripping comments first, because the module documents in prose that it does not consult field 17 and that sentence must not be mistaken for a use. CE-2b-5 is enforced by REUSING the pre-existing ci_check_epoch_accumulator_no_utxo.sh rather than restating it -- a second copy of an invariant is a second thing to drift."
+
+[[rules]]
+id = "DC-LEDGER-03"
+tier = "derived"
+statement = """
+A phase-2-invalid transaction contributes its consumed collateral and NOTHING else. For a tx in the
+block's invalid_transactions set the accumulator applies exactly one effect: the fee pot gains
+collAdaBalance (the resolved collateral inputs minus the collateral return read from the block). Its
+certificates, withdrawals, voting procedures and proposal procedures contribute nothing to any
+accumulator authority state -- not because they are refused, but because Cardano DISCARDS them
+(Cardano.Ledger.Babbage.Rules.Utxo, Phase2Invalid). The cert walk (process_block_certificates) skips a
+discarded tx's certs at the single cert walk, so no caller-side guard is load-bearing. When no
+resolver is supplied the transition refuses, and that refusal is about the MISSING VALUATION, never
+about the tx carrying effects. total_collateral is never read: block validity, including
+IncorrectTotalCollateralField, is established upstream and the accumulator reproduces the transition
+of an already-valid block rather than re-adjudicating one.
+"""
+source = "docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-BND-2c-invalid-tx-accumulator-transition.md (INV-BND-2c)"
+cross_ref = ["DC-LEDGER-01", "DC-LEDGER-02", "DC-EPOCH-39"]
+code_locus = "crates/ade_ledger/src/epoch_accumulator.rs: apply_tx_scan (the Phase2Invalid contribution), apply_one_tx_governance (fields 19/20 discarded), apply_selected_block_with_resolver (the resolver rides ALONGSIDE SelectedBlockCtx so every existing call site stays byte-identical with None). crates/ade_ledger/src/rules.rs: process_block_certificates gates the cert walk on the block's invalid set. crates/ade_runtime/src/chaindb/epoch_accumulator_advance.rs: the resolver threaded through advance_accumulator_over_block / over_chaindb / cross_accumulator_over_boundary_block. crates/ade_node/src/node_lifecycle.rs: the co-advancer supplies the reduced checkpoint as the live resolver. STORE_SEMANTICS_VERSION 4 -> 5."
+tests = ["invalid_tx_fee_is_resolved_collateral_not_declared_fee", "an_invalid_txs_certs_are_discarded_not_refused", "an_invalid_tx_without_a_resolver_still_refuses", "s3_invalid_tx_proposal_is_discarded_leaving_gov_state_unchanged", "s3_invalid_tx_vote_is_discarded_leaving_gov_state_unchanged"]
+ci_scripts = ["ci/ci_check_collateral_balance_resolver.sh"]
+status = "partial"
+authority_surface = "BLUE accumulator within-epoch transition for discarded transactions"
+cluster = "PREPROD-LIVE-2-FORGE-READINESS"
+introduced_in = "PREPROD-LIVE-2-BND-2c"
+strengthened_in = []
+evidence = ["Reference rule from Cardano.Ledger.Babbage.Rules.Utxo (Phase2Invalid) + Babbage.Collateral -- docs/evidence/run-stores/preprod-live2c/bnd2-oracle-extraction.md."]
+evidence_notes = "STATUS IS `partial` DELIBERATELY: the in-tree proof is complete (2252 tests green, four gates passing) but the LIVE bar is not yet met. Live closure requires, on a fresh v5 store: the real accumulator walk resolving the collateral input at 130,350,133 through the reduced checkpoint, the cursor advancing THROUGH that block past 130,350,114, and a warm restart reproducing the resulting accumulator state -- none of which a unit test can stand in for. Flip to `enforced` only on that evidence. The four rewritten unit tests replaced assertions that encoded the UNIMPLEMENTED state ('fail closed because discarding is not implemented'); each now asserts the Cardano rule itself and carries a non-vacuous control (the governance ones assert gov state is UNCHANGED and that the SAME block with the tx valid DOES capture the proposal). A load-bearing discovery during implementation: process_block_certificates walked every tx and applied its certs, relying entirely on the removed guard firing first -- removing the guard without gating that walk would have silently applied a discarded tx's certificates, which is the exact bug class BND-2a fixed on the UTxO side."

@@ -381,6 +381,8 @@ pub enum LedgerTransitionError {
     /// effect, the live within-epoch transition fail-closes; the invalid-tx body-effect skip is S3's
     /// byte-exact-gate item.
     InvalidTxCarriesAuthorityEffect { tx_index: u64 },
+    /// BND-2c: the consumed collateral of a phase-2-invalid tx could not be valued.
+    CollateralBalance(crate::collateral::CollateralBalanceError),
     /// A pending one-shot bootstrap RUPD reached a boundary that is NOT its target (target_epoch+1). The
     /// bootstrap exception applies at EXACTLY the seed→seed+1 boundary; at any other boundary it must be
     /// already-consumed-None. Fail closed rather than carry a stale bootstrap reward into a later epoch.
@@ -514,7 +516,23 @@ pub fn apply_selected_block(
 ) -> Result<EpochAccumulator, LedgerTransitionError> {
     // Observe/analysis path: `freeze = None`, so NO `FreezeLeadership` effect is ever constructed — the
     // effect-producing code is not reached, so there is no zero/placeholder commitment to fabricate.
-    apply_selected_block_core(prior, block_bytes, ctx, None).map(|(acc, _)| acc)
+    apply_selected_block_core(prior, block_bytes, ctx, None, None).map(|(acc, _)| acc)
+}
+
+/// BND-2c (INV-BND-2c): as [`apply_selected_block`], but with the UTxO authority available so a
+/// phase-2-invalid transaction's consumed collateral can be VALUED and applied instead of refused.
+///
+/// The resolver rides ALONGSIDE the context rather than inside it: `SelectedBlockCtx` is owned and
+/// built at many sites, so threading a `&dyn` through it would add a lifetime to all of them. With
+/// `None` this is byte-identical to `apply_selected_block`, which is what keeps every existing caller
+/// unchanged.
+pub fn apply_selected_block_with_resolver(
+    prior: &EpochAccumulator,
+    block_bytes: &[u8],
+    ctx: &SelectedBlockCtx,
+    resolver: Option<&dyn crate::collateral::CollateralValueResolver>,
+) -> Result<EpochAccumulator, LedgerTransitionError> {
+    apply_selected_block_core(prior, block_bytes, ctx, None, resolver).map(|(acc, _)| acc)
 }
 
 /// Apply one durable selected-chain block AND return the ordered boundary leadership effects (S4-pre-2/S4-L2).
@@ -530,12 +548,14 @@ pub fn apply_selected_block_with_effects(
     mark_source_slot: SlotNo,
     mark_source_hash: &Hash32,
     source_checkpoint_commitment: &Hash32,
+    resolver: Option<&dyn crate::collateral::CollateralValueResolver>,
 ) -> Result<(EpochAccumulator, Vec<EpochBoundaryEffect>), LedgerTransitionError> {
     apply_selected_block_core(
         prior,
         block_bytes,
         ctx,
         Some((mark_source_slot, mark_source_hash, source_checkpoint_commitment)),
+        resolver,
     )
 }
 
@@ -549,6 +569,7 @@ fn apply_selected_block_core(
     block_bytes: &[u8],
     ctx: &SelectedBlockCtx,
     freeze: Option<(SlotNo, &Hash32, &Hash32)>,
+    resolver: Option<&dyn crate::collateral::CollateralValueResolver>,
 ) -> Result<(EpochAccumulator, Vec<EpochBoundaryEffect>), LedgerTransitionError> {
     let (era, block) = decode_selected_block(block_bytes)?;
     if (era as u8) < (CardanoEra::Conway as u8) {
@@ -596,7 +617,7 @@ fn apply_selected_block_core(
         }
     }
     // 2. Within-epoch effects of THIS block.
-    acc = apply_within_epoch(acc, &block, era, ctx)?;
+    acc = apply_within_epoch(acc, &block, era, ctx, resolver)?;
     acc.epoch_state.slot = ctx.block_slot;
     // The freeze is an authoritative boundary effect: enforce the ordered-batch invariants fail-closed.
     validate_boundary_effects(&effects)?;
@@ -949,6 +970,7 @@ fn apply_within_epoch(
     block: &ade_types::shelley::block::ShelleyBlock,
     era: CardanoEra,
     ctx: &SelectedBlockCtx,
+    resolver: Option<&dyn crate::collateral::CollateralValueResolver>,
 ) -> Result<EpochAccumulator, LedgerTransitionError> {
     // Phase-2 validity gate (cardano-ledger UTXOS): decode the block's invalid_transactions set once. It
     // gates ALL within-epoch effects — a VALID tx contributes its declared fee + withdrawals (+ certs); a
@@ -963,7 +985,7 @@ fn apply_within_epoch(
     // pass: an invalid tx carrying certs/withdrawals fail-closes HERE, so the cert reuse below (which walks
     // every tx) never applies a discarded invalid-tx cert.
     let (total_fees, withdrawals) =
-        scan_block_tx_effects(block.tx_count, &block.tx_bodies, &invalid)?;
+        scan_block_tx_effects(block.tx_count, &block.tx_bodies, &invalid, resolver)?;
 
     // Certificates + governance — reuse the single ledger authority (no parallel reimplementation). After
     // the guard above, no invalid tx carries certs, so only valid txs' certs are applied.
@@ -1143,6 +1165,7 @@ fn scan_block_tx_effects(
     tx_count: u64,
     tx_bodies: &[u8],
     invalid: &std::collections::BTreeSet<u64>,
+    resolver: Option<&dyn crate::collateral::CollateralValueResolver>,
 ) -> Result<(u64, Vec<StakeCredential>), LedgerTransitionError> {
     use ade_codec::cbor;
     if tx_count == 0 {
@@ -1159,8 +1182,10 @@ fn scan_block_tx_effects(
     {
         cbor::ContainerEncoding::Definite(n, _) => {
             for _ in 0..n {
+                let body_start = offset;
                 let tx = scan_one_tx(data, &mut offset)?;
-                apply_tx_scan(tx, index, invalid, &mut total_fees, &mut withdrawals)?;
+                let body = &data[body_start..offset];
+                apply_tx_scan(tx, index, invalid, body, resolver, &mut total_fees, &mut withdrawals)?;
                 index += 1;
             }
         }
@@ -1168,8 +1193,10 @@ fn scan_block_tx_effects(
             while !cbor::is_break(data, offset)
                 .map_err(|_| LedgerTransitionError::MalformedBlock)?
             {
+                let body_start = offset;
                 let tx = scan_one_tx(data, &mut offset)?;
-                apply_tx_scan(tx, index, invalid, &mut total_fees, &mut withdrawals)?;
+                let body = &data[body_start..offset];
+                apply_tx_scan(tx, index, invalid, body, resolver, &mut total_fees, &mut withdrawals)?;
                 index += 1;
             }
         }
@@ -1224,19 +1251,40 @@ fn apply_tx_scan(
     tx: TxScan,
     index: u64,
     invalid: &std::collections::BTreeSet<u64>,
+    body_bytes: &[u8],
+    resolver: Option<&dyn crate::collateral::CollateralValueResolver>,
     total_fees: &mut u64,
     withdrawals: &mut Vec<StakeCredential>,
 ) -> Result<(), LedgerTransitionError> {
     if invalid.contains(&index) {
-        // Phase-2-invalid: only the consumed collateral is a fee; every body effect is discarded.
-        if tx.has_certs || !tx.withdrawals.is_empty() {
-            return Err(LedgerTransitionError::InvalidTxCarriesAuthorityEffect { tx_index: index });
-        }
-        let collateral = tx
-            .total_collateral
-            .ok_or(LedgerTransitionError::InvalidTxCollateralNeedsUtxo { tx_index: index })?;
+        // BND-2c (INV-BND-2c): the EXACT Cardano `Phase2Invalid` contribution. Every ordinary body
+        // effect is DISCARDED -- certs, withdrawals, votes, proposals contribute nothing, and that is
+        // achieved by not applying them, not by refusing the block. The single effect is the consumed
+        // collateral: `collAdaBalance` over the RESOLVED collateral inputs, minus the collateral
+        // return read from the block. `total_collateral` (field 17) is never consulted: it is a
+        // ledger VALIDITY assertion the UTXO rule already enforced upstream, and the accumulator
+        // reproduces the transition of an already-valid block rather than re-adjudicating one.
+        let Some(resolver) = resolver else {
+            // No UTxO authority to ask ⇒ the consumed amount is genuinely unknowable. Refusing here
+            // is correct and is the ONLY surviving fail-closed on this path.
+            return Err(LedgerTransitionError::InvalidTxCollateralNeedsUtxo { tx_index: index });
+        };
+        let decoded = ade_codec::conway::tx::decode_conway_tx_body(body_bytes, &mut 0usize)
+            .map_err(|_| LedgerTransitionError::MalformedBlock)?;
+        let collateral_inputs: Vec<ade_types::tx::TxIn> = decoded
+            .collateral_inputs
+            .map(|c| c.into_iter().collect())
+            .unwrap_or_default();
+        let collateral_return_coin = decoded.collateral_return.map(|o| o.coin);
+        let balance = crate::collateral::collateral_balance(
+            index,
+            &collateral_inputs,
+            collateral_return_coin,
+            resolver,
+        )
+        .map_err(LedgerTransitionError::CollateralBalance)?;
         *total_fees = total_fees
-            .checked_add(collateral)
+            .checked_add(balance.0)
             .ok_or(LedgerTransitionError::ArithmeticOverflow)?;
     } else {
         // Valid: the declared fee (cardano requires key 2; absent ⇒ 0) + the withdrawals.
@@ -1531,9 +1579,8 @@ fn apply_one_tx_governance(
     // Phase-2-invalid txs discard ALL body effects; rather than selectively skip a discarded proposal/vote
     // (gated to the byte-exact boundary work), fail closed — parity with the fee scan's cert/withdrawal guard.
     if invalid.contains(&tx_index) {
-        if field19.is_some() || field20.is_some() {
-            return Err(LedgerTransitionError::InvalidTxCarriesAuthorityEffect { tx_index });
-        }
+        // BND-2c: Cardano DISCARDS a phase-2-invalid tx's body effects, governance included. Nothing
+        // is applied and nothing is refused -- discarding needs no resolver and no valuation.
         return Ok(());
     }
 
@@ -3369,7 +3416,7 @@ mod tests {
             decode_invalid_tx_indices_canonical(block.invalid_txs.as_deref(), block.tx_count)
                 .expect("canonical invalid set");
         let (one_scan_fees, _w) =
-            scan_block_tx_effects(block.tx_count, &block.tx_bodies, &invalid).expect("scan");
+            scan_block_tx_effects(block.tx_count, &block.tx_bodies, &invalid, None).expect("scan");
 
         let acc0 = fresh_conway_acc();
         let ctx = SelectedBlockCtx {
@@ -3461,7 +3508,7 @@ mod tests {
             decode_invalid_tx_indices_canonical(block.invalid_txs.as_deref(), block.tx_count)
                 .expect("real block invalid_transactions is canonical");
         let (_fees, _withdrawals) =
-            scan_block_tx_effects(block.tx_count, &block.tx_bodies, &invalid).expect("scan");
+            scan_block_tx_effects(block.tx_count, &block.tx_bodies, &invalid, None).expect("scan");
     }
 
     // ----- Phase-2 validity gate: invalid-tx fee = collateral; body effects fail-closed (PO-1) -----
@@ -3512,19 +3559,103 @@ mod tests {
         indices.iter().copied().collect()
     }
 
+    /// A WELL-FORMED Conway tx body carrying collateral: `{0: [in], 1: [], 2: fee, 13: [coll], (17)}`.
+    /// BND-2c decodes the invalid-tx body through the canonical Conway decoder, so these fixtures are
+    /// real bodies rather than the two-key stubs the pre-BND-2c fee scan could accept.
+    /// `extra_field_17` is present ONLY to prove it is IGNORED.
+    fn tx_body_with_collateral(fee: u64, n_collateral: usize, extra_field_17: Option<u64>) -> Vec<u8> {
+        fn txin(tag: u8, ix: u64) -> Vec<u8> {
+            let mut v = vec![0x82, 0x58, 0x20];
+            v.extend([tag; 32]);
+            v.extend(cbor_uint(ix));
+            v
+        }
+        let n_pairs = 4 + usize::from(extra_field_17.is_some());
+        let mut b = vec![0xA0 | n_pairs as u8];
+        b.extend(cbor_uint(0));
+        b.extend(vec![0x81]);
+        b.extend(txin(0xAA, 0));
+        b.extend(cbor_uint(1));
+        b.extend(vec![0x80]); // no ordinary outputs
+        b.extend(cbor_uint(2));
+        b.extend(cbor_uint(fee));
+        b.extend(cbor_uint(13));
+        b.push(0x80 | n_collateral as u8);
+        for i in 0..n_collateral {
+            b.extend(txin(0xC0 + i as u8, i as u64));
+        }
+        if let Some(tc) = extra_field_17 {
+            b.extend(cbor_uint(17));
+            b.extend(cbor_uint(tc));
+        }
+        b
+    }
+
+    /// A resolver that answers a fixed value for every input — models the UTxO authority holding the
+    /// collateral entries. BND-2c: the accumulator asks; it never looks up.
+    struct FixedResolver(u64);
+    impl crate::collateral::CollateralValueResolver for FixedResolver {
+        fn collateral_value(&self, _txin: &ade_types::tx::TxIn) -> Option<ade_types::tx::Coin> {
+            Some(ade_types::tx::Coin(self.0))
+        }
+    }
+
+    /// CE-2c-4 — a phase-2-invalid tx credits its RESOLVED collateral, never its declared fee.
+    ///
+    /// This replaces an assertion that read the declared `total_collateral` (field 17). Per
+    /// `Cardano.Ledger.Babbage.Collateral` field 17 is a declared assertion the UTXO rule checks, never
+    /// the value source; the value is `collAdaBalance` over the RESOLVED collateral inputs.
     #[test]
-    fn invalid_tx_fee_is_collateral_not_declared_fee() {
-        let bodies = tx_bodies_one(tx_body_fee_collateral(50, 200));
-        // VALID (empty invalid set): the declared fee (50) is credited.
+    fn invalid_tx_fee_is_resolved_collateral_not_declared_fee() {
+        let bodies = tx_bodies_one(tx_body_with_collateral(50, 1, Some(200)));
+        // VALID (empty invalid set): the declared fee (50) is credited, unchanged by this slice.
         let (fees_valid, _) =
-            scan_block_tx_effects(1, &bodies, &invalid_set(&[])).expect("valid scan");
+            scan_block_tx_effects(1, &bodies, &invalid_set(&[]), None).expect("valid scan");
         assert_eq!(fees_valid, 50, "a valid tx credits its declared fee");
-        // INVALID (index 0): the consumed collateral (200), NOT the declared fee, is credited.
+        // INVALID: the RESOLVED collateral is credited. 777 is deliberately not 200 (the declared
+        // field-17 value in this body), so a regression to reading field 17 fails here.
+        let r = FixedResolver(777);
         let (fees_invalid, _) =
-            scan_block_tx_effects(1, &bodies, &invalid_set(&[0])).expect("invalid scan");
+            scan_block_tx_effects(1, &bodies, &invalid_set(&[0]), Some(&r)).expect("invalid scan");
         assert_eq!(
-            fees_invalid, 200,
-            "a phase-2-invalid tx credits its collateral, not its declared fee"
+            fees_invalid, 777,
+            "a phase-2-invalid tx credits its RESOLVED collateral, not the declared fee or field 17"
+        );
+    }
+
+    /// CE-2c-3 — an invalid tx's certificates are DISCARDED, not refused. The transition succeeds and
+    /// contributes only the resolved collateral.
+    #[test]
+    fn an_invalid_txs_certs_are_discarded_not_refused() {
+        let mut body = tx_body_with_collateral(50, 1, None);
+        body[0] += 1; // one more pair: the certs field below
+        body.extend(cbor_uint(4));
+        body.extend(vec![0x80]); // empty certs array -- present, and discarded
+        let bodies = tx_bodies_one(body);
+        let r = FixedResolver(123);
+        let (fees, withdrawals) =
+            scan_block_tx_effects(1, &bodies, &invalid_set(&[0]), Some(&r)).expect("discards certs");
+        assert_eq!(fees, 123, "only the resolved collateral is credited");
+        assert!(withdrawals.is_empty(), "a discarded tx contributes no withdrawals");
+        // The SAME block with the tx VALID still credits the declared fee.
+        let (fees_valid, _) =
+            scan_block_tx_effects(1, &bodies, &invalid_set(&[]), None).expect("valid scan");
+        assert_eq!(fees_valid, 50);
+    }
+
+    /// CE-2c-7 — with NO resolver the consumed amount is genuinely unknowable, so the transition still
+    /// refuses. This is the one surviving fail-closed on the path, and it is about the MISSING
+    /// VALUATION, never about the tx "carrying effects".
+    #[test]
+    fn an_invalid_tx_without_a_resolver_still_refuses() {
+        let bodies = tx_bodies_one(tx_body_with_collateral(50, 1, None));
+        let err = scan_block_tx_effects(1, &bodies, &invalid_set(&[0]), None).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                LedgerTransitionError::InvalidTxCollateralNeedsUtxo { tx_index: 0 }
+            ),
+            "expected the missing-valuation refusal, got {err:?}"
         );
     }
 
@@ -3533,7 +3664,7 @@ mod tests {
         // An invalid tx with no key-17 total_collateral: the consumed collateral needs the UTxO, which the
         // accumulator does not have → fail-closed rather than credit a knowingly-wrong fee.
         let bodies = tx_bodies_one(tx_body_fee(50));
-        let err = scan_block_tx_effects(1, &bodies, &invalid_set(&[0])).unwrap_err();
+        let err = scan_block_tx_effects(1, &bodies, &invalid_set(&[0]), None).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -3543,24 +3674,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn invalid_tx_carrying_certs_is_fail_closed() {
-        // cardano discards an invalid tx's certs; the within-epoch cert path does not yet skip them, so
-        // rather than silently apply a discarded cert, the transition fail-closes (the skip is S3's gate).
-        let bodies = tx_bodies_one(tx_body_fee_certs(50));
-        let err = scan_block_tx_effects(1, &bodies, &invalid_set(&[0])).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                LedgerTransitionError::InvalidTxCarriesAuthorityEffect { tx_index: 0 }
-            ),
-            "expected InvalidTxCarriesAuthorityEffect, got {err:?}"
-        );
-        // The SAME block with the tx VALID is fine: the certs are process_block_certificates' job, and the
-        // scan credits the declared fee.
-        let (fees, _) = scan_block_tx_effects(1, &bodies, &invalid_set(&[])).expect("valid scan");
-        assert_eq!(fees, 50);
-    }
 
     #[test]
     fn valid_tx_fee_is_declared_fee_regression() {
@@ -3569,7 +3682,7 @@ mod tests {
         bodies.extend(tx_body_fee(100));
         bodies.extend(tx_body_fee(25));
         let (fees, withdrawals) =
-            scan_block_tx_effects(2, &bodies, &invalid_set(&[])).expect("scan");
+            scan_block_tx_effects(2, &bodies, &invalid_set(&[]), None).expect("scan");
         assert_eq!(fees, 125);
         assert!(withdrawals.is_empty());
     }
@@ -3946,30 +4059,36 @@ mod tests {
         assert_eq!(run(), run(), "vote capture is replay-deterministic (byte-identical gov state)");
     }
 
+    /// CE-2c-3 — a phase-2-invalid tx's PROPOSAL is DISCARDED, not refused. cardano-ledger's
+    /// `Phase2Invalid` applies no body effects at all, so the proposal must simply not be captured.
+    /// Asserting the gov state is UNCHANGED (not merely that the call succeeded) is what makes this a
+    /// discard rather than a silent partial application.
     #[test]
-    fn s3_invalid_tx_carrying_proposal_is_fail_closed() {
+    fn s3_invalid_tx_proposal_is_discarded_leaving_gov_state_unchanged() {
         let p = s3_proposal(1, 0xe0);
         let body = s3_body(&[(20, s3_field20(std::slice::from_ref(&p)))]);
         let bodies = s3_tx_bodies(std::slice::from_ref(&body));
-        let err = apply_block_governance(s3_empty_gov(6), &bodies, 1, &invalid_set(&[0]), EpochNo(500))
-            .unwrap_err();
-        assert!(
-            matches!(err, LedgerTransitionError::InvalidTxCarriesAuthorityEffect { tx_index: 0 }),
-            "a phase-2-invalid tx's proposal must fail closed, got {err:?}"
-        );
+        let before = s3_empty_gov(6);
+        let after = apply_block_governance(before.clone(), &bodies, 1, &invalid_set(&[0]), EpochNo(500))
+            .expect("a discarded proposal is not an error");
+        assert_eq!(after, before, "a discarded tx must leave governance state untouched");
+        assert!(after.proposals.is_empty(), "the proposal must NOT be captured");
+        // The SAME block with the tx VALID does capture it -- so the test is not vacuous.
+        let captured = apply_block_governance(s3_empty_gov(6), &bodies, 1, &invalid_set(&[]), EpochNo(500))
+            .expect("valid capture");
+        assert_eq!(captured.proposals.len(), 1, "control: a valid tx's proposal IS captured");
     }
 
+    /// CE-2c-3 — same for a VOTE.
     #[test]
-    fn s3_invalid_tx_carrying_vote_is_fail_closed() {
+    fn s3_invalid_tx_vote_is_discarded_leaving_gov_state_unchanged() {
         let qid = GovActionId { tx_hash: Hash32([0xCD; 32]), index: 0 };
         let body = s3_body(&[(19, s3_field19(std::slice::from_ref(&qid)))]);
         let bodies = s3_tx_bodies(std::slice::from_ref(&body));
-        let err = apply_block_governance(s3_empty_gov(6), &bodies, 1, &invalid_set(&[0]), EpochNo(500))
-            .unwrap_err();
-        assert!(
-            matches!(err, LedgerTransitionError::InvalidTxCarriesAuthorityEffect { tx_index: 0 }),
-            "got {err:?}"
-        );
+        let before = s3_empty_gov(6);
+        let after = apply_block_governance(before.clone(), &bodies, 1, &invalid_set(&[0]), EpochNo(500))
+            .expect("a discarded vote is not an error");
+        assert_eq!(after, before, "a discarded tx must leave governance state untouched");
     }
 
     #[test]

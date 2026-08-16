@@ -3132,6 +3132,9 @@ fn advance_ledger_state_to_durable_tip_memo(
                     era_schedule,
                     seed_slot,
                     tip.slot,
+                    // BND-2c: the reduced checkpoint IS the UTxO authority -- it already answers
+                    // TxIn -> Coin. The accumulator receives only the resolved scalar.
+                    reduced_checkpoint.map(|cp| cp as &dyn ade_ledger::collateral::CollateralValueResolver),
                 );
                 census_ms_walk += t_walk.elapsed().as_millis();
                 match walk_outcome {
@@ -3355,6 +3358,8 @@ fn advance_ledger_state_to_durable_tip_memo(
                             s_prev,
                             &boundary_hash,
                             &source_commitment,
+                            reduced_checkpoint
+                                .map(|cp| cp as &dyn ade_ledger::collateral::CollateralValueResolver),
                         ) {
                             Ok(AccumulatorBoundaryOutcome::Crossed {
                                 from_epoch,
@@ -7853,6 +7858,7 @@ mod tests {
                 &schedule_86k(),
                 SlotNo(42_000_000),
                 SlotNo(43_500_000),
+                None,
             )
             .unwrap();
 
@@ -7959,6 +7965,7 @@ mod tests {
                 &schedule_86k(),
                 SlotNo(42_000_000),
                 SlotNo(43_500_000),
+                None,
             )
             .unwrap();
             let bn = s

@@ -76,7 +76,15 @@
 /// refused up front with the typed re-bootstrap terminal. Measured on preprod block 130,350,133,
 /// whose single tx is phase-2 invalid: v3 spends `b9fede11…#1/#3` and creates 4 outputs that Cardano
 /// never creates, while leaving the collateral input `0326ab20…#1` unspent.
-pub const STORE_SEMANTICS_VERSION: u32 = 4;
+/// Version 5 (BND-2c): the accumulator now APPLIES Cardano's `Phase2Invalid` transition instead of
+/// refusing it. A phase-2-invalid transaction's ordinary body effects (certs, withdrawals, votes,
+/// proposals) are DISCARDED rather than fail-closed, and its consumed collateral -- `collAdaBalance`
+/// over the RESOLVED collateral inputs -- is added to the fee pot. Replaying the same canonical
+/// blocks therefore advances the accumulator cursor THROUGH a block that previously pinned it and
+/// credits a fee that previously did not exist, so an accumulator persisted by a v4 binary is not
+/// replay-equivalent under this one. Measured on preprod 130,350,133, which pinned every v3/v4 store
+/// at cursor 130,350,114.
+pub const STORE_SEMANTICS_VERSION: u32 = 5;
 
 /// A durable artifact that carries authoritative semantics and therefore must be version-marked.
 ///

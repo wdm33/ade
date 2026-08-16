@@ -125,6 +125,7 @@ pub fn advance_accumulator_over_block(
     store: &EpochAccumulatorStore,
     block_bytes: &[u8],
     ctx: &WithinEpochCtx,
+    resolver: Option<&dyn ade_ledger::collateral::CollateralValueResolver>,
 ) -> Result<AdvanceOutcome, AdvanceError> {
     let (last_slot, acc) = store
         .load_current()
@@ -170,7 +171,12 @@ pub fn advance_accumulator_over_block(
         active_slots_per_epoch: 0,
     };
 
-    match apply_selected_block(&acc, block_bytes, &selected_ctx) {
+    match ade_ledger::epoch_accumulator::apply_selected_block_with_resolver(
+        &acc,
+        block_bytes,
+        &selected_ctx,
+        resolver,
+    ) {
         Ok(next) => {
             store
                 .advance(&next, ctx.block_slot, ctx.block_no, ctx.header_hash.clone())
@@ -255,6 +261,7 @@ pub fn advance_accumulator_over_chaindb(
     era_schedule: &EraSchedule,
     bootstrap_slot: SlotNo,
     to_slot: SlotNo,
+    resolver: Option<&dyn ade_ledger::collateral::CollateralValueResolver>,
 ) -> Result<AccumulatorChaindbOutcome, AccumulatorChaindbError> {
     let from = store
         .last_advanced_slot()
@@ -283,7 +290,7 @@ pub fn advance_accumulator_over_chaindb(
             block_no: decoded.header_input.block_no,
             header_hash: stored.hash.clone(),
         };
-        match advance_accumulator_over_block(store, &stored.bytes, &ctx)
+        match advance_accumulator_over_block(store, &stored.bytes, &ctx, resolver)
             .map_err(AccumulatorChaindbError::Advance)?
         {
             AdvanceOutcome::Advanced { .. } | AdvanceOutcome::AlreadyApplied { .. } => {}
@@ -357,6 +364,7 @@ pub fn cross_accumulator_over_boundary_block(
     mark_source_slot: SlotNo,
     mark_source_hash: &Hash32,
     source_checkpoint_commitment: &Hash32,
+    resolver: Option<&dyn ade_ledger::collateral::CollateralValueResolver>,
 ) -> Result<AccumulatorBoundaryOutcome, AccumulatorChaindbError> {
     let (last_slot, acc) = store
         .load_current()
@@ -418,6 +426,7 @@ pub fn cross_accumulator_over_boundary_block(
         mark_source_slot,
         mark_source_hash,
         source_checkpoint_commitment,
+        resolver,
     ) {
         Ok((next, effects)) => {
             // S4-pre-2: the boundary's leadership freeze is AUTHORITATIVE, not optional evidence — every
@@ -552,7 +561,7 @@ mod tests {
             block_no: BlockNo(1),
             header_hash: Hash32([0x77; 32]),
         };
-        let outcome = advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx).unwrap();
+        let outcome = advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx, None).unwrap();
         assert_eq!(
             outcome,
             AdvanceOutcome::Advanced {
@@ -579,7 +588,7 @@ mod tests {
             block_no: BlockNo(1),
             header_hash: Hash32([0x77; 32]),
         };
-        let outcome = advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx).unwrap();
+        let outcome = advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx, None).unwrap();
         match outcome {
             // BND-1 (CE-BND1-2): a genuine crossing is now named by BOTH epochs, decided before the
             // apply — a strictly stronger assertion than matching an error string, and one that no
@@ -623,7 +632,7 @@ mod tests {
             block_no: BlockNo(1),
             header_hash: Hash32([0x77; 32]),
         };
-        let outcome = advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx).unwrap();
+        let outcome = advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx, None).unwrap();
         match outcome {
             AdvanceOutcome::ApplyFailed { slot, error } => {
                 assert_eq!(slot, SlotNo(43_000_000));
@@ -658,7 +667,7 @@ mod tests {
             block_no: BlockNo(1),
             header_hash: Hash32([0x77; 32]),
         };
-        match advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx).unwrap() {
+        match advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx, None).unwrap() {
             AdvanceOutcome::BoundaryMarkRequired {
                 from_epoch,
                 to_epoch,
@@ -684,7 +693,7 @@ mod tests {
             block_no: BlockNo(1),
             header_hash: Hash32([0x77; 32]),
         };
-        let outcome = advance_accumulator_over_block(&s, b"not even a block", &ctx).unwrap();
+        let outcome = advance_accumulator_over_block(&s, b"not even a block", &ctx, None).unwrap();
         assert_eq!(
             outcome,
             AdvanceOutcome::AlreadyApplied {
@@ -706,7 +715,7 @@ mod tests {
             block_no: BlockNo(1),
             header_hash: Hash32([0x77; 32]),
         };
-        let err = advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx).unwrap_err();
+        let err = advance_accumulator_over_block(&s, RAW_CONWAY_BLOCK, &ctx, None).unwrap_err();
         assert!(matches!(err, AdvanceError::Unsealed));
     }
 
@@ -759,6 +768,7 @@ mod tests {
             &schedule_86k(),
             SlotNo(42_000_000),
             SlotNo(43_500_000),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -793,14 +803,14 @@ mod tests {
         // PATH A — the pre-slice behaviour: one straight fold from the bootstrap baseline.
         let tmp_a = TempDir::new().unwrap();
         let sa = sealed_store_at_epoch_500(&tmp_a, seed);
-        advance_accumulator_over_chaindb(&sa, &db, &sched, seed, tip).unwrap();
+        advance_accumulator_over_chaindb(&sa, &db, &sched, seed, tip, None).unwrap();
         let expected = sa.load_current().unwrap().expect("path A sealed");
 
         // PATH B — fold partway, promote that point as SETTLED, fold on to the tip, then rewind to
         // the settled point and refold the remainder.
         let tmp_b = TempDir::new().unwrap();
         let sb = sealed_store_at_epoch_500(&tmp_b, seed);
-        advance_accumulator_over_chaindb(&sb, &db, &sched, seed, SlotNo(43_010_000)).unwrap();
+        advance_accumulator_over_chaindb(&sb, &db, &sched, seed, SlotNo(43_010_000), None).unwrap();
         // The synthetic fixture reuses ONE raw block, so every stored block decodes to the SAME
         // block_no — there is no height separation to earn a promotion with. The tip height is
         // supplied by the caller (as the live path does, from the ChainDb), so take it from the
@@ -816,7 +826,7 @@ mod tests {
         let settled = sb.settled_rewind_point().unwrap().expect("promoted");
         assert_eq!(settled.slot, SlotNo(43_010_000));
 
-        advance_accumulator_over_chaindb(&sb, &db, &sched, seed, tip).unwrap();
+        advance_accumulator_over_chaindb(&sb, &db, &sched, seed, tip, None).unwrap();
         assert_eq!(
             sb.load_current().unwrap().expect("path B pre-rewind"),
             expected,
@@ -827,7 +837,7 @@ mod tests {
         assert!(sb.reset_to_settled().unwrap());
         assert_eq!(sb.last_advanced_slot().unwrap(), Some(SlotNo(43_010_000)));
         // ...and the refold from there reproduces the SAME state, byte for byte.
-        advance_accumulator_over_chaindb(&sb, &db, &sched, seed, tip).unwrap();
+        advance_accumulator_over_chaindb(&sb, &db, &sched, seed, tip, None).unwrap();
         let refolded = sb.load_current().unwrap().expect("path B refolded");
         assert_eq!(
             refolded, expected,
@@ -845,7 +855,7 @@ mod tests {
         let db = InMemoryChainDb::new();
         put_raw(&db, 43_000_000);
         let sched = schedule_86k();
-        advance_accumulator_over_chaindb(&s, &db, &sched, SlotNo(42_000_000), SlotNo(43_500_000))
+        advance_accumulator_over_chaindb(&s, &db, &sched, SlotNo(42_000_000), SlotNo(43_500_000), None)
             .unwrap();
         let outcome = advance_accumulator_over_chaindb(
             &s,
@@ -853,6 +863,7 @@ mod tests {
             &sched,
             SlotNo(42_000_000),
             SlotNo(43_500_000),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -879,6 +890,7 @@ mod tests {
             &schedule_86k(),
             SlotNo(42_000_000),
             SlotNo(43_200_000),
+            None,
         )
         .unwrap();
         match outcome {
@@ -906,7 +918,7 @@ mod tests {
         let db = InMemoryChainDb::new();
         put_raw(&db, 43_000_000);
         let sched = schedule_86k();
-        advance_accumulator_over_chaindb(&s, &db, &sched, SlotNo(42_000_000), SlotNo(43_500_000))
+        advance_accumulator_over_chaindb(&s, &db, &sched, SlotNo(42_000_000), SlotNo(43_500_000), None)
             .unwrap();
         assert_eq!(s.last_advanced_slot().unwrap(), Some(SlotNo(43_000_000)));
         // Rematerialize to the sealed seed, then replay the canonical chain forward.
@@ -922,6 +934,7 @@ mod tests {
             &sched,
             SlotNo(42_000_000),
             SlotNo(43_500_000),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -966,6 +979,7 @@ mod tests {
             SlotNo(42_000_000),
             &s_prev_hash,
             &Hash32([0x0C; 32]),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1001,6 +1015,7 @@ mod tests {
             SlotNo(43_086_000),
             &Hash32([0x07; 32]),
             &Hash32([0x0C; 32]),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1034,6 +1049,7 @@ mod tests {
             SlotNo(43_086_000),
             &Hash32([0x07; 32]),
             &Hash32([0x0C; 32]),
+            None,
         )
         .unwrap_err();
         assert!(

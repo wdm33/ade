@@ -67,7 +67,8 @@ grep -q "ctx.block_epoch.0 > acc_epoch.0" "$ADV" \
   || fail "the boundary predicate is not the strict epoch comparison (block_epoch > acc epoch)"
 # It must precede the apply call, or it is not a pre-apply decision.
 PRED_LINE=$(grep -n "ctx.block_epoch.0 > acc_epoch.0" "$ADV" | head -1 | cut -d: -f1)
-APPLY_LINE=$(grep -n "match apply_selected_block(&acc, block_bytes, &selected_ctx)" "$ADV" | head -1 | cut -d: -f1)
+# BND-2c renamed the call to the resolver-aware entry; anchor on the apply itself, not its arity.
+APPLY_LINE=$(grep -nE "apply_selected_block(_with_resolver)?\(" "$ADV" | head -1 | cut -d: -f1)
 if [ -n "${PRED_LINE:-}" ] && [ -n "${APPLY_LINE:-}" ]; then
   [ "$PRED_LINE" -lt "$APPLY_LINE" ] \
     || fail "the boundary predicate ($PRED_LINE) does not precede the apply ($APPLY_LINE)"
