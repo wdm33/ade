@@ -155,9 +155,12 @@ mod tests {
     fn the_collateral_return_is_subtracted_exactly_once() {
         let ins = vec![txin(1, 0), txin(2, 1)];
         let r = MapResolver(
-            [(ins[0].clone(), Coin(5_000_000)), (ins[1].clone(), Coin(1_000_000))]
-                .into_iter()
-                .collect(),
+            [
+                (ins[0].clone(), Coin(5_000_000)),
+                (ins[1].clone(), Coin(1_000_000)),
+            ]
+            .into_iter()
+            .collect(),
         );
         assert_eq!(
             collateral_balance(0, &ins, Some(Coin(4_000_000)), &r).expect("balance"),
