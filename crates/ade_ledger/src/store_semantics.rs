@@ -84,7 +84,17 @@
 /// credits a fee that previously did not exist, so an accumulator persisted by a v4 binary is not
 /// replay-equivalent under this one. Measured on preprod 130,350,133, which pinned every v3/v4 store
 /// at cursor 130,350,114.
-pub const STORE_SEMANTICS_VERSION: u32 = 5;
+/// Version 6 (BND-2d): the reduced UTxO authority now RETAINS the `TxIn -> Coin` binding of every
+/// collateral input it destroys under `Phase2Invalid`, written in the same transaction as its cursor.
+/// A collateral value is authoritative only in `[create(x), B)` where `B` is the block that spends
+/// it, and the co-advancer drives the checkpoint to the durable tip at the end of every pass — so at
+/// accumulator-walk time the authority is routinely PAST `B` and the entry is legitimately gone. A v5
+/// checkpoint holds no retention for any block it already applied, so under this binary the
+/// accumulator would refuse at every past phase-2-invalid block: replaying the same canonical blocks
+/// does not reproduce the same accumulator state, and a v5 store is refused up front with the typed
+/// re-bootstrap terminal. Measured on preprod 130,350,133 (live 2026-08-16): the checkpoint sat at
+/// ~130,550,441 while the accumulator was at 130,350,114 and `0326ab20…#1` had already been spent.
+pub const STORE_SEMANTICS_VERSION: u32 = 6;
 
 /// A durable artifact that carries authoritative semantics and therefore must be version-marked.
 ///

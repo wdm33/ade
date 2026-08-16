@@ -39,6 +39,16 @@ use crate::rules::extract_tx_utxo_effect;
 pub struct ReducedBlockDelta {
     pub spent: Vec<TxIn>,
     pub produced: Vec<(TxIn, Coin, ReducedStakeRef)>,
+    /// BND-2d (INV-BND-2d): the collateral inputs a phase-2-invalid tx consumes in THIS block, in
+    /// canonical order — the bindings the checkpoint is about to destroy on the accumulator's
+    /// behalf.
+    ///
+    /// `Some(coin)` means an EARLIER tx in this same block created the output, so the block itself
+    /// is the authority for its value: the net delta CANCELS an intra-block chained spend, so such
+    /// a binding never reaches the checkpoint's table and only this walk can see it. `None` means
+    /// the binding predates this block and the checkpoint must read it from its own table before
+    /// removing it.
+    pub collateral_consumed: Vec<(TxIn, Option<Coin>)>,
 }
 
 /// Compute a block's reduced UTxO delta, mirroring `track_utxo` exactly (same
@@ -55,6 +65,7 @@ pub fn reduced_block_delta(
     // the prior checkpoint). The emitted delta is then the NET block effect.
     let mut produced: BTreeMap<TxIn, (Coin, ReducedStakeRef)> = BTreeMap::new();
     let mut spent: Vec<TxIn> = Vec::new();
+    let mut collateral_consumed: Vec<(TxIn, Option<Coin>)> = Vec::new();
     if block.tx_count == 0 {
         return Ok(ReducedBlockDelta::default());
     }
@@ -67,13 +78,31 @@ pub fn reduced_block_delta(
     match cbor::read_array_header(data, &mut offset)? {
         cbor::ContainerEncoding::Definite(n, _) => {
             for _ in 0..n {
-                process_one_tx(data, &mut offset, era, &invalid, tx_index, &mut spent, &mut produced)?;
+                process_one_tx(
+                    data,
+                    &mut offset,
+                    era,
+                    &invalid,
+                    tx_index,
+                    &mut spent,
+                    &mut produced,
+                    &mut collateral_consumed,
+                )?;
                 tx_index += 1;
             }
         }
         cbor::ContainerEncoding::Indefinite => {
             while !cbor::is_break(data, offset)? {
-                process_one_tx(data, &mut offset, era, &invalid, tx_index, &mut spent, &mut produced)?;
+                process_one_tx(
+                    data,
+                    &mut offset,
+                    era,
+                    &invalid,
+                    tx_index,
+                    &mut spent,
+                    &mut produced,
+                    &mut collateral_consumed,
+                )?;
                 tx_index += 1;
             }
         }
@@ -84,6 +113,7 @@ pub fn reduced_block_delta(
             .into_iter()
             .map(|(txin, (coin, reduced))| (txin, coin, reduced))
             .collect(),
+        collateral_consumed,
     })
 }
 
@@ -96,11 +126,20 @@ fn process_one_tx(
     tx_index: u64,
     spent: &mut Vec<TxIn>,
     produced: &mut BTreeMap<TxIn, (Coin, ReducedStakeRef)>,
+    collateral_consumed: &mut Vec<(TxIn, Option<Coin>)>,
 ) -> Result<(), LedgerError> {
     let body_start = *offset;
     let effect = extract_tx_utxo_effect(data, offset, era, invalid.contains(&tx_index))?;
     let body_end = *offset;
     let wire_bytes = &data[body_start..body_end];
+
+    // BND-2d: the SINGLE derivation names which spends were collateral (empty for a phase-2-valid
+    // tx), so this stays VALIDITY-BLIND -- it never re-decides the rule, it only values what it was
+    // handed. Recorded BEFORE the cancel loop below, which is the only thing that can erase the
+    // evidence of an intra-block-created binding.
+    for input in &effect.collateral_consumed {
+        collateral_consumed.push((input.clone(), produced.get(input).map(|(coin, _)| *coin)));
+    }
 
     // Inputs are processed BEFORE this tx's outputs are added (mirrors track_utxo's
     // remove-then-insert per tx), so a tx can only cancel outputs from EARLIER txs.
@@ -249,6 +288,77 @@ mod tests {
             "an intra-block-produced input is not a prior-checkpoint spend"
         );
         assert_eq!(got, expected, "reduced_block_delta == reduce(track_utxo) with chaining");
+    }
+
+    // BND-2d (CE-2d-6) -- the intra-block case, which ONLY this walk can see. A phase-2-invalid tx
+    // whose collateral input was created by an EARLIER tx in the same block: the net delta cancels
+    // the phantom, so that binding never reaches the checkpoint's table and a storage-side lookup
+    // would find nothing. BLUE therefore resolves it here, from the threaded produced map, and
+    // hands the value across. (Built on the same real fixture the chained-spend regression uses.)
+    #[test]
+    fn an_intra_block_created_collateral_binding_is_valued_by_the_block_itself() {
+        let block = decode_fixture_block();
+        let era = CardanoEra::Conway;
+
+        // tx1 is the real fixture's first transaction; capture its exact body bytes + hash.
+        let data = &block.tx_bodies;
+        let mut off = 0usize;
+        let _ = cbor::read_array_header(data, &mut off).unwrap();
+        let tx1_start = off;
+        let _ = crate::rules::extract_inputs_outputs_from_tx(data, &mut off, era).unwrap();
+        let tx1_bytes = data[tx1_start..off].to_vec();
+        let tx1_hash = ade_crypto::blake2b::blake2b_256(&tx1_bytes);
+        let chained = TxIn { tx_hash: tx1_hash.clone(), index: 0 };
+
+        // The value tx1 bound to that key, taken from the UNMODIFIED block -- the expectation is
+        // derived from the ledger's own delta, not restated by hand.
+        let base_delta = reduced_block_delta(&block, era).unwrap();
+        let expected = base_delta
+            .produced
+            .iter()
+            .find(|(t, _, _)| *t == chained)
+            .map(|(_, c, _)| *c)
+            .expect("tx1 produces an output at index 0");
+
+        // tx2: phase-2 invalid, body map{0:[in], 1:[], 2:0, 13:[(tx1_hash,0)]} -- its COLLATERAL
+        // input is the output tx1 just created.
+        let mut tx2 = vec![0xa4u8];
+        tx2.extend_from_slice(&[0x00, 0x81, 0x82, 0x58, 0x20]);
+        tx2.extend_from_slice(&[0xEE; 32]);
+        tx2.extend_from_slice(&[0x00]); // (0xEE..#0) as the ordinary input
+        tx2.extend_from_slice(&[0x01, 0x80]); // no ordinary outputs
+        tx2.extend_from_slice(&[0x02, 0x00]); // fee 0
+        tx2.extend_from_slice(&[0x0d, 0x81, 0x82, 0x58, 0x20]);
+        tx2.extend_from_slice(&tx1_hash.0);
+        tx2.extend_from_slice(&[0x00]); // collateral (tx1_hash, 0)
+
+        let mut tx_bodies = vec![0x82u8];
+        tx_bodies.extend_from_slice(&tx1_bytes);
+        tx_bodies.extend_from_slice(&tx2);
+        let mut b = block.clone();
+        b.tx_count = 2;
+        b.tx_bodies = tx_bodies;
+        b.invalid_txs = Some(vec![0x81, 0x01]); // [1] -- tx2 is phase-2 invalid
+
+        let delta = reduced_block_delta(&b, era).unwrap();
+
+        // The binding is NOT visible in either half of the delta -- the phantom was cancelled.
+        assert!(
+            !delta.spent.contains(&chained),
+            "an intra-block-created input is not a prior-checkpoint spend"
+        );
+        assert!(
+            !delta.produced.iter().any(|(t, _, _)| *t == chained),
+            "the produced-then-spent output must be cancelled"
+        );
+        // ...and yet the value is carried, because only this walk ever held it.
+        assert_eq!(
+            delta.collateral_consumed,
+            vec![(chained, Some(expected))],
+            "BLUE must value an intra-block collateral binding itself"
+        );
+        // tx2's ORDINARY input is discarded (Phase2Invalid) and is never named for retention.
+        assert_eq!(delta.collateral_consumed.len(), 1);
     }
 
     // Determinism: same block -> identical delta across calls.

@@ -1244,7 +1244,7 @@ mod tests {
         let live = ReducedUtxoCheckpoint::open(&dir.path().join("live.redb")).unwrap();
         live.build_from(&std::collections::BTreeMap::new()).unwrap();
         live.seal_bootstrap(SlotNo(100)).unwrap();
-        live.advance_block(SlotNo(300), &[], &[]).unwrap(); // live is at 300
+        live.advance_block(SlotNo(300), &[], &[], &[]).unwrap(); // live is at 300
         let d = decode_block(RAW_CONWAY_BLOCK).unwrap();
         let db = InMemoryChainDb::new();
         db.put_block(&StoredBlock {
@@ -1289,7 +1289,7 @@ mod tests {
         let live = ReducedUtxoCheckpoint::open(&dir.path().join("live.redb")).unwrap();
         live.build_from(&std::collections::BTreeMap::new()).unwrap();
         live.seal_bootstrap(SlotNo(100)).unwrap();
-        live.advance_block(SlotNo(200), &[], &[]).unwrap(); // live only at 200
+        live.advance_block(SlotNo(200), &[], &[], &[]).unwrap(); // live only at 200
         let d = decode_block(RAW_CONWAY_BLOCK).unwrap();
         let db = InMemoryChainDb::new();
         db.put_block(&StoredBlock {

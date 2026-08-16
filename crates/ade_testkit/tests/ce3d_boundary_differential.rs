@@ -118,7 +118,16 @@ fn co_advance(
     let seed_slot = store.seed_slot().expect("seed").expect("sealed");
     let cp_seed = cp.seed_slot().expect("cp seed").expect("cp sealed");
     loop {
-        match advance_accumulator_over_chaindb(store, chaindb, sched, seed_slot, tip.slot) {
+        match advance_accumulator_over_chaindb(
+            store,
+            chaindb,
+            sched,
+            seed_slot,
+            tip.slot,
+            // BND-2c/BND-2d: the harness mirrors the run loop, so it supplies the SAME
+            // resolver the co-advancer does -- the reduced checkpoint IS the UTxO authority.
+            Some(cp as &dyn ade_ledger::collateral::CollateralValueResolver),
+        ) {
             Ok(AccumulatorChaindbOutcome::ReachedTip { .. }) => break,
             // BND-1 (DC-EPOCH-39): only a genuine crossing drives the boundary work below. An
             // apply failure is a distinct state and must not be routed here.
@@ -151,6 +160,7 @@ fn co_advance(
                     s_prev,
                     &boundary_hash,
                     &source_commitment,
+                    Some(cp as &dyn ade_ledger::collateral::CollateralValueResolver),
                 ) {
                     Ok(AccumulatorBoundaryOutcome::Crossed { from_epoch, to_epoch, slot }) => {
                         let _ = store.clear_boundary_mark();

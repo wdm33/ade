@@ -37,7 +37,7 @@ use std::collections::BTreeMap;
 
 use ade_core::consensus::era_schedule::EraSchedule;
 use ade_ledger::epoch_accumulator::{
-    apply_selected_block, apply_selected_block_with_effects, EpochBoundaryEffect, SelectedBlockCtx,
+    apply_selected_block_with_effects, EpochBoundaryEffect, SelectedBlockCtx,
 };
 use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::Coin;
@@ -906,6 +906,190 @@ mod tests {
         }
         // Observe-only: the store stayed at the seed (it never folded the boundary block).
         assert_eq!(s.last_advanced_slot().unwrap(), Some(SlotNo(42_000_000)));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // BND-2d (CE-2d-3) -- THE WALK-TIME TEST.
+    // ---------------------------------------------------------------------------------------
+
+    /// The real preprod block whose phase-2-invalid transaction pinned the live accumulator.
+    const BLOCK_130350133: &[u8] =
+        include_bytes!("../../../ade_ledger/tests/fixtures/block_130350133.cbor");
+    /// Its single collateral input, `0326ab20…#1`.
+    fn preprod_collateral_input() -> ade_types::tx::TxIn {
+        let mut h = [0u8; 32];
+        for (i, b) in h.iter_mut().enumerate() {
+            let hex = "0326ab20d9cf533634f9d6838ae327971ac1606ab69f4378c1fc8009091e225a";
+            *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        ade_types::tx::TxIn { tx_hash: Hash32(h), index: 1 }
+    }
+
+    /// A checkpoint seeded with the collateral entry, sealed at `seed`.
+    fn seeded_checkpoint(
+        dir: &std::path::Path,
+        name: &str,
+        value: Coin,
+        seed: SlotNo,
+    ) -> crate::chaindb::ReducedUtxoCheckpoint {
+        use ade_ledger::reduced_utxo::ReducedStakeRef;
+        let cp = crate::chaindb::ReducedUtxoCheckpoint::open(&dir.join(name)).unwrap();
+        let mut m = BTreeMap::new();
+        m.insert(
+            preprod_collateral_input(),
+            (value, ReducedStakeRef::Base(StakeCredential::KeyHash(Hash28([0x5a; 28])))),
+        );
+        cp.build_from(&m).unwrap();
+        cp.seal_bootstrap(seed).unwrap();
+        cp
+    }
+
+    /// CE-2d-3 — **the test that would have caught BND-2c's live failure in-tree.**
+    ///
+    /// Every unit resolver in the tree ANSWERS: `FixedResolver` always returns a value and
+    /// `EmptyResolver` proves the refusal path. Nothing covered *"the live authority answers AT WALK
+    /// TIME"*, which is exactly what failed on preprod 2026-08-16: the co-advancer drives the
+    /// checkpoint to the durable tip at the end of every pass, so by the time the accumulator walked
+    /// to 130,350,133 the checkpoint sat ~200k slots past it and had already spent `0326ab20…#1`.
+    ///
+    /// This drives the REAL production checkpoint advancer over the REAL block FIRST — putting the
+    /// authority in exactly that position — and only then runs the REAL accumulator walk. Both
+    /// stores, both production paths, no hand-written resolver.
+    #[test]
+    fn the_accumulator_walk_resolves_collateral_the_authority_already_spent() {
+        use crate::chaindb::{advance_reduced_checkpoint_over_chaindb, InMemoryChainDb};
+        const COLLATERAL_VALUE: Coin = Coin(4_812_345);
+        let tmp = TempDir::new().unwrap();
+        let db = InMemoryChainDb::new();
+        // The failing block, stored within epoch 500 (86_000 * 500) so the walk is within-epoch --
+        // the BND-1 classification, not a boundary.
+        crate::chaindb::ChainDb::put_block(
+            &db,
+            &crate::chaindb::types::StoredBlock {
+                hash: Hash32([0x2f; 32]),
+                slot: SlotNo(43_000_000),
+                bytes: BLOCK_130350133.to_vec(),
+            },
+        )
+        .unwrap();
+        let sched = schedule_86k();
+
+        // 1. The UTxO authority walks FIRST and runs AHEAD -- the live positioning.
+        let cp = seeded_checkpoint(tmp.path(), "cp.redb", COLLATERAL_VALUE, SlotNo(42_000_000));
+        advance_reduced_checkpoint_over_chaindb(
+            &cp,
+            &db,
+            SlotNo(42_000_000),
+            SlotNo(43_500_000),
+            CardanoEra::Conway,
+        )
+        .expect("checkpoint advance");
+        assert!(
+            cp.last_advanced_slot().unwrap().unwrap().0 >= 43_000_000,
+            "the authority must have walked THROUGH the failing block"
+        );
+        // The live-failure condition, asserted rather than assumed (the claim "during the walk the
+        // checkpoint is positioned AT the block" was made once, was false, and only the venue caught
+        // it -- so it is a test assertion now).
+        assert_eq!(
+            cp.get(&preprod_collateral_input()).unwrap(),
+            None,
+            "the authority has SPENT the collateral input -- this is the live failure condition"
+        );
+
+        // 2. The accumulator now walks the same block, behind the authority.
+        let s = sealed_store_at_epoch_500(&tmp, SlotNo(42_000_000));
+        let fees_before = s.load_current().unwrap().unwrap().1.epoch_state.epoch_fees;
+        let outcome = advance_accumulator_over_chaindb(
+            &s,
+            &db,
+            &sched,
+            SlotNo(42_000_000),
+            SlotNo(43_500_000),
+            Some(&cp as &dyn ade_ledger::collateral::CollateralValueResolver),
+        )
+        .unwrap();
+
+        assert!(
+            matches!(outcome, AccumulatorChaindbOutcome::ReachedTip { .. }),
+            "the walk must reach the tip, got {outcome:?}"
+        );
+        assert_eq!(
+            s.last_advanced_slot().unwrap(),
+            Some(SlotNo(43_000_000)),
+            "the cursor must advance THROUGH the block that pinned it"
+        );
+        // Cursor movement alone is not proof -- a control-flow path that stopped refusing would move
+        // it too. The fee pot must carry the resolved collateral, exactly.
+        let (_, acc) = s.load_current().unwrap().unwrap();
+        assert_eq!(
+            acc.epoch_state.epoch_fees.0 - fees_before.0,
+            COLLATERAL_VALUE.0,
+            "the ONLY fee contribution of this block is collAdaBalance -- not the declared fee 904,638"
+        );
+    }
+
+    /// CE-2d-7 — the refusal is still REACHABLE. Same walk, same block, an authority that spent the
+    /// entry WITHOUT retaining it (the pre-BND-2d store): the accumulator refuses, names the exact
+    /// input, and leaves the cursor pinned. This is also the non-vacuity control for the test above.
+    #[test]
+    fn without_the_retention_the_same_walk_still_refuses_and_pins() {
+        use crate::chaindb::{InMemoryChainDb, ReducedUtxoCheckpoint};
+        let tmp = TempDir::new().unwrap();
+        let db = InMemoryChainDb::new();
+        crate::chaindb::ChainDb::put_block(
+            &db,
+            &crate::chaindb::types::StoredBlock {
+                hash: Hash32([0x2f; 32]),
+                slot: SlotNo(43_000_000),
+                bytes: BLOCK_130350133.to_vec(),
+            },
+        )
+        .unwrap();
+
+        // A checkpoint advanced past the block the OLD way: the delta applied, nothing retained.
+        let cp: ReducedUtxoCheckpoint =
+            seeded_checkpoint(tmp.path(), "cp2.redb", Coin(4_812_345), SlotNo(42_000_000));
+        let block = {
+            let env = ade_codec::cbor::envelope::decode_block_envelope(BLOCK_130350133).unwrap();
+            ade_codec::conway::decode_conway_block(&BLOCK_130350133[env.block_start..env.block_end])
+                .unwrap()
+                .decoded()
+                .clone()
+        };
+        let delta = ade_ledger::reduced_advance::reduced_block_delta(&block, CardanoEra::Conway)
+            .expect("delta");
+        cp.advance_block(SlotNo(43_000_000), &delta.spent, &delta.produced, &[])
+            .unwrap();
+
+        let s = sealed_store_at_epoch_500(&tmp, SlotNo(42_000_000));
+        let outcome = advance_accumulator_over_chaindb(
+            &s,
+            &db,
+            &schedule_86k(),
+            SlotNo(42_000_000),
+            SlotNo(43_500_000),
+            Some(&cp as &dyn ade_ledger::collateral::CollateralValueResolver),
+        )
+        .unwrap();
+
+        match outcome {
+            AccumulatorChaindbOutcome::ApplyFailedAt { slot, error } => {
+                assert_eq!(slot, SlotNo(43_000_000));
+                let rendered = format!("{error:?}");
+                assert!(
+                    rendered.contains("UnresolvedCollateralInput")
+                        && rendered.contains("0326ab20"),
+                    "the refusal must NAME the input it could not value, got {rendered}"
+                );
+            }
+            other => panic!("expected a typed refusal, got {other:?}"),
+        }
+        assert_eq!(
+            s.last_advanced_slot().unwrap(),
+            Some(SlotNo(42_000_000)),
+            "an unresolvable collateral input leaves the cursor pinned -- fail closed"
+        );
     }
 
     /// Reorg recovery component (DC-EPOCH-20): reset to the sealed seed, then replay forward

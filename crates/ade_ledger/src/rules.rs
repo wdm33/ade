@@ -1943,6 +1943,14 @@ pub(crate) struct TxUtxoEffect {
     /// `enumerate()`. `0..n` for a valid tx. For an invalid tx: empty, or the single collateral
     /// return at index `len(ordinary outputs)`, matching cardano-ledger's `mkCollateralTxIn`.
     pub produces: Vec<(u16, crate::utxo::TxOut)>,
+    /// BND-2d (INV-BND-2d): the subset of [`Self::spends`] that is COLLATERAL consumed under
+    /// `Phase2Invalid` — EMPTY for a phase-2-valid tx.
+    ///
+    /// It lives here, not in a consumer, so consumers stay VALIDITY-BLIND (INV-BND-2a): they retain
+    /// what this derivation names rather than re-deciding which spends were collateral, so the two
+    /// readings cannot drift. The UTxO authority uses it to retain each binding's `TxIn -> Coin`
+    /// value at the one instant it still holds it.
+    pub collateral_consumed: Vec<ade_types::tx::TxIn>,
 }
 
 /// BND-2a: derive [`TxUtxoEffect`] for one tx, gated by its phase-2 validity.
@@ -1976,6 +1984,8 @@ pub(crate) fn extract_tx_utxo_effect(
                 .enumerate()
                 .map(|(i, o)| (i as u16, o))
                 .collect(),
+            // A phase-2-VALID tx consumes no collateral: nothing to retain.
+            collateral_consumed: Vec::new(),
         });
     }
     match era {
@@ -2024,7 +2034,14 @@ pub(crate) fn extract_tx_utxo_effect(
         }
         (None, None) => Vec::new(),
     };
-    Ok(TxUtxoEffect { spends, produces })
+    // BND-2d: for a phase-2-INVALID tx the spends ARE the collateral inputs, so the retention set
+    // is named by the same derivation that decided them — never re-derived by a consumer.
+    let collateral_consumed = spends.clone();
+    Ok(TxUtxoEffect {
+        spends,
+        produces,
+        collateral_consumed,
+    })
 }
 
 pub(crate) fn extract_inputs_outputs_from_tx(

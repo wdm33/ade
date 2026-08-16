@@ -56,6 +56,21 @@ const BOOTSTRAP_TABLE: TableDefinition<&[u8; KEY_LEN], &[u8]> =
 /// S3f-4d-mat-3 (DC-EPOCH-11): the IMMUTABLE bootstrap slot (the seed point), distinct from
 /// LAST_SLOT (which advances). `reset_to_bootstrap` resets LAST_SLOT back to this.
 const SEED_SLOT_KEY: &str = "seed_slot";
+/// BND-2d (INV-BND-2d): the collateral bindings this authority DESTROYED under the `Phase2Invalid`
+/// rule, `txin_key -> coin(8 BE)`.
+///
+/// A collateral value is authoritative in `[create(x), B)` where `B` is the block that spends it,
+/// so the LAST instant this authority can answer for it is the moment it applies `B`. It records
+/// the binding there, in the SAME write transaction that advances the cursor, and the answer is
+/// **position-invariant** thereafter — `TxIn -> Coin` is immutable over the chain, so no cursor
+/// position could have yielded a different value. Scope is exactly "destroyed over `(seed,
+/// cursor]`": `reset_to_bootstrap` / `seal_bootstrap` clear it with the live table.
+///
+/// Deliberately NOT part of `compute_fingerprint`: the checkpoint commitment names the reduced
+/// UTxO, and a set of entries the UTxO no longer contains is not part of it. Sealed frozen
+/// leadership stays byte-identical for the same prefix.
+const COLLATERAL_RETAINED_TABLE: TableDefinition<&[u8; KEY_LEN], &[u8]> =
+    TableDefinition::new("reduced_collateral_retained");
 const FP_DOMAIN: &[u8] = b"eview-reduced-utxo-checkpoint-v1";
 
 #[derive(Debug)]
@@ -109,6 +124,38 @@ fn encode_value(coin: Coin, reduced: &ReducedStakeRef) -> Vec<u8> {
     v.extend_from_slice(&coin.0.to_be_bytes());
     reduced.encode(&mut v);
     v
+}
+
+/// BND-2d (INV-BND-2d): retain the `TxIn -> Coin` bindings this block's phase-2-invalid
+/// transactions consume, reading them from the LIVE table before the caller removes them.
+///
+/// `Some(coin)` on an entry means an earlier tx in the same block created the output, so the block
+/// itself is the authority for its value and the live table never held it (the net delta cancels an
+/// intra-block chained spend). A binding neither source holds is recorded as NOTHING — the resolver
+/// then answers `None` and the accumulator refuses, naming the input. There is deliberately no
+/// fallback value here: fabricating one is the exact failure the fail-closed guards exist to stop.
+fn retain_collateral(
+    live: &redb::Table<'_, &'static [u8; KEY_LEN], &'static [u8]>,
+    retained: &mut redb::Table<'_, &'static [u8; KEY_LEN], &'static [u8]>,
+    collateral_consumed: &[(TxIn, Option<Coin>)],
+) -> Result<(), ReducedCheckpointError> {
+    for (txin, intra_block) in collateral_consumed {
+        let key = txin_key(txin);
+        let value = match intra_block {
+            Some(coin) => Some(*coin),
+            None => live
+                .get(&key)
+                .map_err(rerr)?
+                .and_then(|v| decode_value(v.value()))
+                .map(|(coin, _)| coin),
+        };
+        if let Some(coin) = value {
+            retained
+                .insert(&key, coin.0.to_be_bytes().as_slice())
+                .map_err(rerr)?;
+        }
+    }
+    Ok(())
 }
 
 fn decode_value(bytes: &[u8]) -> Option<(Coin, ReducedStakeRef)> {
@@ -228,6 +275,7 @@ impl ReducedUtxoCheckpoint {
         &self,
         spent: &[TxIn],
         produced: &[(TxIn, Coin, ReducedStakeRef)],
+        collateral_consumed: &[(TxIn, Option<Coin>)],
     ) -> Result<(), ReducedCheckpointError> {
         let txn = self.db.begin_write().map_err(rerr)?;
         {
@@ -236,6 +284,8 @@ impl ReducedUtxoCheckpoint {
         }
         {
             let mut table = txn.open_table(REDUCED_TABLE).map_err(rerr)?;
+            let mut retained = txn.open_table(COLLATERAL_RETAINED_TABLE).map_err(rerr)?;
+            retain_collateral(&table, &mut retained, collateral_consumed)?;
             for txin in spent {
                 let _ = table.remove(&txin_key(txin)).map_err(rerr)?;
             }
@@ -260,6 +310,7 @@ impl ReducedUtxoCheckpoint {
         slot: SlotNo,
         spent: &[TxIn],
         produced: &[(TxIn, Coin, ReducedStakeRef)],
+        collateral_consumed: &[(TxIn, Option<Coin>)],
     ) -> Result<(), ReducedCheckpointError> {
         let txn = self.db.begin_write().map_err(rerr)?;
         {
@@ -270,6 +321,11 @@ impl ReducedUtxoCheckpoint {
         }
         {
             let mut table = txn.open_table(REDUCED_TABLE).map_err(rerr)?;
+            // BND-2d: retain BEFORE the removals -- this is the last instant the binding exists --
+            // and inside THIS transaction, so the store can never record a slot it did not retain
+            // for, nor retain for a block whose slot it did not record.
+            let mut retained = txn.open_table(COLLATERAL_RETAINED_TABLE).map_err(rerr)?;
+            retain_collateral(&table, &mut retained, collateral_consumed)?;
             for txin in spent {
                 let _ = table.remove(&txin_key(txin)).map_err(rerr)?;
             }
@@ -301,6 +357,13 @@ impl ReducedUtxoCheckpoint {
                 let (k, v) = entry.map_err(rerr)?;
                 boot.insert(k.value(), v.value()).map_err(rerr)?;
             }
+        }
+        {
+            // BND-2d: sealing sets LAST_SLOT back to the seed, so the retention's scope
+            // ("destroyed over (seed, cursor]") is empty. Clear it for the same reason
+            // `reset_to_bootstrap` does, so a re-seal cannot leave a binding out of scope.
+            let mut retained = txn.open_table(COLLATERAL_RETAINED_TABLE).map_err(rerr)?;
+            while retained.pop_first().map_err(rerr)?.is_some() {}
         }
         {
             let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
@@ -353,6 +416,12 @@ impl ReducedUtxoCheckpoint {
                 let (k, v) = entry.map_err(rerr)?;
                 reduced.insert(k.value(), v.value()).map_err(rerr)?;
             }
+        }
+        {
+            // BND-2d: the retention is scoped to "destroyed over (seed, cursor]", so it is cleared
+            // with the live table. The replay that follows re-derives it identically.
+            let mut retained = txn.open_table(COLLATERAL_RETAINED_TABLE).map_err(rerr)?;
+            while retained.pop_first().map_err(rerr)?.is_some() {}
         }
         {
             let mut meta = txn.open_table(META_TABLE).map_err(rerr)?;
@@ -617,6 +686,34 @@ impl ReducedUtxoCheckpoint {
         }
     }
 
+    /// BND-2d (INV-BND-2d): the ADA value of a collateral input this authority DESTROYED under the
+    /// `Phase2Invalid` rule, or `None` if it never destroyed that input.
+    ///
+    /// Position-invariant by construction: the binding was read at the one point it existed, and
+    /// `TxIn -> Coin` is immutable over the chain, so this is the same value a correctly-positioned
+    /// live lookup would have returned.
+    pub fn retained_collateral_value(
+        &self,
+        txin: &TxIn,
+    ) -> Result<Option<Coin>, ReducedCheckpointError> {
+        let txn = self.db.begin_read().map_err(rerr)?;
+        let table = match txn.open_table(COLLATERAL_RETAINED_TABLE) {
+            Ok(t) => t,
+            // A checkpoint that has never retained anything has no such table yet.
+            Err(_) => return Ok(None),
+        };
+        match table.get(&txin_key(txin)).map_err(rerr)? {
+            Some(v) => {
+                let b = v.value();
+                if b.len() != 8 {
+                    return Err(ReducedCheckpointError::Decode);
+                }
+                Ok(Some(Coin(u64::from_be_bytes(b.try_into().expect("8 bytes")))))
+            }
+            None => Ok(None),
+        }
+    }
+
     /// Test-only: write the entries WITHOUT the completeness marker — exactly the
     /// durable state a crash mid-build leaves (a SIGKILL after the entry commit, before
     /// the marker commit). Used to prove crash-recovery deterministically.
@@ -697,7 +794,7 @@ mod tests {
         cp.build_from(&sample()).unwrap();
         assert_eq!(cp.last_advanced_slot().unwrap(), None, "built-only -> no advanced slot");
         // advance: spend txin(0x01,0), produce a new base-cred output, at slot 500.
-        cp.advance_block(SlotNo(500), &[txin(0x01, 0)], &[(txin(0x05, 0), Coin(999), base(0xcc))])
+        cp.advance_block(SlotNo(500), &[txin(0x01, 0)], &[(txin(0x05, 0), Coin(999), base(0xcc))], &[])
             .unwrap();
         assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(500)), "slot recorded");
         assert_eq!(cp.get(&txin(0x01, 0)).unwrap(), None, "spent output removed");
@@ -707,7 +804,7 @@ mod tests {
             "produced output present"
         );
         // a second advance moves the slot forward.
-        cp.advance_block(SlotNo(510), &[], &[]).unwrap();
+        cp.advance_block(SlotNo(510), &[], &[], &[]).unwrap();
         assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(510)));
         // durable across reopen (the slot survives).
         drop(cp);
@@ -728,7 +825,7 @@ mod tests {
         assert_eq!(cp.seed_slot().unwrap(), Some(SlotNo(279)), "seed slot sealed");
         assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(279)), "resume cursor = seed");
         // advance: mutate the live state (spend a seed output, produce a new one).
-        cp.advance_block(SlotNo(300), &[txin(0x01, 0)], &[(txin(0x07, 0), Coin(555), base(0xdd))])
+        cp.advance_block(SlotNo(300), &[txin(0x01, 0)], &[(txin(0x07, 0), Coin(555), base(0xdd))], &[])
             .unwrap();
         assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(300)));
         assert_eq!(cp.get(&txin(0x01, 0)).unwrap(), None, "seed output spent");
@@ -760,7 +857,7 @@ mod tests {
         assert_eq!(cp.verify_ready_at(SlotNo(300), SlotNo(279)), Err(CheckpointReadinessError::Unsealed));
         // seal at seed 279, advance to 300.
         cp.seal_bootstrap(SlotNo(279)).unwrap();
-        cp.advance_block(SlotNo(300), &[], &[]).unwrap();
+        cp.advance_block(SlotNo(300), &[], &[], &[]).unwrap();
         // exact slot + matching lineage -> READY.
         assert_eq!(cp.verify_ready_at(SlotNo(300), SlotNo(279)), Ok(()));
         // wrong lineage -> SeedMismatch.
@@ -817,7 +914,7 @@ mod tests {
         let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("rc.redb")).unwrap();
         cp.build_from(&sample()).unwrap();
         cp.seal_bootstrap(SlotNo(279)).unwrap();
-        cp.advance_block(SlotNo(400), &[], &[]).unwrap();
+        cp.advance_block(SlotNo(400), &[], &[], &[]).unwrap();
         assert_eq!(cp.verify_advanced_through(SlotNo(400), SlotNo(279)), Ok(()), "exactly through");
         assert_eq!(cp.verify_advanced_through(SlotNo(350), SlotNo(279)), Ok(()), "beyond is fine");
         assert_eq!(
@@ -839,7 +936,7 @@ mod tests {
         cp.build_from(&sample()).unwrap();
         cp.seal_bootstrap(SlotNo(279)).unwrap();
         // advance the LIVE checkpoint past the seed (spend a seed output).
-        cp.advance_block(SlotNo(300), &[txin(0x01, 0)], &[]).unwrap();
+        cp.advance_block(SlotNo(300), &[txin(0x01, 0)], &[], &[]).unwrap();
         // the fresh checkpoint reflects the SEED state, not the advanced live state.
         let fresh = cp.materialize_bootstrap_into(&tmp.path().join("fresh.redb")).unwrap();
         assert_eq!(fresh.seed_slot().unwrap(), Some(SlotNo(279)));
@@ -851,7 +948,7 @@ mod tests {
             "fresh has the seed output the LIVE checkpoint spent"
         );
         // mutating the fresh replay checkpoint does NOT touch the live one.
-        fresh.advance_block(SlotNo(999), &[txin(0x02, 0)], &[]).unwrap();
+        fresh.advance_block(SlotNo(999), &[txin(0x02, 0)], &[], &[]).unwrap();
         assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(300)), "live unaffected");
     }
 
@@ -955,7 +1052,7 @@ mod tests {
         let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("adv.redb")).unwrap();
         cp.build_from(&sample()).unwrap(); // start: 3 entries (txin 1/0, 1/1, 2/0)
         // a block that spends txin(0x01,0) and produces a new txin(0x05,0).
-        cp.apply_block_delta(&[txin(0x01, 0)], &[(txin(0x05, 0), Coin(500), base(0xee))])
+        cp.apply_block_delta(&[txin(0x01, 0)], &[(txin(0x05, 0), Coin(500), base(0xee))], &[])
             .unwrap();
         assert!(!cp.is_complete().unwrap(), "mid-advance is INCOMPLETE until finalize");
         let fp = cp.finalize().unwrap();
@@ -991,7 +1088,7 @@ mod tests {
 
         let tmp = TempDir::new().unwrap();
         let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("adv.redb")).unwrap();
-        cp.apply_block_delta(&delta.spent, &delta.produced).unwrap();
+        cp.apply_block_delta(&delta.spent, &delta.produced, &delta.collateral_consumed).unwrap();
         let fp_adv = cp.finalize().unwrap();
         assert!(cp.is_complete().unwrap());
 
@@ -1026,6 +1123,152 @@ mod tests {
         assert_eq!(sums.len(), 1, "NonContributing contributes no credential");
     }
 
+    // ---------------------------------------------------------------------------------------
+    // BND-2d (INV-BND-2d) -- the retention makes the collateral answer POSITION-INVARIANT.
+    // ---------------------------------------------------------------------------------------
+
+    /// A sealed checkpoint holding one collateral entry, ready to be advanced past the block that
+    /// consumes it. Mirrors the live shape: a Mithril-seeded checkpoint that later walks forward.
+    fn sealed_with(entries: BTreeMap<TxIn, (Coin, ReducedStakeRef)>, seed: SlotNo) -> (TempDir, ReducedUtxoCheckpoint) {
+        let tmp = TempDir::new().unwrap();
+        let cp = ReducedUtxoCheckpoint::open(&tmp.path().join("ret.redb")).unwrap();
+        cp.build_from(&entries).unwrap();
+        cp.seal_bootstrap(seed).unwrap();
+        (tmp, cp)
+    }
+
+    /// CE-2d-1 + CE-2d-2 — THE LIVE FAILURE, in-tree.
+    ///
+    /// preprod 2026-08-16: the co-advancer drives the checkpoint to the durable tip at the end of
+    /// every pass, so during the accumulator's walk the cursor sat at ~130,550,441 while the
+    /// accumulator was at 130,350,114 and the collateral input `0326ab20…#1` had already been spent
+    /// by the very block under application. The live-table lookup then truthfully answered `None`
+    /// and the accumulator refused. Here the checkpoint is advanced PAST the consuming block first
+    /// -- the same relative position -- and the resolver must still answer.
+    #[test]
+    fn the_resolver_answers_after_the_authority_has_already_spent_the_collateral() {
+        use ade_ledger::collateral::CollateralValueResolver;
+        let coll = txin(0x03, 1);
+        let mut m = BTreeMap::new();
+        m.insert(coll.clone(), (Coin(4_812_345), base(0x11)));
+        m.insert(txin(0x09, 0), (Coin(1), base(0x22)));
+        let (_tmp, cp) = sealed_with(m, SlotNo(1_000));
+
+        // The block that consumes it as collateral of a phase-2-invalid tx, then two blocks past it
+        // -- the checkpoint runs AHEAD, exactly as the co-advancer drives it.
+        cp.advance_block(SlotNo(1_001), &[coll.clone()], &[], &[(coll.clone(), None)])
+            .unwrap();
+        cp.advance_block(SlotNo(1_002), &[], &[], &[]).unwrap();
+        cp.advance_block(SlotNo(1_003), &[], &[], &[]).unwrap();
+
+        // CE-2d-2, the CONTROL: the live table genuinely no longer holds it. Without this the test
+        // could pass while proving nothing -- it is what makes the assertion below load-bearing.
+        assert_eq!(
+            cp.get(&coll).unwrap(),
+            None,
+            "control: the authority has spent the entry, so the live table must NOT hold it"
+        );
+
+        // CE-2d-1: the answer survives the position.
+        assert_eq!(
+            cp.collateral_value(&coll),
+            Some(Coin(4_812_345)),
+            "the retention must answer for a binding this authority destroyed"
+        );
+        // An input this authority never destroyed is still an honest None -- never a 0.
+        assert_eq!(cp.collateral_value(&txin(0x77, 3)), None);
+    }
+
+    /// CE-2d-5 — the retention is scoped to `(seed, cursor]`: a rollback reset clears it, and the
+    /// replay that follows re-derives it byte-identically. A retention that survived the reset would
+    /// answer for a block the checkpoint no longer claims to have applied.
+    #[test]
+    fn reset_to_bootstrap_clears_the_retention_and_the_replay_rederives_it() {
+        use ade_ledger::collateral::CollateralValueResolver;
+        let coll = txin(0x03, 1);
+        let mut m = BTreeMap::new();
+        m.insert(coll.clone(), (Coin(777), base(0x11)));
+        let (_tmp, cp) = sealed_with(m, SlotNo(1_000));
+
+        cp.advance_block(SlotNo(1_001), &[coll.clone()], &[], &[(coll.clone(), None)])
+            .unwrap();
+        assert_eq!(cp.retained_collateral_value(&coll).unwrap(), Some(Coin(777)));
+
+        cp.reset_to_bootstrap().unwrap();
+        assert_eq!(
+            cp.retained_collateral_value(&coll).unwrap(),
+            None,
+            "the retention is cleared with the live table -- its scope is (seed, cursor]"
+        );
+        // Re-materialized: the live table holds the seed entry again, so the resolver answers from
+        // it -- and the value is the SAME one, because TxIn -> Coin is immutable.
+        assert_eq!(cp.collateral_value(&coll), Some(Coin(777)));
+
+        // The replay re-derives an identical retention.
+        cp.advance_block(SlotNo(1_001), &[coll.clone()], &[], &[(coll.clone(), None)])
+            .unwrap();
+        assert_eq!(cp.retained_collateral_value(&coll).unwrap(), Some(Coin(777)));
+    }
+
+    /// CE-2d-8 — the checkpoint COMMITMENT must not move. `finalize()` is sealed into frozen
+    /// leadership (S4-L2); it names the reduced UTxO, and a set of entries the UTxO no longer
+    /// contains is not part of it. Two checkpoints over the same prefix -- one that retained, one
+    /// that did not -- must fingerprint identically.
+    #[test]
+    fn the_retention_does_not_move_the_checkpoint_commitment() {
+        let coll = txin(0x03, 1);
+        let mut m = BTreeMap::new();
+        m.insert(coll.clone(), (Coin(4_812_345), base(0x11)));
+        m.insert(txin(0x09, 0), (Coin(1), base(0x22)));
+
+        let (_t1, with) = sealed_with(m.clone(), SlotNo(1_000));
+        with.advance_block(SlotNo(1_001), &[coll.clone()], &[], &[(coll.clone(), None)])
+            .unwrap();
+
+        let (_t2, without) = sealed_with(m, SlotNo(1_000));
+        without.advance_block(SlotNo(1_001), &[coll.clone()], &[], &[]).unwrap();
+
+        assert_eq!(
+            with.finalize().unwrap(),
+            without.finalize().unwrap(),
+            "the retention must be invisible to the checkpoint commitment"
+        );
+        // ...and the retention is nevertheless present in exactly one of them.
+        assert!(with.retained_collateral_value(&coll).unwrap().is_some());
+        assert!(without.retained_collateral_value(&coll).unwrap().is_none());
+    }
+
+    /// CE-2d-7 — a binding NEITHER the block nor the live table holds is retained as NOTHING. The
+    /// resolver then answers `None` and the accumulator refuses, naming the input. There is no
+    /// fabricated zero anywhere on this path.
+    #[test]
+    fn an_unheld_collateral_binding_is_retained_as_nothing_never_as_zero() {
+        use ade_ledger::collateral::CollateralValueResolver;
+        let unknown = txin(0xEE, 7);
+        let (_tmp, cp) = sealed_with(BTreeMap::new(), SlotNo(1_000));
+        cp.advance_block(SlotNo(1_001), &[], &[], &[(unknown.clone(), None)])
+            .unwrap();
+        assert_eq!(cp.retained_collateral_value(&unknown).unwrap(), None);
+        assert_eq!(
+            cp.collateral_value(&unknown),
+            None,
+            "an unknown binding must stay an admission of ignorance, never Coin(0)"
+        );
+    }
+
+    /// CE-2d-6 (storage half) — a binding the BLOCK resolved (created by an earlier tx in the same
+    /// block, so the live table never held it) is retained from the block's own value.
+    #[test]
+    fn an_intra_block_created_collateral_binding_is_retained_from_the_block() {
+        use ade_ledger::collateral::CollateralValueResolver;
+        let coll = txin(0x42, 0);
+        let (_tmp, cp) = sealed_with(BTreeMap::new(), SlotNo(1_000));
+        assert_eq!(cp.get(&coll).unwrap(), None, "control: the live table never held it");
+        cp.advance_block(SlotNo(1_001), &[], &[], &[(coll.clone(), Some(Coin(31_337)))])
+            .unwrap();
+        assert_eq!(cp.collateral_value(&coll), Some(Coin(31_337)));
+    }
+
     // A fresh store with no build is INCOMPLETE (not mistaken for an empty-but-complete
     // checkpoint) -- the crash-mid-build recovery signal.
     #[test]
@@ -1050,9 +1293,27 @@ mod tests {
 ///
 /// A storage fault collapses to `None` deliberately. `None` is the caller's REFUSAL signal, so an
 /// unreadable entry and an absent entry both fail closed; neither can become a fabricated value.
+///
+/// BND-2d (INV-BND-2d) — the answer is POSITION-INVARIANT. A live-table lookup alone is correct
+/// only while the authority's cursor sits inside `[create(x), B)`, and the co-advancer drives this
+/// checkpoint to the durable tip at the end of every pass, so during the accumulator's walk the
+/// cursor is routinely PAST `B` and the entry is legitimately gone (preprod 130,350,133, live
+/// 2026-08-16). The retention holds the binding the authority destroyed at `B`, so:
+///
+/// * cursor at or past `B` — the RETENTION answers (the live-failure case);
+/// * cursor before `B` — the LIVE TABLE answers, since `B` is what spends the entry;
+/// * cursor before `B` and `x` created strictly between the cursor and `B` — neither answers, and
+///   the refusal self-clears once the authority walks past `B`.
+///
+/// Live table FIRST, so the answers are a strict superset of the pre-BND-2d ones and identical
+/// wherever those answered. Both sources return the same `Coin` when both hold it: `TxIn -> Coin`
+/// is immutable over the chain.
 impl ade_ledger::collateral::CollateralValueResolver for ReducedUtxoCheckpoint {
     fn collateral_value(&self, txin: &TxIn) -> Option<Coin> {
-        self.get(txin).ok().flatten().map(|(coin, _stake_ref)| coin)
+        if let Some((coin, _stake_ref)) = self.get(txin).ok().flatten() {
+            return Some(coin);
+        }
+        self.retained_collateral_value(txin).ok().flatten()
     }
 }
 

@@ -123,7 +123,7 @@ pub fn drive_window_consensus_inputs(
         // UTxO side: the reduced block delta (== reduce(track_utxo)) into the checkpoint.
         let delta = reduced_block_delta(block, era).map_err(WindowDriverError::Ledger)?;
         checkpoint
-            .apply_block_delta(&delta.spent, &delta.produced)
+            .apply_block_delta(&delta.spent, &delta.produced, &delta.collateral_consumed)
             .map_err(WindowDriverError::Checkpoint)?;
         // Cert side: advance the delegation/reward (+ gov) state, exactly as the ledger does.
         let (cert_state, gov_state) =
@@ -224,7 +224,12 @@ pub fn advance_reduced_checkpoint_over_chaindb(
         let block = decode_stored_to_shelley(&stored.bytes)?;
         let delta = reduced_block_delta(&block, era).map_err(CheckpointAdvanceError::Delta)?;
         checkpoint
-            .advance_block(stored.slot, &delta.spent, &delta.produced)
+            .advance_block(
+                stored.slot,
+                &delta.spent,
+                &delta.produced,
+                &delta.collateral_consumed,
+            )
             .map_err(CheckpointAdvanceError::Checkpoint)?;
     }
     Ok(())
@@ -366,7 +371,9 @@ mod tests {
         let (cp_ref, _d2) = temp_checkpoint();
         cp_ref.build_from(&reduced).expect("build");
         let delta = reduced_block_delta(&block, era).expect("delta");
-        cp_ref.apply_block_delta(&delta.spent, &delta.produced).expect("apply");
+        cp_ref
+            .apply_block_delta(&delta.spent, &delta.produced, &delta.collateral_consumed)
+            .expect("apply");
         let (cert_state, _gov) = advance_cert_state(&block, era, &state).expect("advance");
         let cred_utxo = cp_ref.sum_base_credential_stake().expect("sum");
         let composed = aggregate_pool_stake(&cred_utxo, &cert_state.delegation).expect("agg");

@@ -3139,6 +3139,15 @@ fn advance_ledger_state_to_durable_tip_memo(
                         )),
                     )
                 });
+                // BND-2d evidence (emit-only): WHERE the resolver stands during this walk, MEASURED
+                // rather than assumed. "During the accumulator's walk the checkpoint is positioned
+                // AT the block" was asserted once, used to defer a proof, and was false -- only the
+                // live venue caught it. A cp_cursor GREATER than the slot the accumulator just
+                // applied is positive evidence that the answer came from the BND-2d retention: the
+                // live table cannot hold an entry the authority has already spent.
+                let cp_cursor_before = reduced_checkpoint
+                    .and_then(|cp| cp.last_advanced_slot().ok().flatten())
+                    .map(|s| s.0);
                 let walk_outcome = advance_accumulator_over_chaindb(
                     store,
                     chaindb,
@@ -3164,10 +3173,12 @@ fn advance_ledger_state_to_durable_tip_memo(
                         if b.0 != a.0 {
                             crate::node_log!(
                                 "bnd2c-transition: non_authoritative=true cursor {} -> {} \
-                                 epoch_fees {} -> {} (delta {}) acc_fp {} -> {}",
+                                 epoch_fees {} -> {} (delta {}) acc_fp {} -> {} cp_cursor={}",
                                 b.0, a.0, b.1, a.1,
                                 a.1 as i128 - b.1 as i128,
-                                b.2, a.2
+                                b.2, a.2,
+                                cp_cursor_before
+                                    .map_or_else(|| "none".to_string(), |s| s.to_string())
                             );
                         }
                     }
@@ -8194,7 +8205,7 @@ mod tests {
             let ref_mark = cp.sum_base_credential_stake().unwrap();
 
             // The co-advancer drives the checkpoint on past the boundary, absorbing later state.
-            cp.advance_block(SlotNo(43_100_000), &[], &off_chain_produced())
+            cp.advance_block(SlotNo(43_100_000), &[], &off_chain_produced(), &[])
                 .unwrap();
             assert_ne!(
                 cp.finalize().unwrap(),
@@ -8340,7 +8351,7 @@ mod tests {
             // entry sits AT the tip slot, so `reduced_checkpoint_reset_if_ahead` does not fire either --
             // which is the live condition.
             store.reset_to_bootstrap().unwrap();
-            cp.advance_block(SlotNo(43_100_000), &[], &off_chain_produced())
+            cp.advance_block(SlotNo(43_100_000), &[], &off_chain_produced(), &[])
                 .unwrap();
 
             // The REFOLD.
