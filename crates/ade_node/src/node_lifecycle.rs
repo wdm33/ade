@@ -3126,6 +3126,19 @@ fn advance_ledger_state_to_durable_tip_memo(
         if let Ok(Some(seed_slot)) = seed_slot_probe {
             loop {
                 let t_walk = std::time::Instant::now();
+                // BND-2c evidence (emit-only): the accumulator's state IMMEDIATELY BEFORE this walk.
+                // Cursor movement alone would not distinguish "the intended transition occurred" from
+                // "a control-flow path stopped refusing", so the fingerprint over the canonical
+                // encoding and the fee pot are captured alongside it.
+                let bnd2c_before = store.load_current().ok().flatten().map(|(sl, acc)| {
+                    (
+                        sl.0,
+                        acc.epoch_state.epoch_fees.0,
+                        hex_prefix8(&ade_crypto::blake2b_256(
+                            &ade_ledger::epoch_accumulator::encode_epoch_accumulator(&acc),
+                        )),
+                    )
+                });
                 let walk_outcome = advance_accumulator_over_chaindb(
                     store,
                     chaindb,
@@ -3137,6 +3150,28 @@ fn advance_ledger_state_to_durable_tip_memo(
                     reduced_checkpoint.map(|cp| cp as &dyn ade_ledger::collateral::CollateralValueResolver),
                 );
                 census_ms_walk += t_walk.elapsed().as_millis();
+                {
+                    let after = store.load_current().ok().flatten().map(|(sl, acc)| {
+                        (
+                            sl.0,
+                            acc.epoch_state.epoch_fees.0,
+                            hex_prefix8(&ade_crypto::blake2b_256(
+                                &ade_ledger::epoch_accumulator::encode_epoch_accumulator(&acc),
+                            )),
+                        )
+                    });
+                    if let (Some(b), Some(a)) = (&bnd2c_before, &after) {
+                        if b.0 != a.0 {
+                            crate::node_log!(
+                                "bnd2c-transition: non_authoritative=true cursor {} -> {} \
+                                 epoch_fees {} -> {} (delta {}) acc_fp {} -> {}",
+                                b.0, a.0, b.1, a.1,
+                                a.1 as i128 - b.1 as i128,
+                                b.2, a.2
+                            );
+                        }
+                    }
+                }
                 match walk_outcome {
                     Ok(AccumulatorChaindbOutcome::ReachedTip { .. }) => {
                         // ACCUMULATOR-REFOLD-BOUND S1: roll the bounded rewind buffer now that the

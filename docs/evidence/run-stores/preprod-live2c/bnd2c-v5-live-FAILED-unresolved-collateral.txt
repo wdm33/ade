@@ -1,0 +1,78 @@
+# BND-2c — LIVE BAR **FAILED**. preprod, 2026-08-16. The slice stays OPEN.
+#
+# Code: 390c8191 (DC-LEDGER-03, registered `partial`). Slice: SLICE-BND-2c-...md
+# This records a FAILED run in full, because the failure is the finding.
+
+## THE RUN
+binary        390c8191 (STORE_SEMANTICS_VERSION = 5)
+store         ~/.cardano-live1/ade-preprod-v5 — created FRESH by this run (the v4 store was retired;
+              it cannot be opened under v5 anyway)
+bootstrap     native Mithril, certified anchor slot 129,813,427
+peer          docker cardano-node-preprod
+window        2026-08-16T03:28Z .. 04:35Z (clean SIGINT)
+
+## WHAT PASSED, AND IT IS NOT NOTHING
+The accumulator walked, crossed and transitioned correctly right up to the target block:
+
+  bnd2c-transition: cursor 129813427 -> 130118358  epoch_fees 28471999997 -> 45936385187
+                    (delta 17464385190)  acc_fp 695f04ab -> 131e1a1e
+  epoch-accumulator: CROSSED boundary 304 -> 305 at slot 130118424 (mark from s_prev 130118358)
+  bnd2c-transition: cursor 130118424 -> 130350114  epoch_fees 3287400 -> 5858944830
+                    (delta 5855657430)  acc_fp 3592859b -> 6e88b763
+
+Fees move, the fingerprint moves, the boundary crosses. The transition machinery works.
+
+## WHAT FAILED — CE-2c-1
+
+  epoch-accumulator: WITHIN-EPOCH apply failed at 130350133 (observe-only, NOT a boundary --
+  no rewind, no mark, no cross): CollateralBalance(UnresolvedCollateralInput { tx_index: 0,
+  txin: TxIn { tx_hash: 0326ab20d9cf533634f9d6838ae327971ac1606ab69f4378c1fc8009091e225a,
+  index: 1 } }) cursor=Some(130350114) tx_count=1
+  tx0[invalid=true certs=false wdl=2 votes=false proposals=false collateral=None]
+
+The resolver returned `None`. The cursor stayed at 130,350,114. The slice does not close.
+
+## ROOT CAUSE — a positioning mismatch between two derived stores
+
+`node_lifecycle.rs` advances the reduced checkpoint **to the durable tip** at the end of every
+co-advance pass (`advance_reduced_checkpoint_forward_to(reduced_checkpoint, chaindb, tip.slot)`).
+So while the accumulator walks at cursor ~130,350,114, the checkpoint is already at the tip
+(~130,550,441). By then `0326ab20…#1` has been spent — **by this very block**, under BND-2a's now-
+correct collateral consumption — so the UTxO authority genuinely no longer holds it and truthfully
+answers `None`.
+
+The two derived stores advance over the same chain at different rates, and the accumulator asks the
+UTxO authority for a value at a point the authority has already moved past.
+
+## A WRONG CLAIM I MADE EARLIER, CORRECTED HERE
+When deferring CE-2b-7 in the BND-2b slice I wrote: *"during the accumulator's walk the reduced
+checkpoint is positioned AT the block, so `0326ab20…#1` resolves"*. **That is false**, and it was
+the stated reason for not proving the real-block value at BND-2b time. The live gate is what caught
+it. The deferral was defensible on tool-proliferation grounds; the reasoning attached to it was not.
+
+## WHAT THIS VINDICATES
+Keeping `InvalidTxCollateralNeedsUtxo` / the typed unresolved-collateral refusal was right. Had the
+guard been retired on the strength of green unit tests, the accumulator would have credited a wrong
+value or silently skipped the contribution. Instead it refused, NAMED the exact unresolvable input,
+left the cursor pinned, and did not halt the node (the follow continued — 85 `follow: tip` lines
+after the refusal, so observe-only held).
+
+It also exposes a real gap in the unit tests: every test resolver ANSWERS. `FixedResolver` always
+returns a value, and `EmptyResolver` proves the refusal path — but nothing tested that the *live*
+authority can answer *at walk time*. That was exactly CE-2c-1, and only the live venue could test it.
+
+## THREE CANDIDATE FIXES — recorded, none chosen here
+1. **Lockstep** — advance checkpoint and accumulator per block together. Architecturally honest;
+   a significant co-advancer change.
+2. **Resolve at first sight** — the checkpoint computes `collAdaBalance` while applying that block,
+   when it still holds the entry, and carries the scalar forward. Matches "the UTxO authority
+   resolves"; needs somewhere to carry a per-block derived fact.
+3. **Position on demand** — rewind the checkpoint to the accumulator's cursor. This is the B6 thrash
+   shape and should be argued against, not adopted by default.
+
+## STATE OF THE TREE
+`390c8191` is pushed and SAFE to leave in place: the transition logic and resolver plumbing are
+correct, the cert-walk gate is correct and load-bearing, and the collateral path fails CLOSED when it
+cannot resolve — the same outcome v4 had for this block, reached honestly. `DC-LEDGER-03` remains
+`partial`, which this run shows to be the accurate status rather than caution. The v5 store is kept
+at cursor 130,350,114 as a reproducer.
