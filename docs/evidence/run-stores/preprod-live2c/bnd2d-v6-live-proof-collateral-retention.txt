@@ -1,0 +1,114 @@
+# BND-2d — LIVE PROOF on a FRESH v6 store. preprod, 2026-08-16. The positioning contract HOLDS.
+#
+# Slice: docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-BND-2d-collateral-positioning-contract.md
+# Code:  56e0a4e4 (STORE_SEMANTICS_VERSION = 6)   Rule: DC-LEDGER-PHASE2-04
+# Gate:  ci/ci_check_collateral_retention_positioning.sh
+# Answers the FAILED run recorded in bnd2c-v5-live-FAILED-unresolved-collateral.txt.
+
+## PROVENANCE
+binary        56e0a4e4, target/release/ade sha256 90d4528158ff9afb… (built from the tree that
+              commit records; the store-semantics lock hash matches the recorded v6 entry, which is
+              what ties binary to tree)
+store         ~/.cardano-live1/ade-preprod-v6 — created FRESH by this run; 4.4 GB
+bootstrap     native Mithril, ~/.cardano-live1/preprod-snapshot-6009, certified anchor 129,813,427
+peer          docker cardano-node-preprod 127.0.0.1:3001
+leg 1         19:23 .. 20:17 EDT  (fresh bootstrap + follow)
+leg 2         20:28 .. 20:34 EDT  (WARM restart: no --bootstrap-mithril, no --snapshot-dir)
+invocation    identical in shape to the BND-2a / BND-2c runs — complete operator-key set +
+              --genesis-file, so classify_forge_intent yields forge ON. Same --mode node path.
+
+## THE ONE LINE THAT CLOSES THE SLICE
+
+  bnd2c-transition: non_authoritative=true cursor 130350114 -> 130550399
+                    epoch_fees 5858944830 -> 10290010819 (delta 4431065989)
+                    acc_fp 6e88b763 -> 001e4bf6  cp_cursor=130550441
+
+  cursor      130,350,114 -> 130,550,399   ADVANCED THROUGH 130,350,133
+  fee delta   +4,431,065,989               NON-ZERO
+  acc_fp      6e88b763 -> 001e4bf6         CHANGED
+  cp_cursor   130,550,441                  200,308 slots PAST the block
+
+`cp_cursor` is the field this slice added, and it is what makes the claim a measurement rather than
+an inference. The UTxO authority's cursor was 200,308 slots BEYOND 130,350,133. Under BND-2a the
+authority SPENDS `0326ab20…#1` at that very block, so its live table provably could not hold the
+entry. **The answer therefore came from the BND-2d retention.** Position-invariance, demonstrated in
+the exact configuration that defeated BND-2c.
+
+## THE FULL SEQUENCE — the refusal is still reachable, and it clears
+
+LEG 1, pass 1 (fresh bootstrap, both stores at the seed):
+  bnd2c-transition: cursor 129813427 -> 130118358  epoch_fees 28471999997 -> 45936385187
+                    (delta 17464385190)  acc_fp 695f04ab -> 131e1a1e  cp_cursor=129813427
+  epoch-accumulator: CROSSED boundary 304 -> 305 at slot 130118424 (mark from s_prev 130118358)
+  b6-census-coadv: walk_ms=1137096 boundary_arm_ms=20041 checkpoint_forward_ms=2
+
+LEG 1, pass 2 (the authority still BEHIND the block):
+  bnd2c-transition: cursor 130118424 -> 130350114  epoch_fees 3287400 -> 5858944830
+                    (delta 5855657430)  acc_fp 3592859b -> 6e88b763  cp_cursor=130118424
+  epoch-accumulator: WITHIN-EPOCH apply failed at 130350133 (observe-only, NOT a boundary --
+  no rewind, no mark, no cross): CollateralBalance(UnresolvedCollateralInput { tx_index: 0,
+  txin: TxIn { tx_hash: 0326ab20…, index: 1 } }) cursor=Some(130350114) tx_count=1
+  tx0[invalid=true certs=false wdl=2 votes=false proposals=false collateral=None]
+  b6-census-coadv: ... checkpoint_forward_ms=48774        <- the authority then walks PAST the block
+
+  This refusal is EXPECTED and is documented in the slice as §4.3's residual: `0326ab20…#1` was
+  created AFTER 130,118,424, so at that instant NEITHER source held it — the live table had not yet
+  created it and the authority had not yet reached the block that destroys it. The transition
+  refused, NAMED the exact input, left the cursor pinned and did not halt the node. Then the
+  trailing forward advance (48.8 s) drove the authority past the block, retaining the binding.
+
+  Note this also settles a question the BND-2b deferral got wrong in the other direction: the live
+  table cannot answer for this input from BEHIND either. Only the retention can.
+
+LEG 2 (WARM restart from durable state alone):
+  recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset
+                  anchor_before=130350114/5024325/c16626fe durable_tip=130739648/5042282/7477fc0c
+                  rollback_target=none anchor_after=130350114/5024325/c16626fe
+  bnd2c-transition: cursor 130350114 -> 130550399 … cp_cursor=130550441      <- resolved, applied
+  UnresolvedCollateralInput count in leg 2: 0
+
+  The warm restart recovered the accumulator to EXACTLY where leg 1 left it — cursor 130,350,114,
+  block 5,024,325, hash c16626fe — with no --bootstrap-mithril and no --snapshot-dir, then folded
+  forward THROUGH the block that had pinned every v3/v4/v5 store.
+
+## THE CRITERIA, ONE BY ONE
+
+| CE | criterion | verdict |
+|---|---|---|
+| CE-2d-10a | the collateral resolves at 130,350,133 on a real walk | **MET** (leg 2 transition) |
+| CE-2d-10b | the fee delta is NON-ZERO | **MET** (+4,431,065,989) |
+| CE-2d-10c | `acc_fp` CHANGED | **MET** (6e88b763 -> 001e4bf6) |
+| CE-2d-10d | the cursor advances THROUGH 130,350,114 | **MET** (-> 130,550,399) |
+| CE-2d-10e | a warm restart reproduces the state | **MET** (anchor_before == anchor_after == 130350114/5024325/c16626fe) |
+| CE-2d-10f | the retention — not the live table — is the resolver | **MET** (cp_cursor 130,550,441 > 130,350,133) |
+| — | the unresolved-collateral refusal stays REACHABLE | **MET** (leg 1 pass 2, fired and named the input) |
+
+## WHAT THIS RUN DOES **NOT** CLAIM
+
+- **No peer-acceptance / BA-02 claim.** Forge was CAPABLE (operator keys loaded); no block was
+  forged or accepted by the peer, and none is claimed.
+- **The exact collateral scalar is not isolated from the live fee delta.** The +4,431,065,989 in leg
+  2 covers every block in `(130,350,114, 130,550,399]`, not the collateral contribution alone. The
+  scalar itself is pinned in-tree, where it CAN be isolated: the walk-time test asserts the fee pot
+  gains exactly the resolved collateral and not the declared fee 904,638.
+- **B12 / DC-NODE-15 is untouched.** Its `+1` remains proven benign; this run makes the accumulator
+  demonstrably healthy, which is what makes B12 *eligible* for reconsideration — not decided.
+
+## AN UNRELATED LIVE FAILURE, RECORDED NOT FOLDED IN
+
+Leg 1 ended when chain-sync fail-closed FAR PAST the block under study:
+
+  ade_node --mode node: relay run-loop sync step failed (Pump("Receive(Validity(Header(VrfCert(
+  LeaderValueAboveThreshold { value: [0,3,148,36,101,52,221,219],
+                              threshold: [0,3,147,218,125,24,43,26] }))))")); failing closed
+  (no skip-past, no fallback)
+
+Durable tip at the time ~130,733,645 — i.e. ~383k slots BEYOND 130,350,133, long after this slice's
+work was done. It is a header leadership-threshold rejection during a long catch-up (value exceeds
+threshold by ~0.005%), NOT a collateral, accumulator or store-semantics fault: the accumulator's
+cursor, the checkpoint and the retention were all intact afterwards, which is precisely why the warm
+restart could resume and finish the proof.
+
+Recorded here as a FINDING and deliberately NOT investigated or fixed in this slice — folding an
+unrelated consensus-surface failure into a positioning slice is how scope creep starts. It is a real
+blocker for sustained catch-up and deserves its own slice entry.
