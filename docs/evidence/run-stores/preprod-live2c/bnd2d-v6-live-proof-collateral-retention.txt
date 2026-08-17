@@ -71,6 +71,38 @@ LEG 2 (WARM restart from durable state alone):
   block 5,024,325, hash c16626fe — with no --bootstrap-mithril and no --snapshot-dir, then folded
   forward THROUGH the block that had pinned every v3/v4/v5 store.
 
+## WHAT HAPPENED NEXT — the accumulator is now demonstrably HEALTHY
+
+Leg 2 was stopped with a clean SIGINT, which lands at a loop boundary. Before exiting it went on
+past the bar, and the continuation is worth recording because it is the state the accumulator has
+not been in since LIVE-2c:
+
+  epoch-accumulator: reduced checkpoint REWOUND onto boundary point 130550399 before sealing
+                     (it sat past it -- DC-EPOCH-32)
+  epoch-accumulator: CROSSED boundary 305 -> 306 at slot 130550441 (mark from s_prev 130550399)
+  bnd2c-transition: cursor 130550441 -> 130739648  epoch_fees 1144190 -> 6222776821
+                    (delta 6221632631)  acc_fp 9ab85e92 -> 636c0f5a  cp_cursor=130550399
+  b6-census-coadv: walk_ms=1497468 boundary_arm_ms=89484 checkpoint_forward_ms=13573
+  ade_node --mode node: relay run loop exited … tip slot=Some(130739648)
+
+So after crossing the block that had pinned it, the accumulator ALSO crossed the next epoch boundary
+(305 -> 306) — a boundary it had never reached — and folded on to the durable tip at 130,739,648.
+
+Two things follow, and only the first is a claim of this slice:
+
+1. The cursor is no longer pinned anywhere: it walked 130,350,114 -> 130,739,648 across a boundary.
+   That is the "accumulator demonstrably healthy" precondition B12 / DC-NODE-15 was waiting on. It
+   makes B12 ELIGIBLE for reconsideration; it does not reconsider it, and nothing here touches it.
+2. The DC-EPOCH-32 rewind fired exactly as designed and is visibly expensive: the boundary arm
+   re-materialized the checkpoint from the sealed seed and replayed it onto s_prev
+   (boundary_arm_ms=89,484). That is pre-existing, correct, and NOT a BND-2d regression — BND-2d
+   removed no rewind and added none. It is recorded because a ~90 s boundary arm at every crossing
+   is the kind of cost that should be measured before it is assumed acceptable.
+
+Note the last transition's `cp_cursor=130550399`: after the rewind the authority sat BEHIND the
+blocks being folded, so that segment resolved (had it needed to) from the live table. Both positions
+of the authority are therefore exercised in this one run.
+
 ## THE CRITERIA, ONE BY ONE
 
 | CE | criterion | verdict |
