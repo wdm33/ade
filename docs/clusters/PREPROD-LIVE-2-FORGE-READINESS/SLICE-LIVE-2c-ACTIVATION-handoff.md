@@ -85,6 +85,19 @@ undiagnosed would let a future session re-derive it at cost.
 > symptom of the still-open boundary defect, in which case the gate is doing its job and the fix
 > belongs upstream.
 
+> ### ⚠ CONDITION DISCHARGED 2026-08-16 — the accumulator is no longer a boundary behind
+>
+> The supersession above is CONDITIONAL, and its condition no longer holds. BND-2d (`56e0a4e4`,
+> proof `f19be266`, addendum `ba2e95e9`, store semantics v6) unpinned the accumulator LIVE: it
+> walked through 130,350,133, crossed boundary 305 → 306 at 130,550,441 and folded on to the
+> durable tip 130,739,648. `DC-LEDGER-PHASE2-03` and `-04` are `enforced`.
+>
+> That discharges the precondition the 2026-08-09 supersession named — *"a healthy accumulator, not
+> a classification"* — and **only** that. It does not license moving the predicate, and it does not
+> re-open the census: the `+1` is still candidate (1), still 762/762 `pre_admit`. What changes is
+> that the candidate fix below — the under-truthful SIGNAL, predicate intact — becomes ELIGIBLE to
+> be taken, in its own sealed slice, with its own negative tests.
+
 Candidate fix, named but NOT taken here (see the supersession above): the signal is under-truthful,
 not the predicate.
 `FollowedPeerTipSignal` records only what a peer *says*; a block that peer *served and Ade durably

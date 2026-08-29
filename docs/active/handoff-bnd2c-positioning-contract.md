@@ -1,5 +1,16 @@
 # NEXT — BND-2c: the positioning contract, before any of the three designs
 
+> **⚠ ANSWERED AND CLOSED 2026-08-16 — kept as the record of the question, not as active work.**
+>
+> The contract this doc opens is answered in
+> `docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-BND-2d-collateral-positioning-contract.md` §1:
+> `TxIn → Coin` is immutable over the chain, so position determines only WHETHER an authority can
+> answer, never WHAT the answer is; the co-advancer owns positioning. Of the three candidates below,
+> **resolve-at-first-sight won in its RETENTION form** — lockstep lost on the cross-database
+> invariant no transaction establishes, position-on-demand on measured replay cost. Implemented
+> `56e0a4e4` (store semantics v6), live-proven `f19be266`, addendum `ba2e95e9`.
+> `DC-LEDGER-PHASE2-03` and `-04` are `enforced`.
+
 Entry state: `4171d2ac`. BND-2a CLOSED, BND-2b CLOSED, BND-2c implemented (`390c8191`) with
 `DC-LEDGER-03` registered **`partial`** because its live bar failed. Store semantics **v5**.
 
