@@ -636,6 +636,10 @@ pub struct BoundaryFreezeInputs {
     pub delegated_pools: std::collections::BTreeSet<PoolId>,
     pub registered_pool_vrfs: BTreeMap<PoolId, Hash32>,
     pub mark_pool_stakes: BTreeMap<PoolId, Coin>,
+    /// LV-1 (DC-EPOCH-40): the mark's CREDENTIAL-side total (cardano's `sumAllStake`), captured here
+    /// alongside `mark_pool_stakes` and BEFORE the leadership membership filter, so the frozen object
+    /// carries a denominator that membership cannot move.
+    pub total_active_stake: u64,
 }
 
 /// Cross ONE epoch boundary into `target`, returning the accumulator + the [`BoundaryFreezeInputs`] — the pure
@@ -828,15 +832,19 @@ fn cross_epoch_boundary_transition(
     let target_leadership_epoch = EpochNo(target.0.checked_add(1).ok_or(
         LedgerTransitionError::LeadershipEpochOverflow { boundary_into_epoch: target.0 },
     )?);
-    let mark_pool_stakes = acc
+    let mark_snapshot = &acc
         .epoch_state
         .snapshots
         .as_authoritative()
         .ok_or(LedgerTransitionError::BoundaryLeadershipSnapshotUnavailable { target: target.0 })?
         .mark
-        .0
-        .pool_stakes
-        .clone();
+        .0;
+    let mark_pool_stakes = mark_snapshot.pool_stakes.clone();
+    // LV-1 (DC-EPOCH-40): the sigma denominator, from the SAME mark, folded over the CREDENTIAL side.
+    // Read here — before `from_boundary_snapshot` applies `delegated_pools INTERSECT
+    // registered_pool_vrfs` — because cardano's `calculatePoolDistr'` fixes its total before its own
+    // membership guards run. Summing the surviving entries instead is the defect this closes.
+    let total_active_stake = mark_snapshot.total_active_stake();
     Ok((
         acc,
         BoundaryFreezeInputs {
@@ -845,6 +853,7 @@ fn cross_epoch_boundary_transition(
             delegated_pools,
             registered_pool_vrfs,
             mark_pool_stakes,
+            total_active_stake,
         },
     ))
 }
@@ -882,6 +891,7 @@ pub fn cross_epoch_boundary_with_effect(
         &inputs.delegated_pools,
         &inputs.mark_pool_stakes,
         &inputs.registered_pool_vrfs,
+        inputs.total_active_stake,
     );
     let effect = EpochBoundaryEffect::FreezeLeadership {
         source_epoch: inputs.source_epoch,
@@ -2475,6 +2485,8 @@ mod tests {
             source_hash: Hash32([0x07; 32]),
             source_checkpoint_commitment: Hash32([0x0C; 32]),
             pools: BTreeMap::new(),
+            // LV-1: preserves this test's PRE-EXISTING semantics (summed denominator).
+            total_active_stake: 0,
         };
         let eff = |source: u64, target: u64| EpochBoundaryEffect::FreezeLeadership {
             source_epoch: EpochNo(source),

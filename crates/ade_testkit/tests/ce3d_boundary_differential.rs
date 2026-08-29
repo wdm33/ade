@@ -2105,6 +2105,10 @@ fn s4_0_epoch_indexed_leadership_acceptance_1338_to_1342() {
         record.seed_point_hash.clone(),
         Hash32([0x0C; 32]),
         &mark_1339,
+        // LV-1 (DC-EPOCH-40): the imported mark's snapshot total. This harness derives a
+        // REPRESENTATIVE mark from the 1338 pool set, so its credential side is that set's sum; the
+        // byte-exact reference path begins at 1340 and is unaffected.
+        record.total_active_stake,
     );
 
     // --- Native boundary freezes 1340/1341/1342 (S4-pre-2 shape: delegated ∩ registered). Built over the full
@@ -2127,6 +2131,11 @@ fn s4_0_epoch_indexed_leadership_acceptance_1338_to_1342() {
             &delegated,
             &stakes,
             &vrfs,
+            // LV-1 (DC-EPOCH-40): every pool in this synthetic set is delegated AND registered, so
+            // nothing is filtered and the snapshot total coincides with the entry sum here. The
+            // membership-invariance property itself is proven in
+            // ade_ledger/tests/lv1_sigma_denominator_authority.rs, where they deliberately differ.
+            stakes.values().map(|c| c.0).sum(),
         )
     };
 

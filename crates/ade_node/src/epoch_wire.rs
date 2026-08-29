@@ -1906,6 +1906,8 @@ mod tests {
             source_slot: SlotNo(target * 1_000 - 1),
             source_hash: Hash32([target as u8; 32]),
             source_checkpoint_commitment: Hash32([0xCC; 32]),
+            // LV-1: preserves this test's PRE-EXISTING semantics (summed denominator).
+            total_active_stake: pools.values().map(|e| e.active_stake).sum(),
             pools,
         }
     }

@@ -754,6 +754,11 @@ where
                                     binding.certified_point.block_hash.clone(),
                                     commitment.clone(),
                                     &s1a.mark_pool_distr,
+                                    // LV-1 (DC-EPOCH-40): the IMPORTED mark's credential-side total,
+                                    // via the single `StakeSnapshot::total_active_stake` definition.
+                                    // NOT summed from `mark_pool_distr` -- that is already the
+                                    // FILTERED PoolDistr, and summing it is the defect being closed.
+                                    s1a.snapshots.mark.0.total_active_stake(),
                                 ));
                             }
                             if let Err(e) = store.seal_bootstrap_leadership_epochs(&distrs) {

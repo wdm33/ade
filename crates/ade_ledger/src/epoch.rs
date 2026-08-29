@@ -32,6 +32,21 @@ pub struct StakeSnapshot {
 }
 
 impl StakeSnapshot {
+    /// LV-1 (DC-EPOCH-40): cardano's `sumAllStake` — the snapshot's TOTAL ACTIVE STAKE, folded over the
+    /// **credential** side (`delegations`), which is cardano's `ssStake`. This is the SOLE definition of
+    /// the leader-check sigma denominator; the boundary freeze and the bootstrap import both call it, so
+    /// the two can never drift.
+    ///
+    /// It is deliberately NOT `pool_stakes.values().sum()` and deliberately NOT a sum over any filtered
+    /// pool set. `calculatePoolDistr'` fixes this total BEFORE its `includeHash` / `numDelegators > 0`
+    /// guards run, so membership cannot move it — that invariant is the whole point (DC-EPOCH-40), and
+    /// summing anything pool-shaped is how it was lost.
+    pub fn total_active_stake(&self) -> u64 {
+        self.delegations
+            .values()
+            .fold(0u64, |acc, (_, coin)| acc.saturating_add(coin.0))
+    }
+
     pub fn new() -> Self {
         StakeSnapshot {
             delegations: BTreeMap::new(),

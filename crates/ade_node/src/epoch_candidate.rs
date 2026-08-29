@@ -361,6 +361,9 @@ mod tests {
             // v6: the frozen object's OWN provenance = the boundary-finalized reduced-checkpoint commitment
             // (the exact value the retired window path bound). The metadata below reads it from HERE.
             source_checkpoint_commitment: cp.finalize().expect("boundary-finalized checkpoint commitment"),
+            // LV-1: preserves this test's PRE-EXISTING semantics (it was written against the summed
+            // denominator). Production never sums -- see StakeSnapshot::total_active_stake.
+            total_active_stake: pools.values().map(|e| e.active_stake).sum(),
             pools,
         };
 

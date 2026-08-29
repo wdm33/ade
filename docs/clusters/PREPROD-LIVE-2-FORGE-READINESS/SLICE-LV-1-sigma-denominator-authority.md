@@ -39,7 +39,7 @@ makes Ade admit a header cardano rejects — a consensus divergence, silent, on 
 
 ## 2. INVARIANT
 
-**DC-EPOCH-47 (new).** The leadership σ denominator is the **snapshot's total active stake**, captured
+**DC-EPOCH-40 (new).** The leadership σ denominator is the **snapshot's total active stake**, captured
 at freeze time as the credential-side sum of the boundary mark, and carried on the frozen leadership
 authority as its own field. It is **invariant under the leadership pool-set membership filter**:
 adding or removing a pool from `FrozenLeadershipPoolDistr::pools` must not change it. It is never
@@ -61,7 +61,7 @@ pub struct FrozenLeadershipPoolDistr {
     pub source_slot: SlotNo,
     pub source_hash: Hash32,
     pub source_checkpoint_commitment: Hash32,
-    pub total_active_stake: u64,   // DC-EPOCH-47 — cardano's pdTotalActiveStake
+    pub total_active_stake: u64,   // DC-EPOCH-40 — cardano's pdTotalActiveStake
     pub pools: BTreeMap<Hash28, LeadershipPoolEntry>,
 }
 ```

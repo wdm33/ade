@@ -94,7 +94,7 @@
 /// does not reproduce the same accumulator state, and a v5 store is refused up front with the typed
 /// re-bootstrap terminal. Measured on preprod 130,350,133 (live 2026-08-16): the checkpoint sat at
 /// ~130,550,441 while the accumulator was at 130,350,114 and `0326ab20…#1` had already been spent.
-pub const STORE_SEMANTICS_VERSION: u32 = 6;
+pub const STORE_SEMANTICS_VERSION: u32 = 7;
 
 /// A durable artifact that carries authoritative semantics and therefore must be version-marked.
 ///

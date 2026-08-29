@@ -1812,6 +1812,9 @@ mod tests {
             source_slot: SlotNo(576 * 432_000 + 12_345),
             source_hash: Hash32([0x66; 32]),
             source_checkpoint_commitment: Hash32([0x0C; 32]),
+            // LV-1: preserves this test's PRE-EXISTING semantics (it was written against the summed
+            // denominator). Production never sums -- see StakeSnapshot::total_active_stake.
+            total_active_stake: pools.values().map(|e| e.active_stake).sum(),
             pools,
         }
     }

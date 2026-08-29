@@ -38,10 +38,11 @@ use crate::consensus_view::{PoolDistrView, PoolEntry};
 /// v6 (S4-L2) added `source_checkpoint_commitment` so the promoted candidate authority is FULLY self-contained
 /// (leadership + its provenance commitment both from the one frozen object; no window replay, no live-checkpoint
 /// lookup at promotion time).
-pub const FROZEN_LEADERSHIP_SCHEMA_VERSION: u32 = 6;
+pub const FROZEN_LEADERSHIP_SCHEMA_VERSION: u32 = 7;
 
-/// Outer array: [version, target_leadership_epoch, source_slot, source_hash, source_checkpoint_commitment, pools-map].
-const OUTER_FIELDS: u64 = 6;
+/// Outer array: [version, target_leadership_epoch, source_slot, source_hash, source_checkpoint_commitment,
+/// total_active_stake, pools-map].
+const OUTER_FIELDS: u64 = 7;
 /// Per-pool entry array: [active_stake, vrf_keyhash].
 const ENTRY_FIELDS: u64 = 2;
 
@@ -77,6 +78,20 @@ pub struct FrozenLeadershipPoolDistr {
     /// a window-replay re-materialization), so the frozen object is fully self-contained. It byte-matches the
     /// commitment the retired window-replay path bound for the same source point.
     pub source_checkpoint_commitment: Hash32,
+    /// LV-1 (DC-EPOCH-40): the snapshot's TOTAL ACTIVE STAKE — cardano's `pdTotalActiveStake`, folded
+    /// over the STAKE (credential) map at freeze time, BEFORE any membership decision.
+    ///
+    /// `calculatePoolDistr'` computes this from `unStake` (Conway: `sumAllStakeCompact`; master:
+    /// `sumAllActiveStake` in `mkSnapShot`) and then merely COPIES it into the `PoolDistr`; its
+    /// `includeHash` / `numDelegators > 0` guards filter `unPoolDistr` ONLY, and run after the total
+    /// is already fixed. **So which pools appear in `pools` cannot change this number.**
+    ///
+    /// Ade used to derive it by summing `pools`, which made every pool's sigma a function of the
+    /// membership filter. That is wrong in BOTH directions: a pool in the set whose stake cardano
+    /// does not count inflates it (sigma low, threshold low, spurious REJECT — the observed preprod
+    /// halt), and stake cardano counts behind a pool Ade filtered out deflates it (sigma high,
+    /// threshold high, spurious ACCEPT — a silent consensus divergence).
+    pub total_active_stake: u64,
     /// Per-pool frozen leadership entry, canonical key order.
     pub pools: BTreeMap<Hash28, LeadershipPoolEntry>,
 }
@@ -87,9 +102,11 @@ impl FrozenLeadershipPoolDistr {
     /// per-pool stakes (zero-stake registered pools contribute 0 but are carried for byte-identity).
     pub fn to_pool_distr_view(&self, asc: ActiveSlotsCoeff) -> PoolDistrView {
         let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
-        let mut total_active_stake: u64 = 0;
+        // LV-1 (DC-EPOCH-40): READ the snapshot total. It is NOT summed from `pools` here and there is
+        // deliberately no "sum if it looks unset" fallback -- such a fallback would reintroduce the
+        // defect on exactly the objects that need the fix.
+        let total_active_stake: u64 = self.total_active_stake;
         for (keyhash, entry) in &self.pools {
-            total_active_stake = total_active_stake.saturating_add(entry.active_stake);
             pools.insert(
                 keyhash.clone(),
                 PoolEntry {
@@ -127,6 +144,8 @@ impl FrozenLeadershipPoolDistr {
             source_slot: record.seed_point_slot,
             source_hash: record.seed_point_hash.clone(),
             source_checkpoint_commitment,
+            // LV-1 (DC-EPOCH-40): the seed record carries the certified total directly. Never summed.
+            total_active_stake: record.total_active_stake,
             pools,
         }
     }
@@ -154,6 +173,10 @@ impl FrozenLeadershipPoolDistr {
         delegated_pools: &BTreeSet<PoolId>,
         mark_pool_stakes: &BTreeMap<PoolId, Coin>,
         registered_pool_vrfs: &BTreeMap<PoolId, Hash32>,
+        // LV-1 (DC-EPOCH-40): the mark's credential-side total, from
+        // `StakeSnapshot::total_active_stake` -- captured BEFORE the membership filter below and
+        // carried through untouched, so `pools` cannot move it.
+        total_active_stake: u64,
     ) -> Self {
         let mut pools: BTreeMap<Hash28, LeadershipPoolEntry> = BTreeMap::new();
         for pool_id in delegated_pools {
@@ -170,6 +193,7 @@ impl FrozenLeadershipPoolDistr {
             source_slot,
             source_hash,
             source_checkpoint_commitment,
+            total_active_stake,
             pools,
         }
     }
@@ -185,6 +209,10 @@ impl FrozenLeadershipPoolDistr {
         source_hash: Hash32,
         source_checkpoint_commitment: Hash32,
         mark_pool_distr: &BTreeMap<PoolId, (u64, Hash32)>,
+        // LV-1 (DC-EPOCH-40): the IMPORTED mark snapshot's credential-side total
+        // (`s1a.snapshots.mark.total_active_stake()`). Never summed from `mark_pool_distr`, which is
+        // already the filtered PoolDistr.
+        total_active_stake: u64,
     ) -> Self {
         let pools = mark_pool_distr
             .iter()
@@ -200,6 +228,7 @@ impl FrozenLeadershipPoolDistr {
             source_slot,
             source_hash,
             source_checkpoint_commitment,
+            total_active_stake,
             pools,
         }
     }
@@ -244,6 +273,7 @@ pub fn encode_frozen_leadership(d: &FrozenLeadershipPoolDistr) -> Vec<u8> {
     write_uint_canonical(&mut buf, d.source_slot.0);
     write_bytes_canonical(&mut buf, &d.source_hash.0);
     write_bytes_canonical(&mut buf, &d.source_checkpoint_commitment.0);
+    write_uint_canonical(&mut buf, d.total_active_stake);
     let count = d.pools.len() as u64;
     write_map_header(&mut buf, ContainerEncoding::Definite(count, canonical_width(count)));
     for (keyhash, entry) in &d.pools {
@@ -276,6 +306,7 @@ pub fn decode_frozen_leadership(bytes: &[u8]) -> Result<FrozenLeadershipPoolDist
     let source_slot = SlotNo(read_u64(bytes, &mut o)?);
     let source_hash = read_hash32(bytes, &mut o)?;
     let source_checkpoint_commitment = read_hash32(bytes, &mut o)?;
+    let total_active_stake = read_u64(bytes, &mut o)?;
     let pools = decode_pools(bytes, &mut o)?;
     if o != bytes.len() {
         return Err(FrozenLeadershipError::TrailingBytes { extra: bytes.len() - o });
@@ -285,6 +316,7 @@ pub fn decode_frozen_leadership(bytes: &[u8]) -> Result<FrozenLeadershipPoolDist
         source_slot,
         source_hash,
         source_checkpoint_commitment,
+        total_active_stake,
         pools,
     };
     if encode_frozen_leadership(&decoded) != bytes {
@@ -384,6 +416,9 @@ mod tests {
             source_slot: SlotNo(115_862_416),
             source_hash: Hash32([0x07; 32]),
             source_checkpoint_commitment: Hash32([0x0C; 32]),
+            // LV-1: preserves this test's PRE-EXISTING semantics (it was written against the summed
+            // denominator). Production never sums -- see StakeSnapshot::total_active_stake.
+            total_active_stake: pools.values().map(|e| e.active_stake).sum(),
             pools,
         };
         let asc = ActiveSlotsCoeff { numer: 1, denom: 20 };
@@ -427,6 +462,9 @@ mod tests {
             &delegated_pools,
             &mark_pool_stakes,
             &registered_pool_vrfs,
+            // LV-1: an explicit snapshot total, distinct from the summed entries so the test cannot
+            // pass by accident if the summing loop ever returns.
+            7_777_777,
         );
         assert_eq!(d.target_leadership_epoch, EpochNo(1341));
         assert_eq!(d.source_slot, SlotNo(115_862_416));
@@ -473,6 +511,9 @@ mod tests {
             source_slot: SlotNo(115_862_416),
             source_hash: Hash32([0x07; 32]),
             source_checkpoint_commitment: Hash32([0x0C; 32]),
+            // LV-1: preserves this test's PRE-EXISTING semantics (it was written against the summed
+            // denominator). Production never sums -- see StakeSnapshot::total_active_stake.
+            total_active_stake: pools.values().map(|e| e.active_stake).sum(),
             pools,
         }
     }
@@ -492,6 +533,7 @@ mod tests {
         write_uint_canonical(&mut buf, slot.0);
         write_bytes_canonical(&mut buf, &hash.0);
         write_bytes_canonical(&mut buf, &[0x0C; 32]); // v6: source_checkpoint_commitment
+        write_uint_canonical(&mut buf, 1_000_000); // v7 (LV-1): total_active_stake
         let count = pools.len() as u64;
         write_map_header(&mut buf, ContainerEncoding::Definite(count, canonical_width(count)));
         for (keyhash, stake, vrf) in pools {
@@ -543,12 +585,17 @@ mod tests {
     #[test]
     fn codec_rejects_unknown_version() {
         let mut bytes = encode_frozen_leadership(&sample_distr());
-        // Outer header (0x85) then the single-byte version uint at offset 1.
+        // Outer array header then the single-byte version uint at offset 1. The header byte tracks
+        // OUTER_FIELDS, so assert it instead of naming a stale literal.
+        assert_eq!(bytes[0], 0x80 | (OUTER_FIELDS as u8));
         assert_eq!(bytes[1], FROZEN_LEADERSHIP_SCHEMA_VERSION as u8);
         bytes[1] = 4;
         assert_eq!(
             decode_frozen_leadership(&bytes),
-            Err(FrozenLeadershipError::UnknownVersion { expected: 6, found: 4 })
+            Err(FrozenLeadershipError::UnknownVersion {
+                expected: FROZEN_LEADERSHIP_SCHEMA_VERSION,
+                found: 4
+            })
         );
     }
 

@@ -411,6 +411,9 @@ mod tests {
             source_slot: ade_types::SlotNo(115_862_416),
             source_hash: Hash32([0x07; 32]),
             source_checkpoint_commitment: Hash32([0x0C; 32]),
+            // LV-1: preserves this test's PRE-EXISTING semantics (it was written against the summed
+            // denominator). Production never sums -- see StakeSnapshot::total_active_stake.
+            total_active_stake: pools.values().map(|e| e.active_stake).sum(),
             pools,
         };
         let commitment = consensus_profile_commitment(&test_gen(), &test_pp(), test_asc());
