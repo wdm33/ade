@@ -422,3 +422,90 @@ fn first_native_freeze_vs_neighbours_historical() {
         "READING: a near-zero probe delta across a FULL EPOCH is a stake set that did not advance."
     );
 }
+
+/// PAIRWISE DIFF of two sealed leadership epochs, pool by pool. The question a per-pool probe cannot
+/// settle: is epoch B's stake set a DERIVATION from a later chain point, or a COPY of epoch A's?
+///
+/// A derivation one epoch apart moves essentially every pool. A copy leaves them byte-identical.
+///
+/// ```text
+/// ADE_CENSUS_ACC_REDB=<copy> ADE_CENSUS_EPOCH_A=305 ADE_CENSUS_EPOCH_B=306 \
+///   cargo test -p ade_runtime --test leadership_distr_census pairwise -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "evidence-only; requires ADE_CENSUS_ACC_REDB pointing at a COPY of a real store"]
+fn pairwise_stake_diff_between_two_sealed_epochs() {
+    let path = std::env::var("ADE_CENSUS_ACC_REDB").expect("ADE_CENSUS_ACC_REDB");
+    let a: u64 = std::env::var("ADE_CENSUS_EPOCH_A").expect("A").parse().unwrap();
+    let b: u64 = std::env::var("ADE_CENSUS_EPOCH_B").expect("B").parse().unwrap();
+
+    let store = EpochAccumulatorStore::open(std::path::Path::new(&path)).expect("open store copy");
+    let get = |e: u64| {
+        store
+            .frozen_leadership_for_epoch(EpochNo(e))
+            .expect("read")
+            .expect("present")
+    };
+    let (da, db) = (get(a), get(b));
+
+    let mut identical = 0usize;
+    let mut moved = 0usize;
+    let mut only_a = 0usize;
+    let mut only_b = 0usize;
+    let mut max_rel: f64 = 0.0;
+    let mut sum_abs_delta: i128 = 0;
+
+    for (pid, ea) in &da.pools {
+        match db.pools.get(pid) {
+            None => only_a += 1,
+            Some(eb) => {
+                if ea.active_stake == eb.active_stake {
+                    identical += 1;
+                } else {
+                    moved += 1;
+                    let d = eb.active_stake as i128 - ea.active_stake as i128;
+                    sum_abs_delta += d.abs();
+                    if ea.active_stake > 0 {
+                        let rel = (d.abs() as f64) / (ea.active_stake as f64);
+                        if rel > max_rel {
+                            max_rel = rel;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    only_b = db.pools.keys().filter(|k| !da.pools.contains_key(*k)).count();
+
+    // NAME the set difference. A single large pool entering or leaving the leadership SET moves the
+    // denominator far more than a full epoch of ordinary stake drift, so it must never be a bare count.
+    for (pid, e) in &da.pools {
+        if !db.pools.contains_key(pid) {
+            println!("  ONLY IN {a}: pool {}  stake {}", hex(&pid.0), e.active_stake);
+        }
+    }
+    for (pid, e) in &db.pools {
+        if !da.pools.contains_key(pid) {
+            println!("  ONLY IN {b}: pool {}  stake {}", hex(&pid.0), e.active_stake);
+        }
+    }
+
+    println!("=== pairwise stake diff: epoch {a} -> epoch {b} ===");
+    println!("  pools in {a}                 {}", da.pools.len());
+    println!("  pools in {b}                 {}", db.pools.len());
+    println!("  shared, stake IDENTICAL      {identical}");
+    println!("  shared, stake MOVED          {moved}");
+    println!("  only in {a}                  {only_a}");
+    println!("  only in {b}                  {only_b}");
+    println!("  sum |delta| over moved       {sum_abs_delta}");
+    println!("  max relative move            {:.8}%", max_rel * 100.0);
+    println!();
+    let shared = identical + moved;
+    if shared > 0 {
+        println!(
+            "  VERDICT: {:.2}% of shared pools are byte-identical.",
+            identical as f64 / shared as f64 * 100.0
+        );
+        println!("  A DERIVATION one epoch apart moves nearly every pool. A COPY does not.");
+    }
+}
