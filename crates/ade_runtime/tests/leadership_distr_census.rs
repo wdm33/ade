@@ -326,3 +326,99 @@ fn required_sigma_operands_for_acceptance() {
         (total - lo2) as f64 / total as f64 * 100.0
     );
 }
+
+// ---------------------------------------------------------------------------
+// HISTORICAL-ARTIFACT read path.
+//
+// `EpochAccumulatorStore::open` fail-closes on a store whose semantics marker predates the current
+// STORE_SEMANTICS_VERSION (`found: Absent, required: 6, RebootstrapRequired`) -- correct for
+// production, and it also locks forensics out of every archived fixture. This reads the leadership
+// table DIRECTLY so a historical store can still be interrogated, and decodes with the PRODUCTION
+// `decode_frozen_leadership` so the object itself is never reinterpreted.
+//
+// The table NAME is duplicated here on purpose and is the one thing that could drift; it is asserted
+// against a non-empty read, so a rename surfaces as "table absent" rather than as a silent zero.
+// Test-only. It weakens no production gate.
+// ---------------------------------------------------------------------------
+
+const LEADERSHIP_TABLE: redb::TableDefinition<u64, &[u8]> =
+    redb::TableDefinition::new("current_leadership_by_epoch");
+
+/// Compare the FIRST native leadership freeze against its neighbours in an archived store.
+///
+/// Bootstrap seeds `nesPd_{seed}` and `nesPd_{seed+1}`; the first NATIVE freeze therefore produces
+/// `nesPd_{seed+2}`. That object is the one no continuous-operation proof ever derives -- CE-4A.1 and
+/// CE-4B both assert `start_epoch == seed+2` and fold forward from there, and the S4-pre-2 reference
+/// proof byte-matched `seed+4` (the 1340->1341 crossing). This walks the epochs around it and prints
+/// each pool's stake so a stake set that FAILED TO ADVANCE is visible as a near-zero delta.
+///
+/// ```text
+/// ADE_CENSUS_ACC_REDB=<copy> ADE_CENSUS_EPOCHS=1339,1340,1341,1342 ADE_CENSUS_POOL=<hex28> \
+///   cargo test -p ade_runtime --test leadership_distr_census first_native -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "evidence-only; requires ADE_CENSUS_ACC_REDB pointing at a COPY of a real store"]
+fn first_native_freeze_vs_neighbours_historical() {
+    use ade_ledger::frozen_leadership::decode_frozen_leadership;
+
+    let path = std::env::var("ADE_CENSUS_ACC_REDB").expect("ADE_CENSUS_ACC_REDB");
+    let epochs: Vec<u64> = std::env::var("ADE_CENSUS_EPOCHS")
+        .expect("ADE_CENSUS_EPOCHS, comma-separated")
+        .split(',')
+        .map(|e| e.trim().parse().expect("u64"))
+        .collect();
+    let probe = std::env::var("ADE_CENSUS_POOL").ok().map(|h| {
+        let h = h.replace('_', "");
+        (0..h.len() / 2)
+            .map(|i| u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).expect("hex"))
+            .collect::<Vec<u8>>()
+    });
+
+    let db = redb::Database::open(&path).expect("open redb copy");
+    let txn = db.begin_read().expect("begin_read");
+    let t = txn
+        .open_table(LEADERSHIP_TABLE)
+        .expect("current_leadership_by_epoch table absent -- renamed? this reader must be updated");
+
+    let mut prev: Option<(u64, u64, Option<u64>)> = None;
+    for e in epochs {
+        let raw = match t.get(e).expect("get") {
+            Some(v) => v.value().to_vec(),
+            None => {
+                println!("epoch {e}: ABSENT");
+                continue;
+            }
+        };
+        let d = decode_frozen_leadership(&raw).expect("decode with the PRODUCTION codec");
+        let total: u64 = d.pools.values().map(|p| p.active_stake).sum();
+        let probe_stake = probe.as_ref().and_then(|want| {
+            d.pools
+                .iter()
+                .find(|(k, _)| k.0[..] == want[..])
+                .map(|(_, p)| p.active_stake)
+        });
+
+        println!(
+            "epoch {e}: source_slot {:>12}  pools {:>4}  zero {:>3}  total {:>19}  probe {:?}",
+            d.source_slot.0,
+            d.pools.len(),
+            d.pools.values().filter(|p| p.active_stake == 0).count(),
+            total,
+            probe_stake
+        );
+        if let Some((pe, ptot, pprobe)) = prev {
+            let dt = (total as f64 - ptot as f64) / ptot as f64 * 100.0;
+            print!("   vs {pe}: total {dt:+.6}%");
+            if let (Some(a), Some(b)) = (pprobe, probe_stake) {
+                let dp = (b as f64 - a as f64) / a as f64 * 100.0;
+                print!("   probe {dp:+.8}%");
+            }
+            println!();
+        }
+        prev = Some((e, total, probe_stake));
+    }
+    println!();
+    println!(
+        "READING: a near-zero probe delta across a FULL EPOCH is a stake set that did not advance."
+    );
+}
