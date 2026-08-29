@@ -1,0 +1,130 @@
+# LEADERVALUE CENSUS — the FIRST native leadership freeze reproduces the bootstrap stake.
+# preprod v6 store, 2026-08-29. Read-only. NO fresh bootstrap, NO node re-run, NO oracle for the
+# disputed epoch.
+#
+# Opened by: CE-B12-10 blocked on a deterministic LeaderValueAboveThreshold
+# (b12-ce10-BLOCKED-leader-value-above-threshold.txt).
+# Harness: crates/ade_runtime/tests/leadership_distr_census.rs (#[ignore]d, evidence-only).
+#
+# METHOD NOTE: EpochAccumulatorStore::open is READ-WRITE, so every read below ran against a COPY of
+# ~/.cardano-live1/ade-preprod-v6/epoch-accumulator.redb. The live store was never opened.
+
+## WHAT THE ERROR ALREADY CONTAINED — the issuer is recoverable without widening it
+
+The rejection carries only `value` and `threshold`. It turns out that is ENOUGH, given the sealed
+distribution: the threshold is a function of (asc, sigma) alone, so replaying the PRODUCTION
+`check_leader_claim` over all 505 sealed pools and testing byte-equality against the observed
+threshold identifies the issuer uniquely.
+
+  target threshold bytes  [0,3,147,218,125,24,43,26]
+  MATCH  pool 0ed90e52db2166b3a80e0711885b94f7950fc0e3898a573a8b98b0e9
+         stake 1730595594678   sigma 1730595594678/1626066239242875
+  matches: 1
+
+**Exactly one.** So the issuer is PROVEN, not inferred — and the planned "widen the error first" step
+was not on the critical path after all. (Widening is still worth doing: this route only works while
+the store that rejected the header is still in hand.)
+
+## THE GAP, AS TARGET NUMBERS
+
+Bisecting the production check on the observed `value` (low 56 bytes zero-padded, so these are the
+most GENEROUS bounds — a lower bound on what is actually required):
+
+  ade_stake (numerator)                     1730595594678
+  ade_total (denominator)                   1626066239242875
+  REQUIRED pool stake at Ade's denominator  >= 1731141132959   (+545,538,281 = +0.031523%)
+  REQUIRED total stake at Ade's numerator   <= 1625553813442556 (-512,425,800,319 = -0.031513%)
+
+## THE DECISIVE TABLE — Ade's own three sealed epochs
+
+| epoch | source_slot  | pools | zero-stake | denominator (total active stake) | probe-pool stake | sigma        |
+|-------|--------------|-------|------------|----------------------------------|------------------|--------------|
+| 305   | 129,813,427  | 446   | 0          | 1,628,085,207,615,496            | 1,730,597,146,933| 0.10629647%  |
+| 306   | 130,118,358  | 505   | 57         | 1,626,066,239,242,875            | 1,730,595,594,678| 0.10642836%  |
+| 307   | 130,550,399  | 504   | 57         | 1,563,586,879,499,918            | 1,713,246,643,021| 0.10957157%  |
+
+  305 = BOOTSTRAP, imported verbatim (`from_mark_pool_distr`) — seed+1, the one epoch no native
+        freeze can produce.
+  306 = the FIRST native freeze (`from_boundary_snapshot`, at the 304 -> 305 crossing).  <-- FAILS
+  307 = the SECOND native freeze.
+
+## THE ORACLE, FOR THE EPOCHS IT CAN STILL ANSWER
+
+`cardano-cli query stake-snapshot` on the local peer (now at epoch 310, 100% synced), pool
+0ed90e52…:
+
+  stakeGo   1,717,112,302,756 / total 1,566,942,405,116,693 = 0.10958%   (end of 307)
+  stakeSet  1,718,194,754,861 / total 1,567,636,633,251,793 = 0.10960%   (end of 308)
+  stakeMark 1,719,384,885,397 / total 1,567,920,180,148,898 = 0.10966%   (end of 309)
+
+  **Ade's epoch-307 sigma 0.10957157% matches cardano's 0.10958% to five significant figures.**
+  Ade's epoch-306 sigma 0.10642836% is 2.87% LOW.
+
+Cardano's totals move 0.062% across two epochs. Ade's 306 -> 307 denominator moves **4.0%**.
+
+⚠ The live peer CANNOT answer for epoch 306 — its mark/set/go now cover the ends of 309/308/307, and
+epoch 306's leadership stake is the end of 304. That window closed while this was being diagnosed.
+An exact epoch-306 reference needs the AWS reference node / the LDAT harness
+(`ce3d_boundary_differential::ldat_classify_leadership_pools`).
+
+## THE ARGUMENT THAT NEEDS NO ORACLE
+
+Look at the probe pool's stake at 305 and at 306:
+
+  305   1,730,597,146,933
+  306   1,730,595,594,678
+  diff          1,552,255   =  0.00009%
+
+These are supposed to be DIFFERENT snapshots a FULL EPOCH apart — 305's leadership stake is the end
+of epoch 303, 306's is the end of epoch 304. Cardano's own data shows this pool's stake moving
+~0.06% per epoch. **Two independently derived snapshots one epoch apart cannot agree to nine
+significant figures. That is a copy, not a derivation.**
+
+The pool SET was rebuilt correctly at 306 (446 -> 505 entries, +57 zero-stake, matching the shape of
+cardano's own nesPd, which carries 505 pools and 57 zero-sigma entries at epoch 310). It is the
+STAKE VALUES that did not advance.
+
+## DIAGNOSIS
+
+**The first native leadership freeze reproduces the bootstrap-imported stake instead of deriving the
+end-of-epoch-304 mark snapshot.** By the second native freeze the derivation is correct and matches
+cardano to five significant figures.
+
+Direction and magnitude both fit: a stale, seed-era denominator that is ~4% too high deflates every
+pool's sigma by ~2.9%, which lowers every leader threshold by ~2.9%. Ade then rejects exactly those
+headers whose VRF value falls in the resulting narrow band — which is why the node followed thousands
+of blocks before hitting one, and why it hits the SAME one every time. Only +0.0315% of sigma was
+needed for this header; the available correction is ~2.9%, so the fix clears it with margin.
+
+Call site: `cross_epoch_boundary_with_effect` -> `FrozenLeadershipPoolDistr::from_boundary_snapshot`
+(`epoch_accumulator.rs:877`), whose `mark_pool_stakes` come from `cross_epoch_boundary_transition`'s
+inputs — built from the point-bound base-UTxO stake at the mark source `s_prev`. For the first native
+crossing, `s_prev` is 130,118,358 and the reduced checkpoint reaching it was itself replayed forward
+from the Mithril seed anchor at 129,813,427. That is where the staleness has to be, and it is the
+next thing to instrument.
+
+## WHAT IS PROVEN vs INFERRED — stated separately on purpose
+
+PROVEN, in-tree, no oracle:
+  * the issuer pool (byte-exact threshold reproduction, unique among 505)
+  * the required sigma delta (+0.0315%, lower bound)
+  * 305 and 306 carry the same probe-pool stake to 0.00009%
+  * Ade's 306 sigma is 2.87% below its own 307 sigma
+
+MEASURED against the live oracle, for epochs 307-309 only:
+  * cardano's sigma for the probe pool is stable at 0.1096% +/- 0.007%/epoch
+  * Ade's epoch-307 sigma matches it to five significant figures
+  * cardano's totals move 0.062%/2 epochs where Ade's 306->307 moves 4.0%
+
+INFERRED (strong; an epoch-306 reference would close it):
+  * that epoch 306 is stale rather than epoch 304->305 having genuinely lost 4% of active stake
+
+NOT DETERMINED:
+  * the exact mechanism inside the mark construction at the first post-seed boundary
+
+## WHY THE v6 STORE MUST BE KEPT
+
+It is the reproducer AND the fixture: it halts on the first sync step in ~2 minutes and both halts
+left chain.db / epoch-accumulator.redb / reduced-checkpoint.redb byte-identical in size. Once the
+freeze is corrected, the same store either validates the header or does not — a two-minute verdict.
+A fresh bootstrap would DESTROY this and prove less.
