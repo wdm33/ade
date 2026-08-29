@@ -6893,7 +6893,7 @@ tests = ["forge_refused_not_caught_up", "forge_base_falls_back_to_snapshot_ancho
 ci_script = "ci/ci_check_forge_followed_tip_admission.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AE"
-strengthened_in = ["PHASE4-N-AH", "CN-FOLLOW-01"]
+strengthened_in = ["PHASE4-N-AH", "CN-FOLLOW-01", "PREPROD-LIVE-2-B12"]
 evidence_notes = "PHASE4-N-AE.A (2026-06-06). ENFORCED. The --mode node ForgeTick recovered.tip forge-base fallback (node_lifecycle.rs:1102 `None => act.recovered.tip.clone()`) is removed: the forge base is the durable servable tip (ChainDb::tip(); the recovered snapshot anchor is never a forge base). A closed GREEN classifier forge_followed_tip_admission(durable_servable_tip, followed_peer_tip) returns CaughtUp iff BOTH tips are present AND hash AND block_no are equal, else NotCaughtUp{reason} (NoFollowedPeerTip | NoDurableServableTip | TipMismatch). On the recovered/following path the ForgeTick arm calls the classifier BEFORE the single fenced forge_one_from_recovered; NotCaughtUp records a typed ForgeRefused::NotCaughtUp{local_servable_tip, followed_peer_tip, reason} into ForgeActivation.last_forge_refused (a structured LOCAL observation, never a log-string-only path) and the forge does not fire (no state transition, tip unchanged) -- mechanically distinct from a forge Failed. The followed-peer-tip signal (FollowedPeerTipSignal) is sourced from the SAME run_admission_wire_pump stream (the AdmissionPeerEvent::TipUpdate events NodeBlockSource skips for sync are recorded as a write-only side effect); it is a forge-ADMISSIBILITY input only and never reaches select_best_chain/chain_selector/fork_choice (gate (d) static-grep enforced). The from-genesis cold-start (recovered.tip None) is upstream of the gate (DC-NODE-08). Gate: ci_check_forge_followed_tip_admission.sh."
 
 [[rules]]
@@ -10309,6 +10309,45 @@ introduced_in = "PREPROD-LIVE-2c-ACTIVATION"
 strengthened_in = []
 evidence = ["Run 4 (2026-08-06, wire_smoke.jsonl): 354 admitted ForgeTicks emitted 354 forge_result records, all outcome=no_tip_available -- a catch-all that could not distinguish a fence refusal from an absent tip from a KES-window failure."]
 evidence_notes = "Opened AFTER decomposing run 4's own artifacts, which CORRECTED the SLICE-LIVE-2b code-read conclusion that B11 had fired. The operator op-cert starts at KES period 970; with slotsPerKESPeriod 129_600 and maxKESEvolutions 62, the naive 19-day-ahead slot 131_976_696 is absolute period 1018, evolution 48 -- comfortably INSIDE the window, so kes_period_for_slot returned Some(48) and the wrong slot was never refused there. Pinned as the_naive_19_day_ahead_slot_was_never_refused_by_the_kes_window. This makes DC-NODE-45 the load-bearing fix and DC-NODE-46 a defence-in-depth one, which is the opposite of how the branch table read it. The per-tick reset clause (e) was NARROWED by the mutation sweep: every path that does refuse overwrites the field, so the sticky harm is confined to the one path that records nothing -- which is precisely the record an operator reads when nothing is happening."
+
+[[rules]]
+id = "DC-NODE-47"
+tier = "derived"
+statement = """
+Followed-peer-tip possession evidence (SLICE B12). The forge-admissibility signal
+(FollowedPeerTipSignal) reports the STRONGEST available evidence that the followed peer possesses a
+block, not only the weakest. An ADVERTISEMENT (the peer's chain-sync `tip` field, absorbed by
+observe() from AdmissionPeerEvent::TipUpdate) is testimony and can be stale, absent or false; a tip
+the peer SERVED and Ade DURABLY ADMITTED is a demonstration, because a peer cannot serve a block it
+does not have. (a) BOTH HALVES ARE HELD SEPARATELY -- `latest` and `served` -- and both are readable
+on their own. (b) tip() COMBINES THEM by preferring the served half only on a STRICTLY greater
+block_no; a tie at the same height with differing hashes is a fork the AO owns and falls to the
+ADVERTISEMENT, so the tips disagree and DC-NODE-15 refuses with TipMismatch preserved rather than
+collapsing to NoFollowedPeerTip. (c) THE SERVED FACT IS ADMIT-GATED: written only after a successful
+durable admit, from the pump's own validated tip (PumpTip.slot/hash/block_no, all from the decode the
+admit already performed) -- never on receipt, never via a re-read + re-decode. (d) IT IS
+ROLLBACK-CLEARED: any rollback clears it and the signal falls back to the advertisement. (e) IT IS
+NOT A SYNC OR CHAIN-SELECTION AUTHORITY: it never advances a tip, never feeds next_block / pump_block,
+never reaches a chain selector; it may only make a forge admissible where the peer provably holds
+Ade's own durable tip. (f) POSSESSION vs TESTIMONY: consumers asking whether the peer HOLDS a block
+(the ForgeTick gate and the fork-switch fence -- two call sites of the SAME
+forge_followed_tip_admission predicate) read tip(); consumers recording what the peer SAID (the two
+convergence-evidence emit_admit_and_verdict sites, which derive an AgreementVerdict) read
+advertised(). (g) IT IS PEER-BLIND, symmetrically with the advertisement half it joins; per-peer
+scoping of BOTH halves is DC-NODE-35 and is owed when multi-peer follow activates.
+"""
+source = "docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-B12-served-or-advertised-peer-tip.md; docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LIVE-2c-ACTIVATION-handoff.md (the recorded candidate fix + its 2026-08-09 supersession and 2026-08-16 discharge); docs/evidence/run-stores/preprod-live2c/b12-census-classified.txt."
+cross_ref = ["DC-NODE-15", "DC-NODE-34", "DC-NODE-35", "DC-NODE-16", "DC-NODE-28", "DC-FOLLOW-FORGE-01", "CN-FOLLOW-01"]
+code_locus = "crates/ade_node/src/node_sync.rs: FollowedPeerTipSignal{latest, served} + tip() (the combination rule) + advertised() / served() accessors + observe_served / clear_served + NodeBlockSource::{record_served_tip, clear_served_tip}; the single write site inside run_node_sync's successful-admit block and the clear on the resolve_and_apply_peer_rollback path. crates/ade_runtime/src/forward_sync/pump.rs: PumpTip.block_no (threaded from the decode that already produced prev_hash). crates/ade_node/src/node_lifecycle.rs: the ForgeTick gate operand + the fork-switch fence read tip(); both convergence-evidence sites read advertised(). Gate ci/ci_check_followed_peer_tip_served_evidence.sh."
+tests = ["the_census_frontier_tuple_resolves_caught_up_once_service_is_evidence", "a_catch_up_gap_keeps_the_advertisement_dominant_and_the_gate_refusing", "a_self_forged_tip_is_not_served_evidence_and_the_gate_refuses", "a_rollback_clears_the_served_fact_and_the_signal_falls_back_to_the_advertisement", "a_source_that_has_admitted_nothing_offers_no_served_evidence", "a_tie_at_the_same_height_resolves_to_the_advertisement_and_refuses", "all_three_venue_routes_refuse_on_the_pre_fix_census_tuple"]
+ci_scripts = ["ci/ci_check_followed_peer_tip_served_evidence.sh", "ci/ci_check_forge_followed_tip_admission.sh"]
+status = "partial"
+authority_surface = "RED/GREEN forge-admissibility signal (in-memory, non-authoritative; may only PREVENT a forge). NO BLUE change, NO durable state, STORE SEMANTICS NEUTRAL (version stays 6; neither node_sync.rs nor node_lifecycle.rs is in the store-semantics hashed surface, and the lock gate was RUN and passed unchanged)."
+cluster = "PREPROD-LIVE-2-FORGE-READINESS"
+introduced_in = "PREPROD-LIVE-2-B12"
+strengthened_in = []
+evidence = ["B12 census (2026-08-09, fcbabb67, b12-census-classified.txt): 762 admitted ForgeTicks, 6 distinct tip tuples, local_minus_peer=1 and verdict=tip_mismatch UNANIMOUS; order=pre_admit 762/762 and announcements_since_admit=0 classify the +1 as candidate (1), benign observation order.", "Same census, the catch-up discriminator: peer_announcements=9798 against peer_advances=13 over that run's ~9,800-block catch-up (15m45s, one advance per ~73 s = the preprod block interval)."]
+evidence_notes = "STATUS IS `partial` DELIBERATELY: the in-tree proof is complete (7 CE tests green, both gates passing, eight required mutations each breaking something) but the LIVE bar -- CE-B12-10, admitted ForgeTicks on preprod ceasing to refuse tip_mismatch and reaching leadership evaluation, closing CE-L2c-7/8/9 -- is not yet met. Flip to `enforced` only on that evidence. THE SAFETY ARGUMENT IS MEASURED, NOT ASSUMED: the danger the 2026-08-09 supersession named is a gate that stops enforcing catch-up, and the answer is that during catch-up the chain-sync tip field carries the peer's REAL HEAD so the advertisement LEADS and dominates. Had it instead carried the parent of each delivered header, peer_advances would read ~9,798 rather than 13; it reads 13, so across the whole catch-up the advertisement sat still at the peer's own head while service climbed underneath it, and the +1 is a property of the FRONTIER alone. Service can only ever raise the signal to a block Ade has ITSELF durably admitted, so it cannot manufacture a CaughtUp for a tip Ade does not hold. A CODE READ TURNED INTO A TEST: the LIVE-2c handoff's 'cheapest discriminator first' step 3 -- declare --participant-venue and see whether the latch fires -- is REFUTED, because participant_forge_decision returns UseInitialCatchupGate in the initial modes and the Participant arm routes that to the same dc_node_15_refusal the default arm calls, on operands bound once before the venue branch; all_three_venue_routes_refuse_on_the_pre_fix_census_tuple pins it rather than leaving it a code read, on a cluster where code reads have been wrong four times. THE CONSUMER SPLIT WAS NEARLY MISSED and is the reason clause (f) exists: both convergence-evidence sites feed derive() -> AgreementVerdict, and the combined signal folds in the block just admitted, so pointing them at tip() would make EVERY admit read `Agreed` by construction -- an evidence stream that always agrees, silently. They keep advertised() and are byte-identical to their pre-slice behaviour. A GATE REPAIRED IN PASSING, recorded because it is enforcement debt discovered rather than created: ci/ci_check_forge_followed_tip_admission.sh (cited by CE-B12-6) had been SILENTLY FAILING since ECA-5 (26565bec) -- its prod_body truncated at the FIRST bare #[cfg(test)], and that commit inserted an inline `#[cfg(test)] async fn run_node_sync_no_eview` shim above every symbol the gate inspects, so it saw an empty body and failed closed on it. Both gates now truncate at the trailing #[cfg(test)] MODULE only, and DC-NODE-15's assertions are enforced again. NOT IN SCOPE and stated so: no predicate change, no peer scoping (DC-NODE-35), no BLUE change, no store bump, no CLK, no forge-success or peer-acceptance claim."
 
 [[rules]]
 id = "DC-EPOCH-39"

@@ -4082,7 +4082,14 @@ pub async fn run_relay_loop_with_sched(
                                     // per-block catch-up hot path, so it is not routed through the
                                     // utxo_fp_cache (emit_participant_admit, the hot path, reuses prior_fp).
                                     let post_fp = fingerprint(&state.receive.ledger).combined;
-                                    let peer_tip = source.followed_peer_tip_signal().tip();
+                                    // B12 (DC-NODE-47): the ADVERTISED half, deliberately. This feeds
+                                    // `derive(&outcome, &tip)` -> AgreementVerdict, which asks what the
+                                    // peer SAID; the combined signal folds in the block just admitted and
+                                    // would make every verdict `Agreed` by construction, destroying the
+                                    // evidence stream's meaning. The gate asks about POSSESSION and gets
+                                    // `tip()`; evidence asks about TESTIMONY and gets `advertised()`.
+                                    // Byte-identical to the pre-slice value.
+                                    let peer_tip = source.followed_peer_tip_signal().advertised();
                                     ev.emit_admit_and_verdict(
                                         new_tip.slot.0,
                                         &new_tip.hash,
@@ -4204,6 +4211,11 @@ pub async fn run_relay_loop_with_sched(
                             hash,
                             block_no,
                         });
+                    // B12 (DC-NODE-47): this KEEPS the combined signal, deliberately. It is the
+                    // same `forge_followed_tip_admission` predicate the ForgeTick gate calls, asking
+                    // the same question — does the peer hold the tip we are on? Two call sites of one
+                    // predicate must not see two different operands; leaving this one on the
+                    // advertisement would preserve the very defect this slice removes, in a mirror.
                     let caught_up = matches!(
                         forge_followed_tip_admission(
                             durable_servable_tip,
@@ -6516,7 +6528,10 @@ fn emit_participant_admit(
         // SECOND time per block (doubling the catch-up cost). Byte-identical
         // value; observe-only evidence -- never read back into any authority path.
         let post_fp = state.prior_fp.clone();
-        let peer_tip = source.followed_peer_tip_signal().tip();
+        // B12 (DC-NODE-47): the ADVERTISED half — see the sibling site above. An
+        // AgreementVerdict built from the combined signal would read `Agreed` on every
+        // admit. Byte-identical to the pre-slice value.
+        let peer_tip = source.followed_peer_tip_signal().advertised();
         ev.emit_admit_and_verdict(tip.slot.0, &tip.hash, &tip.prev_hash, &post_fp, peer_tip);
         // MEM-MEASURE-A2 (OP-MEM-01): per-admit RSS sample paired with the durable tip
         // ledger fingerprint (`post_fp`). Observe-only; RSS never feeds authority.

@@ -213,6 +213,27 @@ advertisement wins**, the tips disagree, and the gate refuses. Conservative by c
   **Handed forward, explicitly:** when multi-peer follow activates, the served fact and the
   advertisement must be scoped together, under DC-NODE-35.
 
+### 4.6 POSSESSION vs TESTIMONY — the consumer split, found by auditing the mirrors
+
+`tip()` has four consumers, and they are **not** asking the same question. Auditing them was not
+optional: a fix to one documented path needs the others audited, and this one changes a value three
+other call sites already read.
+
+| consumer | question it asks | operand | why |
+|---|---|---|---|
+| the ForgeTick gate (`node_lifecycle.rs:4391`) | does the peer **hold** the tip I would build on? | `tip()` — combined | possession. The whole point of the slice |
+| the fork-switch fence (`:4210`) | same question, same `forge_followed_tip_admission` predicate | `tip()` — combined | **two call sites of one predicate must not see two different operands.** Leaving this on the advertisement would preserve the exact defect being removed, in a mirror |
+| convergence evidence (`:4085`, `:6519`) | what did the peer **say**? | `advertised()` | testimony |
+
+The evidence split is load-bearing and was nearly missed. Both evidence sites feed
+`derive(&outcome, &tip)` → `AgreementVerdict::{Agreed, Lagging, Diverged}`. The combined signal
+folds in the block Ade just admitted, so feeding it there would make **every** admit read `Agreed`
+by construction — an evidence stream that always agrees, silently. `advertised()` keeps both sites
+byte-identical to their pre-slice behaviour.
+
+So the signal exposes both halves separately and each consumer takes the one that answers its own
+question. A single `tip()` for everything would have been simpler and wrong.
+
 ### 4.5 What does NOT change
 
 `forge_followed_tip_admission` (`node_sync.rs:1153`), `dc_node_15_refusal`
@@ -233,6 +254,7 @@ site, and one pure function.
 | **CE-B12-5** | Served is recorded only after a **successful** durable admit — a rejected block records nothing | unit |
 | **CE-B12-6** | `forge_followed_tip_admission` is byte-unchanged and still requires equality on BOTH `hash` and `block_no` | structural gate (existing `ci_check_forge_followed_tip_admission.sh` assertion (b)) |
 | **CE-B12-7** | Neither `served` nor `tip()` reaches `select_best_chain` / a chain selector / `next_block` / `pump_block` | structural gate (extends existing assertion (d)) |
+| **CE-B12-7b** | The two convergence-evidence sites consume `advertised()`, not `tip()` — an `AgreementVerdict` is testimony and must not read `Agreed` by construction | structural gate (§4.6) |
 | **CE-B12-8** | **All three venue routes** (SingleProducer / Participant / Unknown) refuse on the pre-fix census tuple — the `--participant-venue` discriminator was never available | unit |
 | **CE-B12-9** | Same `block_no`, different hash ⇒ the advertisement wins ⇒ refuse | unit (tie-break) |
 | **CE-B12-10** | **LIVE**: on preprod with a healthy accumulator, admitted ForgeTicks stop refusing `tip_mismatch` and reach leadership evaluation; the `known_pool_evaluated` branch marker appears ⇒ **CE-L2c-7/8/9** | live |
@@ -245,7 +267,7 @@ this is the mutation that would reintroduce the exact danger the supersession na
 `served` on receipt instead of after admit (must fail CE-B12-5) · record the self-forged tip as
 served (must fail CE-B12-3) · drop the rollback clear (must fail CE-B12-4) · make `served` win ties
 (must fail CE-B12-9) · weaken the predicate to a `block_no`-only compare (must fail CE-B12-6) ·
-route `tip()` into the chain selector (must fail CE-B12-7).
+route `tip()` into the chain selector (must fail CE-B12-7) · point either evidence site at `tip()` (must fail CE-B12-7b).
 
 ---
 
@@ -291,3 +313,34 @@ with CE-B12-10 recorded as blocked on a named, separate defect — reported, nev
 Disk: `/` at 92%, 38 GB free. `FROZEN-b6-census-s7` (8.2 GB) is v3 evidence and is **not**
 retirable. Read `reference_machine_disk_reclaim` and `docs/evidence/run-stores/RETENTION.md` —
 manifest first, then drop — before reclaiming anything.
+
+---
+
+## 9. STATUS AT IMPLEMENTATION — in-tree COMPLETE, live PENDING
+
+`DC-NODE-47` is registered **`partial`**: every in-tree criterion is met and the live bar
+(CE-B12-10) is not. It flips to `enforced` on that evidence and on nothing else.
+
+| | |
+|---|---|
+| CE-B12-1/2/3/4/5/8/9 | **green** — 7 tests, `crates/ade_node/tests/b12_served_or_advertised_peer_tip.rs` |
+| CE-B12-6/7/7b | **green** — `ci_check_followed_peer_tip_served_evidence.sh` + `ci_check_forge_followed_tip_admission.sh` |
+| CE-B12-11 | **green** — all eight required mutations each break something (six caught by the gate, two by the tests) |
+| CE-B12-10 | **PENDING** — the live leg, §8 |
+| regressions | none: `ade_node` 644 passed / 0 failed, `ade_runtime` 581 passed / 0 failed |
+| store semantics | NEUTRAL, version 6; the lock gate was **run** and passed unchanged |
+
+### A gate repaired in passing — enforcement debt DISCOVERED, not created
+
+CE-B12-6 cites `ci_check_forge_followed_tip_admission.sh`, so the slice ran it. **It had been failing
+silently since ECA-5 (`26565bec`).** Its `prod_body` truncated at the first bare `#[cfg(test)]`, and
+that commit inserted an inline `#[cfg(test)] async fn run_node_sync_no_eview` shim *above every
+symbol the gate inspects* — so the gate saw an empty body and failed closed on emptiness rather than
+on the code. DC-NODE-15's structural assertions have been unenforced for that whole span.
+
+Both gates now truncate at the **trailing `#[cfg(test)]` module** only (`#[cfg(test)]` + optional
+`#[allow(...)]` lines + `mod `), so production code below an inline test shim stays visible. The
+repaired gate passes against current code.
+
+This is the project's own lesson arriving from the other direction: *ask which gate your change
+should make angry, and run THAT one.* Running it is what found that it could not see anything at all.

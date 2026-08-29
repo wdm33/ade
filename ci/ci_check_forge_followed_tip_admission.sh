@@ -48,7 +48,19 @@ fail() { echo "FAIL (forge-followed-tip admission): $1"; FAILED=1; }
 # Production body of each file (drop the #[cfg(test)] module; strip line/doc
 # comments so commentary naming a token does not trip the greps).
 prod_body() {
-    awk '/#\[cfg\(test\)\]/{exit} {print}' "$1" | sed -E 's://.*::'
+    # Truncate at the TRAILING #[cfg(test)] MODULE only. Anchoring on the first
+    # bare `#[cfg(test)]` silently truncated this gate from ECA-5 (26565bec)
+    # onward, when an inline `#[cfg(test)] async fn run_node_sync_no_eview` shim
+    # landed above every symbol the gate inspects -- so it "passed" by seeing
+    # nothing and then failed closed on empty bodies. A gate that cannot see the
+    # code enforces nothing.
+    awk '
+        /^#\[cfg\(test\)\]$/ { pend = $0; holding = 1; next }
+        holding && /^#\[allow\(/ { pend = pend "\n" $0; next }
+        holding && /^mod / { exit }
+        holding { print pend; holding = 0 }
+        { print }
+    ' "$1" | sed -E 's://.*::'
 }
 
 SYNC_PROD="$(prod_body "$SYNC")"

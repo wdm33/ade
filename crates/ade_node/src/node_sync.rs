@@ -165,6 +165,7 @@ impl NodeBlockSource {
                 .collect(),
             followed_peer_tip: FollowedPeerTipSignal {
                 latest: followed_peer_tip,
+                served: None,
                 census: FollowedPeerTipCensus::default(),
             },
         }
@@ -185,6 +186,31 @@ impl NodeBlockSource {
     /// in-memory feed). Read ONLY by the ForgeTick admissibility gate — never a
     /// sync / chain-selection authority.
     pub fn followed_peer_tip_signal(&self) -> &FollowedPeerTipSignal {
+        match self {
+            Self::InMemory {
+                followed_peer_tip, ..
+            } => followed_peer_tip,
+            Self::WirePump {
+                followed_peer_tip, ..
+            } => followed_peer_tip,
+        }
+    }
+
+    /// B12 (DC-NODE-47): record that the followed peer SERVED a block Ade has now
+    /// durably admitted. The two call sites are the successful-admit boundary and
+    /// nothing else — see `run_node_sync`. Write-only: this cannot advance a tip,
+    /// cannot reach `next_block`, and cannot influence chain selection.
+    pub fn record_served_tip(&mut self, admitted: TipPoint) {
+        self.followed_peer_tip_signal_mut().observe_served(admitted);
+    }
+
+    /// B12 (DC-NODE-47): a rollback invalidates the served fact; the signal falls
+    /// back to the advertisement.
+    pub fn clear_served_tip(&mut self) {
+        self.followed_peer_tip_signal_mut().clear_served();
+    }
+
+    fn followed_peer_tip_signal_mut(&mut self) -> &mut FollowedPeerTipSignal {
         match self {
             Self::InMemory {
                 followed_peer_tip, ..
@@ -677,6 +703,12 @@ where
                     point,
                     fence,
                 )?;
+                // B12 (DC-NODE-47): the served fact may now name a block that is no longer on the
+                // selected chain, so it is cleared and the signal falls back to the advertisement.
+                // A stale served fact could only ever make the DC-NODE-15 gate REFUSE (the predicate
+                // compares hash AND block_no), so this is truthfulness, not safety -- but a signal
+                // that knowingly names an abandoned block is not one worth keeping.
+                source.clear_served_tip();
                 continue;
             }
         };
@@ -863,9 +895,15 @@ where
             // TipUpdate). Log the first block of each batch, every 500th while catching up, and every
             // block once at/near the peer tip -- so BOTH the catch-up and the caught-up transition are
             // visible (a caught-up node is legitimately quiet; this shows the difference from a stall).
+            //
+            // B12 (DC-NODE-47): this reads the ADVERTISED half specifically, not the combined
+            // `tip()`. The question the line answers is "how far behind the peer's own head am I",
+            // and the peer's head is what the advertisement carries; the combined signal folds in
+            // the block we just admitted, which would pin `behind` at 0 and silently delete the
+            // catch-up progress readout. Same value this line read before the slice.
             let behind = source
                 .followed_peer_tip_signal()
-                .tip()
+                .advertised()
                 .map(|p| p.slot.0.saturating_sub(t.slot.0));
             if admitted_this_pass == 1
                 || admitted_this_pass % 500 == 0
@@ -884,6 +922,17 @@ where
                     }
                 }
             }
+            // B12 (DC-NODE-47): the peer SERVED this block and Ade has now DURABLY ADMITTED it,
+            // so the peer provably holds it -- evidence strictly stronger than the advertisement,
+            // and recorded only HERE, after the admit succeeded. Built from `t` (the pump's own
+            // validated slot / hash / block_no, all from the decode the admit already did), NEVER
+            // from `ChainDbServedSource::tip()`, which re-reads and re-decodes: calling that per
+            // admitted block is exactly the fixed per-block cost B6 removed.
+            source.record_served_tip(TipPoint {
+                slot: t.slot,
+                hash: t.hash.clone(),
+                block_no: t.block_no,
+            });
             selected_tip = Some(t);
         }
         // B3b yield-at-boundary (DC-EPOCH-17): the boundary block is now durably admitted. Capture the
@@ -1277,6 +1326,20 @@ pub enum NodeForgeOutcome {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FollowedPeerTipSignal {
     latest: Option<TipPoint>,
+    /// B12 (DC-NODE-47): the strongest evidence of peer possession there is — a
+    /// tip the peer SERVED and Ade DURABLY ADMITTED. `latest` is testimony (the
+    /// peer's chain-sync `tip` field); this is a demonstration, because a peer
+    /// cannot serve a block it does not have.
+    ///
+    /// Written ONLY at a successful durable admit, cleared by ANY rollback, and
+    /// combined with `latest` by [`FollowedPeerTipSignal::tip`] — which prefers
+    /// whichever is higher by `block_no`, STRICTLY. It is exactly as peer-blind
+    /// as the advertisement it joins (`observe` ignores `TipUpdate { peer, .. }`
+    /// and the live path is single-best-peer FOLLOW); scoping one half and not
+    /// the other would combine two differently-scoped facts. Scoping BOTH is
+    /// per-peer candidate tracking — DC-NODE-35 — so DC-NODE-34's
+    /// provenance-only peer identity stays untouched here.
+    served: Option<TipPoint>,
     /// B12 CENSUS (emit-only, NON-AUTHORITATIVE): the provenance of `latest`.
     /// `forge_followed_tip_admission` reads NEITHER of these — it takes two
     /// `Option<TipPoint>` by value and cannot see this struct at all — so the gate
@@ -1306,13 +1369,78 @@ impl FollowedPeerTipSignal {
     pub fn new() -> Self {
         Self {
             latest: None,
+            served: None,
             census: FollowedPeerTipCensus::default(),
         }
     }
 
-    /// The latest observed followed peer tip, or `None` if none observed yet.
+    /// B12 (DC-NODE-47): the STRONGEST available evidence that the followed peer
+    /// possesses a block — the tip it advertised, or a tip it served and Ade
+    /// durably admitted, whichever is higher by `block_no`.
+    ///
+    /// Pure, total, deterministic. The comparison is STRICTLY greater, so a tie at
+    /// the same `block_no` with differing hashes — a peer that served one block and
+    /// advertises another at that height, i.e. a fork the AO owns — resolves to the
+    /// ADVERTISEMENT. That is the conservative half: the tips then disagree and the
+    /// DC-NODE-15 gate refuses with `TipMismatch` intact, rather than collapsing to
+    /// `NoFollowedPeerTip` and losing the diagnostic.
+    ///
+    /// **Why this cannot let Ade forge while genuinely behind.** During catch-up the
+    /// chain-sync `tip` field carries the peer's REAL HEAD, far ahead of the block
+    /// being fed, so the advertisement dominates and the gate refuses exactly as
+    /// before. Measured, not assumed: the B12 census recorded `peer_announcements =
+    /// 9798` against `peer_advances = 13` over a ~9,800-block catch-up — the
+    /// advertisement sat still at the peer's own head while service climbed
+    /// underneath it. Service can only ever raise this to a block Ade has ITSELF
+    /// durably admitted, so it can never manufacture a `CaughtUp` for a tip Ade does
+    /// not hold.
     pub fn tip(&self) -> Option<TipPoint> {
+        match (&self.latest, &self.served) {
+            (Some(advertised), Some(served)) => {
+                if served.block_no > advertised.block_no {
+                    Some(served.clone())
+                } else {
+                    Some(advertised.clone())
+                }
+            }
+            (Some(advertised), None) => Some(advertised.clone()),
+            (None, served) => served.clone(),
+        }
+    }
+
+    /// B12 (DC-NODE-47), emit-only: the ADVERTISED half alone — what the peer last
+    /// said, before it is combined with what it proved. Kept separable so an
+    /// operator transcript can still show the two evidences apart; never the gate's
+    /// operand.
+    pub fn advertised(&self) -> Option<TipPoint> {
         self.latest.clone()
+    }
+
+    /// B12 (DC-NODE-47), emit-only: the SERVED half alone.
+    pub fn served(&self) -> Option<TipPoint> {
+        self.served.clone()
+    }
+
+    /// B12 (DC-NODE-47): record that the peer SERVED a block Ade has now DURABLY
+    /// ADMITTED. Called ONLY after a successful admit — receipt is not possession
+    /// evidence Ade may act on, and a block that failed validation was never
+    /// admitted. Monotone within a follow: a later admit supersedes an earlier one;
+    /// a rollback is the only thing that lowers it, via [`Self::clear_served`].
+    ///
+    /// Like `observe`, this is a write-only side effect. It never advances a tip,
+    /// never feeds `next_block` / `pump_block`, and never reaches a chain selector.
+    fn observe_served(&mut self, admitted: TipPoint) {
+        self.served = Some(admitted);
+    }
+
+    /// B12 (DC-NODE-47): a rollback invalidates the served fact — the block it names
+    /// may no longer be on the selected chain — so the signal falls back to the
+    /// advertisement. A stale served fact could only ever make the gate REFUSE (the
+    /// predicate compares hash AND `block_no`), so this is truthfulness and liveness
+    /// rather than safety; a signal that knowingly names an abandoned block is still
+    /// not one worth keeping.
+    fn clear_served(&mut self) {
+        self.served = None;
     }
 
     /// B12 CENSUS (emit-only): the provenance of the value `tip()` returns.

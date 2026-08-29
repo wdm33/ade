@@ -70,6 +70,14 @@ pub struct PumpTip {
     /// evidence fidelity for the post-switch branch-continuity verdict
     /// (PHASE4-N-AO S10, DC-EVIDENCE-05); not read by any authority path.
     pub prev_hash: Hash32,
+    /// B12 (DC-NODE-47): the admitted block's VALIDATED header `block_no`, from
+    /// the same `decode_block` that produced `prev_hash` — so the followed-peer-tip
+    /// served fact can be built at the admit boundary with NO extra durable read
+    /// and NO second decode. (`ChainDbServedSource::tip()` re-reads and re-decodes;
+    /// calling it per admitted block would reintroduce exactly the fixed per-block
+    /// cost B6 removed.) Transient in-memory field: never persisted, hashed,
+    /// served or replayed, and read by no authority path.
+    pub block_no: u64,
 }
 
 /// Apply one fetched block (its full era-tagged envelope) through the
@@ -151,7 +159,9 @@ where
         .block_hash()
         .cloned()
         .unwrap_or(Hash32([0; 32]));
-    apply_plan(db, wal, snapshots, plan.into_effects(), prev_hash)
+    // B12 (DC-NODE-47): same `decoded`, same boundary, no extra work.
+    let block_no = decoded.header_input.block_no.0;
+    apply_plan(db, wal, snapshots, plan.into_effects(), prev_hash, block_no)
 }
 
 /// Apply an ordered effect plan. The two durability effects must be
@@ -163,6 +173,7 @@ fn apply_plan<D, S>(
     snapshots: &S,
     effects: Vec<SyncEffect>,
     prev_hash: Hash32,
+    block_no: u64,
 ) -> Result<Option<PumpTip>, PumpError>
 where
     D: ChainDb,
@@ -195,6 +206,7 @@ where
                     slot,
                     hash,
                     prev_hash: prev_hash.clone(),
+                    block_no,
                 });
             }
         }
