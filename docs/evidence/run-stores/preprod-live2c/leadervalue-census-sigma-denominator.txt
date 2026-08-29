@@ -1,4 +1,9 @@
-# LEADERVALUE CENSUS — the FIRST native leadership freeze reproduces the bootstrap stake.
+# LEADERVALUE CENSUS — the sigma DENOMINATOR at the first native leadership freeze.
+#
+# ⚠ SECTIONS BELOW ARE PARTLY WITHDRAWN. Read the CORRECTION at the end FIRST: the
+# 'stale copy' reading was refuted by a pairwise diff the same day, and the real
+# finding is a single set-membership entry. The measurements stand; two conclusions
+# drawn from them do not.
 # preprod v6 store, 2026-08-29. Read-only. NO fresh bootstrap, NO node re-run, NO oracle for the
 # disputed epoch.
 #
@@ -128,3 +133,84 @@ It is the reproducer AND the fixture: it halts on the first sync step in ~2 minu
 left chain.db / epoch-accumulator.redb / reduced-checkpoint.redb byte-identical in size. Once the
 freeze is corrected, the same store either validates the header or does not — a two-minute verdict.
 A fresh bootstrap would DESTROY this and prove less.
+
+
+################################################################################
+## CORRECTION, same day, before anyone acted on the above. TWO CLAIMS WITHDRAWN.
+################################################################################
+
+The pairwise pool-by-pool diff that should have been run BEFORE the sections above
+refutes their central argument.
+
+### WITHDRAWN 1 — "that is a copy, not a derivation"
+
+The argument rested on the probe pool's stake agreeing to 0.00009% between epochs
+305 and 306, across snapshots a full epoch apart. Measured across the WHOLE
+distribution rather than one pool:
+
+  305 -> 306 : 412 of 446 shared pools BYTE-IDENTICAL   (92.38%)
+  306 -> 307 : 425 of 504 shared pools BYTE-IDENTICAL   (84.33%)
+
+Epoch 307 is the KNOWN-CORRECT derivation — it matches cardano to five significant
+figures — and it too leaves 84% of pools byte-identical. **High byte-identity
+between consecutive epochs is NORMAL on this chain**; preprod delegation is largely
+static. One pool cannot characterise a distribution, and the distribution was one
+command away.
+
+### WITHDRAWN 2 — "the first native freeze reproduces the bootstrap stake"
+
+Follows from the above, and is withdrawn with it.
+
+### WHAT THE DIFF ACTUALLY FOUND — one membership entry carries the whole anomaly
+
+  306 -> 307:  79 pools moved, sum|delta| =    885,389,101,338
+               DENOMINATORS differ by       62,479,359,742,957      (a 70x mismatch)
+
+  ONLY IN 306: pool 8ed5ab11e76094fa2a2ab29fc3a57498d07e68f6fde6f326162eea88
+               stake 63,075,223,742,053  = 3.879% of the epoch-306 denominator
+
+  Presence:
+    305 (bootstrap-IMPORTED = cardano's own calculatePoolDistr)  66,525,197,762,769
+    306 (first native freeze)                                    63,075,223,742,053
+    307 (second native freeze)                                   ABSENT
+    cardano nesPd at epoch 310 (bech32-checked, 2 controls)      ABSENT
+
+  `cardano-cli query pool-state` returns `{}` — the pool is RETIRED.
+
+Removing it from the epoch-306 denominator raises the issuer's sigma from
+0.10642836% to 0.11072%, a **+4.03%** move, where **+0.0315%** was required.
+
+### WHY THIS IS STILL NOT A FIX — the rule is not established
+
+That pool is in the BOOTSTRAP-IMPORTED 305 distribution, i.e. cardano's OWN output,
+so cardano did carry it at seed+1. If it retired at the boundary into 306, epoch
+306's leadership — frozen at the 304->305 crossing — may LEGITIMATELY include it,
+exactly as `from_boundary_snapshot` documents.
+
+Which puts the defect one level down:
+
+  Ade      `to_pool_distr_view`: total_active_stake = SUM OF THE POOLDISTR ENTRIES
+  cardano  `calculatePoolDistr`: divides by `sumAllStake stake` — the SNAPSHOT's
+           total, INDEPENDENT of which pools are in the map.
+
+Under cardano's definition a retiring pool cannot move the denominator at all.
+Under Ade's it moves it by that pool's entire stake. That has exactly the observed
+shape, and it also explains why 307 matches: no membership change there to expose
+it.
+
+### ENTRY OBLIGATION — answer before touching any code
+
+  (a) Does cardano's nesPd for epoch E include a pool that retires at the boundary
+      into E-1?
+  (b) Is the leader-check sigma denominator the sum of the PoolDistr entries, or the
+      snapshot's total stake?
+
+(b) is decisive: if it is the snapshot total, Ade's membership rule stays exactly as
+it is and only the denominator derivation changes.
+
+Both are cardano-ledger RULES questions that block bytes cannot settle — the BND-2
+shape, whose ruling was "establish what cardano-ledger does FIRST; do not change the
+guard before that." **ORACLE EXTRACTION is the next step, not a code change.**
+
+**Do NOT drop the pool to make the header pass.** Until (b) is answered that is
+indistinguishable from weakening a gate to make a test go green.
