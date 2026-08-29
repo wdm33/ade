@@ -326,7 +326,7 @@ manifest first, then drop — before reclaiming anything.
 | CE-B12-1/2/3/4/5/8/9 | **green** — 7 tests, `crates/ade_node/tests/b12_served_or_advertised_peer_tip.rs` |
 | CE-B12-6/7/7b | **green** — `ci_check_followed_peer_tip_served_evidence.sh` + `ci_check_forge_followed_tip_admission.sh` |
 | CE-B12-11 | **green** — all eight required mutations each break something (six caught by the gate, two by the tests) |
-| CE-B12-10 | **PENDING** — the live leg, §8 |
+| CE-B12-10 | **BLOCKED** — attempted 2026-08-29, twice; Ade never reached the frontier. See §10 |
 | regressions | none: `ade_node` 644 passed / 0 failed, `ade_runtime` 581 passed / 0 failed |
 | store semantics | NEUTRAL, version 6; the lock gate was **run** and passed unchanged |
 
@@ -344,3 +344,55 @@ repaired gate passes against current code.
 
 This is the project's own lesson arriving from the other direction: *ask which gate your change
 should make angry, and run THAT one.* Running it is what found that it could not see anything at all.
+
+---
+
+## 10. CE-B12-10 ATTEMPTED 2026-08-29 — BLOCKED, and §8's contingency is the one that happened
+
+Evidence: `docs/evidence/run-stores/preprod-live2c/b12-ce10-BLOCKED-leader-value-above-threshold.txt`.
+
+Two warm-start attempts on the v6 store, binary `96c7af68`. **Zero `follow: tip` lines in either** —
+the follow loop never opened, so the fix was never exercised live and NOTHING is claimed about it in
+either direction. `DC-NODE-47` stays `partial`.
+
+```
+LeaderValueAboveThreshold { value:     [0,3,148,36,101,52,221,219],
+                            threshold: [0,3,147,218,125,24,43,26] }
+```
+
+**§8 predicted this and got the mechanism wrong in three ways, which is worth more than the
+prediction.** The blocker is not what the record said:
+
+1. **not catch-up-length dependent** — it fired on the FIRST sync step, before one block was
+   admitted, not after ~383k slots;
+2. **deterministic** — three occurrences with byte-identical `value` AND `threshold`, across two
+   binaries and thirteen days. A restart does not work around it; BND-2d's leg 2 stopped by SIGINT
+   before re-reaching the wall, which is what made it look survivable;
+3. **the margin is 0.0315%**, not the ~0.005% on record.
+
+**The operand that should open that slice:** the failing header is in **epoch 306 = seed + 2**
+(bootstrap_epoch 304, anchor slot 129,813,427 — *mid*-epoch-304, while epoch 306's active `go`
+snapshot is the state at the END of 304). Seed+2 stake derivation is a region this project has been
+in before. And "the authority is a stale epoch" is already REFUTED — Ade's authority is on 306, the
+header's own epoch — so it should not be re-derived.
+
+### One result this run did produce, and it belongs to this slice
+
+```
+recovery-trace: anchor_before=130739648/5042282/7477fc0c
+                anchor_after =130739648/5042282/7477fc0c   action=forward_fold, no reset
+```
+
+A v6 store written by binary `56e0a4e4` opened and warm-recovered under `96c7af68` with no reset and
+no rebootstrap terminal, and both halts left `chain.db`, `epoch-accumulator.redb` and
+`reduced-checkpoint.redb` byte-identical in size. **§6's store-semantics-NEUTRAL claim is discharged
+live**, not merely by the lock gate passing. Had the change been semantics-bearing, this is exactly
+where it would have failed.
+
+### Ordering that follows
+
+The `LeaderValueAboveThreshold` defect is a **consensus-correctness continuity blocker** — Ade cannot
+validate a real preprod header — and B12 is a liveness gate. Correctness first: that slice goes next,
+and CE-B12-10 is re-run behind it. Bootstrapping a fresh store *past* the failing header would turn
+CE-B12-10 green while leaving the node unable to follow preprod, which is the "clean demo over a
+producer that cannot survive normal chain movement" trade this project has already refused once.

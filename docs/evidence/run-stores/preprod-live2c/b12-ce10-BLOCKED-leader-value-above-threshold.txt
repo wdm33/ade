@@ -1,0 +1,121 @@
+# CE-B12-10 — LIVE BAR NOT REACHED. preprod, 2026-08-29. BLOCKED on a NAMED SEPARATE DEFECT.
+#
+# Slice: docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-B12-served-or-advertised-peer-tip.md
+# Code:  96c7af68 (DC-NODE-47, `partial`)
+#
+# This is NOT a B12 result, positive or negative. Ade never reached the frontier where the
+# +1 occurs, so the fix was never exercised live. The slice's section 8 recorded this exact
+# contingency BEFORE the run; what follows is that contingency happening, plus three
+# corrections to how the blocker was characterised.
+
+## PROVENANCE
+binary        96c7af68, target/release/ade sha256 2c8d9f2403ba7048… (clean tree at that commit)
+store         ~/.cardano-live1/ade-preprod-v6 — WARM start, no --bootstrap-mithril, no --snapshot-dir
+peer          docker cardano-node-preprod 127.0.0.1:3001, tip 131,321,617 → 131,733,925 during the
+              window, syncProgress 99.23 → 99.54 (the peer was itself resyncing after a 6-day stop)
+attempt 1     20:39:57Z   attempt 2  20:44:23Z    (identical invocation, identical store state)
+
+## WHAT WORKED, AND IS WORTH RECORDING BECAUSE IT WAS NOT GUARANTEED
+
+  recovery-trace: path=recovery_admit action=forward_fold reason=forward_fold_no_reset
+                  anchor_before=130739648/5042282/7477fc0c
+                  durable_tip   =130739648/5042282/7477fc0c
+                  anchor_after  =130739648/5042282/7477fc0c   rollback_target=none
+
+A v6 store written by binary 56e0a4e4 opened and warm-recovered under 96c7af68 with no reset and
+no rebootstrap terminal. That is the slice's STORE-SEMANTICS-NEUTRAL claim discharged live: had the
+B12 change been semantics-bearing, this is where it would have failed.
+
+  nonce1-freeze-window: store_rsw=Some(172800) cli_rsw=Some(172800) cross_check=agreed
+  live2c-timing-authority: commitment=ScheduleCommitment(Hash32(30fe202dcfbb1306af4cdd…))
+                           genesis_cross_check=agreed
+  keep_alive: ping/pong cookies 0,1,2 validated
+
+The timing commitment `30fe202d…` is byte-identical to runs 5/6, the B12 census run, and the
+hermetic unit test — a fourth independent process start. CE-L2c-A3 still holding.
+
+## THE HALT — FIRST SYNC STEP, BOTH ATTEMPTS
+
+  ade_node --mode node: relay run-loop sync step failed
+    (Pump("Receive(Validity(Header(VrfCert(
+      LeaderValueAboveThreshold { value:     [0,3,148,36,101,52,221,219],
+                                  threshold: [0,3,147,218,125,24,43,26] }))))"));
+    failing closed (no skip-past, no fallback).
+
+  follow: tip slot=…   lines emitted: 0   (BOTH attempts — the follow loop never opened)
+
+## THREE CORRECTIONS TO THE RECORDED CHARACTERISATION
+
+The blocker was recorded on 2026-08-16 as firing "during a long catch-up", with a ~0.005% margin,
+and as something a warm restart could work around. All three are wrong.
+
+**(1) It is NOT catch-up-length dependent.** It fired on the FIRST sync step of a warm restart,
+before a single block was admitted, with the durable tip 582k slots behind the peer. The length of
+the catch-up is irrelevant: the store is parked immediately before a header Ade rejects.
+
+**(2) It is DETERMINISTIC, and the operands prove it.** Three occurrences, byte-identical `value`
+AND `threshold`:
+
+  2026-08-16  binary 56e0a4e4  durable tip ~130,733,645   (BND-2d leg 1)
+  2026-08-29  binary 96c7af68  durable tip  130,739,648   (attempt 1)
+  2026-08-29  binary 96c7af68  durable tip  130,739,648   (attempt 2)
+
+Two binaries, thirteen days apart. A restart does NOT work around it — BND-2d's leg 2 got past
+130,733,645 and simply stopped, by clean SIGINT, before re-reaching the wall.
+
+**(3) The margin is 0.0315%, not ~0.005%.** Recomputed from the raw bytes:
+
+  value      1,007,308,967,828,955    0x394246534dddb
+  threshold  1,006,991,541,021,466    0x393da7d182b1a
+  value − threshold  =  317,426,807,489
+  value / threshold  =  1.000315223        →  0.031522 % over
+
+## THE OPERAND THAT SHOULD OPEN THE NEXT SLICE
+
+  bootstrap_epoch          304   (durable_epoch_start_slot=129686400, anchor_slot=129813427)
+  durable tip 130,739,648  →  epoch 306      (window 130,550,400 .. 130,982,399)
+
+  **The failing header is in epoch 306 = seed + 2.**
+
+That is not a new region of the map. Seed+2 is where this project has repeatedly found stake- and
+nonce-derivation residuals — the b3c seed+2 stake residual (Option B, `c4e0413b`), the seed+2 eta0
+work, and the go-stake derivation delta. The header's leader threshold is a function of the pool's
+sigma in the ACTIVE (`go`) stake snapshot for its epoch, and for epoch 306 that snapshot is the
+state as of the END of epoch 304 — whereas this store was seeded from a certified Mithril anchor
+at slot 129,813,427, which is *mid*-epoch-304.
+
+A sigma that is slightly wrong yields a threshold that is slightly wrong, and 0.03% is exactly that
+size. **Start there, and measure it rather than assume it** — the epoch is NOT stale (Ade's own
+authority is on 306, the header's own epoch), so "the authority is an epoch behind" is already
+refuted and should not be re-derived.
+
+## A DIAGNOSTIC GAP THE NEXT SLICE HITS IMMEDIATELY
+
+`LeaderValueAboveThreshold` carries `value` and `threshold` and NOTHING ELSE — no slot, no header
+hash, no pool id. So the error cannot say WHICH header failed, and the operands it does carry are
+the two derived numbers rather than the inputs that produced them. That is the same shape as the
+BND-1 finding (one error variant for two causes) and the NONCE-1 finding (two hashes named, neither
+of their operands): a rule that reports its conclusion but not its premises is un-diagnosable
+without a bespoke probe. Widening this error is likely the first move, not an afterthought.
+
+## DURABLE STATE — INTACT, AND CHECKED RATHER THAN ASSUMED
+
+  chain.db               6,175,084,544 bytes    unchanged
+  epoch-accumulator.redb   208,179,200 bytes    unchanged
+  reduced-checkpoint.redb 2,156,408,832 bytes   unchanged
+
+Byte-identical to the sizes left by the BND-2d run on 2026-08-16. The fail-closed halted before
+mutating anything, twice. The accumulator remains healthy at the durable tip and the store remains
+a valid starting point for CE-B12-10 once the header can be validated.
+
+## WHAT IS AND IS NOT CLAIMED
+
+* **NOT claimed:** any live result for DC-NODE-47, in either direction. `partial` stands.
+* **NOT claimed:** that B12 is implicated. The rejection is in header VRF validation on the RECEIVE
+  path; the B12 signal is read only at the ForgeTick, and this identical failure predates the change
+  by 13 days and one binary.
+* **Claimed:** the v6 store opens, warm-recovers and cross-checks clean under the B12 binary —
+  store semantics neutral, discharged live.
+* **Claimed:** the blocker is deterministic, header-specific, independent of catch-up length, and
+  sits at seed+2. It is a continuity blocker for any preprod follow from this store and it now has
+  enough operands to open its own slice.
