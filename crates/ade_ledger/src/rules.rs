@@ -1082,25 +1082,19 @@ pub fn apply_epoch_boundary_with_registrations(
                 continue;
             }
 
-            // Shelley pledge satisfaction: if pledge > sum(owner_stakes) → maxPool = 0
-            // Haskell uses full go snapshot stake (not filtered by pool): an owner's
-            // total active stake counts toward pledge regardless of their delegation.
+            // Shelley pledge satisfaction: if pledge > selfDelegatedOwnersStake → maxPool = 0.
+            // Only the owners delegated to THIS pool count (DC-EPOCH-42): an owner who has pointed
+            // the pledged stake at another pool does not satisfy this pool's pledge.
             // Only apply for Mary+ (protocol_major >= 4) where owner parsing is reliable.
             // Pre-Mary: owner encoding differs, skip the check (matches proven formula).
+            let self_delegated_owner_stake =
+                go.0.self_delegated_owner_stake(pool_id, &params.owners);
             if state.protocol_params.protocol_major >= 4
                 && !params.owners.is_empty()
                 && params.pledge.0 > 0
+                && params.pledge.0 > self_delegated_owner_stake
             {
-                let owner_stake: u64 = params.owners.iter()
-                    .map(|owner| {
-                        go.0.delegations.get(owner)
-                            .map(|(_, c)| c.0)
-                            .unwrap_or(0)
-                    })
-                    .sum();
-                if params.pledge.0 > owner_stake {
-                    continue;
-                }
+                continue;
             }
 
             // Step 2: poolReward = floor(maxPool * apparentPerformance)
@@ -1192,8 +1186,8 @@ pub fn apply_epoch_boundary_with_registrations(
                 .checked_sub(&margin)
                 .unwrap_or_else(crate::rational::Rational::one);
 
-            // Operator's stake share s/σ in the leader reward. Cardano's `s` is the POOL OWNERS'
-            // stake (the `poolOwners` set), summed from the go snapshot — NOT the reward account's own
+            // Operator's stake share s/σ in the leader reward. Cardano's `s` is the SELF-DELEGATED
+            // owners' stake — the same value the pledge gate above used — NOT the reward account's own
             // delegation. The owners are also EXCLUDED from member rewards below (their share rides in
             // the leader term); paying a non-owner reward account as both leader and member, and an
             // owner as a member, mis-attributes the per-account split (the totals are unchanged, so the
@@ -1201,9 +1195,7 @@ pub fn apply_epoch_boundary_with_registrations(
             // reward-account projection.
             let use_owners = state.protocol_params.protocol_major >= 4 && !params.owners.is_empty();
             let owner_stake: u64 = if use_owners {
-                params.owners.iter()
-                    .map(|o| go.0.delegations.get(o).map(|(_, c)| c.0).unwrap_or(0))
-                    .sum()
+                self_delegated_owner_stake
             } else {
                 op_cred.as_ref()
                     .and_then(|oc| go.0.delegations.get(oc))

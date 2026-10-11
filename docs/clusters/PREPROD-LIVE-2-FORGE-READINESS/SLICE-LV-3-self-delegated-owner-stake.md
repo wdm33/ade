@@ -1,8 +1,8 @@
 # SLICE LV-3 — an owner's stake counts for a pool only when it is delegated to that pool
 
-**Status:** APPROVED 2026-10-11 (owner: "its own slice, before or with LV-2"; implement, then LV-2).
-Nothing is implemented at this commit. It reverses a recorded project rule; §6 says what that
-reversal rests on and what it does not.
+**Status:** IMPLEMENTED 2026-10-11 — every CE below is green; results in §9. DC-EPOCH-42 is
+registered `enforced`. It reverses a recorded project rule; §6 says what that reversal rests on and
+what it does not.
 
 **Entry state:** `8c1328df`. Evidence:
 `docs/evidence/run-stores/preprod-live2c/lv2-e1-native-seed-reward-vs-cardano.md` §4.
@@ -62,8 +62,13 @@ One helper, used at both sites; the two inline sums are deleted:
 
 ```rust
 /// cardano `spssSelfDelegatedOwnersStake`: go stake of the owners delegated to THIS pool.
-fn self_delegated_owner_stake(go: &StakeSnapshot, pool_id: &PoolId, owners: &[Hash28]) -> u64
+impl StakeSnapshot {
+    pub fn self_delegated_owner_stake(&self, pool_id: &PoolId, owners: &[Hash28]) -> u64
+}
 ```
+
+(As built it is a method on the snapshot, next to `total_active_stake`, so an integration test can
+call it directly. The reward path calls it once per pool and both sites read that binding.)
 
 Two definitions of one quantity is how the sites could drift; one definition is the structural part
 of the fix.
@@ -168,9 +173,14 @@ node rebuilt for preview by the same method used here; it is not part of this sl
 ## 7. STORE SEMANTICS
 
 This changes what a boundary computes, so a store that crossed a boundary under the old rule can hold
-different reward balances from one under the new. It ships under the SAME `STORE_SEMANTICS_VERSION`
-7 → 8 bump as LV-2 — one bump, one refusal of v7, one re-bootstrap — and therefore lands with LV-2,
-not ahead of it in a separate release.
+different reward balances from one under the new.
+
+**Amended at implementation.** The draft said LV-3 would share LV-2's 7 → 8 bump. The semantics lock
+does not allow that across two commits: the reward rule is inside the hashed surface, so this
+commit's gate fails until it records its own choice, and a later non-neutral entry must strictly
+increase the version. So **LV-3 takes 7 → 8 here and LV-2 will take 8 → 9**. What the draft was
+protecting is unchanged: no store is created at v8 in between, so there is still one refusal of v7
+and one re-bootstrap. LV-2's doc is corrected to 8 → 9 when LV-2 lands.
 
 ---
 
@@ -182,3 +192,39 @@ not ahead of it in a separate release.
   "every credential matches" with no named exception.
 - **LV-2 itself.** The seed-boundary authority is untouched here.
 - **Any preview claim.**
+
+---
+
+## 9. RESULT — 2026-10-11
+
+| CE | Result |
+|---|---|
+| CE-LV3-1 | GREEN — `a_pool_whose_owner_delegates_elsewhere_earns_nothing`: no leader reward, no member reward, `sum_rewards == 0`, the whole pot returns to reserves |
+| CE-LV3-2 | GREEN — `the_same_owner_delegated_to_the_pool_satisfies_the_pledge` (gate, and the non-vacuity control for CE-LV3-1); `the_leader_term_counts_only_owners_delegated_to_the_pool` (leader term, pledge 0) |
+| CE-LV3-3 | GREEN — `only_the_self_delegated_subset_of_owners_is_summed` (the definition directly; also a repeated and an undelegated owner); `a_pledge_met_only_by_counting_owners_elsewhere_is_not_met` (one lovelace either side of the pledge) |
+| CE-LV3-4 | GREEN — `seed_boundary_reward_census` on the preprod seed, now ASSERTING: reserves draw 7,422,111,617,574 = the reference `deltaR`; no credential of pool `13e8600b…2418a` is paid. 11,051 of 11,056 credentials exact; the five that differ are the non-pledge residuals of the E1 evidence |
+| CE-LV3-5 | GREEN — `ci/ci_check_owner_stake_authority.sh` |
+| CE-LV3-6 | GREEN — `ade_ledger` suite passes; `epoch_oracle_comparison` 26 pass / 1 fail, the same pre-existing governance failure as before the change (§4.1), with the reward sums moving exactly as P3 recorded |
+| CE-LV3-7 | GREEN — below |
+
+### Mutations (each asserted applied; tree restored byte-exact)
+
+| Mutation | Tests that fail | Gate |
+|---|---|---|
+| full-go sum at the pledge gate | CE-LV3-1, the mixed-owner boundary test; CE-LV3-4 (draw 7,424,810,407,082 ≠ 7,422,111,617,574) | fails |
+| full-go sum at the leader term only | `the_leader_term_counts_only_owners_delegated_to_the_pool` | fails |
+| the helper sums all owners | four of five, including CE-LV3-3's direct test | fails |
+| a second, arithmetically equivalent inline sum | none — the tests cannot see it | **fails** (the only witness, as intended) |
+
+### The harness now reads the seed directly
+
+`EpochAccumulatorStore::open` refuses the archived v7 store under this binary, which is correct. The
+evidence harness therefore reads the sealed bootstrap blob straight from the store's meta table and
+decodes it with the production decoder. The seed is imported state that no boundary rule has
+touched, so it stays valid evidence across this bump. No production gate is weakened.
+
+### Not covered
+
+Pools with an EMPTY owner list still skip the pledge check, as before. cardano would compare the
+pledge against zero. No such pool with a positive pledge was observed on preprod or in the mainnet
+comparisons, so it is left as found and named here rather than changed without a witness.

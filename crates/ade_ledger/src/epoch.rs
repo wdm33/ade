@@ -47,6 +47,23 @@ impl StakeSnapshot {
             .fold(0u64, |acc, (_, coin)| acc.saturating_add(coin.0))
     }
 
+    /// LV-3 (DC-EPOCH-42): cardano's `spssSelfDelegatedOwnersStake` — the stake of the pool's owners
+    /// that are DELEGATED TO THAT POOL in this snapshot. This is the SOLE definition of owner stake in
+    /// the reward calculation; the pledge-satisfaction gate and the leader-reward term both call it.
+    ///
+    /// An owner delegated to another pool, or not delegated, contributes nothing: cardano's
+    /// `selfDelegatedOwners` is `spsOwners` filtered by membership in the pool's own delegator set.
+    /// `owners` is a set there, so a repeated owner is counted once.
+    pub fn self_delegated_owner_stake(&self, pool_id: &PoolId, owners: &[Hash28]) -> u64 {
+        owners
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|owner| self.delegations.get(owner))
+            .filter(|(delegated_to, _)| delegated_to == pool_id)
+            .fold(0u64, |acc, (_, coin)| acc.saturating_add(coin.0))
+    }
+
     pub fn new() -> Self {
         StakeSnapshot {
             delegations: BTreeMap::new(),

@@ -94,7 +94,17 @@
 /// does not reproduce the same accumulator state, and a v5 store is refused up front with the typed
 /// re-bootstrap terminal. Measured on preprod 130,350,133 (live 2026-08-16): the checkpoint sat at
 /// ~130,550,441 while the accumulator was at 130,350,114 and `0326ab20…#1` had already been spent.
-pub const STORE_SEMANTICS_VERSION: u32 = 7;
+/// Version 7 (LV-1, DC-EPOCH-40): the frozen leadership distribution CARRIES the snapshot's total
+/// active stake instead of summing the pools that survived the membership filter. A v6 object has no
+/// total to read, and reconstructing one from its entries is the defect.
+/// Version 8 (LV-3, DC-EPOCH-42): in the reward calculation a pool's owner stake is the stake of the
+/// owners DELEGATED TO THAT POOL (cardano `selfDelegatedOwnersStake`), for both the pledge gate and
+/// the leader term. Earlier binaries counted an owner's stake wherever it was delegated, so they paid
+/// a pool whose pledge was met only by stake pointed at another pool. Replaying the same canonical
+/// blocks under this binary yields different reward balances — and therefore different stake
+/// snapshots and leadership — at every boundary such a pool produced in. Measured on preprod
+/// 304→305: pool `13e8600b…2418a` was paid 6,218,191,443 that cardano does not pay.
+pub const STORE_SEMANTICS_VERSION: u32 = 8;
 
 /// A durable artifact that carries authoritative semantics and therefore must be version-marked.
 ///

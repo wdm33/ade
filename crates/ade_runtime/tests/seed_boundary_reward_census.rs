@@ -3,8 +3,15 @@
 //! Question: does Ade's NATIVE reward calculation, fed the seed state's go snapshot + `nesBprev` +
 //! the snapshot's `ssFee`, reproduce cardano's Complete reward update for the seed boundary?
 //!
-//! ⚠ `EpochAccumulatorStore::open` is READ-WRITE and this harness calls `reset_to_bootstrap`. Point
-//! it at a COPY, never at a live store.
+//! The sealed bootstrap seed is read DIRECTLY from the store's meta table and decoded with the
+//! production `decode_epoch_accumulator`. `EpochAccumulatorStore::open` refuses a store whose
+//! semantics marker predates this binary — correct for production — but the SEED blob is imported
+//! state that no boundary rule has touched, so it stays valid evidence across such bumps. The read is
+//! read-only; point it at a COPY regardless, never at a live store.
+//!
+//! Optional assertions (LV-3, CE-LV3-4):
+//!   ADE_CENSUS_EXPECT_RESERVES_DRAW=<lovelace>   the native reserves draw must equal this
+//!   ADE_CENSUS_EXPECT_UNPAID_POOL=<hex28>        no credential delegated to this pool is paid
 //!
 //! ```text
 //! ADE_CENSUS_ACC_REDB=/path/to/copy/epoch-accumulator.redb \
@@ -15,8 +22,9 @@
 
 use std::collections::BTreeMap;
 
-use ade_ledger::epoch_accumulator::{cross_epoch_boundary, SelectedBlockCtx};
-use ade_runtime::chaindb::EpochAccumulatorStore;
+use ade_ledger::epoch_accumulator::{
+    cross_epoch_boundary, decode_epoch_accumulator, SelectedBlockCtx,
+};
 use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::Coin;
 use ade_types::{EpochNo, SlotNo};
@@ -42,9 +50,21 @@ fn native_seed_boundary_reward_vs_cardano_rs() {
         reference.insert(format!("{} {}", f[0], f[1]), f[2].parse().unwrap());
     }
 
-    let store = EpochAccumulatorStore::open(std::path::Path::new(&path)).expect("open store copy");
-    store.reset_to_bootstrap().expect("reset to the sealed bootstrap seed");
-    let (slot, mut acc) = store.load_current().expect("load").expect("sealed");
+    // The table and key names are duplicated from the store on purpose; a rename surfaces here as a
+    // missing table/key rather than as a silent zero.
+    const META_TABLE: redb::TableDefinition<&str, &[u8]> =
+        redb::TableDefinition::new("epoch_acc_meta");
+    let db = redb::Database::open(&path).expect("open redb copy");
+    let mut acc = {
+        let txn = db.begin_read().expect("read txn");
+        let meta = txn.open_table(META_TABLE).expect("epoch_acc_meta table");
+        let blob = meta
+            .get("bootstrap_blob")
+            .expect("read bootstrap_blob")
+            .expect("the store holds a sealed bootstrap seed");
+        decode_epoch_accumulator(blob.value()).expect("decode the sealed bootstrap seed")
+    };
+    let slot = acc.epoch_state.slot;
     let seed_epoch = acc.epoch_state.epoch;
     println!(
         "SEED slot={} epoch={} reserves={} treasury={} epoch_fees={} prev_fees={} bprev_pools={} bprev_blocks={} pending={:?}",
@@ -159,4 +179,25 @@ fn native_seed_boundary_reward_vs_cardano_rs() {
         after.prev_epoch_fees.0,
         after.epoch_state.epoch_fees.0
     );
+
+    if let Ok(expected) = std::env::var("ADE_CENSUS_EXPECT_RESERVES_DRAW") {
+        let expected: i128 = expected.parse().expect("ADE_CENSUS_EXPECT_RESERVES_DRAW");
+        assert_eq!(
+            res0 as i128 - after.epoch_state.reserves.0 as i128,
+            expected,
+            "the native reserves draw must equal the reference's deltaR"
+        );
+    }
+    if let Ok(pool) = std::env::var("ADE_CENSUS_EXPECT_UNPAID_POOL") {
+        let paid: Vec<&String> = ade
+            .iter()
+            .filter(|(k, a)| **a > 0 && go_deleg.get(&k[2..]) == Some(&pool))
+            .map(|(k, _)| k)
+            .collect();
+        assert!(
+            go_deleg.values().any(|p| *p == pool),
+            "the named pool has no delegators in the go snapshot — the assertion would be vacuous"
+        );
+        assert!(paid.is_empty(), "{} credentials of pool {pool} were paid", paid.len());
+    }
 }
