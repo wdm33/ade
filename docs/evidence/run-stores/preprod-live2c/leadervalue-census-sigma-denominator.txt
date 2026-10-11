@@ -1,5 +1,13 @@
 # LEADERVALUE CENSUS — the sigma DENOMINATOR at the first native leadership freeze.
 #
+# ⚠⚠ SUPERSEDED 2026-10-10 by lv1-ce9-v7-live-NOT-FIXED-seed-boundary-reward-update-absent.md.
+# The stake figures measured below stand. TWO conclusions do not:
+#   (1) the retired pool 8ed5ab11…eea88 did NOT inflate the denominator — cardano's own end-of-304
+#       snapshot includes it (registered, `retiring: 305`, reaped after the SNAP);
+#   (2) epoch 307 is NOT a known-correct control — the cardano 0.10958% it was matched against is
+#       the end-of-307 snapshot (leadership 309). Against the right snapshot Ade's 307 is 0.058% low.
+# The cause is a missing first-boundary reward update, not set membership.
+#
 # ⚠ SECTIONS BELOW ARE PARTLY WITHDRAWN. Read the CORRECTION at the end FIRST: the
 # 'stale copy' reading was refuted by a pairwise diff the same day, and the real
 # finding is a single set-membership entry. The measurements stand; two conclusions

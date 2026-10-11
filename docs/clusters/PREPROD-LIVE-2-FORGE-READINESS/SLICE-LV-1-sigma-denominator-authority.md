@@ -1,5 +1,28 @@
 # SLICE LV-1 — the σ denominator is a snapshot fact, not a sum of the pools that survived a filter
 
+> ## ⚠ CORRECTION, 2026-10-10 — READ FIRST
+>
+> **CE-LV1-9 was run and is NOT met. This slice did not fix the halt it was opened for.** Evidence:
+> `docs/evidence/run-stores/preprod-live2c/lv1-ce9-v7-live-NOT-FIXED-seed-boundary-reward-update-absent.md`.
+>
+> - A fresh v7 bootstrap from the on-disk snapshot 6009 (seed slot 129,813,427, mid-304) DID reach
+>   the failing header and rejected it with byte-identical `value` and `threshold`. §6's premise that
+>   the header was unreachable is **withdrawn**.
+> - A reference node rebuilt for the disputed epoch shows pool `8ed5ab11…eea88` registered with
+>   `retiring: 305` at the seed. It is reaped after the SNAP, so it is legitimately in the end-of-304
+>   snapshot and in the denominator. The "3.879% inflated denominator" in §1.1 and the "real case" of
+>   CE-LV1-2 are **withdrawn**: the test supplies a total the live derivation never produces and
+>   should not produce.
+> - The actual cause is a different defect: at a seed taken before cardano has computed the reward
+>   update (`nesRu = SNothing`), Ade pays no rewards at the first boundary. Its end-of-304 mark is
+>   408,132,859,573 low, matching cardano's reward update pool by pool.
+>
+> **What stands:** the invariant in §2 and the design in §3–§4. The denominator is a credential-side
+> snapshot fact that membership must not move, and the code now carries it that way. That is true of
+> cardano and worth having; it was not this bug. DC-EPOCH-40 stays `partial`.
+>
+> The body below is left as written, as the record of what was believed at `b502bd5c`.
+
 **Entry state:** `4f3cd689`. The oracle extraction
 (`leadervalue-oracle-extraction-sigma-denominator.md`) answered both entry-obligation questions from
 verbatim cardano-ledger source at two points in its history. This slice implements what that
