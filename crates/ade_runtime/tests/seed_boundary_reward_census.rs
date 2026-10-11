@@ -242,3 +242,45 @@ fn current_accumulator_fee_pots() {
         );
     }
 }
+
+/// Per-credential view of one pool in the store's CURRENT accumulator: every credential the MARK
+/// snapshot holds for `ADE_CENSUS_MARK_POOL`, with its mark stake and its current reward balance.
+/// For a credential-by-credential comparison against a reference `pstakeMark.activeStake`.
+#[test]
+#[ignore = "evidence-only; requires ADE_CENSUS_ACC_REDB pointing at a COPY of a real store"]
+fn mark_snapshot_credentials_for_pool() {
+    let path = std::env::var("ADE_CENSUS_ACC_REDB").expect("ADE_CENSUS_ACC_REDB");
+    let want = std::env::var("ADE_CENSUS_MARK_POOL").expect("ADE_CENSUS_MARK_POOL");
+    const META_TABLE: redb::TableDefinition<&str, &[u8]> =
+        redb::TableDefinition::new("epoch_acc_meta");
+    let db = redb::Database::open(&path).expect("open redb copy");
+    let txn = db.begin_read().expect("read txn");
+    let meta = txn.open_table(META_TABLE).expect("epoch_acc_meta table");
+    let blob = meta.get("current_blob").expect("read").expect("current blob");
+    let acc = decode_epoch_accumulator(blob.value()).expect("decode");
+    let hx = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    println!(
+        "ACC slot={} epoch={} reserves={} treasury={}",
+        acc.epoch_state.slot.0, acc.epoch_state.epoch.0, acc.epoch_state.reserves.0, acc.epoch_state.treasury.0
+    );
+    let mark = &acc.epoch_state.snapshots.as_authoritative().expect("authoritative").mark.0;
+    let mut n = 0usize;
+    let mut sum = 0u128;
+    for (h, (pid, coin)) in &mark.delegations {
+        if hx(&(pid.0).0) != want {
+            continue;
+        }
+        let key = acc.cert_state.delegation.rewards.get(&StakeCredential::KeyHash(h.clone()));
+        let script = acc.cert_state.delegation.rewards.get(&StakeCredential::ScriptHash(h.clone()));
+        println!(
+            "MARK {} {} reward_key={:?} reward_script={:?}",
+            hx(&h.0),
+            coin.0,
+            key.map(|c| c.0),
+            script.map(|c| c.0)
+        );
+        n += 1;
+        sum += coin.0 as u128;
+    }
+    println!("MARKSUM pool={want} creds={n} stake={sum}");
+}

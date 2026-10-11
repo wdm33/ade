@@ -10,6 +10,9 @@ the previous store rejected, and follows on. The one pool that differs is off by
 exactly the key/script credential residual already recorded and owned by slice LV-4. So the bar as
 written (448 of 448) is **not** met; it is one known credential short.
 
+Following the run one boundary further found **a third reward defect**, unrelated to the seed: a pool
+that retires is not paid for the blocks of its final epoch (§6).
+
 ---
 
 ## 1. THE RUN
@@ -120,7 +123,67 @@ node still running.
 - The sealed denominator is 11,802 lower than the reference's — 7 parts in 10^12. It moved no header
   here. It is still a difference in a consensus input, which is why LV-4 is not optional.
 
-## 6. ARTIFACTS (off-repo)
+## 6. THE SECOND BOUNDARY (305→306) — one more defect, found and identified
+
+The node stopped at the 306→307 boundary with `LeadershipEpochNotSealed { requested: 307 }`: the
+accumulator had not yet crossed 305→306 when the tip got there (its first pass stops at the
+phase-2-invalid block until the checkpoint has moved past it). A warm restart on the same store
+carried on, and the accumulator crossed:
+
+```
+bnd2c-transition: cursor 130350114 -> 130550399 epoch_fees 5858944830 -> 10290010819
+[epoch_boundary] total_stake=32013609032410830 active_stake=1627117252973386 pool_pot=27525851410056
+epoch-accumulator: CROSSED boundary 305 -> 306 at slot 130550441
+```
+
+What is exact at this boundary:
+
+| quantity | Ade | independent value |
+|---|---|---|
+| reserves after 304→305 (implied by `total_stake`) | 12,986,390,967,589,170 | seed reserves − reference `deltaR` |
+| active stake of the go snapshot | 1,627,117,252,973,386 | reference `total.stakeGo` |
+| fee input of this boundary | 22,236,845,053 | public fee total of epoch 304 |
+| fees of epoch 305, rotated out | 10,290,010,819 | public fee total of epoch 305 = reference `feeSS` in 306 |
+| pool pot | 27,525,851,410,056 | recomputed from the three rows above and 19,064 blocks |
+
+So LV-2's fee handling (CE-LV2-4) is confirmed live on the boundary after the seed.
+
+What is not:
+
+```
+sealed epoch-307 stake vs the reference's end-of-305 snapshot
+  exact   446 of 447 pools
+  differ  1    5cb14d2c…1bddc   -16,453,955     (one credential, 32a4d66f…1134)
+reserves after 305→306    Ade 12,979,165,195,057,402   reference 12,979,123,112,128,607   (+42,082,928,795)
+treasury after 305→306    Ade  1,959,103,167,493,699   reference  1,959,103,174,719,172   (-7,225,473)
+```
+
+**Cause, confirmed against the reference.** Pool `8ed5ab11…eea88` retired at the 304→305 boundary.
+It made blocks in epoch 304, its last. Those blocks are rewarded at 305→306, one boundary after the
+pool has been removed from the registrations. cardano computes rewards from the pool parameters
+frozen in the go snapshot, so it still pays that pool's operator and members. Ade looks the pool up
+in the CURRENT registrations, does not find it, and pays nothing.
+
+- In the reference's go snapshot for this boundary the pool has stake 66,476,670,913,199 (saturated),
+  pledge met, 669 of 16,609 blocks at the last capture inside 304. Its maximum reward works out at
+  42,347,662,127; the reserves gap is 42,082,928,795.
+- The credential behind the one differing pool was a member of the retired pool in that snapshot and
+  had re-delegated to `5cb14d2c…` by the end of 305. Reference balance 43,318,478, Ade 26,864,523:
+  the difference is 16,453,955, the same number as the pool difference.
+- The former members who have not re-delegated are in no pool's stake, which is why 446 pools still
+  match.
+
+This is a defect in the shared reward function, older than this slice, and not a seed-boundary
+matter: it happens whenever a pool retires after producing blocks in its final epoch. It was on the
+slice's own list as entry obligation E2 ("cardano rewards from the pool parameters frozen in the go
+snapshot; Ade reads the current registrations"), which was checked at the first boundary only, where
+no pool had yet been removed.
+
+Ade's stake snapshot does not carry pool parameters at all, so the repair is a change to what a
+snapshot holds — the same kind of change the key/script residual needs (the snapshot also drops the
+credential's key/script tag). Neither is attempted here.
+
+## 7. ARTIFACTS (off-repo)
 
 ```
 ~/.cardano-live1/lv2-ce10-v9-bootstrap.log                 the run
@@ -128,6 +191,11 @@ node still running.
 ~/.cardano-live1/lv2-evidence/lv2-ce3.log                  §3
 ~/.cardano-live1/lv2-evidence/lv2-306.log, cmp306.py       §4(b)
 ~/.cardano-live1/lv2-evidence/lv2_mut.log                  the nine mutations
+~/.cardano-live1/lv2-ce10-v9-restart1.log                  the warm restart, §6
+~/.cardano-live1/lv2-evidence/lv2-307.log, cmp307.py       §6 pool comparison
+~/.cardano-live1/lv2-evidence/lv2-mark5cb.log              §6 per-credential view of the differing pool
+~/.cardano-live1/oracle-end304-node/ipc/ledger-state-306.json           reference state at slot 130,563,009
+~/.cardano-live1/oracle-end304-node/stake-snapshot-epoch306-all.json    end-of-305 mark, all pools
 ~/.cardano-live1/oracle-end304-node/stake-snapshot-epoch305-all.json
 ~/.cardano-live1/oracle-rupd304-node/rupd-304to305-rs-by-credential.txt
 ```

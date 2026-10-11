@@ -318,6 +318,23 @@ had).
 A sweep of all 276 `ci/ci_check_*.sh` scripts: 229 pass, 47 fail — and the same 47 fail on the commit
 before this slice. None is caused by it. They are not addressed here.
 
+### The boundary after the seed (305→306) — recorded 2026-10-11, after the slice commit
+
+Evidence §6. The fee pot this slice rotates is confirmed there: the second boundary's pool pot equals
+an independent recomputation exactly, and the fees rotated out of epoch 305 equal the reference's
+`feeSS`. CE-LV2-4 holds live.
+
+The same boundary shows a defect this slice does not own. **E2, re-opened:** E2 asked whether reading
+current pool registrations instead of the go snapshot's frozen pool parameters makes a difference, and
+recorded "no residual attributable" — true at the first boundary, where it was checked. At the second
+it does: a pool that retired at 304→305 is owed its epoch-304 rewards at 305→306, cardano pays them
+from the snapshot, Ade finds no registration and pays nothing (42,082,928,795 less drawn from
+reserves; one re-delegated member already shows as −16,453,955 in the sealed epoch-307 stake).
+
+Also seen: the node halts at an epoch boundary if the accumulator has not sealed that epoch's
+leadership yet, and a warm restart carries on. That is fail-closed behaviour on a catch-up ordering,
+not a wrong result, and it is not addressed here.
+
 ### Not done
 
 - `EPOCH_ACCUMULATOR_SCHEMA_VERSION` is unchanged. The accumulator embeds the reward record as its
