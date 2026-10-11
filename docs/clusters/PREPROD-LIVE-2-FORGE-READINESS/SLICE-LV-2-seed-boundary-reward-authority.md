@@ -113,6 +113,24 @@ The reward formula, `apply_epoch_boundary_with_registrations`, the mark construc
 | **E3** | The seed+2 window-replay derive (`epoch_candidate.rs` → `reduced_window_driver.rs`) applies the same record's `reward_delta` at the window end. Is that path still reachable in production after the S4 authority flip? | Read the call graph; record the answer. Reachable or not, it must not apply an empty delta for `Native` (CE-LV2-6). |
 | **E4** | Is `utxosFees(seed) − ssFee` exactly the seed epoch's own fees so far? | From `ledger-state-seed304.json` and the block fees up to the seed; and at the far end, Ade's `prev_epoch_fees` after 304→305 vs cardano's `feeSS` in epoch 305 (one more offline query on the kept reference node). |
 
+### 4.1 E1 RESULT, 2026-10-10 — wiring confirmed; one pre-existing reward defect blocks the bar
+
+`docs/evidence/run-stores/preprod-live2c/lv2-e1-native-seed-reward-vs-cardano.md`.
+
+Fed `nesBprev` + `ssFee`, the existing reward function matches cardano for **11,050 of 11,056**
+credentials; `pool_pot` goes from 0 to 28,118,802,294,396. Every residual is attributed. Two are
+defects in the shared reward function, outside this slice as drafted:
+
+- **Pledge check.** Ade counts an owner's stake wherever it is delegated; cardano counts only owners
+  delegated to the pool itself. Ade pays pool `13e8600b…2418a` 6,218,191,443 that cardano does not
+  pay. This contradicts a recorded project rule and needs an owner ruling.
+- **Credential discriminant.** A reward for a script credential lands on the key credential with the
+  same 28 bytes (11,802 lovelace).
+
+E1 as written is NOT met, so per the rule above **implementation has not started**. CE-LV2-3 and
+CE-LV2-10(b) cannot pass until the pledge check is settled. E2: no residual attributable. E3, E4: not
+run.
+
 E1 is the load-bearing one. LV-1 was implemented on a theory nobody had checked against a reference;
 E1 exists so that this slice is not.
 

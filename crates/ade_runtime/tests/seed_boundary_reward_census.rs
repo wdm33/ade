@@ -1,0 +1,162 @@
+//! SEED-BOUNDARY REWARD CENSUS — read-only, evidence-only, `#[ignore]`d by default (SLICE LV-2, E1).
+//!
+//! Question: does Ade's NATIVE reward calculation, fed the seed state's go snapshot + `nesBprev` +
+//! the snapshot's `ssFee`, reproduce cardano's Complete reward update for the seed boundary?
+//!
+//! ⚠ `EpochAccumulatorStore::open` is READ-WRITE and this harness calls `reset_to_bootstrap`. Point
+//! it at a COPY, never at a live store.
+//!
+//! ```text
+//! ADE_CENSUS_ACC_REDB=/path/to/copy/epoch-accumulator.redb \
+//! ADE_CENSUS_FEE_SS=23699540134 \
+//! ADE_CENSUS_RS=/path/to/rupd-rs-by-credential.txt \      # lines: <tag 0|1> <hex28> <lovelace>
+//!   cargo test --release -p ade_runtime --test seed_boundary_reward_census -- --ignored --nocapture
+//! ```
+
+use std::collections::BTreeMap;
+
+use ade_ledger::epoch_accumulator::{cross_epoch_boundary, SelectedBlockCtx};
+use ade_runtime::chaindb::EpochAccumulatorStore;
+use ade_types::shelley::cert::StakeCredential;
+use ade_types::tx::Coin;
+use ade_types::{EpochNo, SlotNo};
+
+fn key(c: &StakeCredential) -> String {
+    let (t, h) = match c {
+        StakeCredential::KeyHash(h) => (0, h),
+        StakeCredential::ScriptHash(h) => (1, h),
+    };
+    format!("{t} {}", h.0.iter().map(|b| format!("{b:02x}")).collect::<String>())
+}
+
+#[test]
+#[ignore = "evidence-only; requires ADE_CENSUS_ACC_REDB pointing at a COPY of a real store"]
+fn native_seed_boundary_reward_vs_cardano_rs() {
+    let path = std::env::var("ADE_CENSUS_ACC_REDB").expect("ADE_CENSUS_ACC_REDB");
+    let fee_ss: u64 = std::env::var("ADE_CENSUS_FEE_SS").expect("ADE_CENSUS_FEE_SS").parse().unwrap();
+    let rs_path = std::env::var("ADE_CENSUS_RS").expect("ADE_CENSUS_RS");
+
+    let mut reference: BTreeMap<String, u64> = BTreeMap::new();
+    for line in std::fs::read_to_string(&rs_path).expect("read rs").lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        reference.insert(format!("{} {}", f[0], f[1]), f[2].parse().unwrap());
+    }
+
+    let store = EpochAccumulatorStore::open(std::path::Path::new(&path)).expect("open store copy");
+    store.reset_to_bootstrap().expect("reset to the sealed bootstrap seed");
+    let (slot, mut acc) = store.load_current().expect("load").expect("sealed");
+    let seed_epoch = acc.epoch_state.epoch;
+    println!(
+        "SEED slot={} epoch={} reserves={} treasury={} epoch_fees={} prev_fees={} bprev_pools={} bprev_blocks={} pending={:?}",
+        slot.0,
+        seed_epoch.0,
+        acc.epoch_state.reserves.0,
+        acc.epoch_state.treasury.0,
+        acc.epoch_state.epoch_fees.0,
+        acc.prev_epoch_fees.0,
+        acc.prev_block_production.len(),
+        acc.prev_block_production.values().sum::<u64>(),
+        acc.pending_reward_update.as_ref().map(|r| (r.reward_delta.len(), r.delta_treasury.0, r.delta_reserves.0, r.delta_fees.0)),
+    );
+
+    // The LV-2 `Native` seed path, emulated: no imported record, nesBprev as held, fees = ssFee.
+    acc.pending_reward_update = None;
+    acc.prev_epoch_fees = Coin(fee_ss);
+    let before = acc.cert_state.delegation.rewards.clone();
+    let go_deleg: BTreeMap<String, String> = acc
+        .epoch_state
+        .snapshots
+        .as_authoritative()
+        .expect("authoritative snapshots")
+        .go
+        .0
+        .delegations
+        .iter()
+        .map(|(h, (pid, _))| {
+            let hx = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+            (hx(&h.0), hx(&(pid.0).0))
+        })
+        .collect();
+    let mut by_pool: BTreeMap<String, (usize, i128)> = BTreeMap::new();
+    let (res0, tre0) = (acc.epoch_state.reserves.0, acc.epoch_state.treasury.0);
+
+    let target = EpochNo(seed_epoch.0 + 1);
+    let ctx = SelectedBlockCtx {
+        era: acc.era,
+        block_epoch: target,
+        block_slot: SlotNo(slot.0 + 1),
+        issuer_pool: acc.prev_block_production.keys().next().expect("a producer").clone(),
+        boundary_mark: Some(BTreeMap::new()),
+        active_slots_per_epoch: 21_600,
+    };
+    let after = cross_epoch_boundary(acc, target, &ctx).expect("cross the seed boundary natively");
+
+    let mut ade: BTreeMap<String, i128> = BTreeMap::new();
+    for (c, v) in &after.cert_state.delegation.rewards {
+        let d = v.0 as i128 - before.get(c).map(|x| x.0).unwrap_or(0) as i128;
+        if d != 0 {
+            ade.insert(key(c), d);
+        }
+    }
+    for (c, v) in &before {
+        if !after.cert_state.delegation.rewards.contains_key(c) && v.0 != 0 {
+            ade.insert(key(c), -(v.0 as i128));
+        }
+    }
+
+    let (mut exact, mut differ, mut only_ref, mut only_ade) = (0usize, 0usize, 0usize, 0usize);
+    let (mut sum_ref, mut sum_ade, mut sum_abs) = (0i128, 0i128, 0i128);
+    for (k, r) in &reference {
+        sum_ref += *r as i128;
+        match ade.get(k) {
+            Some(a) if *a == *r as i128 => exact += 1,
+            Some(a) => {
+                differ += 1;
+                sum_abs += (*a - *r as i128).abs();
+                if differ <= 40 {
+                    println!("DIFFER {k} ade={a} cardano={r} d={}", *a - *r as i128);
+                }
+            }
+            None => {
+                only_ref += 1;
+                sum_abs += *r as i128;
+                if only_ref <= 40 {
+                    println!("ONLY-CARDANO {k} {r}");
+                }
+            }
+        }
+    }
+    for (k, a) in &ade {
+        sum_ade += *a;
+        if !reference.contains_key(k) {
+            only_ade += 1;
+            sum_abs += a.abs();
+            let pool = go_deleg.get(&k[2..]).cloned().unwrap_or_else(|| "NOT-IN-GO".into());
+            let e = by_pool.entry(pool).or_insert((0, 0));
+            e.0 += 1;
+            e.1 += *a;
+            if *a >= 400_000_000 {
+                println!("ONLY-ADE {k} {a}");
+            }
+        }
+    }
+    for (pool, (n, sum)) in &by_pool {
+        println!("ONLY-ADE-BY-GO-POOL {pool} creds={n} sum={sum}");
+    }
+    for k in ["4245236ab8056760efceebbff57e8cab220182be3e36439e520a6454", "7a507e54fcae6f3b497ddf679e29d170dad54905e19bbcfb7d398756", "d2cfce07b09d41fde7e4e1e4469d5f3e7b563c9870469dd93cb8ee5f"] {
+        println!("DIFFER-GO-POOL {k} -> {:?}", go_deleg.get(k));
+    }
+    println!(
+        "RESULT cardano_creds={} ade_creds={} exact={exact} differ={differ} only_cardano={only_ref} only_ade={only_ade}",
+        reference.len(),
+        ade.len()
+    );
+    println!("RESULT sum_cardano={sum_ref} sum_ade={sum_ade} sum_abs_diff={sum_abs}");
+    println!(
+        "RESULT reserves_draw={} treasury_gain={} prev_fees_after={} epoch_fees_after={}",
+        res0 as i128 - after.epoch_state.reserves.0 as i128,
+        after.epoch_state.treasury.0 as i128 - tre0 as i128,
+        after.prev_epoch_fees.0,
+        after.epoch_state.epoch_fees.0
+    );
+}
