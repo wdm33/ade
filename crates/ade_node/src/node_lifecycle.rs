@@ -781,7 +781,7 @@ async fn run_node_lifecycle_inner(
                             .ok()
                             .flatten()
                             .and_then(|b| {
-                                ade_ledger::bootstrap_reward_update::decode_bootstrap_reward_update(
+                                ade_ledger::bootstrap_reward_update::decode_seed_reward_authority(
                                     &b,
                                 )
                                 .ok()
@@ -997,7 +997,7 @@ async fn run_node_lifecycle_inner(
                             .ok()
                             .flatten()
                             .and_then(|b| {
-                                ade_ledger::bootstrap_reward_update::decode_bootstrap_reward_update(
+                                ade_ledger::bootstrap_reward_update::decode_seed_reward_authority(
                                     &b,
                                 )
                                 .ok()
@@ -11026,7 +11026,7 @@ mod ce4a_continuous_self_sufficiency {
                 .ok()
                 .flatten()
                 .and_then(|b| {
-                    ade_ledger::bootstrap_reward_update::decode_bootstrap_reward_update(&b).ok()
+                    ade_ledger::bootstrap_reward_update::decode_seed_reward_authority(&b).ok()
                 }),
         };
 
@@ -11753,7 +11753,7 @@ mod ce4a_continuous_self_sufficiency {
                 .get_bootstrap_reward_update(&sidecar.anchor_fp)
                 .ok()
                 .flatten()
-                .and_then(|b| ade_ledger::bootstrap_reward_update::decode_bootstrap_reward_update(&b).ok()),
+                .and_then(|b| ade_ledger::bootstrap_reward_update::decode_seed_reward_authority(&b).ok()),
         };
         let anchor_fp = fingerprint(&state.ledger).combined;
         let mut fwd = ForwardSyncState::new(
@@ -11988,7 +11988,7 @@ mod ce4a_continuous_self_sufficiency {
                 .get_bootstrap_reward_update(&sidecar.anchor_fp)
                 .ok()
                 .flatten()
-                .and_then(|b| ade_ledger::bootstrap_reward_update::decode_bootstrap_reward_update(&b).ok()),
+                .and_then(|b| ade_ledger::bootstrap_reward_update::decode_seed_reward_authority(&b).ok()),
         };
         let anchor_fp = fingerprint(&state.ledger).combined;
         let recovered_anchor = state.tip.clone();

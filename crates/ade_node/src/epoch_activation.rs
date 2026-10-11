@@ -98,6 +98,9 @@ pub enum EpochViewActivationError {
     /// DC-EPOCH-18: the recovered bootstrap reward update is bound to a different seed epoch than the
     /// authority being derived ⇒ terminal halt.
     BootstrapRewardUpdateEpochMismatch { bound: EpochNo, seed: EpochNo },
+    /// DC-EPOCH-41: the seed boundary's reward is owned by the native calculation, so the seed-window
+    /// replay has no imported delta to apply and must not derive an authority without one ⇒ terminal halt.
+    SeedRewardOwnedByNativeCalculation { seed: EpochNo },
     /// CE-4A.3-R3 (DC-EPOCH-06): the resolved active activation's `target_epoch` is ABOVE the recovered
     /// durable tip's epoch — an activation for a future epoch the selected chain has not (re-)reached.
     /// Terminal; NEVER a silent select. (Rollback-aware resolution should already drop a rolled-back

@@ -43,6 +43,11 @@ pub enum CandidateDeriveError {
     /// Option B (B3c / DC-EPOCH-18): the bootstrap reward update is present but bound to a different
     /// seed epoch than this window's (a provenance mismatch). Fail closed.
     BootstrapRewardUpdateEpochMismatch { bound: EpochNo, seed: EpochNo },
+    /// LV-2 (DC-EPOCH-41): the seed boundary's reward is owned by the NATIVE calculation (the snapshot's
+    /// `nesRu` was `SNothing`), so there is no imported delta for a window replay to apply, and a replay
+    /// cannot reproduce a reward the accumulator computes. Fail closed: the seed+2 authority for such a
+    /// seed is the accumulator's frozen leadership object, never this derive with an empty delta.
+    SeedRewardOwnedByNativeCalculation { seed: EpochNo },
 }
 
 /// The canonical leadership consensus profile bound into the candidate (ECA-0b): the source-epoch
@@ -61,7 +66,7 @@ pub struct CandidateProfile {
     /// non-seed-window path; `derive_candidate` additionally gates the apply on
     /// `target_epoch == window.source_epoch`, so a carried update is a strict no-op off its bound window.
     pub bootstrap_reward_update:
-        Option<ade_ledger::bootstrap_reward_update::BootstrapRewardUpdate>,
+        Option<ade_ledger::bootstrap_reward_update::SeedRewardAuthority>,
     /// Option B (B3c / DC-EPOCH-18): the seed epoch. The seed+2 authority window is the one whose
     /// `source_epoch == seed_epoch` (`compute_first_window_bounds(seed_epoch)`), so `derive_candidate`
     /// uses this to decide — MECHANICALLY, at the single derivation site — whether the bootstrap reward
@@ -98,12 +103,19 @@ pub fn derive_candidate(
     // routes through this one function, the enforcement is local to the derivation, never replicated in
     // (and never able to drift across) the callers. A non-seed+2 window never applies it -- a carried
     // update is a strict no-op. activate + recover share the profile, so they derive byte-identically.
+    use ade_ledger::bootstrap_reward_update::SeedRewardAuthority;
     let is_seed2 = window.source_epoch == profile.seed_epoch;
     let bootstrap_reward_delta = match (profile.bootstrap_reward_update.as_ref(), is_seed2) {
-        (Some(rupd), true) if rupd.target_epoch == profile.seed_epoch => Some(&rupd.reward_delta),
-        (Some(rupd), true) => {
+        (Some(authority), true) if authority.target_epoch() != profile.seed_epoch => {
             return Err(CandidateDeriveError::BootstrapRewardUpdateEpochMismatch {
-                bound: rupd.target_epoch,
+                bound: authority.target_epoch(),
+                seed: profile.seed_epoch,
+            })
+        }
+        (Some(SeedRewardAuthority::Imported(rupd)), true) => Some(&rupd.reward_delta),
+        // DC-EPOCH-41: no empty delta and no `None` for a Native seed -- a typed terminal.
+        (Some(SeedRewardAuthority::Native(_)), true) => {
+            return Err(CandidateDeriveError::SeedRewardOwnedByNativeCalculation {
                 seed: profile.seed_epoch,
             })
         }
@@ -485,10 +497,43 @@ mod tests {
     // ---- Option B (B3c / DC-EPOCH-18) -- the mechanical seed+2 rupd fail-closed gate ----
     // `window().source_epoch == 575`, so a profile with `seed_epoch == 575` IS the seed+2 window.
     fn seed2_profile(rupd: Option<BootstrapRewardUpdateT>) -> CandidateProfile {
+        seed2_profile_with(
+            rupd.map(ade_ledger::bootstrap_reward_update::SeedRewardAuthority::Imported),
+        )
+    }
+    fn seed2_profile_with(
+        authority: Option<ade_ledger::bootstrap_reward_update::SeedRewardAuthority>,
+    ) -> CandidateProfile {
         CandidateProfile {
             seed_epoch: window().source_epoch,
-            bootstrap_reward_update: rupd,
+            bootstrap_reward_update: authority,
             ..test_profile()
+        }
+    }
+
+    /// LV-2 CE-LV2-6: for a seed whose reward is owned by the NATIVE calculation, the seed-window
+    /// replay is a typed terminal. It never applies an empty delta and never proceeds with none.
+    #[test]
+    fn seed2_window_with_a_native_seed_authority_is_a_typed_terminal() {
+        use ade_ledger::bootstrap_reward_update::{
+            native_seed_reward_commitment, NativeSeedReward, SeedRewardAuthority,
+        };
+        let seed = window().source_epoch;
+        let (manifest, slot, hash, fee_ss) =
+            (Hash32([0x44; 32]), SlotNo(1), Hash32([0x66; 32]), ade_types::Coin(23_699_540_134));
+        let native = SeedRewardAuthority::Native(NativeSeedReward {
+            canonical_commitment: native_seed_reward_commitment(&manifest, slot, &hash, seed, fee_ss),
+            manifest_commitment: manifest,
+            source_point_slot: slot,
+            source_point_hash: hash,
+            target_epoch: seed,
+            fee_ss,
+        });
+        match derive_with_result(&seed2_profile_with(Some(native))) {
+            Err(CandidateDeriveError::SeedRewardOwnedByNativeCalculation { seed: s }) => {
+                assert_eq!(s, seed)
+            }
+            other => panic!("expected SeedRewardOwnedByNativeCalculation, got {other:?}"),
         }
     }
     fn rupd_bound_to(target_epoch: EpochNo) -> BootstrapRewardUpdateT {

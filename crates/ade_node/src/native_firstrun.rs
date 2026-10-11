@@ -654,48 +654,80 @@ where
             .map_err(|e| NativeFirstRunError::NativeBootstrap(format!("bridge persist: {e:?}")))?;
     }
 
-    // 9b. Option B (B3c): persist the snapshot-bound bootstrap REWARD UPDATE -- the Complete `nesRu`
-    //     reward delta (`s1a.reward_deltas`), bound to the SAME `anchor_fp` as the seed sidecar + the
-    //     seed point + the seed epoch. It is applied at the WINDOW-END of the seed+2 authority replay
-    //     (after the seed epoch's withdrawals, before the snapshot), NEVER mutated into the seed cert
-    //     state. Persisted now so a restart recovers + applies it IDENTICALLY (replay-equivalence). An
-    //     EMPTY delta is still persisted (a bound record = "native bootstrap, no reward delta"),
-    //     distinct from ABSENT (no native bootstrap / a pre-Option-B store), which fails closed at the
-    //     seed+2 boundary.
+    // 9b. Persist WHO OWNS the seed boundary's reward (DC-EPOCH-41), bound to the SAME `anchor_fp` as
+    //     the seed sidecar + the seed point + the seed epoch, and never mutated into the seed cert
+    //     state. A snapshot whose `nesRu` is Complete yields the IMPORTED record (Option B / B3c): the
+    //     finished reward delta, applied exactly once at the seed boundary. A snapshot whose `nesRu`
+    //     is SNothing yields the NATIVE record: cardano had not computed it, so Ade does at that
+    //     boundary, from the imported nesBprev and this record's `ssFee`. The two are different
+    //     variants on disk -- "not computed yet" is never written as an empty computed result.
+    //     ABSENT (no native bootstrap / an older store) remains a third, fail-closed state.
     {
         use ade_ledger::bootstrap_reward_update as bru;
+        use ade_ledger::ledgerdb_state::SnapshotRewardUpdate;
         let manifest_commitment = output.seed_epoch_consensus_inputs.anchor_fp.clone();
         let source_point_slot = binding.certified_point.slot;
         let source_point_hash = binding.certified_point.block_hash.clone();
         let target_epoch = s1a.epoch;
-        let reward_delta = s1a.reward_deltas.clone();
-        let delta_treasury = s1a.rupd_delta_treasury;
-        let delta_reserves = s1a.rupd_delta_reserves;
-        let delta_fees = s1a.rupd_delta_fees;
-        let canonical_commitment = bru::bootstrap_rupd_commitment(
-            &manifest_commitment,
-            source_point_slot,
-            &source_point_hash,
-            target_epoch,
-            delta_treasury,
-            delta_reserves,
-            delta_fees,
-            &reward_delta,
-        );
-        let rupd = bru::BootstrapRewardUpdate {
-            manifest_commitment,
-            source_point_slot,
-            source_point_hash,
-            target_epoch,
-            delta_treasury,
-            delta_reserves,
-            delta_fees,
-            reward_delta,
-            canonical_commitment,
+        let rupd = match &s1a.seed_reward_update {
+            SnapshotRewardUpdate::Complete {
+                reward_deltas,
+                delta_treasury,
+                delta_reserves,
+                delta_fees,
+            } => bru::SeedRewardAuthority::Imported(bru::BootstrapRewardUpdate {
+                canonical_commitment: bru::bootstrap_rupd_commitment(
+                    &manifest_commitment,
+                    source_point_slot,
+                    &source_point_hash,
+                    target_epoch,
+                    *delta_treasury,
+                    *delta_reserves,
+                    *delta_fees,
+                    reward_deltas,
+                ),
+                manifest_commitment,
+                source_point_slot,
+                source_point_hash,
+                target_epoch,
+                delta_treasury: *delta_treasury,
+                delta_reserves: *delta_reserves,
+                delta_fees: *delta_fees,
+                reward_delta: reward_deltas.clone(),
+            }),
+            SnapshotRewardUpdate::NotYetComputed { fee_ss } => {
+                bru::SeedRewardAuthority::Native(bru::NativeSeedReward {
+                    canonical_commitment: bru::native_seed_reward_commitment(
+                        &manifest_commitment,
+                        source_point_slot,
+                        &source_point_hash,
+                        target_epoch,
+                        *fee_ss,
+                    ),
+                    manifest_commitment,
+                    source_point_slot,
+                    source_point_hash,
+                    target_epoch,
+                    fee_ss: *fee_ss,
+                })
+            }
         };
-        let bytes = bru::encode_bootstrap_reward_update(&rupd);
+        eprintln!(
+            "ade_node native-firstrun: seed-boundary reward authority = {}",
+            match &rupd {
+                bru::SeedRewardAuthority::Imported(r) => format!(
+                    "IMPORTED (snapshot nesRu Complete: {} credentials)",
+                    r.reward_delta.len()
+                ),
+                bru::SeedRewardAuthority::Native(n) => format!(
+                    "NATIVE (snapshot nesRu SNothing; ssFee {})",
+                    n.fee_ss.0
+                ),
+            }
+        );
+        let bytes = bru::encode_seed_reward_authority(&rupd);
         snapshot_store
-            .put_bootstrap_reward_update(&rupd.manifest_commitment, &bytes)
+            .put_bootstrap_reward_update(rupd.manifest_commitment(), &bytes)
             .map_err(|e| NativeFirstRunError::NativeBootstrap(format!("rupd persist: {e:?}")))?;
 
         // LIVE-LEDGER-EPOCH-TRANSITION S2 (DC-EPOCH-20): seal the bootstrap SEED accumulator beside the

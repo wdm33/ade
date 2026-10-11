@@ -30,8 +30,12 @@ if grep -Eq 'skip_item.*RewardUpdate\.deltaF' "$LEDGERDB"; then
 fi
 grep -Eq 'read_any_int.*RewardUpdate\.deltaF' "$LEDGERDB" \
   || fail "(1) the decoder does not READ RewardUpdate.deltaF via read_any_int"
-grep -q 'rupd_delta_fees' "$LEDGERDB" \
-  || fail "(1) decode_native_nonutxo_state does not carry rupd_delta_fees onto the decoded state"
+# LV-2: the decoded state now carries the reward update as the typed SnapshotRewardUpdate; deltaF is
+# the Complete variant's delta_fees, built from the value read above.
+grep -q 'delta_fees: Coin(delta_fees),' "$LEDGERDB" \
+  || fail "(1) the decoder does not carry the READ deltaF onto SnapshotRewardUpdate::Complete.delta_fees"
+grep -q 'pub seed_reward_update: SnapshotRewardUpdate,' "$LEDGERDB" \
+  || fail "(1) decode_native_nonutxo_state does not carry the typed reward update onto the decoded state"
 
 # (2) CARRY + COMMITMENT-BIND: the bootstrap RUPD codec carries a delta_fees field and binds it into the
 #     canonical commitment (encode_rupd_body), and native_firstrun threads the DECODED feeSS onto it.
@@ -39,8 +43,10 @@ grep -q 'pub delta_fees: Coin' "$RUPD" \
   || fail "(2) BootstrapRewardUpdate is missing the delta_fees field"
 grep -q 'write_uint_canonical(&mut buf, delta_fees.0)' "$RUPD" \
   || fail "(2) delta_fees is not bound into the canonical commitment body (encode_rupd_body)"
-grep -q 's1a.rupd_delta_fees' "$FIRSTRUN" \
-  || fail "(2) native_firstrun does not thread s1a.rupd_delta_fees into the persisted BootstrapRewardUpdate"
+grep -q 'match &s1a.seed_reward_update {' "$FIRSTRUN" \
+  || fail "(2) native_firstrun does not build the persisted record from s1a.seed_reward_update"
+grep -q 'delta_fees: \*delta_fees,' "$FIRSTRUN" \
+  || fail "(2) native_firstrun does not thread the decoded delta_fees into the persisted BootstrapRewardUpdate"
 
 # (3) SUBTRACT (the fix): the seed-boundary apply reduces epoch_fees by the DECODED rupd.delta_fees,
 #     fail-closed on underflow. The reduction MUST use the decoded value, never a literal (see (5)).
@@ -52,8 +58,8 @@ grep -q 'BootstrapRupdFeesUnderflow' "$ACC" \
 # (4) SCHEMA: the bootstrap RUPD codec is at v3 and the accumulator is at v3-OR-LATER (later slices bump
 #     the shared accumulator version monotonically; the fee-pot semantics are the v3 floor), so a pre-fix
 #     store fails closed (UnknownVersion) -- a fresh judge-snapshot re-bootstrap is the ONLY migration.
-grep -q 'pub const BOOTSTRAP_RUPD_SCHEMA_VERSION: u32 = 3' "$RUPD" \
-  || fail "(4) BOOTSTRAP_RUPD_SCHEMA_VERSION is not 3"
+grep -Eq 'pub const BOOTSTRAP_RUPD_SCHEMA_VERSION: u32 = ([3-9]|[1-9][0-9]+);' "$RUPD" \
+  || fail "(4) BOOTSTRAP_RUPD_SCHEMA_VERSION is not >= 3 (the delta_fees floor; LV-2 moved it to 4)"
 grep -Eq 'pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = ([3-9]|[1-9][0-9]+)' "$ACC" \
   || fail "(4) EPOCH_ACCUMULATOR_SCHEMA_VERSION is not >= 3 (the fee-pot floor)"
 

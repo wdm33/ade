@@ -77,7 +77,7 @@ pub struct EviewActivationInputs {
     /// closed if it is absent at that boundary. Applied at the WINDOW-END of the seed+2 replay (the
     /// `CandidateProfile` carries it to `derive_candidate`), NEVER mutated into the seed cert state.
     pub bootstrap_reward_delta:
-        Option<ade_ledger::bootstrap_reward_update::BootstrapRewardUpdate>,
+        Option<ade_ledger::bootstrap_reward_update::SeedRewardAuthority>,
 }
 
 impl EviewActivationInputs {
@@ -534,7 +534,7 @@ pub fn maybe_activate_first_boundary(
     genesis_hash: Hash32,
     protocol_params_hash: Hash32,
     asc: ActiveSlotsCoeff,
-    bootstrap_reward_update: Option<&ade_ledger::bootstrap_reward_update::BootstrapRewardUpdate>,
+    bootstrap_reward_update: Option<&ade_ledger::bootstrap_reward_update::SeedRewardAuthority>,
     selected_point: &Point,
     active_view: &mut ActiveEpochAuthority,
     scratch_path: &std::path::Path,

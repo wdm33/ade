@@ -105,8 +105,8 @@ use ade_types::tx::{Coin, PoolId};
 use ade_types::{CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
 
 use crate::bootstrap_reward_update::{
-    bootstrap_rupd_commitment, decode_bootstrap_reward_update, encode_bootstrap_reward_update,
-    BootstrapRewardUpdate, BootstrapRupdError,
+    bootstrap_rupd_commitment, decode_seed_reward_authority, encode_seed_reward_authority,
+    native_seed_reward_commitment, BootstrapRupdError, SeedRewardAuthority,
 };
 use crate::delegation::{apply_bootstrap_reward_deltas, CertState};
 use crate::frozen_leadership::FrozenLeadershipPoolDistr;
@@ -166,11 +166,11 @@ pub struct EpochAccumulator {
     pub max_lovelace_supply: u64,
     /// The era. Conway-scoped (the codec rejects pre-Conway), matching the `snapshot/` discipline.
     pub era: CardanoEra,
-    /// The bootstrap-transient reward-update seed (DC-EPOCH-18 / Option-B): the snapshot-bound
-    /// precomputed reward delta applied EXACTLY ONCE at its `target_epoch→+1` boundary, then cleared.
-    /// `None` once the native RUPD takes over (the first boundary whose entire input epoch was
-    /// followed).
-    pub pending_reward_update: Option<BootstrapRewardUpdate>,
+    /// WHO owns the reward paid at the seed→seed+1 boundary (DC-EPOCH-41): the snapshot-bound imported
+    /// result (DC-EPOCH-18 / Option-B), applied EXACTLY ONCE there, or the typed statement that the
+    /// snapshot held none yet and the native calculation runs at that boundary. Consumed at its
+    /// `target_epoch→+1` boundary; `None` afterwards, when every boundary is native.
+    pub pending_reward_update: Option<SeedRewardAuthority>,
 }
 
 /// Fail-closed error from sealing the bootstrap SEED accumulator (LIVE-LEDGER-EPOCH-TRANSITION S2,
@@ -236,7 +236,7 @@ impl EpochAccumulator {
     pub fn seed_from_bootstrap_ledger(
         ledger: &LedgerState,
         expected_epoch: EpochNo,
-        pending_reward_update: Option<BootstrapRewardUpdate>,
+        pending_reward_update: Option<SeedRewardAuthority>,
         current_block_production: BTreeMap<PoolId, u64>,
     ) -> Result<Self, SeedError> {
         if (ledger.era as u8) < (CardanoEra::Conway as u8) {
@@ -396,6 +396,10 @@ pub enum LedgerTransitionError {
     /// boundary. Cardano reduces the fee pot by `feeSS` when it applies the reward update; a snapshot whose
     /// `feeSS` exceeds the accumulated fee pot is inconsistent. Fail closed rather than saturate.
     BootstrapRupdFeesUnderflow,
+    /// LV-2 (DC-EPOCH-41): a `Native` seed boundary computed a ZERO pool reward pot although the
+    /// previous epoch produced blocks. Blocks were made, so a reward is owed; a zero pot means the
+    /// calculation was not actually fed (the defect this rule closes), never a result. Fail closed.
+    SeedBoundaryZeroRewardPot { boundary: u64, prev_blocks: u64 },
     /// CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3: a tx-body governance field (19 `voting_procedures` / 20
     /// `proposal_procedures`) failed to decode, or a field-20 procedure carried an unknown gov-action
     /// variant, on the within-epoch authority path. Terminal for the governance authority — never a silent
@@ -642,6 +646,18 @@ pub struct BoundaryFreezeInputs {
     pub total_active_stake: u64,
 }
 
+/// What one boundary's reward calculation is fed (DC-EPOCH-41). A closed sum so the seed boundary's
+/// two owners and the ordinary case cannot be confused by a flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SeedBoundaryRewardInputs {
+    /// Not a seed boundary: the held `nesBprev` and previous-epoch fees.
+    Ordinary,
+    /// Seed boundary, `Imported`: cardano's result was applied; the native calculation runs at zero.
+    ImportedResultApplied,
+    /// Seed boundary, `Native`: the imported `nesBprev` and the snapshot's `ssFee`.
+    NativeFromSnapshot { fee_ss: Coin },
+}
+
 /// Cross ONE epoch boundary into `target`, returning the accumulator + the [`BoundaryFreezeInputs`] — the pure
 /// state transition, with NO leadership effect and NO commitment. The observe/discard wrapper
 /// ([`cross_epoch_boundary`]) drops the inputs; the effect wrapper ([`cross_epoch_boundary_with_effect`]) binds
@@ -685,84 +701,116 @@ fn cross_epoch_boundary_transition(
         return Err(LedgerTransitionError::MissingBoundaryStake { epoch: target.0 });
     }
 
-    // ONE-SHOT BOOTSTRAP RUPD (DC-EPOCH-18 / CE-3d). The law: native is the SOLE reward authority once
-    // bootstrap-derived inputs are exhausted; only the FIRST bootstrap-adjacent transition (the seed→
-    // seed+1 boundary) may consume manifest-bound historical state from the certified snapshot. That
-    // boundary pays epoch (seed-1)'s rewards, which need epoch (seed-1)'s FEES — PRE-SEED, and
-    // unreconstructable from post-bootstrap blocks (proven: with fees=0 the native pot under-draws by
-    // exactly the snapshot `deltaF`). So here the native reward is forced to ZERO (empty block-production
-    // + zero fees → no reserves draw, R=0, the pool loop is skipped; rotation/POOLREAP/enactment still
-    // run) and the bound bootstrap RUPD supplies cardano's EXACT reward (pots + rs) EXACTLY ONCE, then is
-    // consumed. A pending RUPD at any NON-target boundary fails closed (it may never carry into a later
-    // epoch). After consumption every later boundary is native-only.
-    let is_seed_boundary = matches!(
-        &acc.pending_reward_update,
-        Some(rupd) if rupd.target_epoch.0.checked_add(1) == Some(target.0)
-    );
-    if let Some(rupd) = &acc.pending_reward_update {
-        if !is_seed_boundary {
+    // THE SEED BOUNDARY'S REWARD HAS EXACTLY ONE OWNER (DC-EPOCH-41), selected by the typed
+    // `SeedRewardAuthority` the bootstrap sealed — never by an empty map.
+    //
+    //   Imported (DC-EPOCH-18 / CE-3d): cardano finished the calculation before the snapshot. That
+    //     boundary pays epoch (seed-1)'s rewards, so the native reward is forced to ZERO here (empty
+    //     block-production + zero fees → no reserves draw, the pool loop is skipped; rotation / POOLREAP /
+    //     enactment still run) and the bound record supplies cardano's EXACT reward (pots + rs) once.
+    //   Native: cardano had not started. The ordinary native calculation runs at this boundary, fed the
+    //     imported `nesBprev` (already held as `prev_block_production`) and the snapshot's `ssFee` — the
+    //     same function every later boundary uses, no seed-only arithmetic.
+    //
+    // Either way the authority is consumed here, and a pending authority at any NON-target boundary
+    // fails closed (it may never carry into a later epoch). Afterwards every boundary is native.
+    let seed_authority = match acc.pending_reward_update.take() {
+        None => None,
+        Some(authority) if authority.target_epoch().0.checked_add(1) == Some(target.0) => {
+            Some(authority)
+        }
+        Some(authority) => {
             return Err(LedgerTransitionError::BootstrapRupdWrongBoundary {
-                rupd_target: rupd.target_epoch.0,
+                rupd_target: authority.target_epoch().0,
                 boundary: target.0,
             });
         }
-    }
+    };
 
-    // ONE-SHOT BOOTSTRAP RUPD, staged BEFORE the mark (CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION S1). At the seed
-    // boundary the native reward is zero, so the bootstrap RUPD is the ONLY reward the seed-boundary mark must
-    // see. Verify the durable commitment, apply its reward-account delta to the held delegation HERE — before the
-    // boundary fn builds the POST-RUPD mark — and CONSUME it (`take` → None); its POT deltas are applied AFTER the
-    // native mechanics (below), as they do not affect the mark. Fail-closed on a tampered/corrupt record. (The fn
-    // itself no longer receives a precomputed mark; it builds one from the base + the staged post-RUPD rewards.)
-    let bootstrap_pots = if is_seed_boundary {
-        let rupd = acc
-            .pending_reward_update
-            .take()
-            .expect("is_seed_boundary implies pending_reward_update is Some");
-        let recomputed = bootstrap_rupd_commitment(
-            &rupd.manifest_commitment,
-            rupd.source_point_slot,
-            &rupd.source_point_hash,
-            rupd.target_epoch,
-            rupd.delta_treasury,
-            rupd.delta_reserves,
-            rupd.delta_fees,
-            &rupd.reward_delta,
-        );
-        if recomputed != rupd.canonical_commitment {
-            return Err(LedgerTransitionError::BootstrapRupdCommitmentMismatch);
+    // The reward inputs this boundary's calculation is fed, and (Imported only) the pot deltas applied
+    // after it. Staged BEFORE the mark (CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION S1): an imported
+    // reward-account delta is applied to the held delegation HERE, so the boundary fn builds a POST-RUPD
+    // mark. Fail-closed on a tampered/corrupt record.
+    let (reward_inputs, bootstrap_pots) = match seed_authority {
+        Some(SeedRewardAuthority::Imported(rupd)) => {
+            let recomputed = bootstrap_rupd_commitment(
+                &rupd.manifest_commitment,
+                rupd.source_point_slot,
+                &rupd.source_point_hash,
+                rupd.target_epoch,
+                rupd.delta_treasury,
+                rupd.delta_reserves,
+                rupd.delta_fees,
+                &rupd.reward_delta,
+            );
+            if recomputed != rupd.canonical_commitment {
+                return Err(LedgerTransitionError::BootstrapRupdCommitmentMismatch);
+            }
+            apply_bootstrap_reward_deltas(&mut acc.cert_state.delegation, &rupd.reward_delta)
+                .map_err(|_| LedgerTransitionError::ArithmeticOverflow)?;
+            // Reduce the fee pot by feeSS EXACTLY as cardano does when it APPLIES the reward update: the
+            // fee pot is reduced by feeSS, THEN the SNAP freezes it (Shelley epoch.tex: "The fee pot will
+            // be reduced by feeSS"). This runs BEFORE the pot is captured as `finished_fees` and rotated
+            // to `prev_epoch_fees` (the seed+2 reward's fee input) below, so the seed epoch's feeSS does
+            // not double-count into the seed+2 reward. Fail closed on underflow rather than saturate.
+            acc.epoch_state.epoch_fees.0 = acc
+                .epoch_state
+                .epoch_fees
+                .0
+                .checked_sub(rupd.delta_fees.0)
+                .ok_or(LedgerTransitionError::BootstrapRupdFeesUnderflow)?;
+            (
+                SeedBoundaryRewardInputs::ImportedResultApplied,
+                Some((rupd.delta_reserves, rupd.delta_treasury)),
+            )
         }
-        apply_bootstrap_reward_deltas(&mut acc.cert_state.delegation, &rupd.reward_delta)
-            .map_err(|_| LedgerTransitionError::ArithmeticOverflow)?;
-        // Reduce the fee pot by feeSS EXACTLY as cardano does when it APPLIES the reward update: the fee
-        // pot is reduced by feeSS, THEN the SNAP freezes it (Shelley epoch.tex: "The fee pot will be
-        // reduced by feeSS"). This runs BEFORE the pot is captured as `finished_fees` and rotated to
-        // `prev_epoch_fees` (the seed+2 reward's fee input) below, so the seed epoch's feeSS does not
-        // double-count into the seed+2 reward. Fail closed on underflow rather than saturate a wrong pot.
-        acc.epoch_state.epoch_fees.0 = acc
-            .epoch_state
-            .epoch_fees
-            .0
-            .checked_sub(rupd.delta_fees.0)
-            .ok_or(LedgerTransitionError::BootstrapRupdFeesUnderflow)?;
-        Some((rupd.delta_reserves, rupd.delta_treasury))
-    } else {
-        None
+        Some(SeedRewardAuthority::Native(native)) => {
+            let recomputed = native_seed_reward_commitment(
+                &native.manifest_commitment,
+                native.source_point_slot,
+                &native.source_point_hash,
+                native.target_epoch,
+                native.fee_ss,
+            );
+            if recomputed != native.canonical_commitment {
+                return Err(LedgerTransitionError::BootstrapRupdCommitmentMismatch);
+            }
+            // The imported fee pot still contains `ssFee` (epoch (seed-1)'s fees): cardano removes it
+            // when it applies the reward update at this boundary, then SNAP freezes what is left — the
+            // seed epoch's own fees — as the next boundary's fee input. The same reduction the Imported
+            // arm performs with `delta_fees`, and for the same reason.
+            acc.epoch_state.epoch_fees.0 = acc
+                .epoch_state
+                .epoch_fees
+                .0
+                .checked_sub(native.fee_ss.0)
+                .ok_or(LedgerTransitionError::BootstrapRupdFeesUnderflow)?;
+            (SeedBoundaryRewardInputs::NativeFromSnapshot { fee_ss: native.fee_ss }, None)
+        }
+        None => (SeedBoundaryRewardInputs::Ordinary, None),
     };
 
     // Capture the just-finished epoch's nesBcur (it becomes nesBprev after this boundary).
     let finished_blocks = std::mem::take(&mut acc.epoch_state.block_production);
     let finished_fees = acc.epoch_state.epoch_fees;
 
-    // Reward inputs: at the seed boundary, EMPTY (the bootstrap RUPD carries the reward, so the native
-    // reward computes exactly zero); otherwise the held nesBprev + prev fees.
+    // Reward inputs, by owner. Imported: EMPTY (the record carried the reward, so the native reward
+    // computes exactly zero). Native seed: the imported nesBprev + the snapshot's ssFee. Otherwise: the
+    // held nesBprev + prev fees.
     let mut view = acc.as_ledger_view();
-    if is_seed_boundary {
-        view.epoch_state.block_production = BTreeMap::new();
-        view.epoch_state.epoch_fees = Coin(0);
-    } else {
-        view.epoch_state.block_production = acc.prev_block_production.clone();
-        view.epoch_state.epoch_fees = acc.prev_epoch_fees;
+    match reward_inputs {
+        SeedBoundaryRewardInputs::ImportedResultApplied => {
+            view.epoch_state.block_production = BTreeMap::new();
+            view.epoch_state.epoch_fees = Coin(0);
+        }
+        SeedBoundaryRewardInputs::NativeFromSnapshot { fee_ss } => {
+            view.epoch_state.block_production = acc.prev_block_production.clone();
+            view.epoch_state.epoch_fees = fee_ss;
+        }
+        SeedBoundaryRewardInputs::Ordinary => {
+            view.epoch_state.block_production = acc.prev_block_production.clone();
+            view.epoch_state.epoch_fees = acc.prev_epoch_fees;
+        }
     }
 
     // CRE S4.3: the Conway governance epoch (expiry refund + terminals) is decided and applied INSIDE
@@ -776,7 +824,7 @@ fn cross_epoch_boundary_transition(
         boundary_point: ctx.block_slot,
         canonical_credential_stake: base_utxo.clone(),
     };
-    let (new_view, _accounting) = apply_epoch_boundary_with_registrations(
+    let (new_view, accounting) = apply_epoch_boundary_with_registrations(
         &view,
         target,
         None,
@@ -784,6 +832,22 @@ fn cross_epoch_boundary_transition(
         ctx.active_slots_per_epoch,
     )
     .map_err(LedgerTransitionError::GovernanceEpochTerminal)?;
+
+    // DC-EPOCH-41: a Native seed boundary that owes a reward and computed none is a terminal, not a
+    // result. Blocks were made in the previous epoch, so the pot cannot be zero unless the calculation
+    // was not fed — which is exactly how the absent update used to pass as a paid one.
+    if matches!(reward_inputs, SeedBoundaryRewardInputs::NativeFromSnapshot { .. }) {
+        let prev_blocks: u64 = acc
+            .prev_block_production
+            .values()
+            .fold(0u64, |a, b| a.saturating_add(*b));
+        if prev_blocks > 0 && accounting.pool_reward_pot == 0 {
+            return Err(LedgerTransitionError::SeedBoundaryZeroRewardPot {
+                boundary: target.0,
+                prev_blocks,
+            });
+        }
+    }
 
     // Read back. `new_view.epoch_state` already has epoch=target, rotated snapshots, updated pots, and
     // block_production/epoch_fees reset to empty/0 (the new epoch's fresh nesBcur). POOLREAP — future-pool
@@ -1951,7 +2015,7 @@ pub fn encode_epoch_accumulator(acc: &EpochAccumulator) -> Vec<u8> {
     write_pool_u64_map(&mut buf, &acc.prev_block_production);
     write_uint_canonical(&mut buf, acc.prev_epoch_fees.0);
     match &acc.pending_reward_update {
-        Some(r) => write_bytes_canonical(&mut buf, &encode_bootstrap_reward_update(r)),
+        Some(r) => write_bytes_canonical(&mut buf, &encode_seed_reward_authority(r)),
         None => write_null(&mut buf),
     }
     buf
@@ -2004,7 +2068,7 @@ pub fn decode_epoch_accumulator(
     let prev_block_production = read_pool_u64_map(bytes, &mut o)?;
     let prev_epoch_fees = Coin(read_u64_field(bytes, &mut o)?);
     let pending_reward_update = read_opt_bstr(bytes, &mut o, |b| {
-        decode_bootstrap_reward_update(b).map_err(Into::into)
+        decode_seed_reward_authority(b).map_err(Into::into)
     })?;
 
     if o != bytes.len() {
@@ -2152,7 +2216,7 @@ fn read_u64_field(bytes: &[u8], o: &mut usize) -> Result<u64, EpochAccumulatorCo
 #[allow(clippy::panic)]
 mod tests {
     use super::*;
-    use crate::bootstrap_reward_update::bootstrap_rupd_commitment;
+    use crate::bootstrap_reward_update::{bootstrap_rupd_commitment, BootstrapRewardUpdate};
     use crate::delegation::PoolParams;
     use crate::epoch::{GoSnapshot, MarkSnapshot, SetSnapshot, SnapshotState, StakeSnapshot};
     use crate::rational::Rational;
@@ -2280,7 +2344,7 @@ mod tests {
             Coin(0),
             &delta,
         );
-        acc.pending_reward_update = Some(BootstrapRewardUpdate {
+        acc.pending_reward_update = Some(SeedRewardAuthority::Imported(BootstrapRewardUpdate {
             manifest_commitment: Hash32([0x44; 32]),
             source_point_slot: SlotNo(163_000_000),
             source_point_hash: Hash32([0x66; 32]),
@@ -2290,7 +2354,7 @@ mod tests {
             delta_fees: Coin(0),
             reward_delta: delta,
             canonical_commitment: commitment,
-        });
+        }));
         acc
     }
 
@@ -2904,7 +2968,7 @@ mod tests {
             Coin(0),
             &delta,
         );
-        acc.pending_reward_update = Some(BootstrapRewardUpdate {
+        acc.pending_reward_update = Some(SeedRewardAuthority::Imported(BootstrapRewardUpdate {
             manifest_commitment: Hash32([0x01; 32]),
             source_point_slot: SlotNo(1),
             source_point_hash: Hash32([0x02; 32]),
@@ -2914,7 +2978,7 @@ mod tests {
             delta_fees: Coin(0),
             reward_delta: delta,
             canonical_commitment: commitment,
-        });
+        }));
         // The seed boundary (target_epoch+1 == 1340) forces the native reward to zero (empty inputs) and
         // applies the bound RUPD EXACTLY once: pots + rs. Assert the byte-exact pot moves + the rs credit.
         let reserves_before = acc.epoch_state.reserves.0;
@@ -2979,7 +3043,7 @@ mod tests {
             Coin(0),
             &delta,
         );
-        acc.pending_reward_update = Some(BootstrapRewardUpdate {
+        acc.pending_reward_update = Some(SeedRewardAuthority::Imported(BootstrapRewardUpdate {
             manifest_commitment: Hash32([0x01; 32]),
             source_point_slot: SlotNo(1),
             source_point_hash: Hash32([0x02; 32]),
@@ -2989,7 +3053,7 @@ mod tests {
             delta_fees: Coin(0),
             reward_delta: delta,
             canonical_commitment: commitment,
-        });
+        }));
         let reserves_before = acc.epoch_state.reserves.0;
         let treasury_before = acc.epoch_state.treasury.0;
         let ctx = SelectedBlockCtx {
@@ -3049,7 +3113,7 @@ mod tests {
             Coin(DELTA_FEES),
             &delta,
         );
-        acc.pending_reward_update = Some(BootstrapRewardUpdate {
+        acc.pending_reward_update = Some(SeedRewardAuthority::Imported(BootstrapRewardUpdate {
             manifest_commitment: Hash32([0x01; 32]),
             source_point_slot: SlotNo(1),
             source_point_hash: Hash32([0x02; 32]),
@@ -3059,7 +3123,7 @@ mod tests {
             delta_fees: Coin(DELTA_FEES),
             reward_delta: delta,
             canonical_commitment: commitment,
-        });
+        }));
         let ctx = SelectedBlockCtx {
             era: CardanoEra::Conway,
             block_epoch: EpochNo(1340),
@@ -3075,6 +3139,194 @@ mod tests {
         );
         assert_eq!(after.epoch_state.epoch_fees.0, 0, "new-epoch fee accumulator is fresh");
         assert!(after.pending_reward_update.is_none(), "the one-shot RUPD is consumed once");
+    }
+
+    // ----- LV-2 (DC-EPOCH-41): the seed boundary's reward has exactly one owner -----
+
+    fn native_authority(target_epoch: u64, fee_ss: u64) -> SeedRewardAuthority {
+        use crate::bootstrap_reward_update::NativeSeedReward;
+        SeedRewardAuthority::Native(NativeSeedReward {
+            manifest_commitment: Hash32([0x01; 32]),
+            source_point_slot: SlotNo(1),
+            source_point_hash: Hash32([0x02; 32]),
+            target_epoch: EpochNo(target_epoch),
+            fee_ss: Coin(fee_ss),
+            canonical_commitment: native_seed_reward_commitment(
+                &Hash32([0x01; 32]),
+                SlotNo(1),
+                &Hash32([0x02; 32]),
+                EpochNo(target_epoch),
+                Coin(fee_ss),
+            ),
+        })
+    }
+
+    fn boundary_ctx(into: u64) -> SelectedBlockCtx {
+        SelectedBlockCtx {
+            era: CardanoEra::Conway,
+            block_epoch: EpochNo(into),
+            block_slot: SlotNo(0),
+            issuer_pool: pool(0xAA),
+            boundary_mark: Some(sample_mark(0xCC, 1_000_000_000_000)),
+            active_slots_per_epoch: 21_600,
+        }
+    }
+
+    /// CE-LV2-2: a `Native` seed boundary runs the ORDINARY native reward on the imported `nesBprev`
+    /// and the snapshot's `ssFee` — the result is identical to an ordinary boundary fed the same two
+    /// inputs, because it is the same function. Rewards are credited before the mark, the pots move,
+    /// and the authority is consumed exactly once.
+    #[test]
+    fn native_seed_boundary_runs_the_native_reward_on_nesbprev_and_fee_ss() {
+        const FEE_SS: u64 = 23_699_540_134;
+        const OWN_FEES: u64 = 4_772_459_863;
+
+        let mut seed = reward_fixture(); // epoch 500, nesBprev = {AA: 100}
+        seed.epoch_state.epoch_fees = Coin(FEE_SS + OWN_FEES);
+        seed.pending_reward_update = Some(native_authority(500, FEE_SS));
+        let (reserves_before, treasury_before) =
+            (seed.epoch_state.reserves.0, seed.epoch_state.treasury.0);
+        let after = cross_epoch_boundary(seed, EpochNo(501), &boundary_ctx(501)).expect("seed boundary");
+
+        // The same boundary as an ORDINARY one: no seed authority, the fee input held as prev fees.
+        let mut ordinary = reward_fixture();
+        ordinary.prev_epoch_fees = Coin(FEE_SS);
+        ordinary.epoch_state.epoch_fees = Coin(OWN_FEES);
+        let expected =
+            cross_epoch_boundary(ordinary, EpochNo(501), &boundary_ctx(501)).expect("ordinary");
+
+        let reward = after
+            .cert_state
+            .delegation
+            .rewards
+            .get(&key_cred(0xCC))
+            .copied()
+            .unwrap_or(Coin(0));
+        assert!(reward.0 > 0, "the seed boundary pays: nobody-pays is the defect");
+        assert_eq!(
+            after.cert_state.delegation.rewards, expected.cert_state.delegation.rewards,
+            "one reward function: the Native seed boundary equals the ordinary boundary on the same inputs"
+        );
+        assert_eq!(after.epoch_state.reserves, expected.epoch_state.reserves);
+        assert_eq!(after.epoch_state.treasury, expected.epoch_state.treasury);
+        // (In this small fixture most of the pot is undistributed and returns to reserves together
+        // with the fee share, so the direction of the net reserves move is not asserted.)
+        assert_ne!(after.epoch_state.reserves.0, reserves_before, "the reserves pot moves");
+        assert!(after.epoch_state.treasury.0 > treasury_before, "the treasury takes its cut");
+
+        // Credited BEFORE the mark: the new mark's stake for CC is its base UTxO plus the reward.
+        let mark = &after.epoch_state.snapshots.as_authoritative().unwrap().mark.0;
+        assert_eq!(
+            mark.delegations.get(&Hash28([0xCC; 28])).map(|(_, c)| c.0),
+            Some(1_000_000_000_000 + reward.0),
+            "the mark is built post-reward"
+        );
+        assert!(after.pending_reward_update.is_none(), "the authority is consumed exactly once");
+        assert_eq!(after.prev_epoch_fees, expected.prev_epoch_fees);
+    }
+
+    /// CE-LV2-2: the fee input matters. Fed zero instead of `ssFee`, the reward is different — so a
+    /// path that dropped the snapshot fee could not pass as correct.
+    #[test]
+    fn native_seed_boundary_reward_depends_on_fee_ss() {
+        const FEE_SS: u64 = 23_699_540_134;
+        let run = |fee_ss: u64| {
+            let mut seed = reward_fixture();
+            seed.epoch_state.epoch_fees = Coin(FEE_SS);
+            seed.pending_reward_update = Some(native_authority(500, fee_ss));
+            cross_epoch_boundary(seed, EpochNo(501), &boundary_ctx(501))
+                .expect("seed boundary")
+                .cert_state
+                .delegation
+                .rewards
+                .get(&key_cred(0xCC))
+                .copied()
+                .unwrap_or(Coin(0))
+        };
+        assert!(run(FEE_SS).0 > run(0).0, "ssFee is part of the reward pot");
+    }
+
+    /// CE-LV2-4: after a `Native` seed boundary the fee pot rotated to `prev_epoch_fees` is the seed
+    /// epoch's OWN fees. Real operands: the preprod epoch-304 pot as Ade held it, the snapshot's
+    /// `ssFee`, and the public fee total for epoch 304.
+    #[test]
+    fn native_seed_boundary_rotates_exactly_the_seed_epochs_own_fees() {
+        const POT_AT_END_OF_304: u64 = 45_936_385_187;
+        const FEE_SS: u64 = 23_699_540_134; // epoch 303's fees
+        const FEES_OF_304: u64 = 22_236_845_053;
+        let mut seed = reward_fixture();
+        seed.epoch_state.epoch_fees = Coin(POT_AT_END_OF_304);
+        seed.pending_reward_update = Some(native_authority(500, FEE_SS));
+        let after = cross_epoch_boundary(seed, EpochNo(501), &boundary_ctx(501)).expect("seed boundary");
+        assert_eq!(after.prev_epoch_fees.0, FEES_OF_304);
+        assert_eq!(after.epoch_state.epoch_fees.0, 0, "the new epoch's fee accumulator is fresh");
+    }
+
+    /// CE-LV2-4: a snapshot whose `ssFee` exceeds the imported fee pot is inconsistent — fail closed.
+    #[test]
+    fn native_seed_boundary_fee_reduction_underflow_fails_closed() {
+        let mut seed = reward_fixture();
+        seed.epoch_state.epoch_fees = Coin(1_000);
+        seed.pending_reward_update = Some(native_authority(500, 2_000));
+        match cross_epoch_boundary(seed, EpochNo(501), &boundary_ctx(501)) {
+            Err(LedgerTransitionError::BootstrapRupdFeesUnderflow) => {}
+            other => panic!("expected BootstrapRupdFeesUnderflow, got {other:?}"),
+        }
+    }
+
+    /// CE-LV2-5: blocks were made in the previous epoch, so a reward is owed. A `Native` seed boundary
+    /// that computes a zero pool pot is a terminal, not a result.
+    #[test]
+    fn native_seed_boundary_with_blocks_and_a_zero_pot_is_a_terminal() {
+        let mut seed = reward_fixture(); // nesBprev = {AA: 100}
+        seed.epoch_state.reserves = Coin(0); // nothing to expand ...
+        seed.pending_reward_update = Some(native_authority(500, 0)); // ... and no fees
+        match cross_epoch_boundary(seed, EpochNo(501), &boundary_ctx(501)) {
+            Err(LedgerTransitionError::SeedBoundaryZeroRewardPot { boundary: 501, prev_blocks: 100 }) => {}
+            other => panic!("expected SeedBoundaryZeroRewardPot, got {other:?}"),
+        }
+
+        // No blocks in the previous epoch -> nothing is owed -> a zero pot is a result.
+        let mut idle = reward_fixture();
+        idle.prev_block_production.clear();
+        idle.epoch_state.reserves = Coin(0);
+        idle.pending_reward_update = Some(native_authority(500, 0));
+        cross_epoch_boundary(idle, EpochNo(501), &boundary_ctx(501)).expect("nothing owed");
+    }
+
+    /// A `Native` authority is as bound to its boundary and its bytes as an `Imported` one.
+    #[test]
+    fn native_seed_authority_wrong_boundary_and_tamper_fail_closed() {
+        let mut late = reward_fixture();
+        late.pending_reward_update = Some(native_authority(498, 7)); // its boundary is 498 -> 499
+        match cross_epoch_boundary(late, EpochNo(501), &boundary_ctx(501)) {
+            Err(LedgerTransitionError::BootstrapRupdWrongBoundary { rupd_target: 498, boundary: 501 }) => {}
+            other => panic!("expected BootstrapRupdWrongBoundary, got {other:?}"),
+        }
+
+        let mut tampered = reward_fixture();
+        tampered.epoch_state.epoch_fees = Coin(1_000_000);
+        let Some(SeedRewardAuthority::Native(mut native)) = Some(native_authority(500, 7)) else {
+            panic!("native");
+        };
+        native.fee_ss = Coin(8); // the stored commitment no longer matches
+        tampered.pending_reward_update = Some(SeedRewardAuthority::Native(native));
+        match cross_epoch_boundary(tampered, EpochNo(501), &boundary_ctx(501)) {
+            Err(LedgerTransitionError::BootstrapRupdCommitmentMismatch) => {}
+            other => panic!("expected BootstrapRupdCommitmentMismatch, got {other:?}"),
+        }
+    }
+
+    /// CE-LV2-7: the accumulator's canonical encoding carries the authority as its own variant.
+    #[test]
+    fn accumulator_codec_round_trips_a_native_seed_authority() {
+        let mut acc = populated();
+        acc.pending_reward_update = Some(native_authority(1340, 23_699_540_134));
+        let bytes = encode_epoch_accumulator(&acc);
+        let decoded = decode_epoch_accumulator(&bytes).expect("decode");
+        assert_eq!(decoded.pending_reward_update, acc.pending_reward_update);
+        assert!(matches!(decoded.pending_reward_update, Some(SeedRewardAuthority::Native(_))));
+        assert_eq!(encode_epoch_accumulator(&decoded), bytes);
     }
 
     #[test]
@@ -3094,7 +3346,7 @@ mod tests {
             Coin(2_000), // delta_fees > epoch_fees (1_000)
             &delta,
         );
-        acc.pending_reward_update = Some(BootstrapRewardUpdate {
+        acc.pending_reward_update = Some(SeedRewardAuthority::Imported(BootstrapRewardUpdate {
             manifest_commitment: Hash32([0x01; 32]),
             source_point_slot: SlotNo(1),
             source_point_hash: Hash32([0x02; 32]),
@@ -3104,7 +3356,7 @@ mod tests {
             delta_fees: Coin(2_000),
             reward_delta: delta,
             canonical_commitment: commitment,
-        });
+        }));
         let ctx = SelectedBlockCtx {
             era: CardanoEra::Conway,
             block_epoch: EpochNo(1340),
@@ -3157,7 +3409,7 @@ mod tests {
             Coin(0),
             &delta,
         );
-        acc.pending_reward_update = Some(BootstrapRewardUpdate {
+        acc.pending_reward_update = Some(SeedRewardAuthority::Imported(BootstrapRewardUpdate {
             manifest_commitment: Hash32([0x01; 32]),
             source_point_slot: SlotNo(1),
             source_point_hash: Hash32([0x02; 32]),
@@ -3167,7 +3419,7 @@ mod tests {
             delta_fees: Coin(0),
             reward_delta: delta,
             canonical_commitment: commitment,
-        });
+        }));
         let ctx = SelectedBlockCtx {
             era: CardanoEra::Conway,
             block_epoch: EpochNo(1340),
@@ -4594,7 +4846,7 @@ mod tests {
             Coin(0),
             &rd,
         );
-        acc.pending_reward_update = Some(BootstrapRewardUpdate {
+        acc.pending_reward_update = Some(SeedRewardAuthority::Imported(BootstrapRewardUpdate {
             manifest_commitment: Hash32([0x01; 32]),
             source_point_slot: SlotNo(1),
             source_point_hash: Hash32([0x02; 32]),
@@ -4604,7 +4856,7 @@ mod tests {
             delta_fees: Coin(0),
             reward_delta: rd,
             canonical_commitment: commitment,
-        });
+        }));
         let reserves_before = acc.epoch_state.reserves.0;
         let treasury_before = acc.epoch_state.treasury.0;
         let ctx = SelectedBlockCtx {

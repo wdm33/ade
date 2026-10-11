@@ -104,7 +104,17 @@
 /// blocks under this binary yields different reward balances — and therefore different stake
 /// snapshots and leadership — at every boundary such a pool produced in. Measured on preprod
 /// 304→305: pool `13e8600b…2418a` was paid 6,218,191,443 that cardano does not pay.
-pub const STORE_SEMANTICS_VERSION: u32 = 8;
+/// Version 9 (LV-2, DC-EPOCH-41): the reward paid at the seed→seed+1 boundary has exactly one owner,
+/// carried as a closed sum. A seed snapshot whose `nesRu` is `SNothing` ("not computed yet") used to
+/// be sealed as an empty COMPLETED update, which switched the native calculation off for that boundary
+/// — nobody paid. It is now sealed as `Native`, and the boundary runs the ordinary reward calculation
+/// on the imported `nesBprev` and the snapshot's `ssFee`. A store seeded that way by an earlier binary
+/// holds reward balances, pots and every later stake snapshot without that boundary's reward, and is
+/// wrong in every epoch after it; its reward record (schema 3) also cannot say which case it was. It is
+/// refused, not repaired. Measured on preprod snapshot 6009 (seed at slot-in-epoch 127,027 of 304):
+/// the earlier binary logged `pool_pot=0` at 304→305 where cardano paid 416,110,584,109 to reward
+/// accounts, and a real preprod header was then rejected with `LeaderValueAboveThreshold`.
+pub const STORE_SEMANTICS_VERSION: u32 = 9;
 
 /// A durable artifact that carries authoritative semantics and therefore must be version-marked.
 ///

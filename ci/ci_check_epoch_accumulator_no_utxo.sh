@@ -49,8 +49,9 @@ grep -Eq 'prev_block_production: *BTreeMap<PoolId, *u64>' <<<"$STRUCT_BODY" \
     || print_fail "(B) prev_block_production (nesBprev) is missing -- the reward consumes nesBprev, not nesBcur"
 grep -Eq 'prev_epoch_fees: *Coin' <<<"$STRUCT_BODY" \
     || print_fail "(B) prev_epoch_fees is missing -- it pairs with prev_block_production for the boundary reward"
-grep -Eq 'pending_reward_update: *Option<BootstrapRewardUpdate>' <<<"$STRUCT_BODY" \
-    || print_fail "(B) pending_reward_update (the bootstrap-transient seed) is missing"
+# LV-2 (DC-EPOCH-41): the field is the closed sum of the seed boundary's two reward owners.
+grep -Eq 'pending_reward_update: *Option<SeedRewardAuthority>' <<<"$STRUCT_BODY" \
+    || print_fail "(B) pending_reward_update (the seed boundary's reward authority) is missing or not Option<SeedRewardAuthority>"
 
 # (C) as_ledger_view must build an EMPTY UTxO -- the accumulator never smuggles a real UTxO into the
 #     reused single-authority primitives.

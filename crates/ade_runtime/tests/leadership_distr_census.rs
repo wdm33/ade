@@ -97,6 +97,13 @@ fn dump_frozen_leadership_for_epoch() {
                 share
             );
         }
+        // Machine-readable dump of EVERY pool, for a pool-by-pool comparison against a reference
+        // stake snapshot (LV-2, CE-LV2-10b).
+        if std::env::var("ADE_CENSUS_ALLPOOLS").is_ok() {
+            for (pid, e) in &d.pools {
+                println!("ALLPOOL {} {}", hex(&pid.0), e.active_stake);
+            }
+        }
 
         // THE CONTROL for "the denominator is inflated": if a pool's NUMERATOR moved by the same
         // proportion across epochs, sigma is unchanged and an inflated denominator explains nothing.

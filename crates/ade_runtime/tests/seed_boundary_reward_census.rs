@@ -1,7 +1,10 @@
 //! SEED-BOUNDARY REWARD CENSUS — read-only, evidence-only, `#[ignore]`d by default (SLICE LV-2, E1).
 //!
-//! Question: does Ade's NATIVE reward calculation, fed the seed state's go snapshot + `nesBprev` +
-//! the snapshot's `ssFee`, reproduce cardano's Complete reward update for the seed boundary?
+//! Question: does Ade's seed boundary, crossed exactly as sealed — the `Native` seed reward authority
+//! (LV-2), the seed state's go snapshot, `nesBprev` and the snapshot's `ssFee` — reproduce cardano's
+//! Complete reward update for that boundary? Nothing is emulated: the sealed seed is crossed by the
+//! production transition. It needs a store sealed by an LV-2 binary; an older store's reward record
+//! is refused by the decoder, as it should be.
 //!
 //! The sealed bootstrap seed is read DIRECTLY from the store's meta table and decoded with the
 //! production `decode_epoch_accumulator`. `EpochAccumulatorStore::open` refuses a store whose
@@ -22,11 +25,11 @@
 
 use std::collections::BTreeMap;
 
+use ade_ledger::bootstrap_reward_update::SeedRewardAuthority;
 use ade_ledger::epoch_accumulator::{
     cross_epoch_boundary, decode_epoch_accumulator, SelectedBlockCtx,
 };
 use ade_types::shelley::cert::StakeCredential;
-use ade_types::tx::Coin;
 use ade_types::{EpochNo, SlotNo};
 
 fn key(c: &StakeCredential) -> String {
@@ -55,7 +58,7 @@ fn native_seed_boundary_reward_vs_cardano_rs() {
     const META_TABLE: redb::TableDefinition<&str, &[u8]> =
         redb::TableDefinition::new("epoch_acc_meta");
     let db = redb::Database::open(&path).expect("open redb copy");
-    let mut acc = {
+    let acc = {
         let txn = db.begin_read().expect("read txn");
         let meta = txn.open_table(META_TABLE).expect("epoch_acc_meta table");
         let blob = meta
@@ -67,7 +70,7 @@ fn native_seed_boundary_reward_vs_cardano_rs() {
     let slot = acc.epoch_state.slot;
     let seed_epoch = acc.epoch_state.epoch;
     println!(
-        "SEED slot={} epoch={} reserves={} treasury={} epoch_fees={} prev_fees={} bprev_pools={} bprev_blocks={} pending={:?}",
+        "SEED slot={} epoch={} reserves={} treasury={} epoch_fees={} prev_fees={} bprev_pools={} bprev_blocks={}",
         slot.0,
         seed_epoch.0,
         acc.epoch_state.reserves.0,
@@ -76,12 +79,21 @@ fn native_seed_boundary_reward_vs_cardano_rs() {
         acc.prev_epoch_fees.0,
         acc.prev_block_production.len(),
         acc.prev_block_production.values().sum::<u64>(),
-        acc.pending_reward_update.as_ref().map(|r| (r.reward_delta.len(), r.delta_treasury.0, r.delta_reserves.0, r.delta_fees.0)),
     );
 
-    // The LV-2 `Native` seed path, emulated: no imported record, nesBprev as held, fees = ssFee.
-    acc.pending_reward_update = None;
-    acc.prev_epoch_fees = Coin(fee_ss);
+    // The sealed authority must be Native and carry the reference's ssFee. It is crossed AS SEALED.
+    match &acc.pending_reward_update {
+        Some(SeedRewardAuthority::Native(native)) => {
+            println!("SEED authority=NATIVE fee_ss={}", native.fee_ss.0);
+            assert_eq!(native.fee_ss.0, fee_ss, "the sealed ssFee must equal the reference's feeSS");
+        }
+        Some(SeedRewardAuthority::Imported(r)) => panic!(
+            "this census is for a seed whose reward update was not yet computed; the sealed authority is \
+             IMPORTED ({} credentials)",
+            r.reward_delta.len()
+        ),
+        None => panic!("the sealed seed carries no seed reward authority"),
+    }
     let before = acc.cert_state.delegation.rewards.clone();
     let go_deleg: BTreeMap<String, String> = acc
         .epoch_state

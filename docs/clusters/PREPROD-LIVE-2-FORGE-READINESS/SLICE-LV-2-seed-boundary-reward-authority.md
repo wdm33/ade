@@ -1,6 +1,6 @@
 # SLICE LV-2 — "not computed yet" is not "computed, and empty": the seed boundary's reward has an owner
 
-**Status:** APPROVED 2026-10-10 (owner accepted the three §8 defaults). Entry obligations E1–E4 are all answered as of 2026-10-11 (§4.1, §4.2); implementation may start. Nothing implemented at this commit.
+**Status:** IMPLEMENTED 2026-10-11; results in §9. Every in-tree criterion is green. The live bar CE-LV2-10(b) is **447 of 448 pools** — one credential short, the residual owned by LV-4 — so the slice is NOT closed and DC-EPOCH-41 is registered `partial`.
 
 **Entry state:** `029e082c`. Evidence:
 `docs/evidence/run-stores/preprod-live2c/lv1-ce9-v7-live-NOT-FIXED-seed-boundary-reward-update-absent.md`.
@@ -266,3 +266,61 @@ path `fee_ss = 0` (must fail CE-LV2-3 and CE-LV2-4) · skip the fee-pot reductio
 3. **Slice identity** — drafted as LV-2 inside PREPROD-LIVE-2-FORGE-READINESS because it is the
    blocker for that cluster's live CEs. It is a DC-EPOCH-18 defect by lineage and could instead be a
    slice of the reward-evolution cluster.
+
+---
+
+## 9. RESULT — 2026-10-11
+
+Evidence: `docs/evidence/run-stores/preprod-live2c/lv2-ce10-v9-live-seed-boundary-reward-native.md`.
+
+| CE | Result |
+|---|---|
+| CE-LV2-1 | GREEN — `snothing_decodes_to_not_yet_computed_carrying_ss_fee`, `an_empty_complete_update_is_not_not_yet_computed`, `a_pulsing_update_still_fails_closed` |
+| CE-LV2-2 | GREEN — `native_seed_boundary_runs_the_native_reward_on_nesbprev_and_fee_ss` (equal to an ordinary boundary fed the same inputs; mark built post-reward; consumed once), `native_seed_boundary_reward_depends_on_fee_ss` |
+| CE-LV2-3 | **NOT MET AS WRITTEN — 11,051 of 11,056.** The sealed `Native` seed, crossed by the production transition: reserves draw exact (7,422,111,617,574), fee pot rotated correctly. Two of the five are artifacts of crossing the seed state (the live run's pools come out exact), two are not reward-update credits, **one is LV-4** |
+| CE-LV2-4 | GREEN — `native_seed_boundary_rotates_exactly_the_seed_epochs_own_fees` with the real operands (45,936,385,187 − 23,699,540,134 = 22,236,845,053, the public fee total of epoch 304); underflow fails closed |
+| CE-LV2-5 | GREEN — `native_seed_boundary_with_blocks_and_a_zero_pot_is_a_terminal` (and no terminal when no blocks were made) |
+| CE-LV2-6 | GREEN — `seed2_window_with_a_native_seed_authority_is_a_typed_terminal`; gate: `apply_bootstrap_reward_deltas` has only its two known callers, each fed from an `Imported` record |
+| CE-LV2-7 | GREEN — `both_variants_round_trip_as_themselves`, `a_v3_record_is_refused_not_reinterpreted`, `the_variant_is_inside_the_commitment`, `accumulator_codec_round_trips_a_native_seed_authority` |
+| CE-LV2-8 | GREEN — store semantics **9** (not 8: §4.3), lock reconciled in the same commit |
+| CE-LV2-9 | GREEN with one named exception to "unedited": the `Imported` arithmetic is unchanged and every DC-EPOCH-18 / CE-3d test passes with its assertions untouched. Seven fixtures were mechanically wrapped in `SeedRewardAuthority::Imported(…)` because the field's type changed, and the two tests that pin the record's version number now expect 4 |
+| CE-LV2-10 | (a) GREEN `pool_pot=28118802294396` · **(b) 447 of 448, total −11,802** — the one pool is the LV-4 credential's · (c) GREEN, the header after 130,733,645 is accepted · (d) GREEN, following on in epoch 306 |
+| CE-LV2-11 | GREEN — below |
+
+**The slice is not closed.** (b) is the bar and it is one pool short. The cause is identified, is
+outside this slice, and is the same 11,802 lovelace in CE-LV2-3.
+
+### Mutations (each asserted applied; tree restored byte-exact)
+
+| Mutation | Caught by |
+|---|---|
+| decoder: `SNothing` → an empty `Complete` | CE-LV2-1 test; gate |
+| accumulator: a `Native` seed handled as an applied import | three CE-LV2-2/5 tests; gate |
+| first-run: `NotYetComputed` sealed as an empty `Imported` record | gate only — there is no unit test around first-run; the live receipt line is the runtime witness |
+| native seed path fed `fee_ss = 0` | two CE-LV2-2 tests; gate |
+| fee-pot reduction skipped | CE-LV2-4 tests; gate |
+| zero-pot terminal removed | CE-LV2-5 test |
+| window replay proceeds with no delta for `Native` | CE-LV2-6 test; gate |
+| variant excluded from the commitment | CE-LV2-7 test; gate |
+| `STORE_SEMANTICS_VERSION` left at 8 | gate; lock gate |
+
+The doc's first required mutation named CE-LV2-2 as a witness for the decoder change. It is not: the
+accumulator tests start from a sealed authority. The decoder, the accumulator and first-run were
+mutated separately instead.
+
+### Other gates
+
+`ci_check_bootstrap_rupd_fee_reduction.sh` and `ci_check_epoch_accumulator_no_utxo.sh` pinned the old
+field names and the literal schema version 3. Both were updated to the new shapes; neither assertion
+was loosened (the version check became "≥ 3", the same form the accumulator's version check already
+had).
+
+A sweep of all 276 `ci/ci_check_*.sh` scripts: 229 pass, 47 fail — and the same 47 fail on the commit
+before this slice. None is caused by it. They are not addressed here.
+
+### Not done
+
+- `EPOCH_ACCUMULATOR_SCHEMA_VERSION` is unchanged. The accumulator embeds the reward record as its
+  own versioned bytes, and that record's version gate (3 → 4) refuses an old blob.
+- The archived v7 store can no longer be read by the evidence harness (its record is schema 3). The
+  fresh v9 store has the same seed and replaces it.

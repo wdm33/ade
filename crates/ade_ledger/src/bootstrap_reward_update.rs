@@ -27,8 +27,11 @@
 //! mutated pseudo-state.
 //!
 //! Closed, version-gated, byte-canonical, commitment-bound (the same discipline as
-//! `bootstrap_bridge` / `seed_consensus_inputs`): `encode_bootstrap_reward_update` /
-//! `decode_bootstrap_reward_update` are the SOLE pub codec pair. Decode rejects unknown versions,
+//! `bootstrap_bridge` / `seed_consensus_inputs`): `encode_seed_reward_authority` /
+//! `decode_seed_reward_authority` are the SOLE pub codec pair. The durable record is a closed sum,
+//! [`SeedRewardAuthority`] (LV-2, DC-EPOCH-41): either cardano's finished result, imported, or the
+//! typed statement that there was none yet and the native calculation owns the seed boundary.
+//! Decode rejects unknown versions,
 //! non-canonical or duplicate credential keys, an unknown credential tag, a commitment mismatch,
 //! trailing bytes, and any non-byte-canonical encoding (re-encode != input). No `Default`, no
 //! `#[non_exhaustive]`: the type system requires every field at construction.
@@ -49,13 +52,23 @@ use ade_types::{EpochNo, Hash28, Hash32, SlotNo};
 /// adds `delta_fees` (the RewardUpdate's `feeSS` magnitude) so the seed-boundary apply reduces the fee
 /// pot by `feeSS` EXACTLY as cardano does when it applies the reward update — before the SNAP freezes
 /// the fee pot for the next boundary. Without it the seed epoch's `feeSS` double-counts into the seed+2
-/// reward's fee input.
-pub const BOOTSTRAP_RUPD_SCHEMA_VERSION: u32 = 3;
+/// reward's fee input. v4 (LV-2, DC-EPOCH-41) = the record is a closed SUM,
+/// [`SeedRewardAuthority`]: the variant tag follows the version and is inside the commitment. A v3
+/// record is refused, never reinterpreted — a v3 record with empty deltas cannot be told apart from
+/// a snapshot whose reward update had not been computed yet, and guessing is the defect.
+pub const BOOTSTRAP_RUPD_SCHEMA_VERSION: u32 = 4;
 
 /// Domain separator for the canonical commitment (binds the bytes to THIS artifact + version).
-const RUPD_COMMITMENT_DOMAIN: &[u8] = b"ade.b3c.bootstrap-reward-update.v3";
+const RUPD_COMMITMENT_DOMAIN: &[u8] = b"ade.lv2.seed-reward-authority.v4";
 
-const FIELDS_OUTER: u64 = 10;
+/// The variant discriminants. On the wire directly after the version; inside the commitment.
+const VARIANT_IMPORTED: u64 = 0;
+const VARIANT_NATIVE: u64 = 1;
+
+/// Outer arity of the `Imported` variant: version, variant, 8 body fields, commitment.
+const FIELDS_OUTER: u64 = 11;
+/// Outer arity of the `Native` variant: version, variant, 5 body fields, commitment.
+const FIELDS_OUTER_NATIVE: u64 = 8;
 const CREDENTIAL_FIELDS: u64 = 2;
 
 /// The credential discriminants, matching the ledger snapshot encoding
@@ -103,6 +116,58 @@ pub struct BootstrapRewardUpdate {
     pub canonical_commitment: Hash32,
 }
 
+/// The seed snapshot's reward update had NOT been computed when the snapshot was taken (cardano
+/// `nesRu = SNothing`). The seed→seed+1 boundary's reward is then owed by the NATIVE calculation, run
+/// at that boundary from the imported `nesBprev` and this record's `fee_ss`. Carries the same
+/// provenance binding as [`BootstrapRewardUpdate`] and its own commitment. No `Default`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeSeedReward {
+    /// Binds this record to the source bootstrap snapshot/manifest.
+    pub manifest_commitment: Hash32,
+    /// The seed bootstrap point's slot.
+    pub source_point_slot: SlotNo,
+    /// The seed bootstrap point's block hash.
+    pub source_point_hash: Hash32,
+    /// The seed epoch whose END boundary this authority governs.
+    pub target_epoch: EpochNo,
+    /// The snapshot's `ssFee` — the fees of epoch (seed-1). It is the one input of the seed
+    /// boundary's reward that cannot be rebuilt from post-seed blocks, and it is still inside the
+    /// imported fee pot, which the seed boundary reduces by exactly this amount.
+    pub fee_ss: Coin,
+    /// `blake2b_256(domain ‖ variant ‖ body)` over every field above.
+    pub canonical_commitment: Hash32,
+}
+
+/// DC-EPOCH-41: WHO owns the reward paid at the seed→seed+1 boundary. Exactly one of the two, chosen
+/// by a typed fact about the seed snapshot — never by an empty map. An absent reward update is not
+/// representable as a zero-valued present one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SeedRewardAuthority {
+    /// cardano finished the calculation before the snapshot (`nesRu = Complete`). Its result is
+    /// applied exactly once (DC-EPOCH-18).
+    Imported(BootstrapRewardUpdate),
+    /// cardano had not started (`nesRu = SNothing`). Ade computes it at the seed boundary.
+    Native(NativeSeedReward),
+}
+
+impl SeedRewardAuthority {
+    /// The seed epoch whose END boundary this authority governs.
+    pub fn target_epoch(&self) -> EpochNo {
+        match self {
+            SeedRewardAuthority::Imported(r) => r.target_epoch,
+            SeedRewardAuthority::Native(n) => n.target_epoch,
+        }
+    }
+
+    /// The manifest binding (the sidecar key).
+    pub fn manifest_commitment(&self) -> &Hash32 {
+        match self {
+            SeedRewardAuthority::Imported(r) => &r.manifest_commitment,
+            SeedRewardAuthority::Native(n) => &n.manifest_commitment,
+        }
+    }
+}
+
 /// Closed error sum for `BootstrapRewardUpdate` encode/decode. Carries only non-secret primitives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BootstrapRupdError {
@@ -122,6 +187,8 @@ pub enum BootstrapRupdError {
     CommitmentMismatch,
     /// Trailing bytes after the record.
     TrailingBytes { extra: usize },
+    /// The variant tag is neither `Imported` (0) nor `Native` (1).
+    UnknownVariant { found: u64 },
 }
 
 /// Compute the canonical commitment over the body (every field EXCEPT the commitment itself).
@@ -146,10 +213,51 @@ pub fn bootstrap_rupd_commitment(
         delta_fees,
         reward_delta,
     );
-    let mut domained = Vec::with_capacity(RUPD_COMMITMENT_DOMAIN.len() + body.len());
+    commit_variant(VARIANT_IMPORTED, &body)
+}
+
+/// Compute the canonical commitment of a [`NativeSeedReward`] over every field except the commitment.
+pub fn native_seed_reward_commitment(
+    manifest_commitment: &Hash32,
+    source_point_slot: SlotNo,
+    source_point_hash: &Hash32,
+    target_epoch: EpochNo,
+    fee_ss: Coin,
+) -> Hash32 {
+    let body = encode_native_body(
+        manifest_commitment,
+        source_point_slot,
+        source_point_hash,
+        target_epoch,
+        fee_ss,
+    );
+    commit_variant(VARIANT_NATIVE, &body)
+}
+
+/// `blake2b_256(domain ‖ uint(variant) ‖ body)`. The variant is inside the commitment, so a record
+/// cannot be re-labelled from one authority to the other without breaking it.
+fn commit_variant(variant: u64, body: &[u8]) -> Hash32 {
+    let mut domained = Vec::with_capacity(RUPD_COMMITMENT_DOMAIN.len() + 1 + body.len());
     domained.extend_from_slice(RUPD_COMMITMENT_DOMAIN);
-    domained.extend_from_slice(&body);
+    write_uint_canonical(&mut domained, variant);
+    domained.extend_from_slice(body);
     ade_crypto::blake2b_256(&domained)
+}
+
+fn encode_native_body(
+    manifest_commitment: &Hash32,
+    source_point_slot: SlotNo,
+    source_point_hash: &Hash32,
+    target_epoch: EpochNo,
+    fee_ss: Coin,
+) -> Vec<u8> {
+    let mut buf = Vec::new();
+    write_bytes_canonical(&mut buf, &manifest_commitment.0);
+    write_uint_canonical(&mut buf, source_point_slot.0);
+    write_bytes_canonical(&mut buf, &source_point_hash.0);
+    write_uint_canonical(&mut buf, target_epoch.0);
+    write_uint_canonical(&mut buf, fee_ss.0);
+    buf
 }
 
 /// Encode every field EXCEPT the version header + the commitment (the bytes the commitment binds).
@@ -183,12 +291,127 @@ fn encode_rupd_body(
     buf
 }
 
-/// Canonical CBOR encode. Sole pub encoder.
+/// Canonical CBOR encode of the seed reward authority. With [`decode_seed_reward_authority`], the
+/// SOLE pub codec pair for the durable record.
 ///
-/// Wire shape (v3):
+/// Wire shape (v4):
 /// ```text
-/// array(10) [
-///   uint   BOOTSTRAP_RUPD_SCHEMA_VERSION (= 3),
+/// Imported: array(11) [ uint 4, uint 0, <the 8 Imported body fields below>, bytes(32) commitment ]
+/// Native:   array(8)  [ uint 4, uint 1, bytes(32) manifest_commitment, uint source_point_slot,
+///                       bytes(32) source_point_hash, uint target_epoch, uint fee_ss,
+///                       bytes(32) commitment ]
+/// ```
+pub fn encode_seed_reward_authority(authority: &SeedRewardAuthority) -> Vec<u8> {
+    match authority {
+        SeedRewardAuthority::Imported(rupd) => encode_bootstrap_reward_update(rupd),
+        SeedRewardAuthority::Native(native) => {
+            let mut buf = Vec::new();
+            write_array_header(
+                &mut buf,
+                ContainerEncoding::Definite(
+                    FIELDS_OUTER_NATIVE,
+                    canonical_width(FIELDS_OUTER_NATIVE),
+                ),
+            );
+            write_uint_canonical(&mut buf, BOOTSTRAP_RUPD_SCHEMA_VERSION as u64);
+            write_uint_canonical(&mut buf, VARIANT_NATIVE);
+            buf.extend_from_slice(&encode_native_body(
+                &native.manifest_commitment,
+                native.source_point_slot,
+                &native.source_point_hash,
+                native.target_epoch,
+                native.fee_ss,
+            ));
+            write_bytes_canonical(&mut buf, &native.canonical_commitment.0);
+            buf
+        }
+    }
+}
+
+/// Canonical CBOR decode of the seed reward authority. Fail-fast on an unknown version (checked
+/// BEFORE the shape, so a v3 record is refused as `UnknownVersion`), an unknown variant, a wrong
+/// shape for the variant, a commitment mismatch, trailing bytes, or any non-byte-canonical encoding.
+pub fn decode_seed_reward_authority(
+    bytes: &[u8],
+) -> Result<SeedRewardAuthority, BootstrapRupdError> {
+    let mut o = 0usize;
+    let arity = match read_array_header(bytes, &mut o)? {
+        ContainerEncoding::Definite(n, _) => n,
+        ContainerEncoding::Indefinite => {
+            return Err(BootstrapRupdError::Structural {
+                reason: "indefinite-length array not allowed in BootstrapRewardUpdate",
+            })
+        }
+    };
+    let version = read_u32_field(bytes, &mut o)?;
+    if version != BOOTSTRAP_RUPD_SCHEMA_VERSION {
+        return Err(BootstrapRupdError::UnknownVersion {
+            expected: BOOTSTRAP_RUPD_SCHEMA_VERSION,
+            found: version,
+        });
+    }
+    let variant = read_u64_field(bytes, &mut o)?;
+    match variant {
+        VARIANT_IMPORTED => {
+            if arity != FIELDS_OUTER {
+                return Err(BootstrapRupdError::Structural {
+                    reason: "outer array has wrong field count",
+                });
+            }
+            decode_imported_fields(bytes, o).map(SeedRewardAuthority::Imported)
+        }
+        VARIANT_NATIVE => {
+            if arity != FIELDS_OUTER_NATIVE {
+                return Err(BootstrapRupdError::Structural {
+                    reason: "outer array has wrong field count",
+                });
+            }
+            let manifest_commitment = read_hash32(bytes, &mut o)?;
+            let source_point_slot = SlotNo(read_u64_field(bytes, &mut o)?);
+            let source_point_hash = read_hash32(bytes, &mut o)?;
+            let target_epoch = EpochNo(read_u64_field(bytes, &mut o)?);
+            let fee_ss = Coin(read_u64_field(bytes, &mut o)?);
+            let canonical_commitment = read_hash32(bytes, &mut o)?;
+            if o != bytes.len() {
+                return Err(BootstrapRupdError::TrailingBytes {
+                    extra: bytes.len() - o,
+                });
+            }
+            let recomputed = native_seed_reward_commitment(
+                &manifest_commitment,
+                source_point_slot,
+                &source_point_hash,
+                target_epoch,
+                fee_ss,
+            );
+            if recomputed != canonical_commitment {
+                return Err(BootstrapRupdError::CommitmentMismatch);
+            }
+            let decoded = SeedRewardAuthority::Native(NativeSeedReward {
+                manifest_commitment,
+                source_point_slot,
+                source_point_hash,
+                target_epoch,
+                fee_ss,
+                canonical_commitment,
+            });
+            if encode_seed_reward_authority(&decoded) != bytes {
+                return Err(BootstrapRupdError::MalformedCbor);
+            }
+            Ok(decoded)
+        }
+        found => Err(BootstrapRupdError::UnknownVariant { found }),
+    }
+}
+
+/// Canonical CBOR encode of the `Imported` variant's record. Callers outside this module encode
+/// through [`encode_seed_reward_authority`].
+///
+/// Wire shape (v4, `Imported`):
+/// ```text
+/// array(11) [
+///   uint   BOOTSTRAP_RUPD_SCHEMA_VERSION (= 4),
+///   uint   0 (the Imported variant),
 ///   bytes(32) manifest_commitment,
 ///   uint   source_point_slot,
 ///   bytes(32) source_point_hash,
@@ -200,13 +423,14 @@ fn encode_rupd_body(
 ///   bytes(32) canonical_commitment,
 /// ]
 /// ```
-pub fn encode_bootstrap_reward_update(rupd: &BootstrapRewardUpdate) -> Vec<u8> {
+fn encode_bootstrap_reward_update(rupd: &BootstrapRewardUpdate) -> Vec<u8> {
     let mut buf = Vec::new();
     write_array_header(
         &mut buf,
         ContainerEncoding::Definite(FIELDS_OUTER, canonical_width(FIELDS_OUTER)),
     );
     write_uint_canonical(&mut buf, BOOTSTRAP_RUPD_SCHEMA_VERSION as u64);
+    write_uint_canonical(&mut buf, VARIANT_IMPORTED);
     let body = encode_rupd_body(
         &rupd.manifest_commitment,
         rupd.source_point_slot,
@@ -222,23 +446,13 @@ pub fn encode_bootstrap_reward_update(rupd: &BootstrapRewardUpdate) -> Vec<u8> {
     buf
 }
 
-/// Canonical CBOR decode. Sole pub decoder. Fail-fast on unknown version, wrong shape, short hashes,
-/// unknown credential tag, non-canonical or duplicate keys, commitment mismatch, trailing bytes, or
-/// any non-byte-canonical encoding (re-encode != input).
-pub fn decode_bootstrap_reward_update(
+/// Decode the `Imported` variant's fields, starting just past the variant tag at `o`. Fail-fast on
+/// short hashes, unknown credential tag, non-canonical or duplicate keys, commitment mismatch,
+/// trailing bytes, or any non-byte-canonical encoding (re-encode != input).
+fn decode_imported_fields(
     bytes: &[u8],
+    mut o: usize,
 ) -> Result<BootstrapRewardUpdate, BootstrapRupdError> {
-    let mut o = 0usize;
-    expect_definite_array(bytes, &mut o, FIELDS_OUTER, "outer")?;
-
-    let version = read_u32_field(bytes, &mut o)?;
-    if version != BOOTSTRAP_RUPD_SCHEMA_VERSION {
-        return Err(BootstrapRupdError::UnknownVersion {
-            expected: BOOTSTRAP_RUPD_SCHEMA_VERSION,
-            found: version,
-        });
-    }
-
     let manifest_commitment = read_hash32(bytes, &mut o)?;
     let source_point_slot = SlotNo(read_u64_field(bytes, &mut o)?);
     let source_point_hash = read_hash32(bytes, &mut o)?;
@@ -423,6 +637,17 @@ impl From<ade_codec::CodecError> for BootstrapRupdError {
 mod tests {
     use super::*;
 
+    /// The pre-LV-2 tests below exercise the `Imported` record. They decode through the one pub
+    /// decoder and require the `Imported` variant.
+    fn decode_bootstrap_reward_update(
+        bytes: &[u8],
+    ) -> Result<BootstrapRewardUpdate, BootstrapRupdError> {
+        match decode_seed_reward_authority(bytes)? {
+            SeedRewardAuthority::Imported(r) => Ok(r),
+            SeedRewardAuthority::Native(_) => panic!("expected an Imported record"),
+        }
+    }
+
     fn key_cred(b: u8) -> StakeCredential {
         StakeCredential::KeyHash(Hash28([b; 28]))
     }
@@ -498,9 +723,9 @@ mod tests {
     #[test]
     fn decode_rejects_unknown_version() {
         let fresh = encode_bootstrap_reward_update(&sample());
-        // v2 is now a rejected pre-fix version (the fee-buffer fix requires delta_fees): a v2 version
-        // int on the v3 arity fails closed on the version gate.
-        for bad in [0u64, 1, 2, 99] {
+        // Every earlier version is rejected on the version gate, v3 included: a v3 record with empty
+        // deltas cannot be told apart from "not computed yet" (LV-2).
+        for bad in [0u64, 1, 2, 3, 99] {
             let mut buf = Vec::new();
             write_array_header(
                 &mut buf,
@@ -509,7 +734,7 @@ mod tests {
             write_uint_canonical(&mut buf, bad);
             buf.extend_from_slice(&fresh[2..]);
             match decode_bootstrap_reward_update(&buf) {
-                Err(BootstrapRupdError::UnknownVersion { expected: 3, found })
+                Err(BootstrapRupdError::UnknownVersion { expected: 4, found })
                     if found == bad as u32 => {}
                 other => panic!("expected UnknownVersion for v{bad}, got {other:?}"),
             }
@@ -611,8 +836,8 @@ mod tests {
     #[test]
     fn v3_rejects_genuine_v2_blob() {
         // A genuine v2 wire blob (array(9): the v2 field set, version 2, NO delta_fees) must fail closed
-        // under the v3 decoder — a pre-fix store is never silently reinterpreted; re-bootstrap is the only
-        // migration. The v2 arity (9) differs from v3 (10), so the outer shape gate trips first.
+        // — a pre-fix store is never silently reinterpreted; re-bootstrap is the only migration. The
+        // version is read before the shape, so it is refused as an unknown version.
         let s = sample();
         let mut buf = Vec::new();
         write_array_header(&mut buf, ContainerEncoding::Definite(9, canonical_width(9)));
@@ -626,9 +851,9 @@ mod tests {
         // v2 has NO delta_fees field here — straight to the reward-delta map.
         write_map_header(&mut buf, ContainerEncoding::Definite(0, canonical_width(0)));
         write_bytes_canonical(&mut buf, &s.canonical_commitment.0);
-        match decode_bootstrap_reward_update(&buf) {
-            Err(BootstrapRupdError::Structural { .. }) => {}
-            other => panic!("expected a fail-closed Structural error for a v2 blob, got {other:?}"),
+        match decode_seed_reward_authority(&buf) {
+            Err(BootstrapRupdError::UnknownVersion { expected: 4, found: 2 }) => {}
+            other => panic!("expected a fail-closed UnknownVersion for a v2 blob, got {other:?}"),
         }
     }
 
@@ -644,6 +869,130 @@ mod tests {
         match decode_bootstrap_reward_update(&bytes_bad) {
             Err(BootstrapRupdError::CommitmentMismatch) => {}
             other => panic!("expected CommitmentMismatch, got {other:?}"),
+        }
+    }
+
+    // ---- LV-2 (DC-EPOCH-41): the record is a closed sum ---------------------------------------
+
+    fn native_sample() -> NativeSeedReward {
+        let manifest_commitment = Hash32([0x44; 32]);
+        let source_point_slot = SlotNo(129_813_427);
+        let source_point_hash = Hash32([0x66; 32]);
+        let target_epoch = EpochNo(304);
+        // The preprod snapshot's ssFee at the seed (epoch 303's fees).
+        let fee_ss = Coin(23_699_540_134);
+        NativeSeedReward {
+            canonical_commitment: native_seed_reward_commitment(
+                &manifest_commitment,
+                source_point_slot,
+                &source_point_hash,
+                target_epoch,
+                fee_ss,
+            ),
+            manifest_commitment,
+            source_point_slot,
+            source_point_hash,
+            target_epoch,
+            fee_ss,
+        }
+    }
+
+    /// CE-LV2-7: both variants round-trip byte-identically and decode back to the SAME variant.
+    #[test]
+    fn both_variants_round_trip_as_themselves() {
+        let imported = SeedRewardAuthority::Imported(sample());
+        let native = SeedRewardAuthority::Native(native_sample());
+        for authority in [&imported, &native] {
+            let bytes = encode_seed_reward_authority(authority);
+            let decoded = decode_seed_reward_authority(&bytes).expect("decode");
+            assert_eq!(&decoded, authority);
+            assert_eq!(encode_seed_reward_authority(&decoded), bytes);
+        }
+        assert_ne!(
+            encode_seed_reward_authority(&imported),
+            encode_seed_reward_authority(&native)
+        );
+        assert_eq!(native.target_epoch(), EpochNo(304));
+        assert_eq!(imported.target_epoch(), EpochNo(1338));
+    }
+
+    /// CE-LV2-7: a genuine v3 record — array(10), version 3, no variant tag — is refused with the
+    /// typed `UnknownVersion`. It is never read as an `Imported` record, empty or otherwise.
+    #[test]
+    fn a_v3_record_is_refused_not_reinterpreted() {
+        let mut buf = Vec::new();
+        write_array_header(&mut buf, ContainerEncoding::Definite(10, canonical_width(10)));
+        write_uint_canonical(&mut buf, 3);
+        write_bytes_canonical(&mut buf, &[0x11; 32]);
+        write_uint_canonical(&mut buf, 129_813_427);
+        write_bytes_canonical(&mut buf, &[0x22; 32]);
+        write_uint_canonical(&mut buf, 304);
+        write_uint_canonical(&mut buf, 0); // delta_treasury
+        write_uint_canonical(&mut buf, 0); // delta_reserves
+        write_uint_canonical(&mut buf, 0); // delta_fees
+        write_map_header(&mut buf, ContainerEncoding::Definite(0, canonical_width(0)));
+        write_bytes_canonical(&mut buf, &[0x33; 32]);
+        match decode_seed_reward_authority(&buf) {
+            Err(BootstrapRupdError::UnknownVersion { expected: 4, found: 3 }) => {}
+            other => panic!("expected UnknownVersion for a v3 record, got {other:?}"),
+        }
+    }
+
+    /// CE-LV2-7: the variant is INSIDE the commitment. The same five binding fields committed as
+    /// `Native` do not verify as an empty `Imported` record, and re-labelling the wire tag alone
+    /// breaks the record.
+    #[test]
+    fn the_variant_is_inside_the_commitment() {
+        let n = native_sample();
+        let as_empty_imported = bootstrap_rupd_commitment(
+            &n.manifest_commitment,
+            n.source_point_slot,
+            &n.source_point_hash,
+            n.target_epoch,
+            Coin(0),
+            Coin(0),
+            Coin(0),
+            &BTreeMap::new(),
+        );
+        assert_ne!(n.canonical_commitment, as_empty_imported);
+
+        // Hash the Native body under the OTHER variant tag: it must not equal the real commitment.
+        let body = encode_native_body(
+            &n.manifest_commitment,
+            n.source_point_slot,
+            &n.source_point_hash,
+            n.target_epoch,
+            n.fee_ss,
+        );
+        assert_eq!(commit_variant(VARIANT_NATIVE, &body), n.canonical_commitment);
+        assert_ne!(commit_variant(VARIANT_IMPORTED, &body), n.canonical_commitment);
+
+        // Flip only the wire variant tag (byte 2: header, version, variant) -> not a valid record.
+        let mut bytes = encode_seed_reward_authority(&SeedRewardAuthority::Native(n));
+        assert_eq!(bytes[2], VARIANT_NATIVE as u8);
+        bytes[2] = VARIANT_IMPORTED as u8;
+        assert!(decode_seed_reward_authority(&bytes).is_err());
+    }
+
+    #[test]
+    fn a_tampered_fee_ss_breaks_the_commitment() {
+        let mut n = native_sample();
+        n.fee_ss = Coin(n.fee_ss.0 - 1);
+        match decode_seed_reward_authority(&encode_seed_reward_authority(
+            &SeedRewardAuthority::Native(n),
+        )) {
+            Err(BootstrapRupdError::CommitmentMismatch) => {}
+            other => panic!("expected CommitmentMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_unknown_variant_is_refused() {
+        let mut bytes = encode_seed_reward_authority(&SeedRewardAuthority::Native(native_sample()));
+        bytes[2] = 2;
+        match decode_seed_reward_authority(&bytes) {
+            Err(BootstrapRupdError::UnknownVariant { found: 2 }) => {}
+            other => panic!("expected UnknownVariant, got {other:?}"),
         }
     }
 }

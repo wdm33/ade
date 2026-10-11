@@ -125,6 +125,9 @@ pub fn activate_at_boundary(
         CandidateDeriveError::BootstrapRewardUpdateEpochMismatch { bound, seed } => {
             EpochViewActivationError::BootstrapRewardUpdateEpochMismatch { bound, seed }
         }
+        CandidateDeriveError::SeedRewardOwnedByNativeCalculation { seed } => {
+            EpochViewActivationError::SeedRewardOwnedByNativeCalculation { seed }
+        }
         _ => EpochViewActivationError::EpochViewActivationFailed,
     })?;
 
@@ -207,6 +210,9 @@ pub fn recover_at_boundary(
         }
         CandidateDeriveError::BootstrapRewardUpdateEpochMismatch { bound, seed } => {
             EpochViewActivationError::BootstrapRewardUpdateEpochMismatch { bound, seed }
+        }
+        CandidateDeriveError::SeedRewardOwnedByNativeCalculation { seed } => {
+            EpochViewActivationError::SeedRewardOwnedByNativeCalculation { seed }
         }
         _ => EpochViewActivationError::EpochViewActivationFailed,
     })?;
