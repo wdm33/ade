@@ -201,3 +201,32 @@ fn native_seed_boundary_reward_vs_cardano_rs() {
         assert!(paid.is_empty(), "{} credentials of pool {pool} were paid", paid.len());
     }
 }
+
+/// LV-2 E4 (far end): the fee pots of the store's CURRENT accumulator, read directly. On a store
+/// that has crossed exactly the seed boundary, `prev_epoch_fees` is what Ade rotated out of the seed
+/// epoch — to be compared with the reference's `feeSS` for the following epoch.
+#[test]
+#[ignore = "evidence-only; requires ADE_CENSUS_ACC_REDB pointing at a COPY of a real store"]
+fn current_accumulator_fee_pots() {
+    let path = std::env::var("ADE_CENSUS_ACC_REDB").expect("ADE_CENSUS_ACC_REDB");
+    const META_TABLE: redb::TableDefinition<&str, &[u8]> =
+        redb::TableDefinition::new("epoch_acc_meta");
+    let db = redb::Database::open(&path).expect("open redb copy");
+    let txn = db.begin_read().expect("read txn");
+    let meta = txn.open_table(META_TABLE).expect("epoch_acc_meta table");
+    for key in ["bootstrap_blob", "current_blob"] {
+        let blob = meta.get(key).expect("read").expect("blob present");
+        let acc = decode_epoch_accumulator(blob.value()).expect("decode");
+        println!(
+            "FEES {key} slot={} epoch={} epoch_fees={} prev_epoch_fees={} bcur_blocks={} bprev_blocks={} reserves={} treasury={}",
+            acc.epoch_state.slot.0,
+            acc.epoch_state.epoch.0,
+            acc.epoch_state.epoch_fees.0,
+            acc.prev_epoch_fees.0,
+            acc.epoch_state.block_production.values().sum::<u64>(),
+            acc.prev_block_production.values().sum::<u64>(),
+            acc.epoch_state.reserves.0,
+            acc.epoch_state.treasury.0,
+        );
+    }
+}

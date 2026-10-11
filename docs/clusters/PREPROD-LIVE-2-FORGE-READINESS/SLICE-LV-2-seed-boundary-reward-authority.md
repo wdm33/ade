@@ -1,6 +1,6 @@
 # SLICE LV-2 — "not computed yet" is not "computed, and empty": the seed boundary's reward has an owner
 
-**Status:** APPROVED 2026-10-10 (owner accepted the three §8 defaults). Nothing implemented; the §4 entry obligations run first.
+**Status:** APPROVED 2026-10-10 (owner accepted the three §8 defaults). Entry obligations E1–E4 are all answered as of 2026-10-11 (§4.1, §4.2); implementation may start. Nothing implemented at this commit.
 
 **Entry state:** `029e082c`. Evidence:
 `docs/evidence/run-stores/preprod-live2c/lv1-ce9-v7-live-NOT-FIXED-seed-boundary-reward-update-absent.md`.
@@ -133,6 +133,68 @@ run.
 
 E1 is the load-bearing one. LV-1 was implemented on a theory nobody had checked against a reference;
 E1 exists so that this slice is not.
+
+### 4.2 E1 RE-RUN, E3 and E4 — 2026-10-11
+
+**E1, after LV-3 (`cb65ec6e`).** The pledge defect is fixed. The native seed reward now matches
+cardano for **11,051 of 11,056** credentials and the reserves draw is **exact**
+(7,422,111,617,574). The five that still differ are not reward-formula errors:
+
+| credential | what | status |
+|---|---|---|
+| `94857be3…4dfd5b` (6,296,662), `85ecddcb…99163` (11,847) | unregistered at the seed point; Ade's emulation runs on the SEED state, where the later re-registration has not happened yet | harness artifact — disappears in a real run that replays the rest of the epoch. The +6,308,509 treasury difference is the same two amounts |
+| `900fbcf7…7fedb` (11,802) | a script credential's reward credited to the key credential with the same 28 bytes | real, pre-existing; slice **LV-4** |
+| `7a507e54…98756` (+500,000,000), `4245236a…a6454` (+1,000,000,000) | credits applied at the same boundary that are not part of `rs`: the first is a pool deposit refund; the second's source is not identified (neither pot moves for it) | not a reward difference; the second stays open as recorded in the E1 evidence |
+
+So CE-LV2-3's "all 11,056" has exactly one real exception left, owned by LV-4.
+
+**E3 — the window-replay path.** `derive_candidate` (`epoch_candidate.rs`) is still compiled into
+production: `node_lifecycle::maybe_activate_epoch_boundary` → `maybe_activate_first_boundary` →
+`activate_at_boundary` → `derive_candidate`, which applies the imported record's `reward_delta` at the
+end of the seed window. It is not what supplies leadership any more: `seed+1` comes from the bootstrap
+bridge and every epoch from `seed+2` on comes from the accumulator's frozen leadership object
+(S4-L2), and `maybe_activate_first_boundary` returns early once a view has been promoted, which the
+bridge does before the tip can enter `seed+1`. The last real bootstrap log shows only the bridge and
+the frozen path.
+
+It stays reachable in code, so it gets a rule rather than an assumption: for a `Native` seed there is
+no imported delta, and a window replay cannot reproduce a reward the accumulator computes. **For
+`Native`, `derive_candidate` on the seed window is a typed terminal** — never an empty delta, never
+`None` (CE-LV2-6).
+
+**E4 — the fee pot.** Exact, from three independent sources.
+
+```
+ssFee in the seed snapshot (epoch 304)                         23,699,540,134
+public explorer, total fees of epoch 303 (19,463 blocks)       23,699,540,134   = ssFee
+public explorer, total fees of epoch 304 (19,064 blocks)       22,236,845,053
+Ade v7 store, fee pot rotated out of 304 (never reduced)       45,936,385,187
+  minus fee_ss                                                 22,236,845,053   = epoch 304's fees
+Ade v7 store, blocks counted for 304                                   19,064   = explorer
+```
+
+So `ssFee` is the previous epoch's fees, the imported fee pot still contains it, and Ade's own
+per-block fee accumulation over the rest of the seed epoch is exact. Reducing the pot by `fee_ss`
+once at the seed boundary — what `Imported` already does with `delta_fees` — leaves exactly the seed
+epoch's fees. The reference `ssFee` was constant across both captures inside epoch 304. Source for
+the explorer figures: Koios preprod `epoch_info`, epochs 303 and 304, fetched 2026-10-11. The v7
+figures are read by `seed_boundary_reward_census::current_accumulator_fee_pots`.
+
+CE-LV2-4's expected value is therefore **22,236,845,053**.
+
+### 4.3 Design amendments made by the obligations
+
+- **§3.1 shape.** The `Native` variant carries a small closed record of its own — the same manifest /
+  point / epoch binding as the imported one, `fee_ss`, and its own commitment — so both variants are
+  provenance-bound and commitment-checked the same way.
+- **§3.3.** The zero-pot terminal (CE-LV2-5) is checked on the `Native` path only. `Imported`
+  deliberately runs the native calculation at zero.
+- **§5 store version.** LV-3 took 7 → 8 (the lock does not allow one bump across two commits), so
+  this slice takes **8 → 9**. Read every "7 → 8" / "v8" below as "8 → 9" / "v9". No store exists at
+  v8, so it is still one refusal and one re-bootstrap.
+- **Snapshot commitment.** `commit_native_nonutxo_state` already binds the two pot deltas as a legacy
+  double-binding; for `NotYetComputed` it keeps writing zeros there, byte-identical to today. The
+  variant and `fee_ss` are bound by the reward record's own commitment, as `rs` and `deltaF` are.
 
 ---
 
