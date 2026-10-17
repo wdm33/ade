@@ -1,6 +1,6 @@
 # SLICE LV-4 — a stake snapshot keeps what cardano's keeps: whole credentials and frozen pool parameters
 
-**Status:** DRAFT 2026-10-17. This replaces the narrower "LV-4: key/script credential" slice named in
+**Status:** ENTRY OBLIGATIONS ANSWERED 2026-10-17 (§4.1). Implementation next. This replaces the narrower "LV-4: key/script credential" slice named in
 the LV-2 record. The owner chose one combined slice, because both remaining reward defects have the
 same cause. No code yet.
 
@@ -182,6 +182,79 @@ seed-boundary reward authority (LV-2).
 | **E6** | Does any path feed a reduced (`form_mark_snapshot`) snapshot to the reward calculation? If one does, DC-EPOCH-44's terminal would fire there, so confirm it cannot | code reading plus existing tests |
 | **E7** | The mainnet historical-era comparisons (`ade_testkit` `epoch_oracle_comparison`) build `go` from older snapshot formats. What does each era's snapshot carry for pool parameters, and can the loader fill `pool_params` from it? If an era carries none, that comparison must fail loudly, not pay nothing silently | corpus snapshots |
 
+### 4.1 Results — 2026-10-17
+
+Raw seed bytes: `preprod-snapshot-6009/db/ledger/129813427/state`, read with the standard `cbor2`
+library. Reference: `oracle-rupd304-node/ipc/ledger-state-seed304.json`, the same point, from
+cardano-node.
+
+**E1 — the per-pool entry is `array(10)`**, keyed by pool id:
+
+```
+[ stake, stakeRatio(tag30), selfDelegatedOwners(set keyhash), selfDelegatedOwnersStake,
+  vrf, pledge, cost, margin(tag30), numDelegators, accountId = [tag, hash28] ]
+```
+
+Credentials in `ssStake` are `[tag, hash28]` (0 = key, 1 = script). Decoded this way, all three seed
+snapshots equal the reference **in every field, for every pool and every credential**:
+
+| | credentials (script) | pools (zero stake) | field mismatches |
+|---|---|---|---|
+| mark | 25,382 (251) | 555 (109) | 0 |
+| set | 25,362 (251) | 554 (110) | 0 |
+| go | 25,324 (251) | 546 (107) | 0 |
+
+The snapshot does not store the full owner list. It stores the owners **delegated to the pool** at
+snapshot time, which is LV-3's set.
+
+**E2 — every pool registered at SNAP, before POOLREAP.** Reference at slot 130,563,009: the mark
+taken at 305→306 holds 558 pools. That is the 557 still registered plus `f9647122…`, which was
+reaped at that boundary. No registered pool is missing, including pools with no delegators. The
+future-pool map was empty at that boundary, so the "before adoption" half has unit witnesses only.
+
+**E3 — none.** No pool with stake in any of the three seed snapshots lacks parameters. The same holds
+in the slot-130,563,009 reference. DC-EPOCH-44's terminal stands.
+
+**E4 — YES, a real import defect, wider than suspected.** In the cert state a pool's reward account
+is `[credential tag, hash28]`, for example `cbfa34f3…` → `[1, 97161932…]`. `read_pool_params`
+documents it as `[network, hash28]`, reads the tag as a network number and writes header
+`0xe0 | tag`. So:
+
+- every key account is imported with header `0xe0`. That is right on preprod by accident and has the
+  wrong network nibble on mainnet;
+- the script account is imported as `0xe1`, a **key** credential.
+
+`reward_account_credential` therefore sees a key credential, and both the leader reward and the
+POOLREAP deposit refund would go to the wrong credential. Fixed here: decode the tag and build the
+header from the tag and the manifest network id.
+
+**E5 — none on preprod.** No key and script credential share bytes inside any of the three seed
+snapshots, or the reference snapshots at slot 130,563,009. So the `900fbcf7…` collision is between
+the snapshot's script credential and a **key registration** with the same bytes. That is the
+apply-step resolution, not the mark overwrite. The overwrite has unit witnesses only.
+
+**E6 — no.** `reduced_snapshot::form_mark_snapshot` has no caller outside its own module.
+
+**E7 — the older formats carry full pool parameters.** The corpus go snapshot is `array(3)[stake,
+delegations, poolParams]`. `snapshot_loader::parse_go_pool_params` already parses pledge, cost,
+margin, the raw 29-byte reward account and owners, and already uses them as the harness's
+`cert.pool.pools`. The historical comparisons in effect already pay from frozen parameters. The
+loader fills `pool_params` from the same parse, so no change in those numbers is expected.
+
+### 4.2 Design amendments made by the obligations
+
+1. `SnapshotPoolParams.owners` holds the **self-delegated** owners, as cardano's snapshot does. The
+   boundary mark computes them at SNAP from the pool's owners filtered by delegation to that pool in
+   the cert state. That is cardano's `spsDelegators` membership, not the zero-stake-filtered mark, so
+   an owner with zero stake is still listed and contributes 0. The seed import takes the stored set
+   as-is. `self_delegated_owner_stake` is unchanged.
+2. The cert-state pool import decodes the reward account as a tagged credential (E4). The 29-byte
+   `reward_account` it builds carries the real tag bit and the manifest network nibble. The native
+   import's commitment bytes change with it, which is covered by the store bump.
+3. The stored per-pool values are pledge, cost, margin, self-delegated owners and the tagged reward
+   account. `stake`, `stakeRatio`, `numDelegators` and `selfDelegatedOwnersStake` can all be derived
+   from the snapshot itself, so they are not stored and cannot disagree with it.
+
 ---
 
 ## 5. MECHANICAL ACCEPTANCE CRITERIA
@@ -197,6 +270,7 @@ seed-boundary reward authority (LV-2).
 | **CE-LV4-7** | DRep voting stake is summed over whole credentials | unit |
 | **CE-LV4-8** | The snapshot codec and fingerprint round-trip both credential kinds and all pool parameters. A v9 store, accumulator or snapshot record is refused | unit plus `ci_check_store_semantics_lock.sh` |
 | **CE-LV4-9** | **Seed import.** The three seed snapshots carry frozen parameters equal to the reference for every pool, and credentials with their tags | evidence harness |
+| **CE-LV4-9b** | **Cert-state import (E4).** A registration whose reward account is `[1, h]` imports as script credential `h`, and `[0, h]` as key credential `h`. The network nibble comes from the manifest and never from the tag | unit |
 | **CE-LV4-10** | **Structural.** No `Hash28`-keyed credential map and no `.hash()` projection remains in the snapshot, reward or DRep-stake paths. The reward loop does not read `cert.pool.pools` | `ci/ci_check_snapshot_fidelity.sh` (new) |
 | **CE-LV4-11** | **304→305 on the sealed seed** (`seed_boundary_reward_census`): `900fbcf7…7fedb` matches. The only residuals left are the two seed-point artifacts and the two non-RUPD credits already named in the LV-2 record | evidence harness |
 | **CE-LV4-12** | **Live, fresh follower-only bootstrap**, local docker `cardano-node-preprod`: (a) sealed epoch-306 stake equals the reference for 448 of 448 pools; (b) after 305→306, reserves and treasury equal the reference; (c) sealed epoch-307 stake equals the reference for 447 of 447 pools; (d) the node follows past 307→308 with no terminal | live run plus the existing reference captures |
@@ -217,6 +291,8 @@ Each mutation is asserted applied, the named witness must fail, and the tree is 
 - The mark inserts by bare hash (must fail CE-LV4-1).
 - The missing-params terminal becomes `continue` (must fail CE-LV4-6).
 - The operator credential comes from a key projection (must fail CE-LV4-5).
+- The cert-state import reads the reward-account tag as a network number again (must fail
+  CE-LV4-9b).
 - `STORE_SEMANTICS_VERSION` is left at 9 (must fail the lock gate).
 
 ---
