@@ -1,7 +1,9 @@
 # SLICE LV-5 — find where Ade's treasury first leaves cardano's, before touching any arithmetic
 
-**Status:** DRAFT 2026-10-18. Findings only: this slice measures, it does not design or fix. Opened by
-the owner's decision on LV-4 §7. That decision moved the treasury half of CE-LV4-12(b) here.
+**Status:** FINDINGS COMPLETE 2026-10-18; every CE is met (§8). **Cause: two epoch-305 treasury
+donations of 500,000 each, which Ade never moves into the treasury.** No production code changed. The
+fix is a separate design slice, which the owner has not yet approved. Opened by the owner's decision on
+LV-4 §7, which moved the treasury half of CE-LV4-12(b) here.
 
 **Entry state:** `bc828c57`. Evidence: `docs/evidence/run-stores/preprod-live2c/lv4-ce12-v10-live-snapshot-fidelity.md`
 §3(b), §4.
@@ -130,6 +132,21 @@ Name the path that carries the 1,000,000.
 
 None at entry.
 
-## 8. RESULTS
+## 8. RESULTS — 2026-10-18
 
-Not yet run.
+Full record: `docs/evidence/run-stores/preprod-live2c/lv5-treasury-divergence-census.md`.
+
+| CE | result |
+|---|---|
+| **CE-LV5-1** | Treasury and reserves are equal at the seed and after 304→305. **P = 305→306.** Across it the treasury rises 6,881,969,077,986 for Ade and 6,881,970,077,986 for cardano, exactly 1,000,000 apart, and the reserves stay equal |
+| **CE-LV5-2** | **Reference:** donation pot 0 at slot 130,133,280, 1,000,000 at 130,515,796. **Chain:** Ade's decoders over all 19,692 blocks of epoch 305 find two donations, `24428858…5cd5` at slot 130,271,804 and `853764ba…58a5` at slot 130,404,902, each 500,000 and phase-2 valid. **The two sides agree** |
+| **CE-LV5-3** | **YES.** The donations explain the whole 1,000,000 and the point P, with nothing left over. The lead is confirmed: Ade's accumulator has no donation pot |
+| **CE-LV5-4** | The cause is outside DC-EPOCH-40/41/43/44. The seed boundary, 41's crossing, is exact live in both pots |
+| **CE-LV5-5** | `git diff bc828c57 -- 'crates/*/src'` is empty. Two evidence-only `#[ignore]` tests were added: `treasury_donation_census.rs`, and `dump_current_pots` in `leadership_distr_census.rs` |
+
+**What the fix slice must decide, not settled here:** the shape of the state that carries donations
+between boundaries. Ade's accumulator has no field for cardano's `utxosDonation`, so this is new
+authoritative state with a version bump, not an arithmetic change. It must also decide how a seed
+import reads the seed's own donation pot. At snapshot 6009 that pot is 0. This is inferred, not read: the
+reference pot is 0 at slot 129,975,591, later in the same epoch, and the pot only grows within an
+epoch.

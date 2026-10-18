@@ -520,3 +520,26 @@ fn pairwise_stake_diff_between_two_sealed_epochs() {
         println!("  A DERIVATION one epoch apart moves nearly every pool. A COPY does not.");
     }
 }
+
+/// Prints the pots of the CURRENT accumulator in a store copy, with the slot it is applied through.
+/// Used by LV-5 to compare Ade's treasury and reserves with a reference at a known point.
+///
+/// ```text
+/// ADE_CENSUS_ACC_REDB=/path/to/copy/epoch-accumulator.redb \
+///   cargo test -p ade_runtime --test leadership_distr_census dump_current_pots -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "evidence-only; requires ADE_CENSUS_ACC_REDB pointing at a COPY of a real store"]
+fn dump_current_pots() {
+    let path = std::env::var("ADE_CENSUS_ACC_REDB")
+        .expect("set ADE_CENSUS_ACC_REDB to a COPY of an epoch-accumulator.redb");
+    let store = EpochAccumulatorStore::open(std::path::Path::new(&path)).expect("open store copy");
+    let (slot, acc) = store
+        .load_current()
+        .expect("load current")
+        .expect("store is sealed");
+    println!(
+        "POTS applied_through_slot={} epoch={} treasury={} reserves={}",
+        slot.0, acc.epoch_state.epoch.0, acc.epoch_state.treasury.0, acc.epoch_state.reserves.0
+    );
+}
