@@ -1,7 +1,7 @@
 # SLICE LV-6 — a treasury donation is held in one pot and moved to the treasury once, at the boundary
 
-**Status:** DRAFT 2026-10-18; owner-approved design (§7). E1 answered (§4.1); the other obligations are
-answered before any code.
+**Status:** DRAFT 2026-10-18; owner-approved design (§7). Entry obligations E1–E6 answered (§4.1,
+§4.2). Implementation next.
 
 **Entry state:** `a011ec94`. Cause established by LV-5
 (`docs/evidence/run-stores/preprod-live2c/lv5-treasury-divergence-census.md`). Epoch 305 carried two
@@ -200,6 +200,50 @@ pulser's enact-state treasury, never the current donation pot.
 
 It updates only the UTxO, the fees and the stake distribution. An invalid transaction's donation never
 reaches the pot.
+
+### 4.2 E2–E6 — results, 2026-10-18
+
+**E2 — persistence surface.** Every place that saves, fingerprints or commits to the state:
+
+| surface | carries | change |
+|---|---|---|
+| `snapshot/epoch_state.rs` `encode/decode_epoch_state` | `EpochState`, array(7) | array(8) with `donation_pot` last; snapshot framing `SCHEMA_VERSION` 3 → 4 |
+| accumulator codec (`epoch_accumulator.rs`) | embeds `encode_epoch_state` | `EPOCH_ACCUMULATOR_SCHEMA_VERSION` 5 → 6 |
+| `fingerprint.rs` `fingerprint_epoch` | shared by v1 AND v2 | v1 gets a frozen copy (`fingerprint_epoch_v1`), as LV-4 did for snapshots; v2 adds `donation_pot` |
+| `ledgerdb_state.rs` `commit_native_nonutxo_state` | every certified seed value | binds `donation_pot`; tag `…-v12` → `…-v13` |
+| store-semantics lock | the files above | `STORE_SEMANTICS_VERSION` 10 → 11, new lock entry |
+
+The reduced UTxO checkpoint persists no `EpochState`; nothing is mirrored there. **The version set
+matches §3.5, plus the seed commitment v13.**
+
+**E3 — application and boundary paths.**
+- **Per transaction**, two sites credit `epoch_fees`: `phase.rs` ≈208 (full path) and `epoch_accumulator.rs`
+  `apply_tx_scan` (accumulator fold). Both call the one contribution function.
+- **At the boundary:**
+  - `rules.rs` ≈1539 is the full boundary, which the accumulator's native and seed crossings also go
+    through. It transfers the pot in the named last step.
+  - `rules.rs` ≈157 is the reduced boundary, documented as having no pot authority. It clears the
+    non-authoritative copy as it does `epoch_fees`, and transfers nothing.
+- `hfc.rs` builds a fresh `EpochState` at era translation with zero pots. A pre-Conway era has no
+  donations, so 0 is the translated value there, not a bootstrap default.
+
+**E4 — bootstrap paths.** Each takes the pot from canonical state:
+- `ledgerdb_state.rs` decodes `UTxOState` (≈2053, field 5 currently skipped) into
+  `NativeSnapshotNonUtxoState`, which gains `donation_pot`.
+- `mithril_native_assembly.rs` ≈357 carries it into the sealed `EpochState`.
+- `ade_testkit` `snapshot_loader.rs` reads it from each era's own `UTxOState` where the era has one,
+  and is 0 for eras before Conway.
+- The `epoch.rs` and test literals are fixtures.
+
+**E5 — snapshot 6009, read directly** (`preprod-snapshot-6009/state`, `UTxOState` field 5): donation
+pot **0**. Treasury 1,945,191,497,759,078 and reserves 12,993,813,079,206,744 match the sealed seed.
+0 is now a measured fixture value.
+
+**E6 — real fixtures**, cut byte-exact from the reference ImmutableDB:
+- block at slot 130,271,804: 3,150 bytes, 2 transactions, none invalid;
+- block at slot 130,404,902: 5,708 bytes, 3 transactions, none invalid.
+
+Each carries one of the two donations at transaction index 0.
 
 ## 5. MECHANICAL ACCEPTANCE CRITERIA
 
