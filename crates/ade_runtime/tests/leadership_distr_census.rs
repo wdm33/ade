@@ -543,3 +543,27 @@ fn dump_current_pots() {
         slot.0, acc.epoch_state.epoch.0, acc.epoch_state.treasury.0, acc.epoch_state.reserves.0
     );
 }
+
+/// Prints every reward balance of the CURRENT accumulator in a store copy, one line per credential:
+/// `REWARD <key|script> <hash hex> <lovelace>`. Used by LV-5/DC-EPOCH-41 to compare Ade's balances right
+/// after a live boundary with a reference ledger state at nearly the same point.
+#[test]
+#[ignore = "evidence-only; requires ADE_CENSUS_ACC_REDB pointing at a COPY of a real store"]
+fn dump_reward_balances() {
+    let path = std::env::var("ADE_CENSUS_ACC_REDB")
+        .expect("set ADE_CENSUS_ACC_REDB to a COPY of an epoch-accumulator.redb");
+    let store = EpochAccumulatorStore::open(std::path::Path::new(&path)).expect("open store copy");
+    let (slot, acc) = store
+        .load_current()
+        .expect("load current")
+        .expect("store is sealed");
+    println!("APPLIED_THROUGH {}", slot.0);
+    for (cred, coin) in &acc.cert_state.delegation.rewards {
+        let (kind, h) = match cred {
+            ade_types::shelley::cert::StakeCredential::KeyHash(h) => ("key", h),
+            ade_types::shelley::cert::StakeCredential::ScriptHash(h) => ("script", h),
+        };
+        let hex: String = h.0.iter().map(|x| format!("{x:02x}")).collect();
+        println!("REWARD {kind} {hex} {}", coin.0);
+    }
+}

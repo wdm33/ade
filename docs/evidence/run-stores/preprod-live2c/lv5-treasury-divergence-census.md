@@ -82,6 +82,37 @@ the seed state in isolation.
 crates/ade_runtime/tests/treasury_donation_census.rs           F2 chain side (#[ignore], evidence-only)
 crates/ade_runtime/tests/leadership_distr_census.rs            dump_current_pots, F1 Ade side
 <scratch>/lv5/pots.py                                           F1 reference side (cbor2)
+<scratch>/lv5/cmp_rewards.py, wdrl.py                           section 6 (cbor2)
+crates/ade_runtime/tests/leadership_distr_census.rs            dump_reward_balances, section 6 Ade side
 ~/.cardano-live1/oracle-end304-node/db/ledger/{130133280,130515796}/state, db/immutable, db/volatile
 ~/.cardano-live1/oracle-rupd304-node/db/ledger/129975591/state
 ```
+
+## 6. DC-EPOCH-41 — the seed-boundary crossing, per credential, on the real transition
+
+Owner condition (2026-10-18): promote DC-EPOCH-41 only if the live transition proves the leftovers of
+the isolated CE-LV2-3 crossing, credential by credential.
+
+- **Ade:** `leadership_distr_census::dump_reward_balances` on a copy of the fresh v10 accumulator,
+  taken right after the live crossing (applied through slot 130,118,424, the first block of 305).
+- **Reference:** the accounts map (`DState` accounts, field 0 = balance) of the LedgerDB snapshot at
+  slot 130,133,280.
+
+```
+cardano 33257 ade 33257 equal 33256 different 1
+DIFF key d0f4075a0ab29c0f71c8310f0b3151fbfee6fdc2de910e2f3471455a ade 694110 cardano 0
+```
+
+The one difference is a valid withdrawal of exactly 694,110 at slot 130,121,698, transaction index 9,
+found on chain with `cbor2`. That slot falls between the two points: Ade's copy had not applied it yet,
+and the reference had.
+
+| isolated CE-LV2-3 leftover | live result |
+|---|---|
+| `4245236a…` (+1,000,000,000, outside the reward update) | equal, 1,377,424,518 |
+| `7a507e54…` (+500,000,000, outside the reward update) | equal, 3,475,776,685 |
+| `03b56d5e…`, `6103000c…` (1,000,000,000 each, credentials in no go pool) | equal, 1,000,000,000 each |
+| `85ecddcb…`, `94857be3…` (not registered at the seed point) | absent from BOTH account maps |
+
+Treasury and reserves after 304→305 are exact (§1). **The owner's condition is met. CE-LV2-3 is
+superseded by this proof; its isolated result stays on record. DC-EPOCH-41 is `enforced`.**

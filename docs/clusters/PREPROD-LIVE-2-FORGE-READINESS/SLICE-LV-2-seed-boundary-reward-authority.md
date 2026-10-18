@@ -1,5 +1,13 @@
 # SLICE LV-2 — "not computed yet" is not "computed, and empty": the seed boundary's reward has an owner
 
+> **CLOSED 2026-10-18 — DC-EPOCH-41 `enforced`.** CE-LV2-10 was met in full by LV-4's v10 run
+> (448/448). The owner marked CE-LV2-3 **superseded** by a live-equivalent proof: right after the
+> live 304→305 crossing, every one of the 33,257 reward balances equals cardano's. The single
+> difference is a withdrawal made in the 15k-slot gap between the two points, found on chain. Each
+> leftover of the isolated crossing is equal on the real transition, and the treasury and reserves
+> are exact. The isolated result, 11,052 of 11,056, stays on record below. Evidence:
+> `lv5-treasury-divergence-census.md` §6.
+
 **Status:** IMPLEMENTED 2026-10-11; results in §9. Every in-tree criterion is green. The live bar CE-LV2-10(b) is **447 of 448 pools** — one credential short, the residual owned by LV-4 — so the slice is NOT closed and DC-EPOCH-41 is registered `partial`.
 
 **Entry state:** `029e082c`. Evidence:

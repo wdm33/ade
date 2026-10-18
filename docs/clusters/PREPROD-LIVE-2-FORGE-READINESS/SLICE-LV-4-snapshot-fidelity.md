@@ -381,6 +381,12 @@ reclassified by the owner, never quietly passed. Second, where the 1 ADA treasur
 yet known. If it starts at 304→305, it is inside the crossing DC-EPOCH-41 governs. LV-5's first
 measurement answers that.
 
+**Resolved 2026-10-18.** LV-5 found that the gap starts at 305→306 and is two epoch-305 donations, so
+it is outside 41. The owner then set a narrower condition: per-credential equality on the real
+transition. It was met. Right after the live 304→305 crossing all 33,257 balances equal cardano's; the
+one difference is a withdrawal made in the gap between the two points. CE-LV2-3 is marked superseded,
+and **DC-EPOCH-41 is `enforced`**.
+
 At entry there were none. If E7 finds a historical era whose snapshots carry no pool parameters, that
 comparison would need to be reclassified or fed another way. That choice would come back to the
 owner before it is made.
