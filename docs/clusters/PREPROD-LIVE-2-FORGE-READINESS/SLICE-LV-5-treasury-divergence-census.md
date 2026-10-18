@@ -1,8 +1,7 @@
 # SLICE LV-5 — find where Ade's treasury first leaves cardano's, before touching any arithmetic
 
 **Status:** FINDINGS COMPLETE 2026-10-18; every CE is met (§8). **Cause: two epoch-305 treasury
-donations of 500,000 each, which Ade never moves into the treasury.** No production code changed. The
-fix is a separate design slice, which the owner has not yet approved. Opened by the owner's decision on
+donations of 500,000 each, which Ade never moves into the treasury.** No production code changed. The fix is slice LV-6, `SLICE-LV-6-treasury-donation-pot.md`, drafted 2026-10-18. Opened by the owner's decision on
 LV-4 §7, which moved the treasury half of CE-LV4-12(b) here.
 
 **Entry state:** `bc828c57`. Evidence: `docs/evidence/run-stores/preprod-live2c/lv4-ce12-v10-live-snapshot-fidelity.md`
