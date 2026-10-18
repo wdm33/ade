@@ -52,8 +52,8 @@ fn dump_frozen_leadership_for_epoch() {
             }
         };
 
-        // The denominator is POOL-INDEPENDENT, which is what makes this census decisive without
-        // knowing which header failed: `to_pool_distr_view` sums exactly these entries.
+        // Since LV-1 the σ denominator is the stored `total_active_stake` (DC-EPOCH-40), not a sum
+        // of the entries; both are printed so a membership difference shows up as a gap between them.
         let total: u128 = d.pools.values().map(|e| e.active_stake as u128).sum();
         let zero_stake = d.pools.values().filter(|e| e.active_stake == 0).count();
 
@@ -70,7 +70,11 @@ fn dump_frozen_leadership_for_epoch() {
         );
         println!("  pools                        {}", d.pools.len());
         println!("  of which zero-stake          {zero_stake}");
-        println!("  TOTAL ACTIVE STAKE           {total}   <- the σ denominator");
+        println!(
+            "  TOTAL ACTIVE STAKE           {}   <- the σ denominator (stored)",
+            d.total_active_stake
+        );
+        println!("  sum of pool entries          {total}");
         println!(
             "  canonical_hash               {}",
             hex(&ade_ledger::frozen_leadership::canonical_hash(&d).0)

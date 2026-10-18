@@ -105,6 +105,10 @@ store's `node.log`, not the launcher's log.
   appear only in validation and in the seed import's skip comments. A 1-ADA donation during epoch 305
   would produce exactly this. Not confirmed: the captured reference JSON omits the donation pot, and no
   block of epoch 305 has been checked for a donation field.
+- **Owner decision, 2026-10-18.** The gap is reclassified to its own derived compatibility slice,
+  LV-5. DC-EPOCH-43/44 are `enforced`: their statements claim no treasury or whole-state equality.
+  This record makes no claim of full epoch-state equality with cardano, and none is made until LV-5
+  closes.
 
 ## 5. ARTIFACTS (off-repo)
 

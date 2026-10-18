@@ -1,5 +1,10 @@
 # SLICE LV-1 — the σ denominator is a snapshot fact, not a sum of the pools that survived a filter
 
+> **CLOSED 2026-10-18 — DC-EPOCH-40 `enforced`.** The live bar was met by LV-4's run: the stored
+> `total_active_stake` equals cardano's total for epochs 306 and 307
+> (`lv4-ce12-v10-live-snapshot-fidelity.md`; registry evidence). The correction below stays as the
+> record.
+
 > ## ⚠ CORRECTION, 2026-10-10 — READ FIRST
 >
 > **CE-LV1-9 was run and is NOT met. This slice did not fix the halt it was opened for.** Evidence:

@@ -1,9 +1,10 @@
 # SLICE LV-4 — a stake snapshot keeps what cardano's keeps: whole credentials and frozen pool parameters
 
-**Status:** IMPLEMENTED 2026-10-17 (`19387e86`). Live: CE-LV4-12(a), (c) and (d) met, and (b) met for
-reserves. The treasury after 305→306 is **1,000,000 lovelace** short, a gap that predates LV-4 (it is in
-the v9 run too) and is not explained (§8). DC-EPOCH-43/44 stay `partial` pending the owner's decision on
-that one criterion (§7). This replaces the narrower "LV-4: key/script credential" slice named in
+**Status:** CLOSED 2026-10-18. Implemented 2026-10-17 (`19387e86`). Every CE is met live; for CE-LV4-12(b)
+that means the reserves. The treasury half of (b) was reclassified out by the owner (§7). The treasury
+after 305→306 is **1,000,000 lovelace** short. That gap predates LV-4 (it is in the v9 run too), is
+not explained (§8), and is now its own defect, slice LV-5. DC-EPOCH-43/44 are `enforced`. No claim of
+full epoch-state equality with cardano is made until LV-5 closes. This replaces the narrower "LV-4: key/script credential" slice named in
 the LV-2 record. The owner chose one combined slice, because both remaining reward defects have the
 same cause. No code yet.
 
@@ -307,12 +308,13 @@ loader fills `pool_params` from the same parse, so no change in those numbers is
 | **CE-LV4-9b** | **Cert-state import (E4).** A registration whose reward account is `[1, h]` imports as script credential `h`, and `[0, h]` as key credential `h`. The network nibble comes from the manifest and never from the tag | unit |
 | **CE-LV4-10** | **Structural.** No `Hash28`-keyed credential map and no `.hash()` projection remains in the snapshot, reward or DRep-stake paths. The reward loop does not read `cert.pool.pools` | `ci/ci_check_snapshot_fidelity.sh` (new) |
 | **CE-LV4-11** | **304→305 on the sealed seed** (`seed_boundary_reward_census`): `900fbcf7…7fedb` matches. The only residuals left are the two seed-point artifacts and the two non-RUPD credits already named in the LV-2 record | evidence harness |
-| **CE-LV4-12** | **Live, fresh follower-only bootstrap**, local docker `cardano-node-preprod`: (a) sealed epoch-306 stake equals the reference for 448 of 448 pools; (b) after 305→306, reserves and treasury equal the reference; (c) sealed epoch-307 stake equals the reference for 447 of 447 pools; (d) the node follows past 307→308 with no terminal | live run plus the existing reference captures |
+| **CE-LV4-12** | **Live, fresh follower-only bootstrap**, local docker `cardano-node-preprod`: (a) sealed epoch-306 stake equals the reference for 448 of 448 pools; (b) after 305→306, reserves and treasury equal the reference *(treasury half reclassified to LV-5 by the owner, 2026-10-18; see §7)*; (c) sealed epoch-307 stake equals the reference for 447 of 447 pools; (d) the node follows past 307→308 with no terminal | live run plus the existing reference captures |
 | **CE-LV4-13** | Every existing reward suite passes, including the mainnet historical-era comparisons. Each change in a reward number is named and matched to the reference | existing suites |
 | **CE-LV4-14** | Negative-tested | mutations below |
 
 CE-LV4-12(a)–(c) close LV-2's CE-LV2-10(b) as well. When they are green, DC-EPOCH-40 and DC-EPOCH-41
-can move from `partial` to `enforced`.
+can move from `partial` to `enforced`. *(2026-10-18: DC-EPOCH-40 moved, on the stored total. DC-EPOCH-41
+has not moved: its bar also includes CE-LV2-3, which is still not met as written; see §7.)*
 
 ### Required mutations
 
@@ -355,6 +357,30 @@ apply treasury donations. Two ways to close this slice:
   owns it. DC-EPOCH-43/44 then move to `enforced`. (Recommended.)
 - **Hold** LV-4 `partial` until that gap is found and fixed.
 
+**Decided 2026-10-18 by the owner: reclassify.** The condition was that DC-EPOCH-43/44 be satisfied
+independently of the treasury. That was checked against their registered statements. 43 is credential
+identity: (a) exact-credential crediting, (b) the tagged operator account, (c) owners as key
+credentials, (d) the import reading [tag, hash]. 44 is frozen pool parameters: (a) taken at SNAP,
+(b) checked at import, (c) read only from go, (d) the missing-params terminal. Neither claims
+treasury, pot, or whole-state equality with cardano. Had either done so, the gap would sit inside the
+invariant and holding would be mandatory.
+
+The record: **LV-4 closed DC-EPOCH-43/44. The same run found an independent 1 ADA treasury divergence.
+It does not weaken the evidence for 43/44 and becomes its own derived compatibility slice, LV-5.** LV-5
+is a ledger-state disagreement, not noise. It stays blocking for any claim that requires treasury or
+full epoch-state equality with cardano. No such claim is made until it closes.
+
+**2026-10-18, DC-EPOCH-40 and -41.** The owner approved moving both on the same test. **40 moved.**
+The binding evidence is the stored `total_active_stake`, read directly, which equals cardano's total
+for epochs 306 and 307. **41 did not move, and this goes back to the owner.** Its live bar is
+CE-LV2-10 and CE-LV2-3. CE-LV2-10 is now fully met: (a) non-zero pool pot, (b) 448/448, (d) following
+on, with (c) as corroboration. **CE-LV2-3 as written is not met.** It requires all 11,056 credentials
+and `deltaT` 7,029,700,573,599 on the seed state. That crossing gives 11,052 credentials and
+`deltaT` +6,308,509. Every residual is named (§8, CE-LV4-11), but a hard criterion is met exactly or
+reclassified by the owner, never quietly passed. Second, where the 1 ADA treasury gap starts is not
+yet known. If it starts at 304→305, it is inside the crossing DC-EPOCH-41 governs. LV-5's first
+measurement answers that.
+
 At entry there were none. If E7 finds a historical era whose snapshots carry no pool parameters, that
 comparison would need to be reclassified or fed another way. That choice would come back to the
 owner before it is made.
@@ -373,7 +399,7 @@ store `~/.cardano-live1/ade-preprod-v10`.
 | seed | sealed NATIVE, `ssFee` 23,699,540,134 (unchanged from LV-2) |
 | **CE-LV4-11** | 304→305 on the sealed seed: **11,052 of 11,056** credentials equal the reference update, up from 11,051. `900fbcf7…7fedb` now matches. Reserves draw 7,422,111,617,574, exact. The rest are the LV-2 record's named residuals: two seed-point artifacts (only in the reference, together the +6,308,509 treasury difference), two credits outside the reward update (+1,000,000,000 and +500,000,000), and two 1,000,000,000 credits to credentials in no go pool |
 | **CE-LV4-12(a)** | live crossing 304→305, `pool_pot=28118802294396`. Sealed epoch-306 stake against the reference end-of-304 snapshot: **448 of 448 pools exact, total 1,626,474,372,102,448, denominator delta 0.** The v9 store was 11,802 short on one pool. The header issuer `0ed90e52…` matches |
-| **CE-LV4-12(b)** | after 305→306: **reserves 12,979,123,112,128,607 = reference, exact** (v9: +42,082,928,795). The retired pool `8ed5ab11…` is paid. **Treasury 1,000,000 short** (v9: −7,225,473 = −6,225,473 from the retired pool + this same −1,000,000). Not LV-4's. Lead, not confirmed: Ade's accumulator applies no Conway treasury donations at all |
+| **CE-LV4-12(b)** | after 305→306: **reserves 12,979,123,112,128,607 = reference, exact** (v9: +42,082,928,795). The retired pool `8ed5ab11…` is paid. **Treasury 1,000,000 short** (v9: −7,225,473 = −6,225,473 from the retired pool + this same −1,000,000). Not LV-4's: reclassified to LV-5 (§7). Lead, not confirmed: Ade's accumulator applies no Conway treasury donations at all |
 | **CE-LV4-12(c)** | sealed epoch-307 stake against the reference end-of-305 snapshot: **447 of 447 pools exact, denominator delta 0** (v9: −16,453,955 on `5cb14d2c…`). The retired pool is in the reference with stake 0 and absent from Ade's leadership set |
 | **CE-LV4-12(d)** | one warm restart at the 306→307 header boundary (the known `LeadershipEpochNotSealed` catch-up stop); then 306→307 crossed with active stake equal to the reference go total, and 307→308 crossed and followed past. No terminal |
 
