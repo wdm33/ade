@@ -163,11 +163,18 @@ fn authoritative_state_encoding_is_unchanged_and_never_decodes_reduced() {
     const PRE_P2_FULL_CONWAY_305: &str = "89071b009fdf42f6e48000f441a04786a0a0a0a0a0a05387190131008382a0\
 a082a0a082a0a00000a000584f9818182c1a00025ef51a0001000019400019044c1a001e84801a1dcd650012189682030a8203\
 1903e882010502001a000f42401a1443fd0082010118961a00d59f801b00000002540be40001f60000f6f6";
+    // LV-4 moved exactly one thing, under its own version bumps (store semantics 10, accumulator schema 5,
+    // snapshot framing 3): each of the three stake snapshots gains its frozen pool-parameter map (array(2) ->
+    // array(3), one more empty map), so the embedded epoch-state byte string grows by 3. Spelled out here so
+    // that nothing ELSE in an authoritative encoding can move unnoticed.
+    let lv4_expected = PRE_P2_FULL_CONWAY_305
+        .replace('\n', "")
+        .replace("5387190131008382a0a082a0a082a0a0", "5687190131008383a0a0a083a0a0a083a0a0a0");
     assert_eq!(
         bytes.iter().map(|b| format!("{b:02x}")).collect::<String>(),
-        PRE_P2_FULL_CONWAY_305.replace('\n', ""),
-        "SLICE-P2 must not move a single byte of an AUTHORITATIVE encoding -- existing durable \
-         snapshots decode with these exact bytes"
+        lv4_expected,
+        "SLICE-P2 must not move a single byte of an AUTHORITATIVE encoding, and LV-4 moves only the \
+         stake-snapshot shape -- existing durable snapshots decode with these exact bytes"
     );
 
     let back = ade_ledger::snapshot::decode_ledger_state(&bytes).expect("and decodes");

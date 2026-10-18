@@ -19,21 +19,28 @@
 //!   uint  epoch_fees,
 //! ]
 //! ```
-//! `stake_snapshot` = array(2)[delegations_map, pool_stakes_map] where
-//! delegations_map = map(N) Hash28 -> array(2)[PoolId, Coin]
-//! pool_stakes_map = map(M) PoolId -> Coin.
+//! `stake_snapshot` = array(3)[delegations_map, pool_stakes_map, pool_params_map] where
+//! delegations_map = map(N) credential(array(2)[tag, hash28]) -> array(2)[PoolId, Coin]
+//! pool_stakes_map = map(M) PoolId -> Coin
+//! pool_params_map = map(K) PoolId -> array(5)[pledge, cost, array(2)[m_num, m_den],
+//!                                             credential reward_account, array(J) owner hash28]
+//! (LV-4: whole credentials, frozen pool parameters; the array(2) form of earlier stores is refused).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ade_codec::cbor::{
     canonical_width, read_any_int, read_array_header, read_bytes, read_map_header,
     write_array_header, write_bytes_canonical, write_map_header, write_uint_canonical,
     ContainerEncoding, IntWidth,
 };
+use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::{Coin, PoolId};
 use ade_types::{EpochNo, Hash28, SlotNo};
 
-use crate::epoch::{GoSnapshot, MarkSnapshot, SetSnapshot, SnapshotState, StakeSnapshot};
+use super::cert_state::{read_stake_credential, write_stake_credential};
+use crate::epoch::{
+    GoSnapshot, MarkSnapshot, SetSnapshot, SnapshotPoolParams, SnapshotState, StakeSnapshot,
+};
 use crate::state::EpochState;
 
 use super::error::{SnapshotDecodeError, StructuralReason};
@@ -149,8 +156,7 @@ fn read_snapshot_state(
 }
 
 fn write_stake_snapshot(buf: &mut Vec<u8>, s: &StakeSnapshot) {
-    write_array_header(buf, ContainerEncoding::Definite(2, IntWidth::Inline));
-    // delegations: map Hash28 -> array(2)[PoolId, Coin]
+    write_array_header(buf, ContainerEncoding::Definite(3, IntWidth::Inline));
     write_map_header(
         buf,
         ContainerEncoding::Definite(
@@ -159,12 +165,11 @@ fn write_stake_snapshot(buf: &mut Vec<u8>, s: &StakeSnapshot) {
         ),
     );
     for (cred, (pool, coin)) in &s.delegations {
-        write_bytes_canonical(buf, &cred.0);
+        write_stake_credential(buf, cred);
         write_array_header(buf, ContainerEncoding::Definite(2, IntWidth::Inline));
         write_bytes_canonical(buf, &pool.0 .0);
         write_uint_canonical(buf, coin.0);
     }
-    // pool_stakes: map PoolId -> Coin
     write_map_header(
         buf,
         ContainerEncoding::Definite(
@@ -176,50 +181,116 @@ fn write_stake_snapshot(buf: &mut Vec<u8>, s: &StakeSnapshot) {
         write_bytes_canonical(buf, &pool.0 .0);
         write_uint_canonical(buf, coin.0);
     }
+    write_map_header(
+        buf,
+        ContainerEncoding::Definite(
+            s.pool_params.len() as u64,
+            canonical_width(s.pool_params.len() as u64),
+        ),
+    );
+    for (pool, pp) in &s.pool_params {
+        write_bytes_canonical(buf, &pool.0 .0);
+        write_array_header(buf, ContainerEncoding::Definite(5, IntWidth::Inline));
+        write_uint_canonical(buf, pp.pledge.0);
+        write_uint_canonical(buf, pp.cost.0);
+        write_array_header(buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+        write_uint_canonical(buf, pp.margin.0);
+        write_uint_canonical(buf, pp.margin.1);
+        write_stake_credential(buf, &pp.reward_account);
+        write_array_header(
+            buf,
+            ContainerEncoding::Definite(
+                pp.self_delegated_owners.len() as u64,
+                canonical_width(pp.self_delegated_owners.len() as u64),
+            ),
+        );
+        for owner in &pp.self_delegated_owners {
+            write_bytes_canonical(buf, &owner.0);
+        }
+    }
+}
+
+fn read_definite_map_len(bytes: &[u8], o: &mut usize) -> Result<u64, SnapshotDecodeError> {
+    match read_map_header(bytes, o).map_err(SnapshotDecodeError::Cbor)? {
+        ContainerEncoding::Definite(n, _) => Ok(n),
+        _ => Err(SnapshotDecodeError::Structural {
+            reason: StructuralReason::ArrayLengthMismatch,
+        }),
+    }
+}
+
+fn read_hash28(bytes: &[u8], o: &mut usize) -> Result<Hash28, SnapshotDecodeError> {
+    let (b, _) = read_bytes(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
+    if b.len() != 28 {
+        return Err(SnapshotDecodeError::Structural {
+            reason: StructuralReason::Hash28LengthMismatch,
+        });
+    }
+    let mut arr = [0u8; 28];
+    arr.copy_from_slice(&b);
+    Ok(Hash28(arr))
+}
+
+fn read_snapshot_pool_params(
+    bytes: &[u8],
+    o: &mut usize,
+) -> Result<SnapshotPoolParams, SnapshotDecodeError> {
+    expect_array(bytes, o, 5)?;
+    let (pledge, _, _) = read_any_int(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
+    let (cost, _, _) = read_any_int(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
+    expect_array(bytes, o, 2)?;
+    let (m_num, _, _) = read_any_int(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
+    let (m_den, _, _) = read_any_int(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
+    let reward_account = read_stake_credential(bytes, o)?;
+    let owners_n = match read_array_header(bytes, o).map_err(SnapshotDecodeError::Cbor)? {
+        ContainerEncoding::Definite(n, _) => n,
+        _ => {
+            return Err(SnapshotDecodeError::Structural {
+                reason: StructuralReason::ArrayLengthMismatch,
+            })
+        }
+    };
+    let mut self_delegated_owners = BTreeSet::new();
+    for _ in 0..owners_n {
+        self_delegated_owners.insert(read_hash28(bytes, o)?);
+    }
+    Ok(SnapshotPoolParams {
+        pledge: Coin(pledge),
+        cost: Coin(cost),
+        margin: (m_num, m_den),
+        reward_account,
+        self_delegated_owners,
+    })
 }
 
 fn read_stake_snapshot(bytes: &[u8], o: &mut usize) -> Result<StakeSnapshot, SnapshotDecodeError> {
-    expect_array(bytes, o, 2)?;
-    let delegations_n = match read_map_header(bytes, o).map_err(SnapshotDecodeError::Cbor)? {
-        ContainerEncoding::Definite(n, _) => n,
-        _ => {
-            return Err(SnapshotDecodeError::Structural {
-                reason: StructuralReason::ArrayLengthMismatch,
-            })
-        }
-    };
-    let mut delegations: BTreeMap<Hash28, (PoolId, Coin)> = BTreeMap::new();
+    expect_array(bytes, o, 3)?;
+    let delegations_n = read_definite_map_len(bytes, o)?;
+    let mut delegations: BTreeMap<StakeCredential, (PoolId, Coin)> = BTreeMap::new();
     for _ in 0..delegations_n {
-        let (cred_bytes, _) = read_bytes(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
-        if cred_bytes.len() != 28 {
-            return Err(SnapshotDecodeError::Structural {
-                reason: StructuralReason::Hash28LengthMismatch,
-            });
-        }
-        let mut cred = [0u8; 28];
-        cred.copy_from_slice(&cred_bytes);
+        let cred = read_stake_credential(bytes, o)?;
         expect_array(bytes, o, 2)?;
         let pool = read_pool_id(bytes, o)?;
         let (coin, _, _) = read_any_int(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
-        delegations.insert(Hash28(cred), (pool, Coin(coin)));
+        delegations.insert(cred, (pool, Coin(coin)));
     }
-    let pool_stakes_n = match read_map_header(bytes, o).map_err(SnapshotDecodeError::Cbor)? {
-        ContainerEncoding::Definite(n, _) => n,
-        _ => {
-            return Err(SnapshotDecodeError::Structural {
-                reason: StructuralReason::ArrayLengthMismatch,
-            })
-        }
-    };
+    let pool_stakes_n = read_definite_map_len(bytes, o)?;
     let mut pool_stakes: BTreeMap<PoolId, Coin> = BTreeMap::new();
     for _ in 0..pool_stakes_n {
         let pool = read_pool_id(bytes, o)?;
         let (coin, _, _) = read_any_int(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
         pool_stakes.insert(pool, Coin(coin));
     }
+    let pool_params_n = read_definite_map_len(bytes, o)?;
+    let mut pool_params: BTreeMap<PoolId, SnapshotPoolParams> = BTreeMap::new();
+    for _ in 0..pool_params_n {
+        let pool = read_pool_id(bytes, o)?;
+        pool_params.insert(pool, read_snapshot_pool_params(bytes, o)?);
+    }
     Ok(StakeSnapshot {
         delegations,
         pool_stakes,
+        pool_params,
     })
 }
 
@@ -259,9 +330,9 @@ mod tests {
     fn make_stake_snapshot(seed: u8) -> StakeSnapshot {
         let mut s = StakeSnapshot::new();
         s.delegations
-            .insert(Hash28([seed; 28]), (pool(seed + 1), Coin(1_000)));
+            .insert(StakeCredential::KeyHash(Hash28([seed; 28])), (pool(seed + 1), Coin(1_000)));
         s.delegations
-            .insert(Hash28([seed + 1; 28]), (pool(seed + 2), Coin(2_000)));
+            .insert(StakeCredential::KeyHash(Hash28([seed + 1; 28])), (pool(seed + 2), Coin(2_000)));
         s.pool_stakes.insert(pool(seed + 1), Coin(1_000));
         s.pool_stakes.insert(pool(seed + 2), Coin(2_000));
         s

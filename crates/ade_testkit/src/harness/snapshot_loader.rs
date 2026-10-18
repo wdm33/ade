@@ -357,6 +357,7 @@ impl LoadedSnapshot {
         &self,
         snapshot_index: u32,
     ) -> Result<ade_ledger::epoch::StakeSnapshot, HarnessError> {
+        use ade_types::shelley::cert::StakeCredential;
         use ade_types::tx::{Coin, PoolId};
         use ade_types::Hash28;
         use std::collections::BTreeMap;
@@ -372,9 +373,12 @@ impl LoadedSnapshot {
             stake_map.insert(key, *stake);
         }
 
-        // Combine delegation + stake
-        let mut delegations: BTreeMap<Hash28, (PoolId, Coin)> = BTreeMap::new();
+        // Combine delegation + stake. GREEN: this loader's parsers drop the credential tag, and
+        // `load_delegation_state` registers every delegator as a KeyHash; the snapshot keys the same way
+        // so the two surfaces stay consistent.
+        let mut delegations: BTreeMap<StakeCredential, (PoolId, Coin)> = BTreeMap::new();
         let mut pool_stakes: BTreeMap<PoolId, Coin> = BTreeMap::new();
+        let mut delegated_to: BTreeMap<Hash28, PoolId> = BTreeMap::new();
 
         for (cred_hash, pool_hash) in &delegations_raw {
             let mut cred_bytes = [0u8; 28];
@@ -385,15 +389,53 @@ impl LoadedSnapshot {
             let stake = stake_map.get(&cred_bytes).copied().unwrap_or(0);
             let pool = PoolId(Hash28(pool_bytes));
 
-            delegations.insert(Hash28(cred_bytes), (pool.clone(), Coin(stake)));
+            delegations.insert(StakeCredential::KeyHash(Hash28(cred_bytes)), (pool.clone(), Coin(stake)));
+            delegated_to.insert(Hash28(cred_bytes), pool.clone());
 
             let entry = pool_stakes.entry(pool).or_insert(Coin(0));
             entry.0 = entry.0.saturating_add(stake);
         }
 
+        // LV-4: the snapshot's own pool parameters (this era's snapshot is array(3)[stake, delegations,
+        // poolParams]), frozen as the reward calculation reads them. Self-delegated owners = owners whose
+        // credential is delegated to this pool in this snapshot.
+        let mut pool_params = BTreeMap::new();
+        for (pool_hash, pledge, cost, margin_num, margin_den, reward_acct, owner_hashes) in
+            parse_snapshot_pool_params(&self.raw_cbor, snapshot_index)?
+        {
+            let mut pool_bytes = [0u8; 28];
+            pool_bytes.copy_from_slice(&pool_hash.0[..28]);
+            let pool_id = PoolId(Hash28(pool_bytes));
+            // The loader's KeyHash convention covers reward accounts too: `load_delegation_state`
+            // registers every account as a KeyHash, so a tagged script account would read as
+            // unregistered here and route its leader reward to the treasury -- a harness artifact.
+            let Some(reward_account) =
+                ade_ledger::epoch_accumulator::reward_account_credential(&reward_acct)
+                    .map(|c| StakeCredential::KeyHash(c.hash().clone()))
+            else {
+                continue;
+            };
+            let self_delegated_owners = owner_hashes
+                .iter()
+                .map(|h| Hash28(*h))
+                .filter(|owner| delegated_to.get(owner) == Some(&pool_id))
+                .collect();
+            pool_params.insert(
+                pool_id,
+                ade_ledger::epoch::SnapshotPoolParams {
+                    pledge: Coin(pledge),
+                    cost: Coin(cost),
+                    margin: (margin_num, margin_den),
+                    reward_account,
+                    self_delegated_owners,
+                },
+            );
+        }
+
         Ok(ade_ledger::epoch::StakeSnapshot {
             delegations,
             pool_stakes,
+            pool_params,
         })
     }
 
@@ -2301,7 +2343,7 @@ pub fn compute_drep_stake_distribution(
     for (cred, drep) in vote_delegations {
         // Look up this credential's stake from the go snapshot (Hash28-keyed
         // stake-distribution surface — a non-goal for discriminant fidelity).
-        let stake = go_snapshot.delegations.get(cred.hash())
+        let stake = go_snapshot.delegations.get(&ade_types::shelley::cert::StakeCredential::KeyHash(cred.hash().clone()))
             .map(|(_, coin)| coin.0)
             .unwrap_or(0);
         if stake > 0 {

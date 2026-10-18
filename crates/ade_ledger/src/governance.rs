@@ -44,7 +44,7 @@ pub fn derive_drep_voting_stake(
 ) -> DRepStakeDistribution {
     let mut out: DRepStakeDistribution = BTreeMap::new();
     for (cred, drep) in vote_delegations {
-        let stake = mark.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
+        let stake = mark.delegations.get(cred).map(|(_, c)| c.0).unwrap_or(0);
         if stake > 0 {
             *out.entry(drep.clone()).or_insert(0) += stake;
         }
@@ -606,6 +606,11 @@ pub enum GovernanceTerminal {
     /// CE-3d go-stake residual −343,260,172,883). Fail-closed on BOTH the accumulator and direct/full-ledger
     /// paths, zero mutation (CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION S1).
     BoundaryBaseStakeRequired { boundary_point: ade_types::SlotNo },
+    /// A pool produced blocks and holds go-snapshot stake, but the go snapshot carries no frozen parameters for
+    /// it. The reward calculation reads pool parameters ONLY from the go snapshot (LV-4, DC-EPOCH-44) — it never
+    /// falls back to the registrations current at the boundary, and never skips a pool that earned. cardano's
+    /// snapshot holds every pool registered at SNAP, so this is unreachable on a faithful snapshot.
+    RewardPoolParamsMissing { pool: ade_types::tx::PoolId, boundary_point: ade_types::SlotNo },
 }
 
 /// Canonical inputs to [`plan_conway_governance_epoch`] — all borrows, pure (no I/O, no ledger/accumulator handle).
@@ -2532,9 +2537,9 @@ mod drep_voting_stake_derivation_tests {
     fn mark_with(entries: &[(u8, u64)]) -> StakeSnapshot {
         let mut delegations = BTreeMap::new();
         for (b, coin) in entries {
-            delegations.insert(Hash28([*b; 28]), (PoolId(Hash28([0xEE; 28])), Coin(*coin)));
+            delegations.insert(key(*b), (PoolId(Hash28([0xEE; 28])), Coin(*coin)));
         }
-        StakeSnapshot { delegations, pool_stakes: BTreeMap::new() }
+        StakeSnapshot { delegations, pool_stakes: BTreeMap::new(), pool_params: BTreeMap::new() }
     }
 
     #[test]
@@ -2549,6 +2554,23 @@ mod drep_voting_stake_derivation_tests {
         assert_eq!(d.get(&drep_a), Some(&350), "DRep A = 100 + 250");
         assert_eq!(d.get(&drep_b), Some(&70));
         assert_eq!(d.len(), 2);
+    }
+
+    #[test]
+    fn a_script_voter_does_not_take_the_stake_of_a_key_credential_with_the_same_bytes() {
+        // LV-4 (DC-EPOCH-43): the mark holds only the KEY credential [0x07;28]; a SCRIPT credential with the
+        // same 28 bytes delegating its vote has no stake of its own and contributes nothing.
+        let drep_key = DRep::KeyHash(Hash28([0xAA; 28]));
+        let drep_script = DRep::KeyHash(Hash28([0xBB; 28]));
+        let vd: BTreeMap<StakeCredential, DRep> = [
+            (key(7), drep_key.clone()),
+            (StakeCredential::ScriptHash(Hash28([7; 28])), drep_script.clone()),
+        ]
+        .into_iter()
+        .collect();
+        let d = derive_drep_voting_stake(&vd, &mark_with(&[(7, 400)]));
+        assert_eq!(d.get(&drep_key), Some(&400));
+        assert_eq!(d.get(&drep_script), None, "the script credential has no mark stake");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 # SLICE LV-4 — a stake snapshot keeps what cardano's keeps: whole credentials and frozen pool parameters
 
-**Status:** ENTRY OBLIGATIONS ANSWERED 2026-10-17 (§4.1). Implementation next. This replaces the narrower "LV-4: key/script credential" slice named in
+**Status:** IMPLEMENTED 2026-10-17. Live 304→305 bar met (448 of 448 pools, §8). CE-LV4-12(b)–(d), the
+305→306 boundary, are still running live; DC-EPOCH-43/44 stay `partial` until they are in. This replaces the narrower "LV-4: key/script credential" slice named in
 the LV-2 record. The owner chose one combined slice, because both remaining reward defects have the
 same cause. No code yet.
 
@@ -255,6 +256,37 @@ loader fills `pool_params` from the same parse, so no change in those numbers is
    account. `stake`, `stakeRatio`, `numDelegators` and `selfDelegatedOwnersStake` can all be derived
    from the snapshot itself, so they are not stored and cannot disagree with it.
 
+### 4.3 Amendments made during implementation
+
+4. **The empty-owner pledge skip is gone at PV ≥ 4.** The frozen set is the *self-delegated* owners, so
+   "no owners listed" and "no owner delegated here" are now the same empty set. Keeping the skip would
+   have paid exactly the pool LV-3 stopped paying. cardano has no such skip: an empty set means owner
+   stake 0, and any positive pledge is unmet. The skip was a workaround for the corpus loader's
+   error-tolerant owner parse, and CE-LV4-13 measures what removing it does there. The pre-Mary path
+   (`protocol_major < 4`) is unchanged.
+5. **The v1 fingerprint is frozen, not moved.** `fingerprint_v1` is historical evidence only, so it
+   keeps its own copy of the pre-LV-4 snapshot encoding (`fingerprint_snapshots_v1`). Only the
+   production v2 component changes. The test that pinned "v1 and v2 differ only in the UTxO component"
+   now pins that they also differ in the snapshot component.
+6. **The byte pin for a full-state encoding is re-anchored, not dropped.** The pin in
+   `rvbp_live_path_reduced_dispatch.rs` stays anchored to the pre-P2 bytes, with LV-4's one substitution
+   spelled out: each snapshot gains an empty third map, and the enclosing byte string grows by 3.
+   Nothing else can move unnoticed.
+7. **Versions:** `EPOCH_ACCUMULATOR_SCHEMA_VERSION` 4 → 5 and snapshot framing `SCHEMA_VERSION` 2 → 3,
+   so an old blob is refused by its version and not by a shape error. A new test refuses a v4
+   accumulator. `ci_check_snapshot_pool_set_inclusion.sh` pinned the accumulator version at exactly 4;
+   it now requires ≥ 4, and its own rule (a v3 store fails closed) still holds.
+8. **The corpus loader keeps its KeyHash convention.** Its parsers drop the credential tag in 24 places,
+   and it registers every delegator as a key. Its snapshot keys the same way so the two surfaces agree.
+   It gains frozen pool parameters, built from each era's own snapshot by the ledger's
+   `reward_account_credential`.
+9. **The diagnostic nibble test now asserts the corrected behaviour.**
+   `reward_nibble_disagreement_is_diagnostic_not_terminal` keeps its name, which the registry and its
+   gate reference. A registration's account carries no network, so the observed nibble is the
+   manifest's, and a script tag is not reported as "network 1".
+10. **Untouched but retyped:** the legacy reward skeleton in `epoch.rs` (`compute_rewards`,
+    `retire_pools`) is called only from its own tests. It gets the type changes and nothing else.
+
 ---
 
 ## 5. MECHANICAL ACCEPTANCE CRITERIA
@@ -314,3 +346,50 @@ Each mutation is asserted applied, the named witness must fail, and the tree is 
 None at entry. If E7 finds a historical era whose snapshots carry no pool parameters, that
 comparison would need to be reclassified or fed another way. That choice would come back to the
 owner before it is made.
+
+---
+
+## 8. RESULTS — 2026-10-17
+
+### Live, fresh follower-only v10 bootstrap
+
+Snapshot 6009, local docker `cardano-node-preprod`, no operator keys. Binary sha256 `831554492ddf3b51…`,
+store `~/.cardano-live1/ade-preprod-v10`.
+
+| CE | result |
+|---|---|
+| seed | sealed NATIVE, `ssFee` 23,699,540,134 (unchanged from LV-2) |
+| **CE-LV4-11** | 304→305 on the sealed seed: **11,052 of 11,056** credentials equal the reference update, up from 11,051. `900fbcf7…7fedb` now matches. Reserves draw 7,422,111,617,574, exact. The rest are the LV-2 record's named residuals: two seed-point artifacts (only in the reference, together the +6,308,509 treasury difference), two credits outside the reward update (+1,000,000,000 and +500,000,000), and two 1,000,000,000 credits to credentials in no go pool |
+| **CE-LV4-12(a)** | live crossing 304→305, `pool_pot=28118802294396`. Sealed epoch-306 stake against the reference end-of-304 snapshot: **448 of 448 pools exact, total 1,626,474,372,102,448, denominator delta 0.** The v9 store was 11,802 short on one pool. The header issuer `0ed90e52…` matches |
+| CE-LV4-12(b)–(d) | the 305→306 boundary: pending, running live |
+
+CE-LV4-12(a) is also LV-2's CE-LV2-10(b).
+
+### Mechanical
+
+| | |
+|---|---|
+| CE-LV4-1…7, 9b | 8 integration tests (`lv4_snapshot_fidelity.rs`) and 4 unit tests, passing |
+| CE-LV4-8 | codec and fingerprint round-trip; v4 accumulator, v2 framing and v9 store refused; lock entry v10 recorded |
+| CE-LV4-10 | `ci/ci_check_snapshot_fidelity.sh` OK |
+| CE-LV4-13 | mainnet `epoch_oracle_comparison`: 26 pass and 1 pre-existing failure (`committee_oracle_mainnet_575_576_noop_agreement`), the same as the baseline at `4dfa6b0c`. One output differs: the diagnostic that swaps in *current* registration parameters now shows zero effect, which is LV-4's point. A first run also moved one Conway `deltaT2` by 816,261,323. That was a harness artifact: script reward accounts against the loader's key-only registrations. The loader now applies its key convention to reward accounts, and `deltaT2` equals the baseline exactly. Removing the empty-owner pledge skip changed no mainnet number |
+| suites | ade_ledger 1082, ade_node 645, ade_runtime 581 pass; ade_testkit builds |
+| gates | 47 of 277 fail, the same 47 as at the baseline. `ci_check_owner_stake_authority.sh` now requires the frozen owner set (DC-EPOCH-42 strengthened) |
+
+### Mutations (each asserted applied; tree restored byte-exact)
+
+| mutation | caught by |
+|---|---|
+| M1 apply falls back script → key | CE-LV4-2, the operator test, gate (c); **real data:** CE-LV4-11 back to 11,051 with `900fbcf7…` mismatched |
+| M2 reward loop reads `cert.pool.pools` | the LV-3 tests, the LV-4 tests, gate (b) |
+| M3 mark takes post-adoption params | the mark test, gate (d) |
+| M4 mark keys by bare hash | CE-LV4-1, gate (d) |
+| M5 missing-params terminal → `continue` | CE-LV4-6, gate (b) |
+| M6 operator from key projection | CE-LV4-5, gate (c) |
+| M7 import reads tag as network | CE-LV4-9b, gate (h) |
+| M8 store semantics left at 9 | lock gate, gate (g) |
+| M9 DRep stake by bare hash | CE-LV4-7, gate (e) |
+| M10 seed import skips the per-pool map | both decoder tests, gate (h) |
+
+For M2, `cargo test -p ade_ledger` stops at the first failing test binary, so the named list shows the
+LV-3 tests. The gate's own run of the LV-4 tests shows them failing as well.

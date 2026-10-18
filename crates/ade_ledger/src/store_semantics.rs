@@ -114,7 +114,16 @@
 /// refused, not repaired. Measured on preprod snapshot 6009 (seed at slot-in-epoch 127,027 of 304):
 /// the earlier binary logged `pool_pot=0` at 304→305 where cardano paid 416,110,584,109 to reward
 /// accounts, and a real preprod header was then rejected with `LeaderValueAboveThreshold`.
-pub const STORE_SEMANTICS_VERSION: u32 = 9;
+///
+/// Version 10 (LV-4, DC-EPOCH-43/44): a stake snapshot is keyed by the whole credential and carries each
+/// pool's reward parameters frozen when it was taken; the reward calculation reads pool parameters from
+/// the go snapshot only, and credits a reward to exactly the credential it was computed for. The cert-state
+/// import also stops reading a registration's reward-account tag as a network number. A v9 store's
+/// snapshots hold neither the tag nor any pool parameters, and its rewards were computed from current
+/// registrations — a pool that retired was not paid for its last blocks, and a script credential's reward
+/// could land on a key credential with the same bytes. It is refused, not repaired. Measured on preprod:
+/// 11,802 lovelace misdirected at 304→305; 42,082,928,795 left in reserves at 305→306.
+pub const STORE_SEMANTICS_VERSION: u32 = 10;
 
 /// A durable artifact that carries authoritative semantics and therefore must be version-marked.
 ///

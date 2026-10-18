@@ -56,6 +56,7 @@ pub fn form_mark_snapshot(stake: &StakeByPool) -> StakeSnapshot {
     StakeSnapshot {
         delegations: BTreeMap::new(),
         pool_stakes: stake.pool_stakes.clone(),
+        pool_params: BTreeMap::new(),
     }
 }
 

@@ -392,8 +392,8 @@ fn cre_s5_differential_report() {
     assert_eq!(go_total, 1_673_934_797_356_442, "POST-1341 reference go total (the certified snapshot)");
     // ISOLATION: the two governance-refund accounts are UNDELEGATED → absent from the go delegation set, so the
     // -500B governance refunds and the -343B go-stake undercount are on DISJOINT credential sets.
-    assert!(!go.delegations.contains_key(&acct1_hash), "acct1 is undelegated → absent from go (isolated from B3c)");
-    assert!(!go.delegations.contains_key(&acct2_hash), "acct2 is undelegated → absent from go (isolated from B3c)");
+    assert!(!go.delegations.contains_key(&ade_types::shelley::cert::StakeCredential::KeyHash(acct1_hash.clone())), "acct1 is undelegated → absent from go (isolated from B3c)");
+    assert!(!go.delegations.contains_key(&ade_types::shelley::cert::StakeCredential::KeyHash(acct2_hash.clone())), "acct2 is undelegated → absent from go (isolated from B3c)");
     eprintln!("\nITEM 5 — remaining B3c residual, ISOLATED from governance:");
     eprintln!("  remaining CE-3d gap = go-stake undercount -343,260,172,883 lovelace (~0.0205% uniform on base-UTxO");
     eprintln!("    stake of real delegated credentials in the reduced checkpoint) — a UTxO-component residual, NOT governance.");

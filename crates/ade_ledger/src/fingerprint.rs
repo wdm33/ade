@@ -93,7 +93,7 @@ pub fn fingerprint_v1(state: &LedgerState) -> LedgerFingerprint {
     let utxo = fingerprint_utxo(&state.utxo_state);
     let cert = fingerprint_cert_projection(&state.cert_state);
     let epoch = fingerprint_epoch(&state.epoch_state);
-    let snapshots = fingerprint_snapshots(&state.epoch_state.snapshots);
+    let snapshots = fingerprint_snapshots_v1(&state.epoch_state.snapshots);
     let pparams = fingerprint_pparams(&state.protocol_params, state.conway_deposit_params.as_ref());
     let governance = fingerprint_gov_projection(&state.gov_state);
     let combined = rollup(&[
@@ -469,6 +469,38 @@ fn fingerprint_snapshots(snapshots: &crate::epoch::EpochStakeSnapshots) -> Hash3
     blake2b_256(&buf)
 }
 
+/// The FROZEN v1 snapshot component: the pre-LV-4 encoding (`array(2)`, credential written as its bare
+/// 28 bytes, no pool parameters). v1 is historical evidence only; production (v2) uses
+/// [`fingerprint_snapshots`].
+fn fingerprint_snapshots_v1(snapshots: &crate::epoch::EpochStakeSnapshots) -> Hash32 {
+    let mut buf = Vec::new();
+    write_component_header(&mut buf, b"ade/fp/snapshots");
+    match snapshots {
+        crate::epoch::EpochStakeSnapshots::Authoritative(s) => {
+            write_array_canonical(&mut buf, 3);
+            for snap in [&s.mark.0, &s.set.0, &s.go.0] {
+                write_array_canonical(&mut buf, 2);
+                write_map_canonical(&mut buf, snap.delegations.len() as u64);
+                for (cred, (pool, coin)) in &snap.delegations {
+                    write_hash28(&mut buf, cred.hash());
+                    write_array_canonical(&mut buf, 2);
+                    write_pool_id(&mut buf, pool);
+                    write_coin(&mut buf, *coin);
+                }
+                write_map_canonical(&mut buf, snap.pool_stakes.len() as u64);
+                for (pool, coin) in &snap.pool_stakes {
+                    write_pool_id(&mut buf, pool);
+                    write_coin(&mut buf, *coin);
+                }
+            }
+        }
+        crate::epoch::EpochStakeSnapshots::ReducedUnavailable => {
+            write_component_header(&mut buf, b"ade/fp/snapshots/reduced-unavailable");
+        }
+    }
+    blake2b_256(&buf)
+}
+
 fn fingerprint_pparams(
     pp: &ProtocolParameters,
     conway_deposits: Option<&ConwayOnlyDepositParams>,
@@ -796,11 +828,14 @@ fn write_cert_pool_params(buf: &mut Vec<u8>, p: &CertPoolParams) {
     }
 }
 
+/// LV-4: `[delegations{tagged credential -> [pool, coin]}, pool_stakes, pool_params{pool -> [pledge, cost,
+/// [m_num, m_den], tagged reward account, [self-delegated owners]]}]`. A key and a script credential with the
+/// same bytes fingerprint differently, and so does any change to a frozen pool parameter.
 fn write_stake_snapshot(buf: &mut Vec<u8>, snap: &StakeSnapshot) {
-    write_array_canonical(buf, 2);
+    write_array_canonical(buf, 3);
     write_map_canonical(buf, snap.delegations.len() as u64);
     for (cred, (pool, coin)) in &snap.delegations {
-        write_hash28(buf, cred);
+        write_stake_credential(buf, cred);
         write_array_canonical(buf, 2);
         write_pool_id(buf, pool);
         write_coin(buf, *coin);
@@ -809,6 +844,21 @@ fn write_stake_snapshot(buf: &mut Vec<u8>, snap: &StakeSnapshot) {
     for (pool, coin) in &snap.pool_stakes {
         write_pool_id(buf, pool);
         write_coin(buf, *coin);
+    }
+    write_map_canonical(buf, snap.pool_params.len() as u64);
+    for (pool, pp) in &snap.pool_params {
+        write_pool_id(buf, pool);
+        write_array_canonical(buf, 5);
+        write_coin(buf, pp.pledge);
+        write_coin(buf, pp.cost);
+        write_array_canonical(buf, 2);
+        write_uint_canonical(buf, pp.margin.0);
+        write_uint_canonical(buf, pp.margin.1);
+        write_stake_credential(buf, &pp.reward_account);
+        write_array_canonical(buf, pp.self_delegated_owners.len() as u64);
+        for owner in &pp.self_delegated_owners {
+            write_hash28(buf, owner);
+        }
     }
 }
 
@@ -1053,7 +1103,7 @@ mod tests {
         let mut snap = StakeSnapshot::new();
         snap.pool_stakes.insert(PoolId(Hash28([0x44; 28])), Coin(1_000));
         snap.delegations
-            .insert(Hash28([0x33; 28]), (PoolId(Hash28([0x44; 28])), Coin(1_000)));
+            .insert(StakeCredential::KeyHash(Hash28([0x33; 28])), (PoolId(Hash28([0x44; 28])), Coin(1_000)));
         let auth_populated = fingerprint_snapshots(&EpochStakeSnapshots::Authoritative(SnapshotState {
             mark: MarkSnapshot(snap.clone()),
             set: SetSnapshot(snap.clone()),
@@ -1143,7 +1193,9 @@ mod tests {
     #[test]
     fn v1_and_v2_utxo_components_differ_only_the_utxo_changes() {
         // The v2 UTxO component is a DIFFERENT construction -- v1 != v2, never
-        // silently interchangeable -- and ONLY the utxo component changes.
+        // silently interchangeable. Besides the utxo component, ONLY the snapshot
+        // component differs: LV-4 moved v2's snapshot encoding (whole credentials,
+        // frozen pool parameters) while v1 keeps its frozen historical form.
         let mut s = LedgerState::new(CardanoEra::Shelley);
         s.utxo_state.utxos.insert(
             TxIn { tx_hash: Hash32([0x07; 32]), index: 1 },
@@ -1156,7 +1208,7 @@ mod tests {
         assert_eq!(f1.era, f2.era);
         assert_eq!(f1.cert, f2.cert);
         assert_eq!(f1.epoch, f2.epoch);
-        assert_eq!(f1.snapshots, f2.snapshots);
+        assert_ne!(f1.snapshots, f2.snapshots, "LV-4: v2 snapshot encoding is not v1's");
         assert_eq!(f1.pparams, f2.pparams);
         assert_eq!(f1.governance, f2.governance);
     }

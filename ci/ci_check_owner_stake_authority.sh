@@ -62,7 +62,7 @@ if [[ -z "$EPOCH_PROD" || -z "$RULES_PROD" ]]; then
 fi
 
 # --- (a) the single definition, filtered by delegation target -------------------
-DEF_FN="$(awk '/pub fn self_delegated_owner_stake\(/{c=1} c{print} c&&/^    }$/{exit}' <<<"$EPOCH_PROD")"
+DEF_FN="$(awk '/pub fn self_delegated_owner_stake(<[^>]*>)?\(/{c=1} c{print} c&&/^    }$/{exit}' <<<"$EPOCH_PROD")"
 if [[ -z "$DEF_FN" ]]; then
     fail "StakeSnapshot::self_delegated_owner_stake not found in $EPOCH -- the single definition is gone"
 else
@@ -73,7 +73,7 @@ else
     grep -qE 'pool_stakes' <<<"$DEF_FN" \
         && fail "self_delegated_owner_stake reads pool_stakes -- owner stake is a per-credential fact"
 fi
-DEF_COUNT="$(grep -cE 'fn self_delegated_owner_stake\(' <<<"$EPOCH_PROD" || true)"
+DEF_COUNT="$(grep -cE 'fn self_delegated_owner_stake(<[^>]*>)?\(' <<<"$EPOCH_PROD" || true)"
 (( DEF_COUNT == 1 )) || fail "$DEF_COUNT definitions of self_delegated_owner_stake in $EPOCH, expected exactly 1"
 
 # --- (b) called once in the reward path, result bound ---------------------------
@@ -83,8 +83,10 @@ if [[ -z "$REWARD_FN" ]]; then
 else
     CALLS="$(grep -cE '\.self_delegated_owner_stake\(' <<<"$REWARD_FN" || true)"
     (( CALLS == 1 )) || fail "the reward path calls self_delegated_owner_stake $CALLS times, expected exactly 1 (one value feeds both sites)"
-    grep -qE 'go\.0\.self_delegated_owner_stake\(pool_id, &params\.owners\)' <<<"$REWARD_FN" \
-        || fail "the reward path does not take the owner stake from the GO snapshot for this pool's owners"
+    # LV-4 strengthened: the owners are the self-delegated set FROZEN in the go snapshot's pool parameters
+    # (cardano's spssSelfDelegatedOwners), never the current registration's owner list.
+    grep -qE 'go\.0\.self_delegated_owner_stake\(pool_id, &params\.self_delegated_owners\)' <<<"$REWARD_FN" \
+        || fail "the reward path does not take the owner stake from the GO snapshot for the owners frozen in it"
 
     # --- (c) both sites read the one binding -----------------------------------
     grep -qE 'params\.pledge\.0 > self_delegated_owner_stake' <<<"$REWARD_FN" \

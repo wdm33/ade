@@ -55,8 +55,8 @@ grep -q 'DC-EPOCH-24' "$REG" || fail "(6) DC-EPOCH-24 is not in the invariant re
 #     0-stake pools) -- fails closed (UnknownVersion) on decode. A warm-start never RELOADS a stale
 #     snapshot-inclusion semantics; persisted authority has one replay meaning; re-bootstrap is the only
 #     migration. This is the persisted-side enforcement of DC-EPOCH-24.
-grep -q 'pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = 4' "$ACC" \
-  || fail "(7) EPOCH_ACCUMULATOR_SCHEMA_VERSION is not 4 -- a pre-C v3 store must fail closed"
+grep -Eq 'pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = ([4-9]|[1-9][0-9]+);' "$ACC" \
+  || fail "(7) EPOCH_ACCUMULATOR_SCHEMA_VERSION is not >= 4 -- a pre-C v3 store must fail closed (LV-4 moved it to 5)"
 grep -q 'fn codec_rejects_pre_c_v3_store_rebootstrap_required' "$ACC" \
   || fail "(7) the pre-C v3 fail-closed (re-bootstrap required) test is missing"
 

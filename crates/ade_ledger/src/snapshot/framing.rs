@@ -10,8 +10,8 @@
 //! Wraps `(LedgerState, PraosChainDepState)` as a single
 //! byte payload with:
 //!
-//! * a versioned schema tag (`SCHEMA_VERSION == 2`; v2 = the embedded cert state is the
-//!   6-field encoding with future_pools, ECA-0a) — unknown versions (incl. an old v1
+//! * a versioned schema tag (`SCHEMA_VERSION == 3`; v2 = the embedded cert state is the
+//!   6-field encoding with future_pools, ECA-0a; v3 = LV-4 stake snapshots) — unknown versions (incl. an old v1
 //!   persistent-cache blob) reject before any payload work (DC-STORE-09);
 //! * the source state's combined `LedgerFingerprint.combined` hash
 //!   embedded inline — verified after decode (DC-STORE-08).
@@ -48,7 +48,9 @@ use super::ledger::{decode_ledger_state, encode_ledger_state};
 // v2 (ECA-0a): the embedded LedgerState's cert state is the 6-field encoding (adds future_pools).
 // The bump makes an old v1 persistent-cache blob reject as UnknownVersion (clean) rather than as a
 // structural ArrayLengthMismatch from the embedded cert-state decode.
-pub const SCHEMA_VERSION: u32 = 2;
+// v3 (LV-4): the embedded stake snapshots carry whole credentials and frozen pool parameters
+// (`array(3)`); a v2 blob rejects as UnknownVersion.
+pub const SCHEMA_VERSION: u32 = 3;
 
 const FIELDS: u64 = 4;
 
@@ -232,14 +234,14 @@ mod tests {
         let cd = sample_chain_dep();
         let mut bytes = encode_snapshot(&l, &cd).expect("encode");
         // Array header is 0x84 (definite array(4) inline); version is the next
-        // byte. Patch SCHEMA_VERSION=2 (0x02) → an unknown 3 (0x03).
+        // byte. Patch SCHEMA_VERSION=3 (0x03) → the pre-LV-4 2 (0x02), which must be refused.
         assert_eq!(bytes[0], 0x84);
-        assert_eq!(bytes[1], 0x02);
-        bytes[1] = 0x03;
+        assert_eq!(bytes[1], 0x03);
+        bytes[1] = 0x02;
         match decode_snapshot(&bytes) {
             Err(SnapshotDecodeError::UnknownVersion { expected, found }) => {
                 assert_eq!(expected, SCHEMA_VERSION);
-                assert_eq!(found, 3);
+                assert_eq!(found, 2);
             }
             other => panic!("expected UnknownVersion, got {other:?}"),
         }

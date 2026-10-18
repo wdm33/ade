@@ -15,7 +15,7 @@
 
 use ade_ledger::delegation::PoolParams;
 use ade_ledger::epoch::{GoSnapshot, StakeSnapshot};
-use ade_ledger::epoch_accumulator::BoundaryBaseStake;
+use ade_ledger::epoch_accumulator::{snapshot_pool_params, BoundaryBaseStake};
 use ade_ledger::rational::Rational;
 use ade_ledger::rules::{apply_epoch_boundary_with_registrations, EpochBoundaryAccounting};
 use ade_ledger::state::LedgerState;
@@ -59,7 +59,7 @@ fn pool_params(id: u8, reward_acct: u8, pledge: u64, owners: &[u8]) -> PoolParam
 fn go_snapshot(delegations: &[(u8, u8, u64)]) -> StakeSnapshot {
     let mut snap = StakeSnapshot::new();
     for (cred, pool_byte, stake) in delegations {
-        snap.delegations.insert(h(*cred), (pool(*pool_byte), Coin(*stake)));
+        snap.delegations.insert(StakeCredential::KeyHash(h(*cred)), (pool(*pool_byte), Coin(*stake)));
         let entry = snap.pool_stakes.entry(pool(*pool_byte)).or_insert(Coin(0));
         entry.0 += *stake;
     }
@@ -105,6 +105,15 @@ fn boundary(
     cert.delegation
         .registrations
         .insert(StakeCredential::KeyHash(h(REWARD_ACCT_P)), Coin(2 * ADA));
+
+    // LV-4: both pools were registered when the go snapshot was taken; their parameters, and the owners
+    // delegated to them in that snapshot, are frozen in it.
+    let go_delegations: BTreeMap<StakeCredential, PoolId> = delegations
+        .iter()
+        .map(|(cred, pool_byte, _)| (StakeCredential::KeyHash(h(*cred)), pool(*pool_byte)))
+        .collect();
+    let frozen = snapshot_pool_params(&cert.pool.pools, &go_delegations);
+    state.epoch_state.snapshots.as_authoritative_mut().unwrap().go.0.pool_params = frozen;
 
     let base = BoundaryBaseStake {
         boundary_point: SlotNo(0),

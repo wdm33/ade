@@ -174,9 +174,9 @@ fn the_credential_side_sum_includes_stake_the_membership_filter_would_drop() {
     // Two credentials delegating to two different pools. Only ONE pool will survive the VRF
     // intersection, but cardano's sumAllStake folds the credential map regardless.
     snap.delegations
-        .insert(pid(0xAA), (PoolId(pid(0x01)), Coin(700)));
+        .insert(ade_types::shelley::cert::StakeCredential::KeyHash(pid(0xAA)), (PoolId(pid(0x01)), Coin(700)));
     snap.delegations
-        .insert(pid(0xBB), (PoolId(pid(0x02)), Coin(300)));
+        .insert(ade_types::shelley::cert::StakeCredential::KeyHash(pid(0xBB)), (PoolId(pid(0x02)), Coin(300)));
     snap.pool_stakes.insert(PoolId(pid(0x01)), Coin(700));
     snap.pool_stakes.insert(PoolId(pid(0x02)), Coin(300));
 

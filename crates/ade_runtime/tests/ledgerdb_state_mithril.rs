@@ -33,12 +33,12 @@ fn decode_verified_mithril_ledger_state() {
     eprintln!("Mithril ledger snapshot slot {slot}, state {} bytes", state.len());
     // Discover the snapshot's own NES epoch (the binding authority — a wrong manifest epoch returns
     // the decoded one fail-closed; the filename slot is NOT used as the authority).
-    let nes_epoch = match probe_ledgerdb_state(&state, u64::MAX) {
+    let nes_epoch = match probe_ledgerdb_state(&state, u64::MAX, 2) {
         Err(LedgerDbStateError::EpochMismatch { decoded_epoch, .. }) => decoded_epoch,
         other => panic!("epoch discovery unexpected: {other:?}"),
     };
     eprintln!("decoded NES epoch (binding authority, not the filename slot {slot}): {nes_epoch}");
-    let p = probe_ledgerdb_state(&state, nes_epoch).expect("decode mithril state");
+    let p = probe_ledgerdb_state(&state, nes_epoch, 2).expect("decode mithril state");
     eprintln!("MITHRIL PROBE OK: {p:#?}");
     assert_eq!(p.era_index, 6, "current era is Conway");
     assert_eq!(
@@ -48,7 +48,7 @@ fn decode_verified_mithril_ledger_state() {
     assert!(p.active_pool_count > 50, "expected real pools");
     assert!(p.registration_count > 500, "expected real registrations");
     // determinism: same bytes + same epoch -> byte-identical canonical commitment.
-    let p2 = probe_ledgerdb_state(&state, nes_epoch).unwrap();
+    let p2 = probe_ledgerdb_state(&state, nes_epoch, 2).unwrap();
     assert_eq!(
         p.cert_state_commitment, p2.cert_state_commitment,
         "deterministic canonical CertState commitment"

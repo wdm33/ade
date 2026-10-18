@@ -191,9 +191,14 @@ fn read_credential(d: &[u8], o: &mut usize) -> R<StakeCredential> {
 }
 
 /// Decode one `PoolParams` value (the map VALUE; the pool id is the map key). The on-wire array is
-/// `[vrf(32), pledge, cost, margin(tag30 [n,d]), rewardAcct[net,hash28], owners(set), relays,
-/// metadata, …]`; Ade keeps the leadership-relevant prefix.
-fn read_pool_params(d: &[u8], o: &mut usize, pool_id: PoolId) -> R<PoolParams> {
+/// `[vrf(32), pledge, cost, margin(tag30 [n,d]), accountId = credential[tag, hash28], owners(set),
+/// relays, metadata, …]`; Ade keeps the leadership-relevant prefix.
+///
+/// LV-4 (E4): the account is a CREDENTIAL — `[0, h]` key, `[1, h]` script — and carries no network.
+/// It was once read as `[network, hash]`, which turned a script reward account into a key one and put
+/// the tag in the network nibble. The 29-byte account is rebuilt from the real tag (header bit 0x10)
+/// and the manifest-derived `network_id`.
+fn read_pool_params(d: &[u8], o: &mut usize, pool_id: PoolId, network_id: u8) -> R<PoolParams> {
     let n = array_len(d, o, "poolparams")?;
     if n < 6 {
         return Err(malformed(format!("poolparams arity {n} < 6")));
@@ -212,13 +217,14 @@ fn read_pool_params(d: &[u8], o: &mut usize, pool_id: PoolId) -> R<PoolParams> {
     expect_array(d, o, 2, "poolparams.margin")?;
     let mnum = read_u64(d, o, "margin.num")?;
     let mden = read_u64(d, o, "margin.den")?;
-    // reward account: array(2)[networkByte, credHash28] -> 29-byte stake address.
-    expect_array(d, o, 2, "poolparams.rewardAcct")?;
-    let net = read_u64(d, o, "rewardAcct.net")?;
-    let rcred = read_fixed_bytes(d, o, 28, "rewardAcct.hash")?;
+    let account = read_credential(d, o)?;
+    let (script_bit, rcred) = match &account {
+        StakeCredential::KeyHash(h) => (0x00u8, h),
+        StakeCredential::ScriptHash(h) => (0x10u8, h),
+    };
     let mut reward_account = Vec::with_capacity(29);
-    reward_account.push(0xe0u8 | ((net as u8) & 0x0f)); // staking key-hash header | network
-    reward_account.extend_from_slice(&rcred);
+    reward_account.push(0xe0u8 | script_bit | (network_id & 0x0f));
+    reward_account.extend_from_slice(&rcred.0);
     // owners: a set (CBOR tag 258) of key hashes, or a plain array.
     let owners = read_hash28_set(d, o, "poolparams.owners")?;
     // remaining fields (relays, metadata, deposit, …) are not leadership-relevant: skip them.
@@ -529,39 +535,105 @@ mod tip_tests {
         assert!(decode_ledgerdb_tip(&s).is_err());
     }
 
-    /// CE-3d acceptance #1 + #3 (hermetic): a SnapShot's combined `ssStake` (cred -> [coin, pool])
-    /// decodes to the full `StakeSnapshot` (delegations + `calculatePoolDistr` pool_stakes), and the
-    /// result round-trips through the accumulator's `epoch_state` codec byte-identically (restart).
+    /// LV-4 test encoder for one cardano `SnapShot`: `ssStake` entries `(tag, cred byte, coin, pool byte)` and
+    /// `ssStakePoolsSnapShot` entries `(pool byte, stake, owners, owners stake, pledge, cost, account tag, account
+    /// byte)`, each pool entry in the array(10) layout read by `read_stake_snapshot_full`.
+    #[allow(clippy::type_complexity)]
+    fn lv4_snapshot_bytes(
+        stake: &[(u64, u8, u64, u8)],
+        pools: &[(u8, u64, &[u8], u64, u64, u64, u64, u8)],
+    ) -> Vec<u8> {
+        use ade_codec::cbor::{
+            write_array_header, write_bytes_canonical, write_map_header, write_tag, write_uint_canonical,
+            ContainerEncoding, IntWidth,
+        };
+        let arr = |b: &mut Vec<u8>, n: u64| write_array_header(b, ContainerEncoding::Definite(n, IntWidth::Inline));
+        let mut b = Vec::new();
+        arr(&mut b, 2);
+        write_map_header(&mut b, ContainerEncoding::Definite(stake.len() as u64, IntWidth::Inline));
+        for (tag, cred, coin, pool) in stake {
+            arr(&mut b, 2);
+            write_uint_canonical(&mut b, *tag);
+            write_bytes_canonical(&mut b, &[*cred; 28]);
+            arr(&mut b, 2);
+            write_uint_canonical(&mut b, *coin);
+            write_bytes_canonical(&mut b, &[*pool; 28]);
+        }
+        write_map_header(&mut b, ContainerEncoding::Definite(pools.len() as u64, IntWidth::Inline));
+        for (pool, pstake, owners, owners_stake, pledge, cost, acct_tag, acct) in pools {
+            write_bytes_canonical(&mut b, &[*pool; 28]);
+            arr(&mut b, 10);
+            write_uint_canonical(&mut b, *pstake);
+            write_tag(&mut b, 30, IntWidth::I8);
+            arr(&mut b, 2);
+            write_uint_canonical(&mut b, *pstake);
+            write_uint_canonical(&mut b, 1_000_000);
+            write_tag(&mut b, 258, IntWidth::I16);
+            arr(&mut b, owners.len() as u64);
+            for o in owners.iter() {
+                write_bytes_canonical(&mut b, &[*o; 28]);
+            }
+            write_uint_canonical(&mut b, *owners_stake);
+            write_bytes_canonical(&mut b, &[0x77; 32]);
+            write_uint_canonical(&mut b, *pledge);
+            write_uint_canonical(&mut b, *cost);
+            write_tag(&mut b, 30, IntWidth::I8);
+            arr(&mut b, 2);
+            write_uint_canonical(&mut b, 1);
+            write_uint_canonical(&mut b, 20);
+            write_uint_canonical(&mut b, 3);
+            arr(&mut b, 2);
+            write_uint_canonical(&mut b, *acct_tag);
+            write_bytes_canonical(&mut b, &[*acct; 28]);
+        }
+        b
+    }
+
+    /// CE-3d acceptance #1 + #3 and LV-4 CE-LV4-9 (hermetic): a SnapShot's combined `ssStake`
+    /// (cred -> [coin, pool]) decodes to the full `StakeSnapshot` WITH credential tags, the per-pool map to frozen
+    /// parameters (including a zero-stake pool and a script reward account), and the result round-trips through
+    /// the accumulator's `epoch_state` codec byte-identically (restart).
     #[test]
     fn read_stake_snapshot_full_decodes_combined_stake_and_delegation() {
-        // SnapShot = array(2)[ ssStake: map(cred -> [coin, pool]), ssPoolParams: map(0) ].
-        // aa,bb -> pool11 (aggregate to 3000); cc -> pool22 (500). ssPoolParams skipped.
-        let mut s: Vec<u8> = vec![0x82, 0xa3]; // SnapShot a(2) ; ssStake map(3)
-        let mut entry = |cred: u8, hi: u8, lo: u8, pool: u8| {
-            s.extend_from_slice(&[0x82, 0x00, 0x58, 0x1c]); // key cred = a(2)[tag0, bytes(28)]
-            s.extend_from_slice(&[cred; 28]);
-            s.extend_from_slice(&[0x82, 0x19, hi, lo, 0x58, 0x1c]); // val a(2)[coin u16, bytes(28) pool]
-            s.extend_from_slice(&[pool; 28]);
-        };
-        entry(0xaa, 0x03, 0xe8, 0x11); // 1000 -> pool11
-        entry(0xbb, 0x07, 0xd0, 0x11); // 2000 -> pool11
-        entry(0xcc, 0x01, 0xf4, 0x22); // 500  -> pool22
-        s.push(0xa0); // ssPoolParams map(0) -- skipped
-
+        // aa (key), bb (key) -> pool11 (3000); cc (SCRIPT) and cc (KEY) -> pool22 (500 + 40).
+        // pool11: owner aa delegated here; pool22: script reward account; pool33: registered, no stake.
+        let s = lv4_snapshot_bytes(
+            &[(0, 0xaa, 1000, 0x11), (0, 0xbb, 2000, 0x11), (1, 0xcc, 500, 0x22), (0, 0xcc, 40, 0x22)],
+            &[
+                (0x11, 3000, &[0xaa], 1000, 900, 340, 0, 0xaa),
+                (0x22, 540, &[], 0, 0, 170, 1, 0xdd),
+                (0x33, 0, &[], 0, 5, 170, 0, 0xee),
+            ],
+        );
         let mut o = 0usize;
         let snap = read_stake_snapshot_full(&s, &mut o, "test").expect("decode");
-        assert_eq!(o, s.len(), "consumes the whole SnapShot (ssStake + skipped ssPoolParams)");
-        assert_eq!(snap.delegations.len(), 3);
+        assert_eq!(o, s.len(), "consumes the whole SnapShot");
+        assert_eq!(snap.delegations.len(), 4, "the key and the script credential cc are two entries");
         assert_eq!(
-            snap.delegations.get(&Hash28([0xaa; 28])),
+            snap.delegations.get(&StakeCredential::KeyHash(Hash28([0xaa; 28]))),
             Some(&(PoolId(Hash28([0x11; 28])), Coin(1000)))
         );
         assert_eq!(
-            snap.delegations.get(&Hash28([0xcc; 28])),
+            snap.delegations.get(&StakeCredential::ScriptHash(Hash28([0xcc; 28]))),
             Some(&(PoolId(Hash28([0x22; 28])), Coin(500)))
         );
+        assert_eq!(
+            snap.delegations.get(&StakeCredential::KeyHash(Hash28([0xcc; 28]))),
+            Some(&(PoolId(Hash28([0x22; 28])), Coin(40)))
+        );
         assert_eq!(snap.pool_stakes.get(&PoolId(Hash28([0x11; 28]))), Some(&Coin(3000)));
-        assert_eq!(snap.pool_stakes.get(&PoolId(Hash28([0x22; 28]))), Some(&Coin(500)));
+        assert_eq!(snap.pool_stakes.get(&PoolId(Hash28([0x22; 28]))), Some(&Coin(540)));
+        assert_eq!(snap.total_active_stake(), 3540);
+        assert_eq!(snap.pool_params.len(), 3, "every registered pool, including the zero-stake one");
+        let p11 = &snap.pool_params[&PoolId(Hash28([0x11; 28]))];
+        assert_eq!((p11.pledge, p11.cost, p11.margin), (Coin(900), Coin(340), (1, 20)));
+        assert_eq!(p11.reward_account, StakeCredential::KeyHash(Hash28([0xaa; 28])));
+        assert_eq!(p11.self_delegated_owners, [Hash28([0xaa; 28])].into_iter().collect());
+        assert_eq!(
+            snap.pool_params[&PoolId(Hash28([0x22; 28]))].reward_account,
+            StakeCredential::ScriptHash(Hash28([0xdd; 28])),
+            "a script reward account keeps its tag"
+        );
 
         // Acceptance #3: the snapshots survive the accumulator's encode/decode byte-identically.
         use crate::epoch::{GoSnapshot, MarkSnapshot, SetSnapshot, SnapshotState};
@@ -578,6 +650,64 @@ mod tip_tests {
         assert_eq!(rt_snaps.go.0, snap, "go survives encode/decode byte-identically");
         assert_eq!(rt_snaps.mark.0, snap);
         assert_eq!(rt_snaps.set.0, snap);
+    }
+
+    /// LV-4: the per-pool entry's derivable values are cross-checked, and a staked pool with no entry is
+    /// terminal — never silently accepted.
+    #[test]
+    fn read_stake_snapshot_full_refuses_an_entry_that_disagrees_with_its_snapshot() {
+        let stake = [(0u64, 0xaau8, 1000u64, 0x11u8)];
+        let ok = lv4_snapshot_bytes(&stake, &[(0x11, 1000, &[0xaa], 1000, 1, 1, 0, 0xaa)]);
+        assert!(read_stake_snapshot_full(&ok, &mut 0, "test").is_ok());
+        let wrong_stake = lv4_snapshot_bytes(&stake, &[(0x11, 999, &[0xaa], 1000, 1, 1, 0, 0xaa)]);
+        assert!(read_stake_snapshot_full(&wrong_stake, &mut 0, "test").is_err(), "pool stake != ssStake sum");
+        let wrong_owners = lv4_snapshot_bytes(&stake, &[(0x11, 1000, &[0xaa], 7, 1, 1, 0, 0xaa)]);
+        assert!(read_stake_snapshot_full(&wrong_owners, &mut 0, "test").is_err(), "owner stake != derived");
+        let missing = lv4_snapshot_bytes(&stake, &[(0x99, 0, &[], 0, 1, 1, 0, 0xaa)]);
+        assert!(read_stake_snapshot_full(&missing, &mut 0, "test").is_err(), "staked pool without parameters");
+    }
+
+    /// LV-4 CE-LV4-9b (E4): a registration's reward account is a CREDENTIAL `[tag, hash]`, not
+    /// `[network, hash]`. `[1, h]` is a script account, `[0, h]` a key account, and the network nibble is the
+    /// manifest's — never the tag.
+    #[test]
+    fn a_registration_reward_account_tag_is_the_credential_kind_not_the_network() {
+        use ade_codec::cbor::{
+            write_array_header, write_bytes_canonical, write_tag, write_uint_canonical, ContainerEncoding,
+            IntWidth,
+        };
+        let params = |acct_tag: u64| {
+            let arr = |b: &mut Vec<u8>, n: u64| {
+                write_array_header(b, ContainerEncoding::Definite(n, IntWidth::Inline))
+            };
+            let mut b = Vec::new();
+            arr(&mut b, 6);
+            write_bytes_canonical(&mut b, &[0x55; 32]);
+            write_uint_canonical(&mut b, 100);
+            write_uint_canonical(&mut b, 340);
+            write_tag(&mut b, 30, IntWidth::I8);
+            arr(&mut b, 2);
+            write_uint_canonical(&mut b, 1);
+            write_uint_canonical(&mut b, 1);
+            arr(&mut b, 2);
+            write_uint_canonical(&mut b, acct_tag);
+            write_bytes_canonical(&mut b, &[0x97; 28]);
+            arr(&mut b, 0);
+            b
+        };
+        let pool = PoolId(Hash28([0xcb; 28]));
+        let script = read_pool_params(&params(1), &mut 0, pool.clone(), 0).expect("decode");
+        assert_eq!(script.reward_account[0], 0xf0, "script header, testnet");
+        assert_eq!(
+            crate::epoch_accumulator::reward_account_credential(&script.reward_account),
+            Some(StakeCredential::ScriptHash(Hash28([0x97; 28])))
+        );
+        let key_mainnet = read_pool_params(&params(0), &mut 0, pool, 1).expect("decode");
+        assert_eq!(key_mainnet.reward_account[0], 0xe1, "key header, network from the manifest");
+        assert_eq!(
+            crate::epoch_accumulator::reward_account_credential(&key_mainnet.reward_account),
+            Some(StakeCredential::KeyHash(Hash28([0x97; 28])))
+        );
     }
 
     /// CE-3d fail-closed: a structurally short SnapShot is TERMINAL (never empty-substituted).
@@ -1057,7 +1187,12 @@ fn extract_praos_nonces_v2(hs: &[u8]) -> R<PraosNonces> {
 
 /// Decode the V2 LedgerDB `state` CBOR into the Stage-1 probe. `manifest_epoch` is the epoch implied
 /// by the verified Mithril-certified point (the authority); the decoded epoch is cross-checked.
-pub fn probe_ledgerdb_state(state_cbor: &[u8], manifest_epoch: u64) -> R<LedgerDbStateProbe> {
+pub fn probe_ledgerdb_state(
+    state_cbor: &[u8],
+    manifest_epoch: u64,
+    manifest_network_magic: u32,
+) -> R<LedgerDbStateProbe> {
+    let network_id = network_id_from_magic(manifest_network_magic);
     let d = state_cbor;
     let o = &mut 0usize;
     // top: array(2)[version, [telescope, headerState]]
@@ -1089,7 +1224,7 @@ pub fn probe_ledgerdb_state(state_cbor: &[u8], manifest_epoch: u64) -> R<LedgerD
     skip_item(d, o)?; // accountState
     // LedgerState = array(2)[CertState, UTxOState]
     expect_array(d, o, 2, "LedgerState")?;
-    let (pool, delegation, _vote_delegations) = read_cert_state(d, o)?;
+    let (pool, delegation, _vote_delegations) = read_cert_state(d, o, network_id)?;
     skip_item(d, o)?; // UTxOState (the empty UTxO + the incremental stake distr; Stage 2 reads `tables`)
     skip_item(d, o)?; // EpochState.snapshots
     skip_item(d, o)?; // EpochState.nonMyopic
@@ -1145,13 +1280,17 @@ pub fn probe_ledgerdb_state(state_cbor: &[u8], manifest_epoch: u64) -> R<LedgerD
 /// Decode the CertState (LedgerState[0]) = array(3)[VState, PState, DState] -> (PoolState,
 /// DelegationState, BootstrapGovImport). The VState yields the DRep-expiry + committee-hot-key import (CRE
 /// S1 part 2b); the DState UMap yields the DRep vote-delegation baseline (part 2a).
-fn read_cert_state(d: &[u8], o: &mut usize) -> R<(PoolState, DelegationState, BootstrapGovImport)> {
+fn read_cert_state(
+    d: &[u8],
+    o: &mut usize,
+    network_id: u8,
+) -> R<(PoolState, DelegationState, BootstrapGovImport)> {
     expect_array(d, o, 3, "CertState")?;
     let (drep_expiry, committee_hot_keys, num_dormant_epochs) = read_vstate(d, o)?; // VState
     // PState = array(4)[?, psStakePoolParams(28B->PoolParams), psFutureStakePoolParams, psRetiring]
     expect_array(d, o, 4, "PState")?;
     skip_item(d, o)?; // PState[0] (32-byte-key map; not the active pool params)
-    let pools = read_pool_map(d, o)?;
+    let pools = read_pool_map(d, o, network_id)?;
     // P1: psFutureStakePoolParams carries the CERTIFICATE's CDDL form, NOT the internal form the
     // active map uses. Sharing `read_pool_map` here decoded fine on preview only because preview
     // keeps this map EMPTY; preprod has one staged re-registration and it failed closed at bootstrap.
@@ -1270,11 +1409,11 @@ fn read_future_pool_map(d: &[u8], o: &mut usize) -> R<BTreeMap<PoolId, PoolParam
 }
 
 /// Decode a `Map PoolId PoolParams` (28-byte pool-id key -> PoolParams array).
-fn read_pool_map(d: &[u8], o: &mut usize) -> R<BTreeMap<PoolId, PoolParams>> {
+fn read_pool_map(d: &[u8], o: &mut usize, network_id: u8) -> R<BTreeMap<PoolId, PoolParams>> {
     let mut out = BTreeMap::new();
     map_each(d, o, "poolMap", |o| {
         let pid = PoolId(hash28(read_fixed_bytes(d, o, 28, "poolMap.key")?));
-        let pp = read_pool_params(d, o, pid.clone())?;
+        let pp = read_pool_params(d, o, pid.clone(), network_id)?;
         out.insert(pid, pp);
         Ok(())
     })?;
@@ -1631,41 +1770,94 @@ pub struct NativeSnapshotNonUtxoState {
 }
 
 /// Decode a cardano `SnapShot = array(2)[ssStake: map(StakeCredential -> [Coin, PoolId]),
-/// ssPoolParams: map(PoolId -> PoolParams)]` (stake + delegation COMBINED in ssStake, this ledger
-/// version) into Ade's `StakeSnapshot`: `delegations` = credential-hash -> (pool, coin); `pool_stakes`
-/// = the `calculatePoolDistr` per-pool sum. `ssPoolParams` is SKIPPED — pool params live in the durable
-/// cert state, and this version's ssPoolParams is not vrf-first; the per-pool VRF comes from the
-/// cert-state registrations (the mark<->nesPd VRF cross-check, see [`derive_mark_pool_distr`]). Faithful
-/// to the certified snapshot ALONE — never the UTxO checkpoint, a live capture, nesPd, window-replay,
-/// or an oracle. A malformed / short SnapShot is TERMINAL (no empty-substitution).
+/// ssStakePoolsSnapShot: map(PoolId -> StakePoolSnapShot)]` (stake + delegation COMBINED in ssStake, this
+/// ledger version) into Ade's `StakeSnapshot`: `delegations` = credential -> (pool, coin), WITH the key/script
+/// tag (LV-4, DC-EPOCH-43); `pool_stakes` = the `calculatePoolDistr` per-pool sum; `pool_params` = each pool's
+/// frozen reward parameters (LV-4, DC-EPOCH-44), decoded from the per-pool entry:
+///
+/// ```text
+/// array(10)[ stake, stakeRatio(tag30), selfDelegatedOwners(set keyhash), selfDelegatedOwnersStake,
+///            vrf, pledge, cost, margin(tag30), numDelegators, accountId = credential ]
+/// ```
+///
+/// The entry's `stake` and `selfDelegatedOwnersStake` are DERIVABLE from the snapshot; both are cross-checked
+/// against the derivation and a disagreement is terminal. A pool with stake but no entry is terminal (cardano's
+/// map holds every pool registered at SNAP). VRF is not taken from here — the seed+1 leadership VRFs come from
+/// the cert-state registrations (the mark<->nesPd VRF cross-check, see [`derive_mark_pool_distr`]). Faithful
+/// to the certified snapshot ALONE — never the UTxO checkpoint, a live capture, nesPd, window-replay, or an
+/// oracle. A malformed / short SnapShot is TERMINAL (no empty-substitution).
 fn read_stake_snapshot_full(d: &[u8], o: &mut usize, label: &'static str) -> R<StakeSnapshot> {
-    let sn = array_len(d, o, label)?;
-    // SnapShot = array(2)[ssStake, ssPoolParams] (stake + delegation COMBINED).
-    if sn < 2 {
-        return Err(malformed(format!("{label}.SnapShot arity {sn} < 2")));
-    }
+    expect_array(d, o, 2, label)?;
     // map0 = ssStake: map(StakeCredential -> [Coin, PoolId]) -- stake + delegation in one entry.
-    let mut delegations: BTreeMap<Hash28, (PoolId, Coin)> = BTreeMap::new();
+    let mut delegations: BTreeMap<StakeCredential, (PoolId, Coin)> = BTreeMap::new();
     let mut pool_stakes: BTreeMap<PoolId, u64> = BTreeMap::new();
     map_each(d, o, label, |o| {
         let cred = read_credential(d, o)?; // key: array(2)[tag, hash28]
         expect_array(d, o, 2, "snap.stake.val")?; // value: [coin, pool]
         let coin = read_u64(d, o, "snap.stake.coin")?;
         let pool = PoolId(hash28(read_fixed_bytes(d, o, 28, "snap.stake.pool")?));
-        // StakeSnapshot is Hash28-keyed (discriminant-erased), matching how the boundary fold reads it.
-        delegations.insert(cred.hash().clone(), (pool.clone(), Coin(coin)));
+        delegations.insert(cred, (pool.clone(), Coin(coin)));
         let e = pool_stakes.entry(pool).or_insert(0u64);
         *e = e.saturating_add(coin);
         Ok(())
     })?;
-    // map1 = ssPoolParams (+ any trailing): skipped (see the fn doc).
-    for _ in 1..sn {
-        skip_item(d, o)?;
-    }
-    Ok(StakeSnapshot {
+    let mut snapshot = StakeSnapshot {
         delegations,
         pool_stakes: pool_stakes.into_iter().map(|(p, c)| (p, Coin(c))).collect(),
-    })
+        pool_params: BTreeMap::new(),
+    };
+    // map1 = ssStakePoolsSnapShot: map(PoolId -> array(10)).
+    let mut pool_params: BTreeMap<PoolId, crate::epoch::SnapshotPoolParams> = BTreeMap::new();
+    map_each(d, o, label, |o| {
+        let pool = PoolId(hash28(read_fixed_bytes(d, o, 28, "snap.pool.key")?));
+        expect_array(d, o, 10, "snap.pool")?;
+        let stake = read_u64(d, o, "snap.pool.stake")?;
+        skip_item(d, o)?; // stakeRatio: stake / the snapshot's total, derivable
+        let owners = read_hash28_set(d, o, "snap.pool.selfDelegatedOwners")?;
+        let owners_stake = read_u64(d, o, "snap.pool.selfDelegatedOwnersStake")?;
+        let _vrf = read_fixed_bytes(d, o, 32, "snap.pool.vrf")?;
+        let pledge = Coin(read_u64(d, o, "snap.pool.pledge")?);
+        let cost = Coin(read_u64(d, o, "snap.pool.cost")?);
+        let (mt, _) = read_tag(d, o)?;
+        if mt != TAG_RATIONAL {
+            return Err(malformed(format!("{label}.pool.margin tag {mt} != 30")));
+        }
+        expect_array(d, o, 2, "snap.pool.margin")?;
+        let mnum = read_u64(d, o, "snap.pool.margin.num")?;
+        let mden = read_u64(d, o, "snap.pool.margin.den")?;
+        let _num_delegators = read_u64(d, o, "snap.pool.numDelegators")?;
+        let reward_account = read_credential(d, o)?;
+        let derived_stake = snapshot.pool_stakes.get(&pool).map(|c| c.0).unwrap_or(0);
+        if stake != derived_stake {
+            return Err(malformed(format!(
+                "{label}.pool {:?} stake {stake} != ssStake sum {derived_stake}",
+                pool.0
+            )));
+        }
+        let derived_owners_stake = snapshot.self_delegated_owner_stake(&pool, &owners);
+        if owners_stake != derived_owners_stake {
+            return Err(malformed(format!(
+                "{label}.pool {:?} selfDelegatedOwnersStake {owners_stake} != derived {derived_owners_stake}",
+                pool.0
+            )));
+        }
+        pool_params.insert(
+            pool,
+            crate::epoch::SnapshotPoolParams {
+                pledge,
+                cost,
+                margin: (mnum, mden),
+                reward_account,
+                self_delegated_owners: owners.into_iter().collect(),
+            },
+        );
+        Ok(())
+    })?;
+    if let Some(pool) = snapshot.pool_stakes.keys().find(|p| !pool_params.contains_key(*p)) {
+        return Err(malformed(format!("{label}: pool {:?} has stake but no frozen parameters", pool.0)));
+    }
+    snapshot.pool_params = pool_params;
+    Ok(snapshot)
 }
 
 /// `nn`-error wrapper for [`read_stake_snapshot_full`].
@@ -1857,7 +2049,7 @@ pub fn decode_native_nonutxo_state(
     let (treasury, reserves) = read_account_state(d, o)?;
     // LedgerState = array(2)[CertState, UTxOState]
     nn_expect_array(d, o, 2, "LedgerState")?;
-    let (pool, delegation, gov_import) = nn_read_cert_state(d, o)?;
+    let (pool, delegation, gov_import) = nn_read_cert_state(d, o, network_id)?;
     // UTxOState = array(6)[utxo, deposited, fees, govState, incrStake, donation]
     let (
         protocol_params,
@@ -2732,8 +2924,9 @@ fn nn_hash28(b: Vec<u8>) -> Hash28 {
 fn nn_read_cert_state(
     d: &[u8],
     o: &mut usize,
+    network_id: u8,
 ) -> Rn<(PoolState, DelegationState, BootstrapGovImport)> {
-    read_cert_state(d, o).map_err(|e| match e {
+    read_cert_state(d, o, network_id).map_err(|e| match e {
         LedgerDbStateError::ZeroVrf(p) => NativeNonUtxoError::ZeroVrf(p),
         LedgerDbStateError::MalformedCbor(s) => NativeNonUtxoError::MalformedCbor(s),
         other => nn_malformed(format!("cert_state: {other:?}")),

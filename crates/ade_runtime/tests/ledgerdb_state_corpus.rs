@@ -26,7 +26,7 @@ fn decode_local_preview_corpus() {
         "corpus {} bytes, slot {slot}, expected_epoch {expected_epoch}",
         state.len()
     );
-    match probe_ledgerdb_state(&state, expected_epoch) {
+    match probe_ledgerdb_state(&state, expected_epoch, 2) {
         Ok(probe) => {
             eprintln!("PROBE OK: {probe:#?}");
             assert_eq!(probe.era_index, 6, "current era must be Conway");
@@ -40,7 +40,7 @@ fn decode_local_preview_corpus() {
                 "expected thousands of registrations"
             );
             // determinism: same bytes + same epoch -> byte-identical canonical commitment.
-            let probe2 = probe_ledgerdb_state(&state, expected_epoch).expect("re-probe");
+            let probe2 = probe_ledgerdb_state(&state, expected_epoch, 2).expect("re-probe");
             assert_eq!(
                 probe.cert_state_commitment, probe2.cert_state_commitment,
                 "deterministic canonical CertState commitment"

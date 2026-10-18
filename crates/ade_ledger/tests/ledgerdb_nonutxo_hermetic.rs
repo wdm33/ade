@@ -79,9 +79,9 @@ fn rational(num: u64, den: u64) -> Vec<u8> {
     concat(&[tag(30), arr(2), uint(num), uint(den)])
 }
 
-/// PoolParams value (array 6): vrf, pledge, cost, margin(tag30 [n,d]), rewardAcct[net,hash28], owners.
-/// `reward_net` is the reward-account network byte (the snapshot's network-bound field).
-fn pool_params(vrf: [u8; 32], reward_net: u8) -> Vec<u8> {
+/// PoolParams value (array 6): vrf, pledge, cost, margin(tag30 [n,d]), accountId = credential[tag, hash28],
+/// owners. LV-4 (E4): the account carries a key/script TAG, not a network byte — the network is the manifest's.
+fn pool_params(vrf: [u8; 32], reward_tag: u8) -> Vec<u8> {
     concat(&[
         arr(6),
         bytes(&vrf),
@@ -92,7 +92,7 @@ fn pool_params(vrf: [u8; 32], reward_net: u8) -> Vec<u8> {
         uint(1),
         uint(10),
         arr(2),
-        uint(reward_net as u64),
+        uint(reward_tag as u64),
         bytes(&[0xaa; 28]),
         arr(0), // owners (empty)
     ])
@@ -180,9 +180,8 @@ struct Knobs {
     reserves: u64,
     /// nesBprev entries (pool id -> blocks).
     block_production: Vec<([u8; 28], u64)>,
-    /// The pool reward-account network byte (the snapshot's network-bound field; the
-    /// `network_id` decoded from it is cross-checked against the manifest-derived id).
-    reward_net: u8,
+    /// The pool reward account's credential tag (0 key, 1 script).
+    reward_tag: u8,
     /// Override the curPParams item entirely (for malformed/missing-PParams tests).
     pparams_override: Option<Vec<u8>>,
     /// Override the esAccountState item entirely.
@@ -201,7 +200,7 @@ impl Default for Knobs {
             treasury: 1_890_267_427_632_547,
             reserves: 13_051_749_596_873_397,
             block_production: vec![([0x11; 28], 50)],
-            reward_net: 0, // testnet (matches the default TESTNET_MAGIC -> network_id 0)
+            reward_tag: 0, // a key-hash reward account
             pparams_override: None,
             account_state_override: None,
             gov_state_short: false,
@@ -214,7 +213,7 @@ fn build_state(k: &Knobs) -> Vec<u8> {
     let pstate = concat(&[
         arr(4),
         map(0),
-        concat(&[map(1), bytes(&POOL_ID), pool_params(k.pool_vrf, k.reward_net)]),
+        concat(&[map(1), bytes(&POOL_ID), pool_params(k.pool_vrf, k.reward_tag)]),
         map(0),
         concat(&[map(1), bytes(&POOL_ID), uint(1337)]),
     ]);
@@ -294,7 +293,24 @@ fn build_state(k: &Knobs) -> Vec<u8> {
             concat(&[arr(2), uint(0), bytes(&[0x33; 28])]),
             concat(&[arr(2), uint(1_000_000), bytes(&POOL_ID)]),
         ]),
-        map(0), // ssPoolParams (the VRF comes from the cert-state registration)
+        // ssStakePoolsSnapShot: POOL_ID's frozen entry, array(10)[stake, stakeRatio, selfDelegatedOwners,
+        // selfDelegatedOwnersStake, vrf, pledge, cost, margin, numDelegators, accountId] (LV-4). The
+        // seed+1 leadership VRF still comes from the cert-state registration.
+        concat(&[
+            map(1),
+            bytes(&POOL_ID),
+            arr(10),
+            uint(1_000_000),
+            rational(1, 1),
+            arr(0),
+            uint(0),
+            bytes(&k.pool_vrf),
+            uint(1000),
+            uint(340),
+            rational(1, 10),
+            uint(1),
+            concat(&[arr(2), uint(k.reward_tag as u64), bytes(&[0xaa; 28])]),
+        ]),
     ]);
     // ssStakeSet / ssStakeGo: valid-but-empty StakeSnapshots = array(2)[map(0) ssStake, map(0) ssPoolParams].
     let empty_snap = concat(&[arr(2), map(0), map(0)]);
@@ -490,11 +506,8 @@ fn commitment_binds_every_field() {
     let (_s, c) = decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC).unwrap();
     assert_ne!(c, c0, "protocol_params is bound");
 
-    // network id (derived from the manifest magic): a mainnet manifest yields network_id 1
-    // (with a matching mainnet reward-account net byte so the decode stays valid).
-    let mut k = Knobs::default();
-    k.reward_net = 1;
-    let (_s, c) = decode_native_nonutxo_state(&build_state(&k), point(), 296, MAINNET_MAGIC).unwrap();
+    // network id (derived from the manifest magic): a mainnet manifest yields network_id 1.
+    let (_s, c) = decode_native_nonutxo_state(&base, point(), 296, MAINNET_MAGIC).unwrap();
     assert_ne!(c, c0, "network_id is bound");
 
     // a nonce (perturbing the input bytes by rebuilding with a different trailing nonce is
@@ -526,10 +539,8 @@ fn network_id_derived_from_manifest_magic() {
     assert_eq!(s0.network_id, 0, "testnet magic derives network_id 0");
     assert_eq!(s0.protocol_params.network_id, 0, "pp.network_id == derived");
 
-    // mainnet magic -> network_id 1 (with a matching mainnet reward-account net byte).
-    let mut k = Knobs::default();
-    k.reward_net = 1;
-    let st1 = build_state(&k);
+    // mainnet magic -> network_id 1.
+    let st1 = build_state(&Knobs::default());
     let (s1, _c1) = decode_native_nonutxo_state(&st1, point(), 296, MAINNET_MAGIC).unwrap();
     assert_eq!(s1.network_id, 1, "mainnet magic derives network_id 1");
     assert_eq!(s1.protocol_params.network_id, 1, "pp.network_id == derived");
@@ -673,20 +684,26 @@ fn malformed_cbor_is_terminal() {
     ));
 }
 
-/// A pool reward-account net byte (testnet 0) disagreeing with the manifest-derived id
-/// (mainnet magic -> 1) is DIAGNOSTIC ONLY — the decode SUCCEEDS (network_id is bound from the
-/// manifest authority, not the operator-controlled nibble) and records the disagreement as a
-/// `Uniform` observation. The manifest is the sole network authority; the nibble never rejects.
+/// The reward-account nibble is DIAGNOSTIC ONLY and never rejects; the manifest is the sole network
+/// authority. LV-4 (E4): the registration's account is a credential `[tag, hash]` and carries NO network, so
+/// the observed nibble is the manifest's — a script tag (1) is never read as "network 1". (Before LV-4 the tag
+/// was read as a network byte, which is how a preprod snapshot appeared to "mix" networks.)
 #[test]
 fn reward_nibble_disagreement_is_diagnostic_not_terminal() {
-    // default fixture reward_net is 0 (testnet); pass the mainnet magic (derives network_id 1).
-    let st = build_state(&Knobs::default());
-    let (s, _c) = decode_native_nonutxo_state(&st, point(), 296, MAINNET_MAGIC)
-        .expect("a reward-nibble disagreement must NOT reject — the manifest is the authority");
-    assert_eq!(s.network_id, 1, "network_id is bound from the manifest magic, not the nibble");
+    let mut k = Knobs::default();
+    k.reward_tag = 1; // a SCRIPT reward account
+    let (s, _c) = decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC)
+        .expect("the nibble never rejects — the manifest is the authority");
+    assert_eq!(s.network_id, 0, "network_id is bound from the manifest magic");
     assert_eq!(
         s.reward_nibble_observation,
         ade_ledger::ledgerdb_state::RewardNibbleObservation::Uniform(0),
-        "the disagreeing nibble is recorded as diagnostic evidence, never a verdict"
+        "the script tag is not a network: the nibble is the manifest's"
+    );
+    let (s, _c) = decode_native_nonutxo_state(&build_state(&Knobs::default()), point(), 296, MAINNET_MAGIC)
+        .expect("mainnet manifest");
+    assert_eq!(
+        s.reward_nibble_observation,
+        ade_ledger::ledgerdb_state::RewardNibbleObservation::Uniform(1)
     );
 }

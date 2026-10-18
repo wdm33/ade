@@ -19,6 +19,12 @@ use std::path::PathBuf;
 
 use ade_testkit::harness::snapshot_loader::LoadedSnapshot;
 
+/// The loader's credential convention (GREEN harness): its parsers drop the key/script tag and it
+/// registers every delegator as a KeyHash, so this diagnostic looks credentials up the same way.
+fn kh(h: &ade_types::Hash28) -> ade_types::shelley::cert::StakeCredential {
+    ade_types::shelley::cert::StakeCredential::KeyHash(h.clone())
+}
+
 fn snapshots_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -602,7 +608,7 @@ fn allegra_circulation_totalstake_test() {
                     let mut k = [0u8; 28]; k.copy_from_slice(&params.reward_account[1..29]); Some(k)
                 } else { None };
                 let op_stake = op_cred.and_then(|k|
-                    go.0.delegations.get(&ade_types::Hash28(k)).map(|(_, c)| c.0)
+                    go.0.delegations.get(&ade_types::shelley::cert::StakeCredential::KeyHash(ade_types::Hash28(k))).map(|(_, c)| c.0)
                 ).unwrap_or(0);
                 let op_share = ade_ledger::rational::Rational::new(
                     op_stake as i128, pool_stake.0 as i128
@@ -615,7 +621,7 @@ fn allegra_circulation_totalstake_test() {
                 let mut total = leader_rew;
                 for (cred, (pid, coin)) in &go.0.delegations {
                     if pid != pool_id { continue; }
-                    if op_cred.as_ref() == Some(&cred.0) { continue; }
+                    if op_cred.as_ref() == Some(&cred.hash().0) { continue; }
                     if coin.0 == 0 { continue; }
                     let share = ade_ledger::rational::Rational::new(
                         coin.0 as i128, pool_stake.0 as i128).unwrap();
@@ -983,7 +989,7 @@ fn conway_epoch_508_boundary_comparison() {
                     let mut k = [0u8; 28]; k.copy_from_slice(&params.reward_account[1..29]); Some(k)
                 } else { None };
                 let op_stake = op_cred_key.and_then(|k|
-                    go.0.delegations.get(&ade_types::Hash28(k)).map(|(_, c)| c.0)
+                    go.0.delegations.get(&ade_types::shelley::cert::StakeCredential::KeyHash(ade_types::Hash28(k))).map(|(_, c)| c.0)
                 ).unwrap_or(0);
                 let op_share = ade_ledger::rational::Rational::new(op_stake as i128, pool_stake.0 as i128)
                     .unwrap_or_else(ade_ledger::rational::Rational::zero);
@@ -996,7 +1002,7 @@ fn conway_epoch_508_boundary_comparison() {
                 let mut pool_total = leader_rew;
                 for (cred, (pid, coin)) in &go.0.delegations {
                     if pid != pool_id { continue; }
-                    if op_cred_key.as_ref() == Some(&cred.0) { continue; }
+                    if op_cred_key.as_ref() == Some(&cred.hash().0) { continue; }
                     if coin.0 == 0 { continue; }
                     let share = ade_ledger::rational::Rational::new(coin.0 as i128, pool_stake.0 as i128).unwrap();
                     let mr = member_factor.checked_mul(&share).unwrap().floor().max(0) as u64;
@@ -1087,7 +1093,7 @@ fn conway_epoch_508_boundary_comparison() {
                     let mut k = [0u8; 28]; k.copy_from_slice(&params.reward_account[1..29]); Some(k)
                 } else { None };
                 let op_stake = op_cred_key.and_then(|k|
-                    go.0.delegations.get(&ade_types::Hash28(k)).map(|(_, c)| c.0)
+                    go.0.delegations.get(&ade_types::shelley::cert::StakeCredential::KeyHash(ade_types::Hash28(k))).map(|(_, c)| c.0)
                 ).unwrap_or(0);
                 let op_share = ade_ledger::rational::Rational::new(op_stake as i128, pool_stake.0 as i128)
                     .unwrap_or_else(ade_ledger::rational::Rational::zero);
@@ -1100,7 +1106,7 @@ fn conway_epoch_508_boundary_comparison() {
                 let mut pool_total = leader_rew;
                 for (cred, (pid, coin)) in &go.0.delegations {
                     if pid != pool_id { continue; }
-                    if op_cred_key.as_ref() == Some(&cred.0) { continue; }
+                    if op_cred_key.as_ref() == Some(&cred.hash().0) { continue; }
                     if coin.0 == 0 { continue; }
                     let share = ade_ledger::rational::Rational::new(coin.0 as i128, pool_stake.0 as i128).unwrap();
                     let mr = member_factor.checked_mul(&share).unwrap().floor().max(0) as u64;
@@ -1207,7 +1213,7 @@ fn conway_epoch_508_boundary_comparison() {
                     let mut k = [0u8; 28]; k.copy_from_slice(&params.reward_account[1..29]); Some(k)
                 } else { None };
                 let op_stake = op_cred_key.and_then(|k|
-                    go.0.delegations.get(&ade_types::Hash28(k)).map(|(_, c)| c.0)
+                    go.0.delegations.get(&ade_types::shelley::cert::StakeCredential::KeyHash(ade_types::Hash28(k))).map(|(_, c)| c.0)
                 ).unwrap_or(0);
                 let op_share = ade_ledger::rational::Rational::new(op_stake as i128, pool_stake.0 as i128)
                     .unwrap_or_else(ade_ledger::rational::Rational::zero);
@@ -1220,7 +1226,7 @@ fn conway_epoch_508_boundary_comparison() {
                 let mut pool_total = leader_rew;
                 for (cred, (pid, coin)) in &go.0.delegations {
                     if pid != pool_id { continue; }
-                    if op_cred_key.as_ref() == Some(&cred.0) { continue; }
+                    if op_cred_key.as_ref() == Some(&cred.hash().0) { continue; }
                     if coin.0 == 0 { continue; }
                     let share = ade_ledger::rational::Rational::new(coin.0 as i128, pool_stake.0 as i128).unwrap();
                     let mr = member_factor.checked_mul(&share).unwrap().floor().max(0) as u64;
@@ -1736,7 +1742,7 @@ fn ce71_root_cause_isolation() {
             } else { None };
 
             let op_stake = op_cred_key.and_then(|k| {
-                go.0.delegations.get(&ade_types::Hash28(k))
+                go.0.delegations.get(&ade_types::shelley::cert::StakeCredential::KeyHash(ade_types::Hash28(k)))
                     .map(|(_, coin)| coin.0)
             }).unwrap_or(0);
 
@@ -1759,7 +1765,7 @@ fn ce71_root_cause_isolation() {
             let mut haskell_pool_total = haskell_leader;
             for (cred, (pid, coin)) in &go.0.delegations {
                 if pid != pool_id { continue; }
-                if op_cred_key.as_ref() == Some(&cred.0) { continue; } // skip operator
+                if op_cred_key.as_ref() == Some(&cred.hash().0) { continue; } // skip operator
                 if coin.0 == 0 { continue; }
                 let share = ade_ledger::rational::Rational::new(coin.0 as i128, pool_stake.0 as i128).unwrap();
                 let mr = haskell_member_factor.checked_mul(&share).unwrap().floor().max(0) as u64;
@@ -1773,7 +1779,7 @@ fn ce71_root_cause_isolation() {
             let mut ade_pool_total = ade_leader;
             for (cred, (pid, coin)) in &go.0.delegations {
                 if pid != pool_id { continue; }
-                if op_cred_key.as_ref() == Some(&cred.0) { continue; }
+                if op_cred_key.as_ref() == Some(&cred.hash().0) { continue; }
                 if coin.0 == 0 { continue; }
                 let share = ade_ledger::rational::Rational::new(coin.0 as i128, pool_stake.0 as i128).unwrap();
                 let mr = haskell_member_factor.checked_mul(&share).unwrap().floor().max(0) as u64;
@@ -2087,7 +2093,7 @@ fn mary_per_pool_reward_intermediates() {
                 let mut k = [0u8; 28]; k.copy_from_slice(&params.reward_account[1..29]); Some(k)
             } else { None };
             let op_stake = op_cred.and_then(|k|
-                go.0.delegations.get(&ade_types::Hash28(k)).map(|(_, c)| c.0)
+                go.0.delegations.get(&ade_types::shelley::cert::StakeCredential::KeyHash(ade_types::Hash28(k))).map(|(_, c)| c.0)
             ).unwrap_or(0);
             let op_share = ade_ledger::rational::Rational::new(
                 op_stake as i128, pool_stake.0 as i128
@@ -2100,7 +2106,7 @@ fn mary_per_pool_reward_intermediates() {
             let mut total = leader_rew;
             for (cred, (pid, coin)) in &go.0.delegations {
                 if pid != pool_id { continue; }
-                if op_cred.as_ref() == Some(&cred.0) { continue; }
+                if op_cred.as_ref() == Some(&cred.hash().0) { continue; }
                 if coin.0 == 0 { continue; }
                 let share = ade_ledger::rational::Rational::new(
                     coin.0 as i128, pool_stake.0 as i128).unwrap();
@@ -2506,7 +2512,7 @@ fn regular_epoch_boundary_comparison() {
                     if !params.owners.is_empty() && params.pledge.0 > 0 {
                         let delegator_stakes = &go.0.delegations;
                         let ostake: u64 = params.owners.iter()
-                            .map(|o| delegator_stakes.get(o).map(|(_, c)| c.0).unwrap_or(0))
+                            .map(|o| delegator_stakes.get(&kh(o)).map(|(_, c)| c.0).unwrap_or(0))
                             .sum();
                         if params.pledge.0 > ostake { continue; }
                     }
@@ -2549,7 +2555,7 @@ fn regular_epoch_boundary_comparison() {
 
                         // Operator stake share
                         let op_stake = op_cred.as_ref()
-                            .and_then(|oc| go.0.delegations.get(oc))
+                            .and_then(|oc| go.0.delegations.get(&kh(oc)))
                             .map(|(_, c)| c.0)
                             .unwrap_or(0);
                         let op_share = ade_ledger::rational::Rational::new(
@@ -2579,10 +2585,10 @@ fn regular_epoch_boundary_comparison() {
                         for (cred, (_, stake)) in go.0.delegations.iter()
                             .filter(|(_, (pid, _))| pid == pool_id)
                         {
-                            if op_cred.as_ref() == Some(cred) { continue; }
+                            if op_cred.as_ref() == Some(cred.hash()) { continue; }
                             if stake.0 == 0 { continue; }
                             // Only distribute if member is registered
-                            if !registered_creds.contains(cred) { continue; }
+                            if !registered_creds.contains(cred.hash()) { continue; }
                             let share = ade_ledger::rational::Rational::new(
                                 stake.0 as i128, pool_stake.0.max(1) as i128,
                             ).unwrap_or_else(ade_ledger::rational::Rational::zero);
@@ -2700,7 +2706,7 @@ fn per_pool_scaling_diagnostic() {
             };
             if max_pool == 0 { continue; }
             if !params.owners.is_empty() && params.pledge.0 > 0 {
-                let ostake: u64 = params.owners.iter().map(|o| go.0.delegations.get(o).map(|(_, c)| c.0).unwrap_or(0)).sum();
+                let ostake: u64 = params.owners.iter().map(|o| go.0.delegations.get(&kh(o)).map(|(_, c)| c.0).unwrap_or(0)).sum();
                 if params.pledge.0 > ostake { continue; }
             }
 
@@ -2880,7 +2886,7 @@ fn binary_search_totalstake() {
                 };
                 if max_pool == 0 { continue; }
                 if !params.owners.is_empty() && params.pledge.0 > 0 {
-                    let ostake: u64 = params.owners.iter().map(|o| go.0.delegations.get(o).map(|(_, c)| c.0).unwrap_or(0)).sum();
+                    let ostake: u64 = params.owners.iter().map(|o| go.0.delegations.get(&kh(o)).map(|(_, c)| c.0).unwrap_or(0)).sum();
                     if params.pledge.0 > ostake { continue; }
                 }
 
@@ -2994,7 +3000,7 @@ fn pv_branching_circ_vs_circ_treasury() {
                 };
                 if max_pool == 0 { continue; }
                 if *pv >= 4 && !params.owners.is_empty() && params.pledge.0 > 0 {
-                    let ostake: u64 = params.owners.iter().map(|o| go.0.delegations.get(o).map(|(_, c)| c.0).unwrap_or(0)).sum();
+                    let ostake: u64 = params.owners.iter().map(|o| go.0.delegations.get(&kh(o)).map(|(_, c)| c.0).unwrap_or(0)).sum();
                     if params.pledge.0 > ostake { continue; }
                 }
                 let perf = ade_ledger::rational::Rational::new((blocks as i128) * (perf_denom as i128), (total_blocks as i128) * (pool_stake.0 as i128)).unwrap_or_else(ade_ledger::rational::Rational::one);
@@ -3062,20 +3068,21 @@ fn conway_drep_stake_distribution() {
         stake_map.insert(k, *s);
     }
 
-    let mut go_delegations: std::collections::BTreeMap<ade_types::Hash28, (ade_types::tx::PoolId, ade_types::tx::Coin)> = std::collections::BTreeMap::new();
+    let mut go_delegations: std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, (ade_types::tx::PoolId, ade_types::tx::Coin)> = std::collections::BTreeMap::new();
     for (cred_hash, pool_hash) in &delegations {
         let mut cb = [0u8; 28];
         cb.copy_from_slice(&cred_hash.0[..28]);
         let mut pb = [0u8; 28];
         pb.copy_from_slice(&pool_hash.0[..28]);
         let stake = stake_map.get(&cb).copied().unwrap_or(0);
-        go_delegations.insert(ade_types::Hash28(cb),
+        go_delegations.insert(kh(&ade_types::Hash28(cb)),
             (ade_types::tx::PoolId(ade_types::Hash28(pb)), ade_types::tx::Coin(stake)));
     }
 
     let go_snapshot = ade_ledger::epoch::StakeSnapshot {
         delegations: go_delegations,
         pool_stakes: std::collections::BTreeMap::new(), // not needed for DRep computation
+        pool_params: std::collections::BTreeMap::new(),
     };
 
     // Compute DRep stake distribution
@@ -3241,12 +3248,13 @@ fn conway_governance_ratification_test() {
         let mut cb = [0u8;28]; cb.copy_from_slice(&ch.0[..28]);
         let mut pb = [0u8;28]; pb.copy_from_slice(&ph.0[..28]);
         let stake = stake_map.get(&cb).copied().unwrap_or(0);
-        go_delegations.insert(ade_types::Hash28(cb),
+        go_delegations.insert(kh(&ade_types::Hash28(cb)),
             (ade_types::tx::PoolId(ade_types::Hash28(pb)), ade_types::tx::Coin(stake)));
     }
     let go_snapshot = ade_ledger::epoch::StakeSnapshot {
         delegations: go_delegations,
         pool_stakes: std::collections::BTreeMap::new(),
+        pool_params: std::collections::BTreeMap::new(),
     };
     let drep_dist = compute_drep_stake_distribution(&vote_delegs, &go_snapshot);
 
@@ -3345,7 +3353,7 @@ fn conway_governance_ratification_test() {
             let mut ds = std::collections::BTreeMap::new();
             let go = &p_pre_state.epoch_state.snapshots.as_authoritative().unwrap().go;
             for (cred, drep) in &p_pre_gov.vote_delegations {
-                let stake = go.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
+                let stake = go.0.delegations.get(&kh(cred.hash())).map(|(_, c)| c.0).unwrap_or(0);
                 if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
             }
             ds
@@ -3440,7 +3448,7 @@ fn conway_governance_ratification_test() {
             let mut ds = std::collections::BTreeMap::new();
             let go = &t_pre_state.epoch_state.snapshots.as_authoritative().unwrap().go;
             for (cred, drep) in &t_pre_gov.vote_delegations {
-                let stake = go.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
+                let stake = go.0.delegations.get(&kh(cred.hash())).map(|(_, c)| c.0).unwrap_or(0);
                 if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
             }
             ds
@@ -3449,7 +3457,7 @@ fn conway_governance_ratification_test() {
             let mut ds = std::collections::BTreeMap::new();
             let mark = &t_pre_state.epoch_state.snapshots.as_authoritative().unwrap().mark;
             for (cred, drep) in &t_pre_gov.vote_delegations {
-                let stake = mark.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
+                let stake = mark.0.delegations.get(&kh(cred.hash())).map(|(_, c)| c.0).unwrap_or(0);
                 if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
             }
             ds
@@ -3458,7 +3466,7 @@ fn conway_governance_ratification_test() {
             let mut ds = std::collections::BTreeMap::new();
             let set = &t_pre_state.epoch_state.snapshots.as_authoritative().unwrap().set;
             for (cred, drep) in &t_pre_gov.vote_delegations {
-                let stake = set.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
+                let stake = set.0.delegations.get(&kh(cred.hash())).map(|(_, c)| c.0).unwrap_or(0);
                 if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
             }
             ds
@@ -3487,7 +3495,7 @@ fn conway_governance_ratification_test() {
                     _ => true, // AlwaysAbstain/AlwaysNoConfidence always count
                 };
                 if !drep_registered { continue; }
-                let stake = mark.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
+                let stake = mark.0.delegations.get(&kh(cred.hash())).map(|(_, c)| c.0).unwrap_or(0);
                 if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
             }
             ds
@@ -3760,7 +3768,7 @@ fn conway_epoch_boundary_end_to_end() {
             .collect();
     // Also add all go delegation credentials (some operators may not be in registrations)
     for k in pre_state.epoch_state.snapshots.as_authoritative().unwrap().go.0.delegations.keys() {
-        all_registered.insert(ade_types::shelley::cert::StakeCredential::KeyHash(k.clone()), ());
+        all_registered.insert(k.clone(), ());
     }
 
     for (label, regs) in [("PRE", None), ("ALL", Some(&all_registered))] {
@@ -4000,11 +4008,11 @@ fn alonzo_epoch_boundary_end_to_end() {
     let go_deleg_count = pre_state.epoch_state.snapshots.as_authoritative().unwrap().go.0.delegations.len();
     let go_in_pre_regs = pre_state.epoch_state.snapshots.as_authoritative().unwrap().go.0.delegations.keys()
         .filter(|k| pre_state.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.registrations.contains_key(
-            &ade_types::shelley::cert::StakeCredential::KeyHash((*k).clone())))
+            *k))
         .count();
     let go_in_post_regs = pre_state.epoch_state.snapshots.as_authoritative().unwrap().go.0.delegations.keys()
         .filter(|k| post_registered.contains_key(
-            &ade_types::shelley::cert::StakeCredential::KeyHash((*k).clone())))
+            *k))
         .count();
     eprintln!("  go delegators: {} in_PRE_regs={} in_POST_regs={}",
         go_deleg_count, go_in_pre_regs, go_in_post_regs);

@@ -5,7 +5,8 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::{Coin, PoolId};
 use ade_types::{CardanoEra, EpochNo, Hash28};
 
@@ -20,15 +21,37 @@ use crate::state::LedgerState;
 // S-14: Snapshot types and rotation
 // ---------------------------------------------------------------------------
 
-/// Stake distribution snapshot at a given epoch boundary.
+/// Stake distribution snapshot at a given epoch boundary — cardano's `SnapShot`.
 ///
-/// Maps stake credential hash -> delegated pool + lovelace amount.
+/// LV-4 (DC-EPOCH-43, DC-EPOCH-44): keyed by the WHOLE stake credential (a key and a script credential
+/// with the same 28 bytes are distinct entries), and carrying each registered pool's reward-relevant
+/// parameters frozen when the snapshot was taken. The reward calculation reads pool parameters from the
+/// go snapshot only, never from the registrations current at the boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StakeSnapshot {
     /// Stake credential -> (pool, lovelace).
-    pub delegations: BTreeMap<Hash28, (PoolId, Coin)>,
+    pub delegations: BTreeMap<StakeCredential, (PoolId, Coin)>,
     /// Pool -> total delegated stake.
     pub pool_stakes: BTreeMap<PoolId, Coin>,
+    /// Pool -> its parameters as registered when the snapshot was taken (every pool registered at SNAP,
+    /// before POOLREAP, including pools with no stake).
+    pub pool_params: BTreeMap<PoolId, SnapshotPoolParams>,
+}
+
+/// The reward-relevant parameters of one pool, frozen when the snapshot was taken — cardano's
+/// `StakePoolSnapShot` minus the values derivable from the snapshot itself (stake, stake ratio,
+/// delegator count, self-delegated owner stake).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotPoolParams {
+    pub pledge: Coin,
+    pub cost: Coin,
+    /// (numerator, denominator).
+    pub margin: (u64, u64),
+    /// The pool's reward account, with its key/script tag.
+    pub reward_account: StakeCredential,
+    /// The pool's owners that were delegated to this pool when the snapshot was taken (cardano's
+    /// `spssSelfDelegatedOwners`). Owners are key hashes.
+    pub self_delegated_owners: BTreeSet<Hash28>,
 }
 
 impl StakeSnapshot {
@@ -53,13 +76,19 @@ impl StakeSnapshot {
     ///
     /// An owner delegated to another pool, or not delegated, contributes nothing: cardano's
     /// `selfDelegatedOwners` is `spsOwners` filtered by membership in the pool's own delegator set.
-    /// `owners` is a set there, so a repeated owner is counted once.
-    pub fn self_delegated_owner_stake(&self, pool_id: &PoolId, owners: &[Hash28]) -> u64 {
+    /// `owners` is a set there, so a repeated owner is counted once. Owners are key hashes, so only the
+    /// owner's KEY credential is looked up (DC-EPOCH-43): a script credential with the same bytes is a
+    /// different staker.
+    pub fn self_delegated_owner_stake<'a>(
+        &self,
+        pool_id: &PoolId,
+        owners: impl IntoIterator<Item = &'a Hash28>,
+    ) -> u64 {
         owners
-            .iter()
-            .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
-            .filter_map(|owner| self.delegations.get(owner))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|owner| self.delegations.get(&StakeCredential::KeyHash(owner.clone())))
             .filter(|(delegated_to, _)| delegated_to == pool_id)
             .fold(0u64, |acc, (_, coin)| acc.saturating_add(coin.0))
     }
@@ -68,6 +97,7 @@ impl StakeSnapshot {
         StakeSnapshot {
             delegations: BTreeMap::new(),
             pool_stakes: BTreeMap::new(),
+            pool_params: BTreeMap::new(),
         }
     }
 }
@@ -191,7 +221,7 @@ pub struct PoolRewards {
     /// Pool operator reward in lovelace.
     pub operator_reward: Coin,
     /// Member rewards: credential hash -> lovelace.
-    pub member_rewards: BTreeMap<Hash28, Coin>,
+    pub member_rewards: BTreeMap<StakeCredential, Coin>,
 }
 
 /// Compute total rewards available for distribution in an epoch.
@@ -227,7 +257,7 @@ pub fn compute_pool_reward(
     total_stake: Coin,
     pool_cost: Coin,
     pool_margin: &Rational,
-    delegator_stakes: &BTreeMap<Hash28, Coin>,
+    delegator_stakes: &BTreeMap<StakeCredential, Coin>,
 ) -> Option<PoolRewards> {
     if total_stake.0 == 0 {
         return Some(PoolRewards {
@@ -313,7 +343,7 @@ pub fn compute_rewards(
         };
 
         // Gather delegator stakes for this pool
-        let delegator_stakes: BTreeMap<Hash28, Coin> = go_snapshot
+        let delegator_stakes: BTreeMap<StakeCredential, Coin> = go_snapshot
             .0
             .delegations
             .iter()
@@ -414,10 +444,12 @@ fn remove_pool_from_snapshot(
 ) -> StakeSnapshot {
     let mut new_delegations = snapshot.delegations.clone();
     let mut new_pool_stakes = snapshot.pool_stakes.clone();
+    let mut new_pool_params = snapshot.pool_params.clone();
 
     // Remove pool entries
     for pool_id in retired_pool_ids {
         new_pool_stakes.remove(pool_id);
+        new_pool_params.remove(pool_id);
     }
 
     // Remove delegations to retired pools
@@ -428,6 +460,7 @@ fn remove_pool_from_snapshot(
     StakeSnapshot {
         delegations: new_delegations,
         pool_stakes: new_pool_stakes,
+        pool_params: new_pool_params,
     }
 }
 
@@ -545,8 +578,8 @@ mod tests {
         PoolId(Hash28([byte; 28]))
     }
 
-    fn make_cred(byte: u8) -> Hash28 {
-        Hash28([byte; 28])
+    fn make_cred(byte: u8) -> StakeCredential {
+        StakeCredential::KeyHash(Hash28([byte; 28]))
     }
 
     // -----------------------------------------------------------------------
@@ -722,6 +755,7 @@ mod tests {
         let go = GoSnapshot(StakeSnapshot {
             delegations,
             pool_stakes,
+            pool_params: BTreeMap::new(),
         });
 
         let mut params = BTreeMap::new();
@@ -729,13 +763,13 @@ mod tests {
             cost: Coin(10),
             margin: Rational::new(1, 10).unwrap(),
             pledge: Coin(100),
-            reward_account: make_cred(0x01),
+            reward_account: Hash28([0x01; 28]),
         });
         params.insert(make_pool_id(0x02), PoolParams {
             cost: Coin(10),
             margin: Rational::new(1, 10).unwrap(),
             pledge: Coin(100),
-            reward_account: make_cred(0x02),
+            reward_account: Hash28([0x02; 28]),
         });
 
         let r1 = compute_rewards(Coin(1000), Coin(1000), &go, &params).unwrap();
@@ -754,13 +788,13 @@ mod tests {
             cost: Coin(100),
             margin: Rational::new(1, 10).unwrap(),
             pledge: Coin(500),
-            reward_account: make_cred(0x01),
+            reward_account: Hash28([0x01; 28]),
         });
         params.insert(make_pool_id(0x02), PoolParams {
             cost: Coin(200),
             margin: Rational::new(1, 5).unwrap(),
             pledge: Coin(1000),
-            reward_account: make_cred(0x02),
+            reward_account: Hash28([0x02; 28]),
         });
 
         let retirements = vec![
@@ -802,7 +836,7 @@ mod tests {
             cost: Coin(100),
             margin: Rational::new(1, 10).unwrap(),
             pledge: Coin(500),
-            reward_account: make_cred(0x01),
+            reward_account: Hash28([0x01; 28]),
         });
 
         let retirements = vec![
@@ -841,7 +875,7 @@ mod tests {
             cost: Coin(100),
             margin: Rational::new(1, 10).unwrap(),
             pledge: Coin(500),
-            reward_account: make_cred(0x01),
+            reward_account: Hash28([0x01; 28]),
         });
 
         let retirements = vec![

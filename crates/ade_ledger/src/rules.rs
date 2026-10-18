@@ -961,11 +961,6 @@ pub fn apply_epoch_boundary_with_registrations(
 
     if total_stake > 0 && total_active_stake > 0 && pool_reward_pot > 0 {
         for (pool_id, pool_stake) in &go.0.pool_stakes {
-            let params = match cert.pool.pools.get(pool_id) {
-                Some(p) => p,
-                None => continue,
-            };
-
             // Pool performance = blocks_produced / expected_blocks_for_this_pool
             // expected_for_pool = expected_total * (pool_stake / total_stake)
             let blocks_produced = state.epoch_state.block_production
@@ -976,8 +971,18 @@ pub fn apply_epoch_boundary_with_registrations(
                 continue; // Zero performance → zero reward
             }
 
+            // The pool's parameters as FROZEN in the go snapshot (DC-EPOCH-44) — never the registrations
+            // current at this boundary. A pool that retired or re-registered since the snapshot is paid on
+            // the values it had then. A pool that earned with no frozen parameters is a terminal.
+            let params = go.0.pool_params.get(pool_id).ok_or_else(|| {
+                crate::governance::GovernanceTerminal::RewardPoolParamsMissing {
+                    pool: pool_id.clone(),
+                    boundary_point: state.epoch_state.slot,
+                }
+            })?;
+
             // Gather delegator stakes for this pool
-            let delegator_stakes: std::collections::BTreeMap<ade_types::Hash28, ade_types::tx::Coin> =
+            let delegator_stakes: std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, ade_types::tx::Coin> =
                 go.0.delegations.iter()
                     .filter(|(_, (pid, _))| pid == pool_id)
                     .map(|(cred, (_, coin))| (cred.clone(), *coin))
@@ -1084,13 +1089,14 @@ pub fn apply_epoch_boundary_with_registrations(
 
             // Shelley pledge satisfaction: if pledge > selfDelegatedOwnersStake → maxPool = 0.
             // Only the owners delegated to THIS pool count (DC-EPOCH-42): an owner who has pointed
-            // the pledged stake at another pool does not satisfy this pool's pledge.
+            // the pledged stake at another pool does not satisfy this pool's pledge. The set is the one
+            // frozen in the go snapshot, so "no owner delegated here" (empty) is the same as cardano's
+            // `selfDelegatedOwners = []` and a positive pledge is not met.
             // Only apply for Mary+ (protocol_major >= 4) where owner parsing is reliable.
             // Pre-Mary: owner encoding differs, skip the check (matches proven formula).
             let self_delegated_owner_stake =
-                go.0.self_delegated_owner_stake(pool_id, &params.owners);
+                go.0.self_delegated_owner_stake(pool_id, &params.self_delegated_owners);
             if state.protocol_params.protocol_major >= 4
-                && !params.owners.is_empty()
                 && params.pledge.0 > 0
                 && params.pledge.0 > self_delegated_owner_stake
             {
@@ -1120,14 +1126,9 @@ pub fn apply_epoch_boundary_with_registrations(
             //   Applied to each delegator EXCEPT the operator (who already
             //   got their share via leaderReward).
 
-            // Identify operator credential from reward_account
-            let op_cred: Option<ade_types::Hash28> = if params.reward_account.len() >= 29 {
-                let mut cred_bytes = [0u8; 28];
-                cred_bytes.copy_from_slice(&params.reward_account[1..29]);
-                Some(ade_types::Hash28(cred_bytes))
-            } else {
-                None
-            };
+            // The operator credential is the frozen reward account, with its key/script tag (DC-EPOCH-43).
+            let op_cred: Option<ade_types::shelley::cert::StakeCredential> =
+                Some(params.reward_account.clone());
 
             _sum_f += pool_max;
             _sum_max_pool += max_pool;
@@ -1148,15 +1149,11 @@ pub fn apply_epoch_boundary_with_registrations(
 
             // Registration check helper: uses override set if provided,
             // falls back to PRE state registrations.
-            let is_cred_registered = |h: &ade_types::Hash28| -> bool {
-                // Reward-account hash from address bytes — no key/script discriminant
-                // is encoded at this boundary; the CertState registrations map is
-                // keyed the same way, so KeyHash is the consistent projection.
-                let sc = ade_types::shelley::cert::StakeCredential::KeyHash(h.clone());
+            let is_cred_registered = |sc: &ade_types::shelley::cert::StakeCredential| -> bool {
                 if let Some(override_regs) = registration_override {
-                    override_regs.contains_key(&sc)
+                    override_regs.contains_key(sc)
                 } else {
-                    cert.delegation.registrations.contains_key(&sc)
+                    cert.delegation.registrations.contains_key(sc)
                 }
             };
 
@@ -1193,7 +1190,7 @@ pub fn apply_epoch_boundary_with_registrations(
             // owner as a member, mis-attributes the per-account split (the totals are unchanged, so the
             // pots are not). Gated to Mary+ where owner parsing is reliable; pre-Mary keeps the proven
             // reward-account projection.
-            let use_owners = state.protocol_params.protocol_major >= 4 && !params.owners.is_empty();
+            let use_owners = state.protocol_params.protocol_major >= 4;
             let owner_stake: u64 = if use_owners {
                 self_delegated_owner_stake
             } else {
@@ -1247,7 +1244,8 @@ pub fn apply_epoch_boundary_with_registrations(
                     // excludes them from member rewards. Pre-Mary (no reliable owners) falls back to
                     // excluding the reward account, matching the proven pre-Mary path.
                     let is_owner = if use_owners {
-                        params.owners.contains(cred)
+                        matches!(cred, ade_types::shelley::cert::StakeCredential::KeyHash(h)
+                            if params.self_delegated_owners.contains(h))
                     } else {
                         op_cred.as_ref() == Some(cred)
                     };
@@ -1291,39 +1289,21 @@ pub fn apply_epoch_boundary_with_registrations(
     let mut delegation = cert.delegation.clone();
 
     for (cred, reward) in &reward_deltas {
-        // The reward distribution keys by Hash28 (no key/script discriminant), but registrations carry
-        // it. Resolve to the REGISTERED stake credential — key-hash first, then script-hash — and credit
-        // THAT one. A script-hash staker is registered as ScriptHash; projecting every hash to KeyHash
-        // (the old behaviour) failed the lookup for script stakers and routed their reward to the
-        // treasury (a treasury-vs-member-rewards split error). A given hash is registered as at most one
-        // discriminant; if neither is registered the reward goes to the treasury (deltaT2), as before.
-        let as_key = ade_types::shelley::cert::StakeCredential::KeyHash(cred.clone());
-        let as_script = ade_types::shelley::cert::StakeCredential::ScriptHash(cred.clone());
-        let registered = if let Some(override_regs) = registration_override {
-            if override_regs.contains_key(&as_key) {
-                Some(as_key)
-            } else if override_regs.contains_key(&as_script) {
-                Some(as_script)
-            } else {
-                None
-            }
-        } else if delegation.registrations.contains_key(&as_key) {
-            Some(as_key)
-        } else if delegation.registrations.contains_key(&as_script) {
-            Some(as_script)
-        } else {
-            None
+        // The reward is keyed by the WHOLE credential (DC-EPOCH-43) and credited to exactly that credential
+        // if it is registered; otherwise it goes to the treasury (deltaT2). There is no key-then-script
+        // resolution: a script staker and a key staker with the same 28 bytes are different accounts, and
+        // crediting one with the other's reward was the 304→305 residual.
+        let registered = match registration_override {
+            Some(override_regs) => override_regs.contains_key(cred),
+            None => delegation.registrations.contains_key(cred),
         };
-        match registered {
-            Some(stake_cred) => {
-                let entry = delegation.rewards
-                    .entry(stake_cred)
-                    .or_insert(ade_types::tx::Coin(0));
-                entry.0 = entry.0.saturating_add(reward.0);
-            }
-            None => {
-                delta_t2 = delta_t2.saturating_add(reward.0);
-            }
+        if registered {
+            let entry = delegation.rewards
+                .entry(cred.clone())
+                .or_insert(ade_types::tx::Coin(0));
+            entry.0 = entry.0.saturating_add(reward.0);
+        } else {
+            delta_t2 = delta_t2.saturating_add(reward.0);
         }
     }
 
@@ -1335,9 +1315,12 @@ pub fn apply_epoch_boundary_with_registrations(
     //    read here PRE-POOLREAP (POOLREAP runs below), matching cardano's SNAP-before-POOLREAP order. A CONWAY
     //    boundary WITHOUT the base input is a structured terminal (never a reward-only mark), zero mutation.
     let new_mark = match boundary_base_stake {
+        // `cert.pool.pools` here is the registrations at SNAP: future-pool adoption and POOLREAP both run
+        // below, on `pool_state`.
         Some(base) => crate::epoch_accumulator::build_boundary_mark_snapshot(
             base,
             crate::epoch_accumulator::PostRupdRewards::after_rupd(&delegation),
+            &cert.pool.pools,
         ),
         None => {
             // ANY Conway boundary that reaches this fn REQUIRES the base — fail closed rather than fabricate a
@@ -1359,7 +1342,7 @@ pub fn apply_epoch_boundary_with_registrations(
                             .get(cred)
                             .copied()
                             .unwrap_or(ade_types::tx::Coin(0));
-                        (cred.hash().clone(), (pool.clone(), stake))
+                        (cred.clone(), (pool.clone(), stake))
                     })
                     .collect(),
                 pool_stakes: {
@@ -1369,6 +1352,10 @@ pub fn apply_epoch_boundary_with_registrations(
                     }
                     ps
                 },
+                pool_params: crate::epoch_accumulator::snapshot_pool_params(
+                    &cert.pool.pools,
+                    &delegation.delegations,
+                ),
             }
         }
     };
@@ -3198,7 +3185,7 @@ mod cert_state_dispatch {
             apply_epoch_boundary_with_registrations(&state, EpochNo(501), None, Some(&base_stake), 21_600)
                 .unwrap();
         assert_eq!(
-            built.epoch_state.snapshots.as_authoritative().unwrap().mark.0.delegations.get(&Hash28([0xA1; 28])).map(|(_, c)| c.0),
+            built.epoch_state.snapshots.as_authoritative().unwrap().mark.0.delegations.get(&StakeCredential::KeyHash(Hash28([0xA1; 28]))).map(|(_, c)| c.0),
             Some(1000),
             "the mark stake is base (300) + post-RUPD reward (700)"
         );

@@ -145,7 +145,7 @@ fn build_state(current_era_index: u64, pool_vrf: [u8; 32], pool_distr_vrf: [u8; 
 fn happy_minimal_state_decodes_with_required_elements() {
     let vrf = [0x55u8; 32];
     let st = build_state(6, vrf, vrf);
-    let p = probe_ledgerdb_state(&st, 1336).expect("decode");
+    let p = probe_ledgerdb_state(&st, 1336, 2).expect("decode");
     assert_eq!(p.era_index, 6);
     assert_eq!(p.epoch, 1336);
     assert_eq!(p.active_pool_count, 1);
@@ -161,8 +161,8 @@ fn happy_minimal_state_decodes_with_required_elements() {
 fn determinism_same_bytes_same_commitment() {
     let vrf = [0x55u8; 32];
     let st = build_state(6, vrf, vrf);
-    let a = probe_ledgerdb_state(&st, 1336).unwrap();
-    let b = probe_ledgerdb_state(&st, 1336).unwrap();
+    let a = probe_ledgerdb_state(&st, 1336, 2).unwrap();
+    let b = probe_ledgerdb_state(&st, 1336, 2).unwrap();
     assert_eq!(a, b);
     assert_eq!(a.cert_state_commitment, b.cert_state_commitment);
 }
@@ -171,7 +171,7 @@ fn determinism_same_bytes_same_commitment() {
 fn zero_vrf_is_terminal() {
     let st = build_state(6, [0u8; 32], [0u8; 32]);
     assert!(matches!(
-        probe_ledgerdb_state(&st, 1336),
+        probe_ledgerdb_state(&st, 1336, 2),
         Err(LedgerDbStateError::ZeroVrf(_))
     ));
 }
@@ -181,7 +181,7 @@ fn wrong_era_is_terminal_no_fallback_to_latest() {
     let vrf = [0x55u8; 32];
     let st = build_state(5, vrf, vrf); // current era = Babbage (5), not Conway
     assert!(matches!(
-        probe_ledgerdb_state(&st, 1336),
+        probe_ledgerdb_state(&st, 1336, 2),
         Err(LedgerDbStateError::UnsupportedEra { current_index: 5 })
     ));
 }
@@ -190,7 +190,7 @@ fn wrong_era_is_terminal_no_fallback_to_latest() {
 fn pool_distr_vrf_mismatch_is_terminal() {
     let st = build_state(6, [0x55u8; 32], [0x66u8; 32]);
     assert!(matches!(
-        probe_ledgerdb_state(&st, 1336),
+        probe_ledgerdb_state(&st, 1336, 2),
         Err(LedgerDbStateError::PoolDistrVrfMismatch(_))
     ));
 }
@@ -200,7 +200,7 @@ fn epoch_mismatch_is_terminal() {
     let vrf = [0x55u8; 32];
     let st = build_state(6, vrf, vrf);
     assert!(matches!(
-        probe_ledgerdb_state(&st, 9999),
+        probe_ledgerdb_state(&st, 9999, 2),
         Err(LedgerDbStateError::EpochMismatch {
             decoded_epoch: 1336,
             manifest_epoch: 9999
@@ -211,7 +211,7 @@ fn epoch_mismatch_is_terminal() {
 #[test]
 fn malformed_cbor_is_terminal() {
     assert!(matches!(
-        probe_ledgerdb_state(&[0x00, 0x01, 0x02], 1336),
+        probe_ledgerdb_state(&[0x00, 0x01, 0x02], 1336, 2),
         Err(LedgerDbStateError::MalformedCbor(_))
     ));
 }

@@ -730,12 +730,16 @@ mod tests {
         use ade_ledger::epoch::{GoSnapshot, MarkSnapshot, SetSnapshot, SnapshotState, StakeSnapshot};
         let stake_snapshot = |pid: PoolId, coin: u64| {
             let mut delegations = BTreeMap::new();
-            delegations.insert((pid.0).clone(), (pid.clone(), Coin(coin)));
+            delegations.insert(
+                ade_types::shelley::cert::StakeCredential::KeyHash((pid.0).clone()),
+                (pid.clone(), Coin(coin)),
+            );
             let mut pool_stakes = BTreeMap::new();
             pool_stakes.insert(pid, Coin(coin));
             StakeSnapshot {
                 delegations,
                 pool_stakes,
+                pool_params: BTreeMap::new(),
             }
         };
         let snapshots = SnapshotState {

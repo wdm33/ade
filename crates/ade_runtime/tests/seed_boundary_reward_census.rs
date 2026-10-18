@@ -104,9 +104,9 @@ fn native_seed_boundary_reward_vs_cardano_rs() {
         .0
         .delegations
         .iter()
-        .map(|(h, (pid, _))| {
+        .map(|(c, (pid, _))| {
             let hx = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
-            (hx(&h.0), hx(&(pid.0).0))
+            (key(c), hx(&(pid.0).0))
         })
         .collect();
     let mut by_pool: BTreeMap<String, (usize, i128)> = BTreeMap::new();
@@ -163,7 +163,7 @@ fn native_seed_boundary_reward_vs_cardano_rs() {
         if !reference.contains_key(k) {
             only_ade += 1;
             sum_abs += a.abs();
-            let pool = go_deleg.get(&k[2..]).cloned().unwrap_or_else(|| "NOT-IN-GO".into());
+            let pool = go_deleg.get(k).cloned().unwrap_or_else(|| "NOT-IN-GO".into());
             let e = by_pool.entry(pool).or_insert((0, 0));
             e.0 += 1;
             e.1 += *a;
@@ -266,10 +266,11 @@ fn mark_snapshot_credentials_for_pool() {
     let mark = &acc.epoch_state.snapshots.as_authoritative().expect("authoritative").mark.0;
     let mut n = 0usize;
     let mut sum = 0u128;
-    for (h, (pid, coin)) in &mark.delegations {
+    for (cred, (pid, coin)) in &mark.delegations {
         if hx(&(pid.0).0) != want {
             continue;
         }
+        let h = cred.hash();
         let key = acc.cert_state.delegation.rewards.get(&StakeCredential::KeyHash(h.clone()));
         let script = acc.cert_state.delegation.rewards.get(&StakeCredential::ScriptHash(h.clone()));
         println!(

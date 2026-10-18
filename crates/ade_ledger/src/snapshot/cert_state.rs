@@ -190,7 +190,7 @@ where
     Ok(m)
 }
 
-fn write_stake_credential(buf: &mut Vec<u8>, cred: &StakeCredential) {
+pub(crate) fn write_stake_credential(buf: &mut Vec<u8>, cred: &StakeCredential) {
     write_array_header(buf, ContainerEncoding::Definite(2, IntWidth::Inline));
     let (variant, hash): (u64, &Hash28) = match cred {
         StakeCredential::KeyHash(h) => (0, h),

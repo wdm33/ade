@@ -699,7 +699,7 @@ use ade_ledger::epoch::StakeSnapshot;
 /// Per-credential delegations as canonical bytes: Hash28 -> (PoolId bytes, coin). The go-snapshot key is
 /// Hash28 (discriminant-stripped) on both the accumulator and the cardano decode.
 fn deleg_canon(s: &StakeSnapshot) -> BTreeMap<[u8; 28], ([u8; 28], u64)> {
-    s.delegations.iter().map(|(h, (pid, c))| (h.0, ((pid.0).0, c.0))).collect()
+    s.delegations.iter().map(|(h, (pid, c))| (h.hash().0, ((pid.0).0, c.0))).collect()
 }
 
 /// pool_stakes as canonical bytes.
@@ -1071,7 +1071,7 @@ fn crae_rupd_accrual_equals_residual() {
             .expect("read POST-1341 state");
         let point = SeedPoint { slot: SlotNo(EPOCH_1341_FIRST_SLOT), block_hash: Hash32([0u8; 32]) };
         let (s1a, _c) = decode_native_nonutxo_state(&state, point, 1341, 2).expect("decode");
-        s1a.snapshots.mark.0.delegations.keys().map(|h| h.0).collect()
+        s1a.snapshots.mark.0.delegations.keys().map(|h| h.hash().0).collect()
     };
 
     // Reward accrued to the mark's credentials across the boundary (the RUPD payout the stale mark misses).
@@ -1138,7 +1138,7 @@ fn crae_cardano_mark_is_base_plus_reward() {
         *reward_h.entry(cred_hash28(c)).or_insert(0) += co.0 as u128;
     }
     let mark: BTreeMap<[u8; 28], u64> =
-        s1a.snapshots.mark.0.delegations.iter().map(|(h, (_, c))| (h.0, c.0)).collect();
+        s1a.snapshots.mark.0.delegations.iter().map(|(h, (_, c))| (h.hash().0, c.0)).collect();
 
     // Per credential in cardano's mark: reconstructed = base + reward; compare to the snapshot's stake.
     let (mut resid, mut mm, mut base_only, mut rew_only) = (0i128, 0u64, 0i128, 0i128);

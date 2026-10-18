@@ -191,7 +191,7 @@ fn cre_s3_drep_voting_stake_derivation_on_real_state() {
     // delegator — the derivation neither invents nor drops stake across the regrouping.
     let independent: u128 = vd
         .keys()
-        .filter_map(|c| mark.delegations.get(c.hash()).map(|(_, coin)| coin.0 as u128))
+        .filter_map(|c| mark.delegations.get(c).map(|(_, coin)| coin.0 as u128))
         .filter(|s| *s > 0)
         .sum();
     assert_eq!(total, independent, "derived total == summed positive-delegator mark stake (conservation)");

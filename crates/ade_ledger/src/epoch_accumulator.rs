@@ -132,8 +132,10 @@ use crate::utxo::UTxOState;
 /// non-reference-equivalent until the mark rotates out two boundaries later). A pre-fix v1/v2/v3 (or
 /// unversioned) store therefore fails closed on decode (`UnknownVersion`) — persisted authority has ONE
 /// unambiguous replay meaning, recovery never carries a stale interpretation forward, and the only
-/// migration is an explicit fresh re-bootstrap.
-pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = 4;
+/// migration is an explicit fresh re-bootstrap. v5 (LV-4) = the stake snapshots are keyed by the whole
+/// credential (key/script tag kept) and carry each pool's frozen reward parameters; a v4 snapshot has
+/// neither, so it is refused rather than read as "no pool parameters".
+pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = 5;
 
 /// The non-UTxO authority a self-sustaining ledger maintains beside the disk-backed reduced UTxO
 /// checkpoint. Closed record — all fields required at construction; no `Default`, no
@@ -1010,9 +1012,14 @@ impl<'a> PostRupdRewards<'a> {
 /// serialized SnapShot rule, distinct from the derived `PoolDistr` (`numDelegators>0`) count that keeps such pools.
 /// Deciding membership here — at construction, not as a post-filter — makes `delegations`, `pool_stakes`, and the
 /// canonical fingerprint equal cardano's. Pure, deterministic (`BTreeMap`), saturating on the supply-bounded sums.
+///
+/// LV-4 (DC-EPOCH-43/44): credentials keep their key/script tag, and the mark carries every registered pool's
+/// parameters frozen here ([`snapshot_pool_params`]). `pools` MUST be the registrations at SNAP — before
+/// future-pool adoption and before POOLREAP — which is the only state the boundary transition passes.
 pub(crate) fn build_boundary_mark_snapshot(
     base: &BoundaryBaseStake,
     rewards: PostRupdRewards<'_>,
+    pools: &BTreeMap<PoolId, crate::delegation::PoolParams>,
 ) -> crate::epoch::StakeSnapshot {
     let base_utxo = &base.canonical_credential_stake;
     let delegation = rewards.delegation;
@@ -1026,14 +1033,52 @@ pub(crate) fn build_boundary_mark_snapshot(
         if stake == 0 {
             continue;
         }
-        delegations.insert(cred.hash().clone(), (pool.clone(), Coin(stake)));
+        delegations.insert(cred.clone(), (pool.clone(), Coin(stake)));
         let entry = pool_stakes.entry(pool.clone()).or_insert(Coin(0));
         entry.0 = entry.0.saturating_add(stake);
     }
     crate::epoch::StakeSnapshot {
         delegations,
         pool_stakes,
+        pool_params: snapshot_pool_params(pools, &delegation.delegations),
     }
+}
+
+/// LV-4 (DC-EPOCH-44): freeze every registered pool's reward-relevant parameters into a snapshot — cardano's
+/// `ssStakePoolsSnapShot`, built at SNAP from the registrations as they stand then (every registered pool,
+/// including pools with no stake). The self-delegated owners are the pool's owners delegated to THIS pool in
+/// the cert state (cardano's `spsDelegators` membership), so an owner with zero stake is still listed.
+///
+/// A pool whose reward account is not a well-formed 29-byte account has no frozen entry; if such a pool ever
+/// earns, the reward calculation's missing-parameters terminal fires rather than paying a guessed credential.
+pub fn snapshot_pool_params(
+    pools: &BTreeMap<PoolId, crate::delegation::PoolParams>,
+    delegations: &BTreeMap<StakeCredential, PoolId>,
+) -> BTreeMap<PoolId, crate::epoch::SnapshotPoolParams> {
+    pools
+        .iter()
+        .filter_map(|(pool_id, params)| {
+            let reward_account = reward_account_credential(&params.reward_account)?;
+            let self_delegated_owners = params
+                .owners
+                .iter()
+                .filter(|owner| {
+                    delegations.get(&StakeCredential::KeyHash((*owner).clone())) == Some(pool_id)
+                })
+                .cloned()
+                .collect();
+            Some((
+                pool_id.clone(),
+                crate::epoch::SnapshotPoolParams {
+                    pledge: params.pledge,
+                    cost: params.cost,
+                    margin: params.margin,
+                    reward_account,
+                    self_delegated_owners,
+                },
+            ))
+        })
+        .collect()
 }
 
 /// Apply this block's within-epoch effects: certificates + governance (the ledger's own authority),
@@ -1524,7 +1569,7 @@ pub fn scan_block_tx_authority_effects(
 /// set ⇒ script. Returns `None` for a malformed (≠ 29-byte) account. Shared with the boundary
 /// POOLREAP refund (`rules::apply_epoch_boundary_with_registrations`) so a script-hash reward account
 /// routes by its real discriminant, never a KeyHash projection.
-pub(crate) fn reward_account_credential(account: &[u8]) -> Option<StakeCredential> {
+pub fn reward_account_credential(account: &[u8]) -> Option<StakeCredential> {
     if account.len() != 29 {
         return None;
     }
@@ -2287,7 +2332,7 @@ mod tests {
         acc.epoch_state.block_production.insert(pool(0x44), 7);
         let mut snap = StakeSnapshot::new();
         snap.delegations
-            .insert(Hash28([0x33; 28]), (pool(0x44), Coin(1_000)));
+            .insert(StakeCredential::KeyHash(Hash28([0x33; 28])), (pool(0x44), Coin(1_000)));
         snap.pool_stakes.insert(pool(0x44), Coin(1_000));
         acc.epoch_state.snapshots = crate::epoch::EpochStakeSnapshots::Authoritative(SnapshotState {
             mark: MarkSnapshot(snap.clone()),
@@ -2589,13 +2634,13 @@ mod tests {
         // deposit params or the bootstrap-RUPD feeSS (delta_fees).
         let acc = populated();
         let bytes = encode_epoch_accumulator(&acc);
-        // outer array header is one byte; the version uint follows. v4 (=0x04) → patch down to a v1 store (0x01).
+        // outer array header is one byte; the version uint follows. v5 (=0x05) → patch down to a v1 store (0x01).
         let mut buf = bytes.clone();
-        assert_eq!(buf[1], 0x04);
+        assert_eq!(buf[1], 0x05);
         buf[1] = 0x01;
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::UnknownVersion {
-                expected: 4,
+                expected: 5,
                 found: 1,
             }) => {}
             other => panic!("expected UnknownVersion, got {other:?}"),
@@ -2611,14 +2656,30 @@ mod tests {
         let acc = populated();
         let bytes = encode_epoch_accumulator(&acc);
         let mut buf = bytes.clone();
-        assert_eq!(buf[1], 0x04, "current version is v4");
+        assert_eq!(buf[1], 0x05, "current version is v5");
         buf[1] = 0x03; // a fee-pot-era store, pre snapshot-inclusion fix
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::UnknownVersion {
-                expected: 4,
+                expected: 5,
                 found: 3,
             }) => {}
             other => panic!("a pre-C v3 store must fail closed (re-bootstrap required), got {other:?}"),
+        }
+    }
+
+    // LV-4: a v4 store's snapshots are keyed by bare hash and carry no frozen pool parameters. It fails closed
+    // on decode; it is never read as "no pool parameters".
+    #[test]
+    fn codec_rejects_pre_lv4_store_rebootstrap_required() {
+        let mut buf = encode_epoch_accumulator(&populated());
+        assert_eq!(buf[1], 0x05);
+        buf[1] = 0x04;
+        match decode_epoch_accumulator(&buf) {
+            Err(EpochAccumulatorCodecError::UnknownVersion {
+                expected: 5,
+                found: 4,
+            }) => {}
+            other => panic!("a pre-LV-4 v4 store must fail closed, got {other:?}"),
         }
     }
 
@@ -2648,16 +2709,16 @@ mod tests {
 
     #[test]
     fn codec_rejects_non_canonical_via_reencode_backstop() {
-        // Re-encode the version uint non-minimally: 0x04 (minimal) → 0x18 0x04 (1-byte-argument uint,
-        // same value 4). The value decodes correctly but re-encodes minimally, so the byte-canonical
+        // Re-encode the version uint non-minimally: 0x05 (minimal) → 0x18 0x05 (1-byte-argument uint,
+        // same value 5). The value decodes correctly but re-encodes minimally, so the byte-canonical
         // backstop (re-encode != input) rejects it fail-closed — the discipline that a valid value MUST
         // have exactly one accepted encoding.
         let bytes = encode_epoch_accumulator(&populated());
-        assert_eq!(bytes[1], 0x04, "version is encoded minimally");
+        assert_eq!(bytes[1], 0x05, "version is encoded minimally");
         let mut buf = Vec::with_capacity(bytes.len() + 1);
         buf.push(bytes[0]); // outer array header
         buf.push(0x18); // uint, 1-byte argument follows
-        buf.push(0x04); // = 4 (non-minimal)
+        buf.push(0x05); // = 5 (non-minimal)
         buf.extend_from_slice(&bytes[2..]);
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::MalformedCbor) => {}
@@ -2711,7 +2772,7 @@ mod tests {
         let stake = 1_000_000_000_000u64;
         let mut snap = StakeSnapshot::new();
         snap.delegations
-            .insert(Hash28([0xCC; 28]), (pool(0xAA), Coin(stake)));
+            .insert(StakeCredential::KeyHash(Hash28([0xCC; 28])), (pool(0xAA), Coin(stake)));
         snap.pool_stakes.insert(pool(0xAA), Coin(stake));
         acc.epoch_state.snapshots.as_authoritative_mut().unwrap().go = GoSnapshot(snap);
         // C is registered + delegated to pool AA; the operator account (0x0B) is a different cred.
@@ -2727,6 +2788,9 @@ mod tests {
             .pool
             .pools
             .insert(pool(0xAA), sample_pool_params(0xAA, key_account(0x0B)));
+        // LV-4: the pool was registered when the go snapshot was taken, so its parameters are frozen in it.
+        acc.epoch_state.snapshots.as_authoritative_mut().unwrap().go.0.pool_params =
+            snapshot_pool_params(&acc.cert_state.pool.pools, &acc.cert_state.delegation.delegations);
         acc
     }
 
@@ -2820,14 +2884,18 @@ mod tests {
             canonical_credential_stake: base_utxo.clone(),
         };
         let built =
-            build_boundary_mark_snapshot(&base_stake, PostRupdRewards::after_rupd(&acc.cert_state.delegation));
+            build_boundary_mark_snapshot(
+                &base_stake,
+                PostRupdRewards::after_rupd(&acc.cert_state.delegation),
+                &acc.cert_state.pool.pools,
+            );
         assert_eq!(
-            built.delegations.get(member.hash()),
+            built.delegations.get(&member),
             Some(&(pool_aa.clone(), Coin(base))),
             "the member's per-credential stake is carried into the mark"
         );
         assert_eq!(
-            built.delegations.get(op.hash()),
+            built.delegations.get(&op),
             Some(&(pool_aa.clone(), Coin(base))),
             "the operator's per-credential stake is carried into the mark"
         );
@@ -2880,6 +2948,7 @@ mod tests {
         let per_pool_go = StakeSnapshot {
             delegations: BTreeMap::new(),
             pool_stakes: built.pool_stakes.clone(),
+            pool_params: built.pool_params.clone(),
         };
         let mut acc_pp = acc.clone();
         acc_pp.epoch_state.snapshots.as_authoritative_mut().unwrap().go = GoSnapshot(per_pool_go);
@@ -2931,14 +3000,18 @@ mod tests {
             boundary_point: SlotNo(0),
             canonical_credential_stake: base_utxo,
         };
-        let mark = build_boundary_mark_snapshot(&base_stake, PostRupdRewards::after_rupd(&delegation));
+        let mark = build_boundary_mark_snapshot(
+            &base_stake,
+            PostRupdRewards::after_rupd(&delegation),
+            &BTreeMap::new(),
+        );
 
         // Positive-stake credentials are carried in full.
-        assert_eq!(mark.delegations.get(staker.hash()), Some(&(pool_live.clone(), Coin(500))));
-        assert_eq!(mark.delegations.get(reward_only.hash()), Some(&(pool_live.clone(), Coin(7))));
+        assert_eq!(mark.delegations.get(&staker), Some(&(pool_live.clone(), Coin(500))));
+        assert_eq!(mark.delegations.get(&reward_only), Some(&(pool_live.clone(), Coin(7))));
         // Zero-stake credentials are OMITTED from delegations.
-        assert_eq!(mark.delegations.get(zero_on_live.hash()), None, "zero-stake delegator dropped");
-        assert_eq!(mark.delegations.get(zero_on_phantom.hash()), None, "zero-stake delegator dropped");
+        assert_eq!(mark.delegations.get(&zero_on_live), None, "zero-stake delegator dropped");
+        assert_eq!(mark.delegations.get(&zero_on_phantom), None, "zero-stake delegator dropped");
         // The live pool holds only its positive-stake delegators; the phantom pool is ABSENT.
         assert_eq!(mark.pool_stakes.get(&pool_live), Some(&Coin(507)));
         assert_eq!(
@@ -3217,7 +3290,7 @@ mod tests {
         // Credited BEFORE the mark: the new mark's stake for CC is its base UTxO plus the reward.
         let mark = &after.epoch_state.snapshots.as_authoritative().unwrap().mark.0;
         assert_eq!(
-            mark.delegations.get(&Hash28([0xCC; 28])).map(|(_, c)| c.0),
+            mark.delegations.get(&StakeCredential::KeyHash(Hash28([0xCC; 28]))).map(|(_, c)| c.0),
             Some(1_000_000_000_000 + reward.0),
             "the mark is built post-reward"
         );

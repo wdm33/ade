@@ -286,7 +286,7 @@ mod tests {
         let mut mark_snap = StakeSnapshot::new();
         mark_snap
             .delegations
-            .insert(Hash28([0x33; 28]), (PoolId(Hash28([0x44; 28])), Coin(100)));
+            .insert(StakeCredential::KeyHash(Hash28([0x33; 28])), (PoolId(Hash28([0x44; 28])), Coin(100)));
         mark_snap.pool_stakes.insert(PoolId(Hash28([0x44; 28])), Coin(100));
         s.epoch_state.snapshots.as_authoritative_mut().unwrap().mark = MarkSnapshot(mark_snap.clone());
         s.epoch_state.snapshots.as_authoritative_mut().unwrap().set = SetSnapshot(mark_snap.clone());
