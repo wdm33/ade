@@ -539,8 +539,12 @@ fn dump_current_pots() {
         .expect("load current")
         .expect("store is sealed");
     println!(
-        "POTS applied_through_slot={} epoch={} treasury={} reserves={}",
-        slot.0, acc.epoch_state.epoch.0, acc.epoch_state.treasury.0, acc.epoch_state.reserves.0
+        "POTS applied_through_slot={} epoch={} treasury={} reserves={} donation_pot={}",
+        slot.0,
+        acc.epoch_state.epoch.0,
+        acc.epoch_state.treasury.0,
+        acc.epoch_state.reserves.0,
+        acc.epoch_state.donation_pot.0
     );
 }
 

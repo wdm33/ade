@@ -356,4 +356,12 @@ failed the gate, but for no named reason. The assignments are now guarded, and t
 the boundary reads the pot exactly once. M4, M7 and M8 were re-run against the fixed gate with the
 results above.
 
-**Live (CE-LV6-10).** Not yet run. DC-EPOCH-45 stays partial until it is.
+**Live (CE-LV6-10): met.** A fresh v11 bootstrap of snapshot 6009 against the local docker
+`cardano-node-preprod`, with one warm restart at the known 306→307 header stop. After 305→306:
+
+- treasury 1,959,103,174,719,172 and reserves 12,979,123,112,128,607, both equal to the reference;
+- the donation pot is 0.
+
+Before the boundary, the pot held 500,000, the first donation, at the first stop. The node then crossed
+306→307 and followed on. Evidence:
+`docs/evidence/run-stores/preprod-live2c/lv6-ce10-v11-live-donation-pot.md`. DC-EPOCH-45 is enforced.
