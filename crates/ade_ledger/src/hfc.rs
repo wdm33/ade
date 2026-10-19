@@ -48,6 +48,8 @@ pub fn translate_byron_to_shelley(
         treasury: Coin(0),
         block_production: std::collections::BTreeMap::new(),
         epoch_fees: Coin(0),
+        // Byron -> Shelley: no era before Conway has treasury donations.
+        donation_pot: Coin(0),
     };
 
     Ok(LedgerState {
@@ -292,6 +294,7 @@ mod tests {
                 treasury: Coin(0),
                 block_production: std::collections::BTreeMap::new(),
                 epoch_fees: Coin(0),
+                donation_pot: Coin(0),
             },
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::ByronRegular,
@@ -314,6 +317,7 @@ mod tests {
                 treasury: Coin(0),
                 block_production: std::collections::BTreeMap::new(),
                 epoch_fees: Coin(0),
+                donation_pot: Coin(0),
             },
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Shelley,
@@ -336,6 +340,7 @@ mod tests {
                 treasury: Coin(0),
                 block_production: std::collections::BTreeMap::new(),
                 epoch_fees: Coin(0),
+                donation_pot: Coin(0),
             },
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Allegra,
@@ -548,6 +553,7 @@ mod tests {
                 treasury: Coin(0),
                 block_production: std::collections::BTreeMap::new(),
                 epoch_fees: Coin(0),
+                donation_pot: Coin(0),
             },
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Mary,
@@ -570,6 +576,7 @@ mod tests {
                 treasury: Coin(0),
                 block_production: std::collections::BTreeMap::new(),
                 epoch_fees: Coin(0),
+                donation_pot: Coin(0),
             },
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Alonzo,
@@ -592,6 +599,7 @@ mod tests {
                 treasury: Coin(0),
                 block_production: std::collections::BTreeMap::new(),
                 epoch_fees: Coin(0),
+                donation_pot: Coin(0),
             },
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Babbage,

@@ -849,6 +849,7 @@ mod tip_tests {
                 delta_fees: Coin(0),
             },
             epoch_fees: Coin(0),
+            donation_pot: Coin(0),
             imported_gov: gov,
             reward_nibble_observation: RewardNibbleObservation::None,
             max_block_ex_units_mem: 0,
@@ -1587,6 +1588,8 @@ const CONWAY_GOV_STATE_FIELDS: u64 = 7;
 const CONWAY_GOV_STATE_CURPPARAMS_INDEX: usize = 3;
 /// `UTxOState` (Conway) = `[utxo, deposited, fees, govState, incrStake, donation]`.
 const UTXO_STATE_GOVSTATE_INDEX: usize = 3;
+/// `UTxOState[5]` = `utxosDonation`, the treasury-donation pot (Conway).
+const UTXO_STATE_DONATION_INDEX: usize = 5;
 /// CBOR tag for a rational number (`a0`, `rho`, `tau`, `minFeeRefScriptCostPerByte`).
 const TAG_RATIONAL_PP: u64 = 30;
 /// The Cardano mainnet network magic. The internal network id is derived from the
@@ -1734,6 +1737,10 @@ pub struct NativeSnapshotNonUtxoState {
     /// (seed+1 -> seed+2, paying epoch (seed)'s reward) consumes the FULL epoch fees (this pre-seed
     /// snapshot pot + the followed tail), not just the followed tail. Manifest-bound certified state.
     pub epoch_fees: Coin,
+    /// The certified treasury-donation pot (`UTxOState[5]`, DC-EPOCH-45) at the snapshot point. Seeds
+    /// `epoch_state.donation_pot`, so donations made in the seed epoch before the snapshot still reach the
+    /// treasury at the seed boundary. Read from the snapshot, never defaulted; commitment-bound (v13).
+    pub donation_pot: Coin,
     /// The bootstrap-imported Conway governance state (CONWAY-PROPOSAL-DEPOSIT-EXPIRY S1) — the live
     /// `Proposals` set + the constitutional committee — bound into the v6 commitment. An ABSENT gov
     /// state is never an empty one: a pre-v6 store fails closed on load (re-bootstrap required).
@@ -2061,6 +2068,7 @@ pub fn decode_native_nonutxo_state(
         prev_max_block_ex_units_mem,
         enacted_pparam_update,
         conway_deposit_params,
+        donation_pot,
     ) = read_conway_pparams_from_utxo_state(d, o, network_id)?;
     // Thread the CertState bootstrap governance import (CRE S1 part 2): the DState-UMap DRep vote
     // delegations (2a) + the VState DRep-expiry and committee-hot-key maps (2b). They live ONLY in
@@ -2178,6 +2186,7 @@ pub fn decode_native_nonutxo_state(
         current_block_production,
         seed_reward_update,
         epoch_fees,
+        donation_pot,
         imported_gov,
         reward_nibble_observation,
         max_block_ex_units_mem,
@@ -2264,6 +2273,7 @@ fn read_conway_pparams_from_utxo_state(
     u64,
     Option<GovActionId>,
     crate::pparams::ConwayOnlyDepositParams,
+    Coin,
 )> {
     // UTxOState = array(6)[utxo, deposited, fees, govState, incrStake, donation]; descend to [3] = govState.
     if peek_major(d, *o).map_err(NativeNonUtxoError::from)? != 4 {
@@ -2308,8 +2318,19 @@ fn read_conway_pparams_from_utxo_state(
     for _ in (CONWAY_GOV_STATE_CURPPARAMS_INDEX + 2)..(gn as usize) {
         skip_item(d, o)?;
     }
-    // skip the remaining UTxOState fields (incrStake, donation, …).
-    for _ in (UTXO_STATE_GOVSTATE_INDEX + 1)..(un as usize) {
+    // [4] incrStake is not this decoder's authority; [5] donation IS (DC-EPOCH-45): the certified
+    // treasury-donation pot of the seed epoch so far, moved to the treasury at the next boundary. It is
+    // READ, never defaulted: a UTxOState without it is refused, not imported as an empty pot.
+    if (un as usize) <= UTXO_STATE_DONATION_INDEX {
+        return Err(NativeNonUtxoError::ProtocolParamsMissing(format!(
+            "UTxOState arity {un} has no donation pot"
+        )));
+    }
+    for _ in (UTXO_STATE_GOVSTATE_INDEX + 1)..UTXO_STATE_DONATION_INDEX {
+        skip_item(d, o)?;
+    }
+    let donation_pot = Coin(nn_read_u64(d, o, "UTxOState.donation")?);
+    for _ in (UTXO_STATE_DONATION_INDEX + 1)..(un as usize) {
         skip_item(d, o)?;
     }
     Ok((
@@ -2336,6 +2357,7 @@ fn read_conway_pparams_from_utxo_state(
         prev_max_block_ex_units_mem,
         enacted_pparam_update,
         conway_deposit_params,
+        donation_pot,
     ))
 }
 
@@ -2634,7 +2656,8 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
     // ratify/enact inputs, so both are now commitment-bound (the §5 seam).
     // v12: additionally binds the Conway-only deposit params (govActionDeposit/dRepDeposit/dRepActivity),
     // decoded from the certified curPParams into bootstrap authority — a tampered deposit param flips it.
-    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v12");
+    // v13 (LV-6): additionally binds the certified treasury-donation pot (below, after the fee pot).
+    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v13");
     v.push(s.era.as_u8());
     // The manifest-derived network id (a network identity perturbation flips the commitment).
     v.push(s.network_id);
@@ -2720,6 +2743,8 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
     // v5: the certified epoch fee pot (seed epoch's pre-seed fees) — authority for the first
     // bootstrap-adjacent native boundary's reward; a fee-pot perturbation flips the commitment.
     v.extend_from_slice(&s.epoch_fees.0.to_be_bytes());
+    // v13: the certified treasury-donation pot -- a perturbation flips the commitment.
+    v.extend_from_slice(&s.donation_pot.0.to_be_bytes());
     // v6: the imported Conway gov state (CONWAY-PROPOSAL-DEPOSIT-EXPIRY) — the live proposal set
     // (identity-bound by GovActionId, with deposit/return-addr/expiry/vote maps) + the constitutional
     // committee. A tampered proposal/deposit/return-addr/expiry/vote flips the commitment. The DECODE

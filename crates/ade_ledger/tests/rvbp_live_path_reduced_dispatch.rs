@@ -170,11 +170,20 @@ a082a0a082a0a00000a000584f9818182c1a00025ef51a0001000019400019044c1a001e84801a1d
     let lv4_expected = PRE_P2_FULL_CONWAY_305
         .replace('\n', "")
         .replace("5387190131008382a0a082a0a082a0a0", "5687190131008383a0a0a083a0a0a083a0a0a0");
+    // LV-6 moved exactly one more thing, under its own bumps (store semantics 11, accumulator schema 6,
+    // snapshot framing 4): the epoch state gains the donation pot as its last field. array(7) -> array(8),
+    // one more uint (0 here) after epoch_fees, so the embedded epoch-state byte string grows by 1.
+    let lv6_expected = lv4_expected.replace(
+        "5687190131008383a0a0a083a0a0a083a0a0a00000a000",
+        "5788190131008383a0a0a083a0a0a083a0a0a00000a00000",
+    );
+    assert_ne!(lv6_expected, lv4_expected, "the LV-6 substitution must apply");
     assert_eq!(
         bytes.iter().map(|b| format!("{b:02x}")).collect::<String>(),
-        lv4_expected,
-        "SLICE-P2 must not move a single byte of an AUTHORITATIVE encoding, and LV-4 moves only the \
-         stake-snapshot shape -- existing durable snapshots decode with these exact bytes"
+        lv6_expected,
+        "SLICE-P2 must not move a single byte of an AUTHORITATIVE encoding; LV-4 moves only the \
+         stake-snapshot shape and LV-6 only the epoch state's donation pot -- existing durable snapshots \
+         decode with these exact bytes"
     );
 
     let back = ade_ledger::snapshot::decode_ledger_state(&bytes).expect("and decodes");

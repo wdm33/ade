@@ -92,7 +92,7 @@ pub fn fingerprint_v1(state: &LedgerState) -> LedgerFingerprint {
     let era = fingerprint_era(state.era, state.max_lovelace_supply);
     let utxo = fingerprint_utxo(&state.utxo_state);
     let cert = fingerprint_cert_projection(&state.cert_state);
-    let epoch = fingerprint_epoch(&state.epoch_state);
+    let epoch = fingerprint_epoch_v1(&state.epoch_state);
     let snapshots = fingerprint_snapshots_v1(&state.epoch_state.snapshots);
     let pparams = fingerprint_pparams(&state.protocol_params, state.conway_deposit_params.as_ref());
     let governance = fingerprint_gov_projection(&state.gov_state);
@@ -430,6 +430,28 @@ fn fingerprint_cert(cert: &CertState) -> Hash32 {
 }
 
 fn fingerprint_epoch(epoch: &EpochState) -> Hash32 {
+    let mut buf = Vec::new();
+    write_component_header(&mut buf, b"ade/fp/epoch");
+    // Fields: epoch, slot, reserves, treasury, block_production, epoch_fees, donation_pot (LV-6).
+    // Snapshots are intentionally excluded — they have their own component.
+    write_array_canonical(&mut buf, 7);
+    write_uint_canonical(&mut buf, epoch.epoch.0);
+    write_uint_canonical(&mut buf, epoch.slot.0);
+    write_coin(&mut buf, epoch.reserves);
+    write_coin(&mut buf, epoch.treasury);
+    write_map_canonical(&mut buf, epoch.block_production.len() as u64);
+    for (pool_id, count) in &epoch.block_production {
+        write_pool_id(&mut buf, pool_id);
+        write_uint_canonical(&mut buf, *count);
+    }
+    write_coin(&mut buf, epoch.epoch_fees);
+    write_coin(&mut buf, epoch.donation_pot);
+    blake2b_256(&buf)
+}
+
+/// The FROZEN v1 epoch component: the pre-LV-6 encoding, without the donation pot. v1 is historical
+/// evidence only; production (v2) uses [`fingerprint_epoch`].
+fn fingerprint_epoch_v1(epoch: &EpochState) -> Hash32 {
     let mut buf = Vec::new();
     write_component_header(&mut buf, b"ade/fp/epoch");
     // Fields: epoch, slot, reserves, treasury, block_production, epoch_fees.
@@ -1193,9 +1215,10 @@ mod tests {
     #[test]
     fn v1_and_v2_utxo_components_differ_only_the_utxo_changes() {
         // The v2 UTxO component is a DIFFERENT construction -- v1 != v2, never
-        // silently interchangeable. Besides the utxo component, ONLY the snapshot
-        // component differs: LV-4 moved v2's snapshot encoding (whole credentials,
-        // frozen pool parameters) while v1 keeps its frozen historical form.
+        // silently interchangeable. Besides the utxo component, ONLY the snapshot and
+        // epoch components differ: LV-4 moved v2's snapshot encoding (whole credentials,
+        // frozen pool parameters) and LV-6 added the donation pot to v2's epoch
+        // component, while v1 keeps its frozen historical form of both.
         let mut s = LedgerState::new(CardanoEra::Shelley);
         s.utxo_state.utxos.insert(
             TxIn { tx_hash: Hash32([0x07; 32]), index: 1 },
@@ -1207,7 +1230,7 @@ mod tests {
         assert_ne!(f1.combined, f2.combined);
         assert_eq!(f1.era, f2.era);
         assert_eq!(f1.cert, f2.cert);
-        assert_eq!(f1.epoch, f2.epoch);
+        assert_ne!(f1.epoch, f2.epoch, "LV-6: v2 epoch component carries the donation pot");
         assert_ne!(f1.snapshots, f2.snapshots, "LV-4: v2 snapshot encoding is not v1's");
         assert_eq!(f1.pparams, f2.pparams);
         assert_eq!(f1.governance, f2.governance);

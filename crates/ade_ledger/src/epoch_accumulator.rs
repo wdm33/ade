@@ -134,8 +134,10 @@ use crate::utxo::UTxOState;
 /// unambiguous replay meaning, recovery never carries a stale interpretation forward, and the only
 /// migration is an explicit fresh re-bootstrap. v5 (LV-4) = the stake snapshots are keyed by the whole
 /// credential (key/script tag kept) and carry each pool's frozen reward parameters; a v4 snapshot has
-/// neither, so it is refused rather than read as "no pool parameters".
-pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = 5;
+/// neither, so it is refused rather than read as "no pool parameters". v6 (LV-6) = the embedded epoch
+/// state carries the treasury-donation pot; a v5 record has none, so it is refused rather than read as an
+/// empty pot.
+pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = 6;
 
 /// The non-UTxO authority a self-sustaining ledger maintains beside the disk-backed reduced UTxO
 /// checkpoint. Closed record — all fields required at construction; no `Default`, no
@@ -1103,7 +1105,7 @@ fn apply_within_epoch(
     // Fees + withdrawals (and the invalid-tx authority-effect guard) in one tx-body scan, BEFORE the cert
     // pass: an invalid tx carrying certs/withdrawals fail-closes HERE, so the cert reuse below (which walks
     // every tx) never applies a discarded invalid-tx cert.
-    let (total_fees, withdrawals) =
+    let (total_fees, total_donations, withdrawals) =
         scan_block_tx_effects(block.tx_count, &block.tx_bodies, &invalid, resolver)?;
 
     // Certificates + governance — reuse the single ledger authority (no parallel reimplementation). After
@@ -1148,6 +1150,14 @@ fn apply_within_epoch(
             .epoch_fees
             .0
             .checked_add(total_fees)
+            .ok_or(LedgerTransitionError::ArithmeticOverflow)?,
+    );
+    // Treasury donations of valid txs (cardano utxosDonation, DC-EPOCH-45).
+    acc.epoch_state.donation_pot = Coin(
+        acc.epoch_state
+            .donation_pot
+            .0
+            .checked_add(total_donations)
             .ok_or(LedgerTransitionError::ArithmeticOverflow)?,
     );
     // Withdrawals (valid txs only) zero the named reward accounts.
@@ -1261,6 +1271,8 @@ struct TxScan {
     has_certs: bool,
     /// Withdrawn reward-account credentials (key 5 map keys).
     withdrawals: Vec<StakeCredential>,
+    /// Declared treasury donation (key 22). Credited only through `state::tx_donation_contribution`.
+    donation: Option<u64>,
     /// BND CENSUS (diagnostic only): whether the body carries voting procedures (key 19).
     /// `apply_tx_scan` never reads this — the governance guard in `apply_one_tx_governance` is the
     /// authority for fields 19/20. It is recorded HERE so ONE body walk can report every
@@ -1271,9 +1283,9 @@ struct TxScan {
     has_proposals: bool,
 }
 
-/// Scan the block's tx bodies once, returning `(Σ fees, withdrawn reward-account credentials of VALID
-/// txs)` with cardano-ledger UTXOS fee semantics. A VALID tx (index ∉ `invalid`) contributes its declared
-/// fee (key 2) and its withdrawals; a phase-2-INVALID tx (index ∈ `invalid`) contributes ONLY its consumed
+/// Scan the block's tx bodies once, returning `(Σ fees, Σ donations, withdrawn reward-account credentials
+/// of VALID txs)` with cardano-ledger UTXOS fee semantics. A VALID tx (index ∉ `invalid`) contributes its
+/// declared fee (key 2), its treasury donation (key 22) and its withdrawals; a phase-2-INVALID tx (index ∈ `invalid`) contributes ONLY its consumed
 /// collateral (`total_collateral`, key 17) and NONE of its body effects. Fail-closed: an invalid tx whose
 /// collateral is not declarable without the UTxO (`total_collateral` absent) is
 /// `InvalidTxCollateralNeedsUtxo`; an invalid tx that carries certs (key 4) or withdrawals (key 5) is
@@ -1285,14 +1297,15 @@ fn scan_block_tx_effects(
     tx_bodies: &[u8],
     invalid: &std::collections::BTreeSet<u64>,
     resolver: Option<&dyn crate::collateral::CollateralValueResolver>,
-) -> Result<(u64, Vec<StakeCredential>), LedgerTransitionError> {
+) -> Result<(u64, u64, Vec<StakeCredential>), LedgerTransitionError> {
     use ade_codec::cbor;
     if tx_count == 0 {
-        return Ok((0, Vec::new()));
+        return Ok((0, 0, Vec::new()));
     }
     let data = tx_bodies;
     let mut offset = 0usize;
     let mut total_fees: u64 = 0;
+    let mut total_donations: u64 = 0;
     let mut withdrawals: Vec<StakeCredential> = Vec::new();
 
     let mut index: u64 = 0;
@@ -1304,7 +1317,16 @@ fn scan_block_tx_effects(
                 let body_start = offset;
                 let tx = scan_one_tx(data, &mut offset)?;
                 let body = &data[body_start..offset];
-                apply_tx_scan(tx, index, invalid, body, resolver, &mut total_fees, &mut withdrawals)?;
+                apply_tx_scan(
+                    tx,
+                    index,
+                    invalid,
+                    body,
+                    resolver,
+                    &mut total_fees,
+                    &mut total_donations,
+                    &mut withdrawals,
+                )?;
                 index += 1;
             }
         }
@@ -1315,7 +1337,16 @@ fn scan_block_tx_effects(
                 let body_start = offset;
                 let tx = scan_one_tx(data, &mut offset)?;
                 let body = &data[body_start..offset];
-                apply_tx_scan(tx, index, invalid, body, resolver, &mut total_fees, &mut withdrawals)?;
+                apply_tx_scan(
+                    tx,
+                    index,
+                    invalid,
+                    body,
+                    resolver,
+                    &mut total_fees,
+                    &mut total_donations,
+                    &mut withdrawals,
+                )?;
                 index += 1;
             }
         }
@@ -1327,7 +1358,7 @@ fn scan_block_tx_effects(
     if index != tx_count {
         return Err(LedgerTransitionError::MalformedBlock);
     }
-    Ok((total_fees, withdrawals))
+    Ok((total_fees, total_donations, withdrawals))
 }
 
 /// Walk ONE tx body map, collecting the fields the validity-aware fee/withdrawal decision needs.
@@ -1338,6 +1369,7 @@ fn scan_one_tx(data: &[u8], offset: &mut usize) -> Result<TxScan, LedgerTransiti
         total_collateral: None,
         has_certs: false,
         withdrawals: Vec::new(),
+        donation: None,
         has_votes: false,
         has_proposals: false,
     };
@@ -1373,8 +1405,17 @@ fn apply_tx_scan(
     body_bytes: &[u8],
     resolver: Option<&dyn crate::collateral::CollateralValueResolver>,
     total_fees: &mut u64,
+    total_donations: &mut u64,
     withdrawals: &mut Vec<StakeCredential>,
 ) -> Result<(), LedgerTransitionError> {
+    // DC-EPOCH-45: the donation follows the same validity gate as every other body effect.
+    let donation = crate::state::tx_donation_contribution(
+        tx.donation.map(Coin),
+        !invalid.contains(&index),
+    );
+    *total_donations = total_donations
+        .checked_add(donation.0)
+        .ok_or(LedgerTransitionError::ArithmeticOverflow)?;
     if invalid.contains(&index) {
         // BND-2c (INV-BND-2c): the EXACT Cardano `Phase2Invalid` contribution. Every ordinary body
         // effect is DISCARDED -- certs, withdrawals, votes, proposals contribute nothing, and that is
@@ -1466,6 +1507,11 @@ fn read_one_tx_field(
             let (tc, _) =
                 cbor::read_uint(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)?;
             tx.total_collateral = Some(tc);
+        }
+        22 => {
+            let (d, _) =
+                cbor::read_uint(data, offset).map_err(|_| LedgerTransitionError::MalformedBlock)?;
+            tx.donation = Some(d);
         }
         // BND CENSUS: record the presence of the governance authority fields in the SAME walk. The
         // value is skipped exactly as the `_` arm skipped it before, so the parse is byte-for-byte
@@ -2634,13 +2680,13 @@ mod tests {
         // deposit params or the bootstrap-RUPD feeSS (delta_fees).
         let acc = populated();
         let bytes = encode_epoch_accumulator(&acc);
-        // outer array header is one byte; the version uint follows. v5 (=0x05) → patch down to a v1 store (0x01).
+        // outer array header is one byte; the version uint follows. v6 (=0x06) → patch down to a v1 store (0x01).
         let mut buf = bytes.clone();
-        assert_eq!(buf[1], 0x05);
+        assert_eq!(buf[1], 0x06);
         buf[1] = 0x01;
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::UnknownVersion {
-                expected: 5,
+                expected: 6,
                 found: 1,
             }) => {}
             other => panic!("expected UnknownVersion, got {other:?}"),
@@ -2656,11 +2702,11 @@ mod tests {
         let acc = populated();
         let bytes = encode_epoch_accumulator(&acc);
         let mut buf = bytes.clone();
-        assert_eq!(buf[1], 0x05, "current version is v5");
+        assert_eq!(buf[1], 0x06, "current version is v6");
         buf[1] = 0x03; // a fee-pot-era store, pre snapshot-inclusion fix
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::UnknownVersion {
-                expected: 5,
+                expected: 6,
                 found: 3,
             }) => {}
             other => panic!("a pre-C v3 store must fail closed (re-bootstrap required), got {other:?}"),
@@ -2672,14 +2718,30 @@ mod tests {
     #[test]
     fn codec_rejects_pre_lv4_store_rebootstrap_required() {
         let mut buf = encode_epoch_accumulator(&populated());
-        assert_eq!(buf[1], 0x05);
+        assert_eq!(buf[1], 0x06);
         buf[1] = 0x04;
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::UnknownVersion {
-                expected: 5,
+                expected: 6,
                 found: 4,
             }) => {}
             other => panic!("a pre-LV-4 v4 store must fail closed, got {other:?}"),
+        }
+    }
+
+    // LV-6: a v5 store's epoch state has no treasury-donation pot. It fails closed on decode; it is never
+    // read as an empty pot.
+    #[test]
+    fn codec_rejects_pre_lv6_store_rebootstrap_required() {
+        let mut buf = encode_epoch_accumulator(&populated());
+        assert_eq!(buf[1], 0x06);
+        buf[1] = 0x05;
+        match decode_epoch_accumulator(&buf) {
+            Err(EpochAccumulatorCodecError::UnknownVersion {
+                expected: 6,
+                found: 5,
+            }) => {}
+            other => panic!("a pre-LV-6 v5 store must fail closed, got {other:?}"),
         }
     }
 
@@ -2709,16 +2771,16 @@ mod tests {
 
     #[test]
     fn codec_rejects_non_canonical_via_reencode_backstop() {
-        // Re-encode the version uint non-minimally: 0x05 (minimal) → 0x18 0x05 (1-byte-argument uint,
-        // same value 5). The value decodes correctly but re-encodes minimally, so the byte-canonical
+        // Re-encode the version uint non-minimally: 0x06 (minimal) → 0x18 0x06 (1-byte-argument uint,
+        // same value 6). The value decodes correctly but re-encodes minimally, so the byte-canonical
         // backstop (re-encode != input) rejects it fail-closed — the discipline that a valid value MUST
         // have exactly one accepted encoding.
         let bytes = encode_epoch_accumulator(&populated());
-        assert_eq!(bytes[1], 0x05, "version is encoded minimally");
+        assert_eq!(bytes[1], 0x06, "version is encoded minimally");
         let mut buf = Vec::with_capacity(bytes.len() + 1);
         buf.push(bytes[0]); // outer array header
         buf.push(0x18); // uint, 1-byte argument follows
-        buf.push(0x05); // = 5 (non-minimal)
+        buf.push(0x06); // = 6 (non-minimal)
         buf.extend_from_slice(&bytes[2..]);
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::MalformedCbor) => {}
@@ -3752,7 +3814,7 @@ mod tests {
         let invalid =
             decode_invalid_tx_indices_canonical(block.invalid_txs.as_deref(), block.tx_count)
                 .expect("canonical invalid set");
-        let (one_scan_fees, _w) =
+        let (one_scan_fees, _donations, _w) =
             scan_block_tx_effects(block.tx_count, &block.tx_bodies, &invalid, None).expect("scan");
 
         let acc0 = fresh_conway_acc();
@@ -3844,7 +3906,7 @@ mod tests {
         let invalid =
             decode_invalid_tx_indices_canonical(block.invalid_txs.as_deref(), block.tx_count)
                 .expect("real block invalid_transactions is canonical");
-        let (_fees, _withdrawals) =
+        let (_fees, _donations, _withdrawals) =
             scan_block_tx_effects(block.tx_count, &block.tx_bodies, &invalid, None).expect("scan");
     }
 
@@ -3946,13 +4008,13 @@ mod tests {
     fn invalid_tx_fee_is_resolved_collateral_not_declared_fee() {
         let bodies = tx_bodies_one(tx_body_with_collateral(50, 1, Some(200)));
         // VALID (empty invalid set): the declared fee (50) is credited, unchanged by this slice.
-        let (fees_valid, _) =
+        let (fees_valid, _donations, _) =
             scan_block_tx_effects(1, &bodies, &invalid_set(&[]), None).expect("valid scan");
         assert_eq!(fees_valid, 50, "a valid tx credits its declared fee");
         // INVALID: the RESOLVED collateral is credited. 777 is deliberately not 200 (the declared
         // field-17 value in this body), so a regression to reading field 17 fails here.
         let r = FixedResolver(777);
-        let (fees_invalid, _) =
+        let (fees_invalid, _donations, _) =
             scan_block_tx_effects(1, &bodies, &invalid_set(&[0]), Some(&r)).expect("invalid scan");
         assert_eq!(
             fees_invalid, 777,
@@ -3970,12 +4032,12 @@ mod tests {
         body.extend(vec![0x80]); // empty certs array -- present, and discarded
         let bodies = tx_bodies_one(body);
         let r = FixedResolver(123);
-        let (fees, withdrawals) =
+        let (fees, _donations, withdrawals) =
             scan_block_tx_effects(1, &bodies, &invalid_set(&[0]), Some(&r)).expect("discards certs");
         assert_eq!(fees, 123, "only the resolved collateral is credited");
         assert!(withdrawals.is_empty(), "a discarded tx contributes no withdrawals");
         // The SAME block with the tx VALID still credits the declared fee.
-        let (fees_valid, _) =
+        let (fees_valid, _donations, _) =
             scan_block_tx_effects(1, &bodies, &invalid_set(&[]), None).expect("valid scan");
         assert_eq!(fees_valid, 50);
     }
@@ -4018,7 +4080,7 @@ mod tests {
         let mut bodies = vec![0x82]; // array(2)
         bodies.extend(tx_body_fee(100));
         bodies.extend(tx_body_fee(25));
-        let (fees, withdrawals) =
+        let (fees, _donations, withdrawals) =
             scan_block_tx_effects(2, &bodies, &invalid_set(&[]), None).expect("scan");
         assert_eq!(fees, 125);
         assert!(withdrawals.is_empty());
@@ -4697,6 +4759,185 @@ mod tests {
             "an unregistered return account's deposit routes to treasury",
         );
         assert!(plan.proposals.is_empty(), "the expired proposal is removed regardless of destination");
+    }
+
+    // ─── LV-6 (DC-EPOCH-45): the treasury-donation pot ───
+
+    /// A Conway tx body with collateral (as above) plus a treasury donation (key 22).
+    fn tx_body_with_donation(fee: u64, donation: u64) -> Vec<u8> {
+        let mut b = tx_body_with_collateral(fee, 1, None);
+        b[0] += 1; // one more pair: the donation
+        b.extend(cbor_uint(22));
+        b.extend(cbor_uint(donation));
+        b
+    }
+
+    /// CE-LV6-1 / CE-LV6-2: a valid tx's donation is credited, a phase-2-invalid tx's is not, and the
+    /// invalid tx's collateral contribution is unchanged by the donation it carries.
+    #[test]
+    fn lv6_a_valid_txs_donation_is_credited_and_an_invalid_txs_is_not() {
+        let bodies = tx_bodies_one(tx_body_with_donation(50, 123_456));
+        let (fees_valid, donations_valid, _) =
+            scan_block_tx_effects(1, &bodies, &invalid_set(&[]), None).expect("valid scan");
+        assert_eq!(fees_valid, 50);
+        assert_eq!(donations_valid, 123_456, "a valid tx's donation is credited");
+        let r = FixedResolver(777);
+        let (fees_invalid, donations_invalid, _) =
+            scan_block_tx_effects(1, &bodies, &invalid_set(&[0]), Some(&r)).expect("invalid scan");
+        assert_eq!(fees_invalid, 777, "the invalid tx still contributes exactly its resolved collateral");
+        assert_eq!(donations_invalid, 0, "a phase-2-invalid tx's donation never reaches the pot");
+    }
+
+    /// CE-LV6-4 (chain side): the two real epoch-305 blocks, byte-exact from the chain, each carry one
+    /// 500,000 donation in a valid tx; folded together they make the 1,000,000 pot cardano held at slot
+    /// 130,515,796.
+    #[test]
+    fn lv6_the_real_epoch_305_blocks_carry_500_000_each() {
+        let mut pot = 0u64;
+        for bytes in [
+            &include_bytes!("../tests/fixtures/block_130271804.cbor")[..],
+            &include_bytes!("../tests/fixtures/block_130404902.cbor")[..],
+        ] {
+            let (era, block) = decode_selected_block(bytes).expect("real Conway block");
+            assert_eq!(era, CardanoEra::Conway);
+            let invalid =
+                decode_invalid_tx_indices_canonical(block.invalid_txs.as_deref(), block.tx_count)
+                    .expect("invalid set");
+            assert!(invalid.is_empty(), "every tx of both blocks is phase-2 valid");
+            let (_fees, donations, _) =
+                scan_block_tx_effects(block.tx_count, &block.tx_bodies, &invalid, None).expect("scan");
+            assert_eq!(donations, 500_000);
+            pot += donations;
+        }
+        assert_eq!(pot, 1_000_000);
+    }
+
+    /// CE-LV6-4 (production fold + boundary): the two real blocks folded through `apply_within_epoch`
+    /// fill `epoch_state.donation_pot` with 1,000,000; crossing 305 -> 306 adds exactly that to the treasury
+    /// and leaves the pot at zero.
+    #[test]
+    fn lv6_the_real_pair_folds_into_the_pot_and_the_boundary_moves_it() {
+        let mut acc = EpochAccumulator::new(CardanoEra::Conway);
+        acc.epoch_state.epoch = EpochNo(305);
+        acc.protocol_params = conway_params();
+        acc.epoch_state.treasury = Coin(1_952_221_204_641_186);
+        for (bytes, slot) in [
+            (&include_bytes!("../tests/fixtures/block_130271804.cbor")[..], 130_271_804u64),
+            (&include_bytes!("../tests/fixtures/block_130404902.cbor")[..], 130_404_902u64),
+        ] {
+            let (era, block) = decode_selected_block(bytes).expect("real Conway block");
+            let ctx = SelectedBlockCtx {
+                era,
+                block_epoch: EpochNo(305),
+                block_slot: SlotNo(slot),
+                issuer_pool: pool(0xBB),
+                boundary_mark: None,
+                active_slots_per_epoch: 0,
+            };
+            acc = apply_within_epoch(acc, &block, era, &ctx, None).expect("fold a real block");
+        }
+        assert_eq!(acc.epoch_state.donation_pot, Coin(1_000_000), "500,000 + 500,000");
+        let ctx = SelectedBlockCtx {
+            era: CardanoEra::Conway,
+            block_epoch: EpochNo(306),
+            block_slot: SlotNo(130_550_441),
+            issuer_pool: pool(0xBB),
+            boundary_mark: Some(BTreeMap::new()),
+            active_slots_per_epoch: 21_600,
+        };
+        let t0 = acc.epoch_state.treasury.0;
+        let after = cross_epoch_boundary(acc, EpochNo(306), &ctx).expect("boundary");
+        assert_eq!(after.epoch_state.donation_pot, Coin(0), "cleared at 305 -> 306");
+        assert_eq!(after.epoch_state.treasury.0, t0 + 1_000_000, "exactly the pot, no rewards in this fixture");
+    }
+
+    fn lv6_boundary(ledger: &crate::state::LedgerState, target: u64) -> crate::state::LedgerState {
+        let base = BoundaryBaseStake { boundary_point: SlotNo(0), canonical_credential_stake: BTreeMap::new() };
+        apply_epoch_boundary_with_registrations(ledger, EpochNo(target), None, Some(&base), 21_600)
+            .expect("boundary")
+            .0
+    }
+
+    /// CE-LV6-3 / CE-LV6-4 (boundary side): the whole pot of the epoch just ended is added to the treasury
+    /// exactly once and the pot is zero afterwards; the next boundary moves nothing. Built on a zero-reward
+    /// ledger so the pot is the only treasury movement.
+    #[test]
+    fn lv6_the_boundary_moves_the_whole_pot_once_and_zeroes_it() {
+        let mut ledger = s4_acc_with_gov(Vec::new()).as_ledger_view();
+        ledger.epoch_state.treasury = Coin(1_952_221_204_641_186);
+        ledger.epoch_state.donation_pot = Coin(500_000 + 500_000);
+        let after = lv6_boundary(&ledger, 1341);
+        assert_eq!(after.epoch_state.treasury, Coin(1_952_221_204_641_186 + 1_000_000));
+        assert_eq!(after.epoch_state.donation_pot, Coin(0), "the pot is cleared at the boundary");
+        let again = lv6_boundary(&after, 1342);
+        assert_eq!(again.epoch_state.treasury, after.epoch_state.treasury, "a second boundary moves nothing");
+        assert_eq!(again.epoch_state.donation_pot, Coin(0));
+    }
+
+    /// CE-LV6-3: donations and unclaimed gov deposits both reach the treasury at the same boundary, as in
+    /// cardano's `accountState3` (`utxosDonation <> fold unclaimed`).
+    #[test]
+    fn lv6_donations_and_unclaimed_deposits_both_reach_the_treasury() {
+        // 0xee is NOT registered: the expiring proposal's deposit is unclaimed -> treasury.
+        let mut ledger =
+            s4_acc_with_gov(vec![s4_gas(0x01, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xee)]).as_ledger_view();
+        ledger.epoch_state.donation_pot = Coin(1_000_000);
+        let t0 = ledger.epoch_state.treasury.0;
+        let after = lv6_boundary(&ledger, 1341);
+        assert_eq!(after.epoch_state.treasury.0, t0 + 100_000_000_000 + 1_000_000);
+        assert_eq!(after.epoch_state.donation_pot, Coin(0));
+    }
+
+    /// CE-LV6-12: the pot never funds a treasury withdrawal. A ratified withdrawal that only the current
+    /// pot could pay (treasury < amount <= treasury + pot) does not succeed: Ade enacts no withdrawal, so the
+    /// boundary is the typed terminal, raised before any mutation -- the pot and the treasury are untouched
+    /// because no new state exists. When withdrawal enactment is implemented this becomes the affordability
+    /// test: withdrawal first, pot after.
+    #[test]
+    fn lv6_the_pot_never_funds_a_treasury_withdrawal() {
+        let account = {
+            let mut a = vec![0xe0u8];
+            a.extend([0xe0u8; 28]);
+            a
+        };
+        let tw = GovAction::TreasuryWithdrawals { withdrawals: vec![(account, Coin(1_500))], policy_hash: None };
+        let votes = vec![
+            (StakeCredential::KeyHash(Hash28([0xC1; 28])), Vote::Yes),
+            (StakeCredential::KeyHash(Hash28([0xC2; 28])), Vote::Yes),
+        ];
+        let mut ledger = s4_acc_with_gov(vec![s4_gas(0x01, tw, votes, 1345, 0, 0xe0)]).as_ledger_view();
+        ledger.epoch_state.treasury = Coin(1_000);
+        ledger.epoch_state.donation_pot = Coin(1_000);
+        let before = ledger.clone();
+        let base = BoundaryBaseStake { boundary_point: SlotNo(0), canonical_credential_stake: BTreeMap::new() };
+        let err = apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&base), 21_600)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                crate::governance::GovernanceTerminal::UnsupportedRatifiedAction {
+                    kind: crate::governance::UnsupportedActionKind::NotParameterChange,
+                    ..
+                }
+            ),
+            "a withdrawal only the pot could fund is never enacted, got {err:?}"
+        );
+        assert_eq!(ledger, before, "the input state is untouched");
+    }
+
+    /// DC-EPOCH-45 (f): overflow adding the pot to the treasury is a typed terminal, never a saturation.
+    #[test]
+    fn lv6_a_pot_that_would_overflow_the_treasury_is_a_terminal() {
+        let mut ledger = s4_acc_with_gov(Vec::new()).as_ledger_view();
+        ledger.epoch_state.treasury = Coin(u64::MAX - 5);
+        ledger.epoch_state.donation_pot = Coin(10);
+        let base = BoundaryBaseStake { boundary_point: SlotNo(0), canonical_credential_stake: BTreeMap::new() };
+        let err = apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&base), 21_600)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            crate::governance::GovernanceTerminal::TreasuryOverflow { boundary: EpochNo(1341) }
+        ));
     }
 
     // ─── CRE S4.3a proof gates: one governance authority; the accumulator + replay paths agree ───

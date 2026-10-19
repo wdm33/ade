@@ -611,6 +611,9 @@ pub enum GovernanceTerminal {
     /// falls back to the registrations current at the boundary, and never skips a pool that earned. cardano's
     /// snapshot holds every pool registered at SNAP, so this is unreachable on a faithful snapshot.
     RewardPoolParamsMissing { pool: ade_types::tx::PoolId, boundary_point: ade_types::SlotNo },
+    /// Adding the epoch's donation pot to the treasury overflowed u64 at the boundary into `boundary`
+    /// (DC-EPOCH-45). Never a saturation.
+    TreasuryOverflow { boundary: ade_types::EpochNo },
 }
 
 /// Canonical inputs to [`plan_conway_governance_epoch`] — all borrows, pure (no I/O, no ledger/accumulator handle).

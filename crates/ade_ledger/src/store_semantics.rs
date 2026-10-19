@@ -123,7 +123,13 @@
 /// registrations — a pool that retired was not paid for its last blocks, and a script credential's reward
 /// could land on a key credential with the same bytes. It is refused, not repaired. Measured on preprod:
 /// 11,802 lovelace misdirected at 304→305; 42,082,928,795 left in reserves at 305→306.
-pub const STORE_SEMANTICS_VERSION: u32 = 10;
+///
+/// Version 11 (LV-6, DC-EPOCH-45): the epoch state carries the treasury-donation pot. A phase-2-valid
+/// transaction's donation is credited to it, the epoch boundary moves the whole pot into the treasury as
+/// its last treasury step, and a bootstrap imports it from the snapshot. A v10 store applied donations to
+/// nothing, so its treasury is short by every donation since its seed. It is refused, not repaired.
+/// Measured on preprod: two epoch-305 donations of 500,000, treasury 1,000,000 short after 305→306.
+pub const STORE_SEMANTICS_VERSION: u32 = 11;
 
 /// A durable artifact that carries authoritative semantics and therefore must be version-marked.
 ///

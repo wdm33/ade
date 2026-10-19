@@ -180,6 +180,7 @@ fn make_shelley_state_at_hfc() -> LedgerState {
             treasury: Coin(217_021_606_000_000),
             block_production: std::collections::BTreeMap::new(),
             epoch_fees: Coin(0),
+            donation_pot: Coin(0),
         },
         protocol_params: ProtocolParameters {
             max_block_ex_units: ade_ledger::pparams::MaxBlockExUnits::Unversioned,

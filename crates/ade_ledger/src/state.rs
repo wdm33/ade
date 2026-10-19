@@ -31,6 +31,11 @@ pub struct EpochState {
     /// Accumulated transaction fees from the epoch.
     /// Added to the reward pot at the epoch boundary.
     pub epoch_fees: Coin,
+    /// Treasury donations of the current epoch (cardano `utxosDonation`, DC-EPOCH-45). Three transitions
+    /// only: the accumulator fold credits a phase-2-valid transaction's donation, the epoch boundary moves
+    /// the whole pot into the treasury as its last treasury step and zeroes it, and a bootstrap imports it
+    /// from the snapshot's `UTxOState`.
+    pub donation_pot: Coin,
 }
 
 impl EpochState {
@@ -43,7 +48,18 @@ impl EpochState {
             treasury: Coin(0),
             block_production: std::collections::BTreeMap::new(),
             epoch_fees: Coin(0),
+            donation_pot: Coin(0),
         }
+    }
+}
+
+/// A transaction's contribution to the donation pot (DC-EPOCH-45): its `treasury donation` (body key 22)
+/// if it is phase-2 valid, nothing if it is not -- cardano's `conwayEvalScriptsTxValid` adds the donation
+/// and `babbageEvalScriptsTxInvalid` never touches it. The one definition; the accumulator fold calls it.
+pub fn tx_donation_contribution(donation: Option<Coin>, phase2_valid: bool) -> Coin {
+    match (phase2_valid, donation) {
+        (true, Some(d)) => d,
+        _ => Coin(0),
     }
 }
 

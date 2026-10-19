@@ -906,6 +906,7 @@ mod tests {
             treasury: Coin(0),
             block_production: std::collections::BTreeMap::new(),
             epoch_fees: Coin(0),
+            donation_pot: Coin(0),
         };
 
         let state = LedgerState {

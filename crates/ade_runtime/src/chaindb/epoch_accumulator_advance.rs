@@ -1029,6 +1029,58 @@ mod tests {
         );
     }
 
+    /// CE-LV6-7 (DC-EPOCH-45) — warm-restart identity with a non-zero donation pot. The two real epoch-305
+    /// donating blocks, stored within one epoch, are folded by the production walk: once uninterrupted, and
+    /// once with the store closed and reopened between the two blocks. The persisted accumulators are
+    /// byte-identical and both hold the 1,000,000 pot.
+    #[test]
+    fn lv6_a_donation_pot_survives_a_warm_restart_byte_identically() {
+        use crate::chaindb::InMemoryChainDb;
+        const B1: &[u8] = include_bytes!("../../../ade_ledger/tests/fixtures/block_130271804.cbor");
+        const B2: &[u8] = include_bytes!("../../../ade_ledger/tests/fixtures/block_130404902.cbor");
+        let db = InMemoryChainDb::new();
+        for (bytes, slot, h) in [(B1, 43_000_000u64, 0x31u8), (B2, 43_010_000, 0x32)] {
+            crate::chaindb::ChainDb::put_block(
+                &db,
+                &crate::chaindb::types::StoredBlock {
+                    hash: Hash32([h; 32]),
+                    slot: SlotNo(slot),
+                    bytes: bytes.to_vec(),
+                },
+            )
+            .unwrap();
+        }
+        let sched = schedule_86k();
+
+        let straight_dir = TempDir::new().unwrap();
+        let straight = sealed_store_at_epoch_500(&straight_dir, SlotNo(42_000_000));
+        advance_accumulator_over_chaindb(&straight, &db, &sched, SlotNo(42_000_000), SlotNo(43_500_000), None)
+            .unwrap();
+
+        let restart_dir = TempDir::new().unwrap();
+        {
+            let first = sealed_store_at_epoch_500(&restart_dir, SlotNo(42_000_000));
+            advance_accumulator_over_chaindb(&first, &db, &sched, SlotNo(42_000_000), SlotNo(43_005_000), None)
+                .unwrap();
+            let (_, mid) = first.load_current().unwrap().unwrap();
+            assert_eq!(mid.epoch_state.donation_pot, Coin(500_000), "one block folded before the restart");
+        }
+        let reopened = store(&restart_dir);
+        assert_eq!(reopened.last_advanced_slot().unwrap(), Some(SlotNo(43_000_000)));
+        advance_accumulator_over_chaindb(&reopened, &db, &sched, SlotNo(43_000_000), SlotNo(43_500_000), None)
+            .unwrap();
+
+        let (slot_a, a) = straight.load_current().unwrap().unwrap();
+        let (slot_b, b) = reopened.load_current().unwrap().unwrap();
+        assert_eq!(a.epoch_state.donation_pot, Coin(1_000_000));
+        assert_eq!(slot_a, slot_b);
+        assert_eq!(
+            ade_ledger::epoch_accumulator::encode_epoch_accumulator(&a),
+            ade_ledger::epoch_accumulator::encode_epoch_accumulator(&b),
+            "the restarted fold is byte-identical to the uninterrupted one"
+        );
+    }
+
     /// CE-2d-7 — the refusal is still REACHABLE. Same walk, same block, an authority that spent the
     /// entry WITHOUT retaining it (the pre-BND-2d store): the accumulator refuses, names the exact
     /// input, and leaves the cursor pinned. This is also the non-vacuity control for the test above.

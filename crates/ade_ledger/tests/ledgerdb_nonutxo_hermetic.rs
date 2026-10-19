@@ -188,6 +188,10 @@ struct Knobs {
     account_state_override: Option<Vec<u8>>,
     /// Override the govState arity by dropping it to fewer fields (for missing-PParams).
     gov_state_short: bool,
+    /// `UTxOState[5]`, the treasury-donation pot (LV-6).
+    donation: u64,
+    /// Drop `UTxOState` to five fields (no donation pot) -- must be refused, never read as 0.
+    utxo_state_without_donation: bool,
 }
 
 impl Default for Knobs {
@@ -204,6 +208,8 @@ impl Default for Knobs {
             pparams_override: None,
             account_state_override: None,
             gov_state_short: false,
+            donation: 0,
+            utxo_state_without_donation: false,
         }
     }
 }
@@ -264,15 +270,19 @@ fn build_state(k: &Knobs) -> Vec<u8> {
             arr(0),          // drepPulser
         ])
     };
-    let utxo_state = concat(&[
-        arr(6),
-        map(0),                // utxo (empty — UTxO lives in `tables`)
-        uint(1_159_004_000_000), // deposited
-        uint(6_669_569_234),   // fees
-        gov_state,
-        map(0),                // incrStake (placeholder)
-        uint(0),               // donation
-    ]);
+    let utxo_state = if k.utxo_state_without_donation {
+        concat(&[arr(5), map(0), uint(1_159_004_000_000), uint(6_669_569_234), gov_state, map(0)])
+    } else {
+        concat(&[
+            arr(6),
+            map(0),                // utxo (empty — UTxO lives in `tables`)
+            uint(1_159_004_000_000), // deposited
+            uint(6_669_569_234),   // fees
+            gov_state,
+            map(0),                // incrStake (placeholder)
+            uint(k.donation),      // donation
+        ])
+    };
 
     // LedgerState = [CertState, UTxOState]
     let ls = concat(&[arr(2), cert, utxo_state]);
@@ -706,4 +716,40 @@ fn reward_nibble_disagreement_is_diagnostic_not_terminal() {
         s.reward_nibble_observation,
         ade_ledger::ledgerdb_state::RewardNibbleObservation::Uniform(1)
     );
+}
+
+// ─── LV-6 (DC-EPOCH-45): the seed's treasury-donation pot is read from the snapshot ───
+
+/// CE-LV6-5: a seed taken mid-epoch after donations imports its pot; it is not started at zero.
+#[test]
+fn a_seed_with_donations_imports_its_donation_pot() {
+    let mut k = Knobs::default();
+    k.donation = 7_654_321;
+    let (s, _) = decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC).expect("decode");
+    assert_eq!(s.donation_pot, Coin(7_654_321));
+    let (s0, _) =
+        decode_native_nonutxo_state(&build_state(&Knobs::default()), point(), 296, TESTNET_MAGIC).expect("decode");
+    assert_eq!(s0.donation_pot, Coin(0), "a snapshot without donations holds 0 -- read, not defaulted");
+}
+
+/// The seed commitment (v13) binds the donation pot.
+#[test]
+fn the_seed_commitment_binds_the_donation_pot() {
+    let (_, c0) =
+        decode_native_nonutxo_state(&build_state(&Knobs::default()), point(), 296, TESTNET_MAGIC).unwrap();
+    let mut k = Knobs::default();
+    k.donation = 1;
+    let (_, c1) = decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC).unwrap();
+    assert_ne!(c0, c1, "a donation-pot perturbation flips the commitment");
+}
+
+/// A Conway `UTxOState` without its donation field is refused, never imported as an empty pot.
+#[test]
+fn a_utxo_state_without_a_donation_pot_is_refused() {
+    let mut k = Knobs::default();
+    k.utxo_state_without_donation = true;
+    assert!(matches!(
+        decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC),
+        Err(NativeNonUtxoError::ProtocolParamsMissing(m)) if m.contains("donation")
+    ));
 }

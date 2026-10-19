@@ -45,7 +45,7 @@ use crate::state::EpochState;
 
 use super::error::{SnapshotDecodeError, StructuralReason};
 
-const FIELDS: u64 = 7;
+const FIELDS: u64 = 8;
 
 pub fn encode_epoch_state(state: &EpochState) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -70,6 +70,7 @@ pub fn encode_epoch_state(state: &EpochState) -> Vec<u8> {
         write_uint_canonical(&mut buf, *count);
     }
     write_uint_canonical(&mut buf, state.epoch_fees.0);
+    write_uint_canonical(&mut buf, state.donation_pot.0);
     buf
 }
 
@@ -96,6 +97,7 @@ pub fn decode_epoch_state(bytes: &[u8]) -> Result<EpochState, SnapshotDecodeErro
         block_production.insert(pool, count);
     }
     let (fees, _, _) = read_any_int(bytes, &mut o).map_err(SnapshotDecodeError::Cbor)?;
+    let (donation_pot, _, _) = read_any_int(bytes, &mut o).map_err(SnapshotDecodeError::Cbor)?;
     Ok(EpochState {
         epoch: EpochNo(epoch),
         slot: SlotNo(slot),
@@ -104,6 +106,7 @@ pub fn decode_epoch_state(bytes: &[u8]) -> Result<EpochState, SnapshotDecodeErro
         treasury: Coin(treasury),
         block_production,
         epoch_fees: Coin(fees),
+        donation_pot: Coin(donation_pot),
     })
 }
 

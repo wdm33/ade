@@ -355,6 +355,9 @@ pub fn assemble_native_mithril_seed(
         // so the FULL epoch (seed) fees rotate to nesBprev at the seed boundary and the FIRST native
         // boundary (seed+1 -> seed+2) draws the complete fee pot (NOT cold-start 0, which under-draws).
         epoch_fees: s1a.epoch_fees,
+        // donation_pot <- the certified snapshot's treasury-donation pot (DC-EPOCH-45). Read from the
+        // snapshot, never defaulted: a mid-epoch seed taken after donations must hand them to the boundary.
+        donation_pot: s1a.donation_pot,
     };
     let ledger = LedgerState {
         utxo_state: utxo,
@@ -779,6 +782,8 @@ mod tests {
                 delta_fees: Coin(0),
             },
             epoch_fees: Coin(0),
+            // Non-zero on purpose: the assembly must carry the certified pot, not start one at zero.
+            donation_pot: Coin(7_654_321),
             imported_gov: sample_imported_gov(),
             reward_nibble_observation: RewardNibbleObservation::Mixed,
             max_block_ex_units_mem: 0,
@@ -1115,6 +1120,8 @@ mod tests {
         assert_eq!(seed.ledger.epoch_state.treasury, s1a.treasury);
         assert_eq!(seed.ledger.epoch_state.block_production, s1a.block_production);
         assert_eq!(seed.ledger.epoch_state.epoch_fees, Coin(0), "epoch_fees = 0");
+        // DC-EPOCH-45: the certified donation pot is carried, not started at zero.
+        assert_eq!(seed.ledger.epoch_state.donation_pot, Coin(7_654_321), "donation_pot <- snapshot");
         // CE-3d: the mark/set/go snapshots are threaded from S1a (the certified snapshot's
         // esSnapshots), NOT a cold-start empty default. This is what seeds the accumulator's `go`.
         assert_eq!(seed.ledger.epoch_state.snapshots.as_authoritative(), Some(&s1a.snapshots));

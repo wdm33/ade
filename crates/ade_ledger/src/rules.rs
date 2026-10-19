@@ -155,6 +155,8 @@ pub fn apply_reduced_epoch_boundary(state: &LedgerState, new_epoch: ade_types::E
     // The block-production window rolled over: the new epoch starts with a fresh (empty) window and zero fees.
     reduced.epoch_state.block_production = std::collections::BTreeMap::new();
     reduced.epoch_state.epoch_fees = ade_types::tx::Coin(0);
+    // Likewise the donation pot: cleared, never transferred -- the reduced plane has no pot authority.
+    reduced.epoch_state.donation_pot = ade_types::tx::Coin(0);
     reduced
 }
 
@@ -1498,6 +1500,19 @@ pub fn apply_epoch_boundary_with_registrations(
             .saturating_add(gov_deposit_to_treasury)
     );
 
+    // 6. Donations (DC-EPOCH-45). Cardano's EPOCH rule adds `utxosDonation` to the treasury only after
+    //    POOLREAP and the enacted treasury withdrawals, together with the unclaimed gov deposits, and then
+    //    clears it (`accountState3`, `utxosDonationL .~ zero`). So the pot of the epoch just ended is the
+    //    LAST thing added to the treasury and is never available to that boundary's withdrawals. Ade enacts
+    //    no treasury withdrawal (a ratified one is `UnsupportedRatifiedAction`, raised above before any
+    //    mutation), so nothing here precedes this step that the pot could fund. The new epoch's pot is 0.
+    let new_treasury = ade_types::tx::Coin(
+        new_treasury
+            .0
+            .checked_add(state.epoch_state.donation_pot.0)
+            .ok_or(crate::governance::GovernanceTerminal::TreasuryOverflow { boundary: new_epoch })?,
+    );
+
     let cert_state = crate::delegation::CertState {
         delegation,
         pool: pool_state,
@@ -1537,6 +1552,7 @@ pub fn apply_epoch_boundary_with_registrations(
             treasury: new_treasury,
             block_production: std::collections::BTreeMap::new(),
             epoch_fees: ade_types::tx::Coin(0),
+            donation_pot: ade_types::tx::Coin(0),
         },
         // CRE S4.3c: a supported exec-units enactment writes the new Tx/block memory limits (steps preserved) in
         // the SAME boundary construction as the proposal removal + deposit returns + root advance; otherwise the

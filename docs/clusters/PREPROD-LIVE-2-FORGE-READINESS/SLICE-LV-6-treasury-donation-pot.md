@@ -73,13 +73,13 @@ It does NOT go into `EpochAccumulator` as a separate field. The accumulator is o
 ### 3.2 Per-transaction crediting
 
 The per-transaction contribution is ONE pure function, for example `tx_donation_contribution(body,
-phase2_valid) -> Coin`: the donation for a valid transaction, zero for an invalid one. Ade has two
-paths that apply a transaction to an `EpochState`, the full ledger path and the accumulator fold. Each
-calls that one function next to its `epoch_fees` credit, and neither decides validity on its own
-terms:
-- `crates/ade_ledger/src/phase.rs`: the full path; valid → donation, invalid → none.
-- `crates/ade_ledger/src/epoch_accumulator.rs`, `apply_tx_scan`: the valid branch adds the donation;
-  the `Phase2Invalid` branch is unchanged.
+phase2_valid) -> Coin`: the donation for a valid transaction, zero for an invalid one. The
+accumulator fold calls it next to its `epoch_fees` credit and passes the block's phase-2 validity set.
+(The draft assumed a second path, the full ledger; E3 found it credits no valid-transaction pot effects,
+so there is one caller.)
+- `crates/ade_ledger/src/epoch_accumulator.rs`, `apply_tx_scan`: the contribution is computed with the
+  validity gate and summed; `apply_within_epoch` credits the sum to `epoch_state.donation_pot`.
+- `crates/ade_ledger/src/phase.rs` (phase-2 failure) adds no donation, as cardano's invalid branch.
 
 The scan reads body key 22. E3 lists every other place a transaction is applied.
 
@@ -217,8 +217,11 @@ The reduced UTxO checkpoint persists no `EpochState`; nothing is mirrored there.
 matches §3.5, plus the seed commitment v13.**
 
 **E3 — application and boundary paths.**
-- **Per transaction**, two sites credit `epoch_fees`: `phase.rs` ≈208 (full path) and `epoch_accumulator.rs`
-  `apply_tx_scan` (accumulator fold). Both call the one contribution function.
+- **Per transaction:** *corrected during implementation.* Only ONE production site credits transaction
+  effects to the pots: `epoch_accumulator.rs` `apply_tx_scan` / `apply_within_epoch`, the accumulator
+  fold. `phase.rs`'s `apply_phase_2_failure` is called only from its own tests, and the full ledger path
+  credits no valid-transaction fees at all. So the accumulator fold is the single
+  transaction-application authority, and it is the one caller of the contribution function.
 - **At the boundary:**
   - `rules.rs` ≈1539 is the full boundary, which the accumulator's native and seed crossings also go
     through. It transfers the pot in the named last step.
@@ -249,7 +252,7 @@ Each carries one of the two donations at transaction index 0.
 
 | CE | criterion | witness |
 |---|---|---|
-| **CE-LV6-1** | A valid Conway transaction's donation is added to the pot, on the full path AND the accumulator path, with the same result | unit |
+| **CE-LV6-1** | A valid Conway transaction's donation is added to the pot by the accumulator fold, the single transaction-application authority *(amended: E3 found no second path; see §4.2)* | unit |
 | **CE-LV6-2** | A phase-2-invalid transaction's donation adds nothing; its collateral contribution is unchanged | unit |
 | **CE-LV6-3** | At every boundary path the whole pot goes to the treasury exactly once and the pot is 0 afterwards; a second boundary moves nothing | unit, every path in E3 |
 | **CE-LV6-4** | **The real epoch-305 pair:** the two real bodies give a pot of 500,000 + 500,000 = 1,000,000; the 305→306 boundary adds exactly 1,000,000 to the treasury and resets the pot | integration, real bytes |
@@ -272,7 +275,8 @@ Each mutation is asserted applied, the named witness must fail, and the tree is 
 - The boundary does not reset the pot (must fail CE-LV6-3).
 - The boundary adds the pot twice (must fail CE-LV6-3 and CE-LV6-4).
 - The seed import sets the pot to `Coin(0)` (must fail CE-LV6-5 and the gate).
-- Only one of the two per-transaction paths credits (must fail CE-LV6-1).
+- The fold drops the scan's donation total (must fail CE-LV6-4 and CE-LV6-7). *(Replaces "only one of two paths credits": there is one path.)*
+- The pot is added before POOLREAP and the gov deposit returns, with the same final number (must fail the gate's order check: the algebraic-equivalence case).
 - `STORE_SEMANTICS_VERSION` is left at 10 (must fail the lock gate).
 - The boundary adds the pot before the gov deposit returns / withdrawal step, or ratification reads
   the pot (must fail CE-LV6-12).
@@ -297,4 +301,59 @@ Each mutation is asserted applied, the named witness must fail, and the tree is 
 
 ## 8. RESULTS
 
-Not yet run.
+Run 2026-10-18 on the uncommitted implementation, before the live leg.
+
+**Suites (CE-LV6-1..9, 12, 13).** `ade_ledger` 1093, `ade_node` 645, `ade_runtime` 582: all pass. The
+new tests:
+
+- CE-LV6-1, CE-LV6-2: `lv6_a_valid_txs_donation_is_credited_and_an_invalid_txs_is_not`.
+- CE-LV6-3: `lv6_the_boundary_moves_the_whole_pot_once_and_zeroes_it` and
+  `lv6_donations_and_unclaimed_deposits_both_reach_the_treasury`.
+- CE-LV6-4: `lv6_the_real_epoch_305_blocks_carry_500_000_each` and
+  `lv6_the_real_pair_folds_into_the_pot_and_the_boundary_moves_it`, using the two real blocks at slots
+  130,271,804 and 130,404,902, committed as fixtures.
+- CE-LV6-5: `a_seed_with_donations_imports_its_donation_pot`, `the_seed_commitment_binds_the_donation_pot`
+  and `a_utxo_state_without_a_donation_pot_is_refused`; Mithril assembly carries a non-zero pot
+  (7,654,321) in its fixture test.
+- CE-LV6-6: the accumulator codec refuses schema 5 (`codec_rejects_pre_lv6_store_rebootstrap_required`),
+  framing refuses schema 3, and the v2 fingerprint's epoch component now changes with the pot.
+- CE-LV6-7: `lv6_a_donation_pot_survives_a_warm_restart_byte_identically` (`ade_runtime`): the
+  straight and reopened stores encode byte-identically.
+- CE-LV6-12: `lv6_the_pot_never_funds_a_treasury_withdrawal`, plus the gate's order check.
+- An overflowing pot is the typed terminal `TreasuryOverflow`
+  (`lv6_a_pot_that_would_overflow_the_treasury_is_a_terminal`).
+
+`ci/ci_check_donation_pot.sh` (CE-LV6-8, 12, 13) passes, as does the store-semantics lock (v11 entry
+recorded) and the registry gates.
+
+**Corpus (CE-LV6-9).** The epoch-oracle comparison ran over the corpus: 26 pass, 1 fails. The failure
+was there before LV-6, with the same numbers. Compared with the pre-LV-6 baseline run, no number moved;
+the preprod treasury delta is unchanged at 260,984,218,562. The one byte pin that encodes an
+`EpochState` (`rvbp_live_path_reduced_dispatch.rs`) was re-anchored to the new field, with an
+`assert_ne` that the old bytes no longer match.
+
+**Gate sweep.** All `ci/ci_check_*.sh` scripts run: 46 fail, none of them new. Every one was already
+failing before LV-6.
+
+**Mutations (CE-LV6-11).** Each mutation was asserted applied, the tree restored byte-exact after each.
+
+| mutation | caught by |
+|---|---|
+| M1 valid branch does not credit | the CE-LV6-1/4 unit tests, the warm-restart test, gate (a) |
+| M2 invalid branch credits | the CE-LV6-2 unit test, gate (b) |
+| M3 boundary does not reset the pot | the CE-LV6-3/4 unit tests, gate (d) "not zeroed" |
+| M4 boundary adds the pot twice | the CE-LV6-3/4 unit tests, gate (d) "exactly once, unscaled" |
+| M5 seed import sets `Coin(0)` | the two seed-import tests, gate (e) |
+| M6 fold drops the scan's donation total | the real-pair test and the warm-restart test |
+| M7 store semantics left at 10 | the lock gate (C), gate (f) |
+| M8 pot added before POOLREAP, same final number | gate (d) "added before POOLREAP"; also the overflow-terminal test |
+| M9 ratification reads the pot | gate (d) only (no test can see an unused read) |
+| M10 a UTxOState without the pot is accepted | the refusal test |
+
+The first run exposed a defect in the gate itself: under `set -euo pipefail`, a step that was not
+found made a `grep | head | cut` assignment fail, and the script exited 1 with no message. M4 and M8
+failed the gate, but for no named reason. The assignments are now guarded, and the gate asserts that
+the boundary reads the pot exactly once. M4, M7 and M8 were re-run against the fixed gate with the
+results above.
+
+**Live (CE-LV6-10).** Not yet run. DC-EPOCH-45 stays partial until it is.

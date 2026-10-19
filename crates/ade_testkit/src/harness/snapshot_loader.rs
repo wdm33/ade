@@ -103,6 +103,9 @@ impl LoadedSnapshot {
                     }).collect()
                 },
                 epoch_fees: ade_types::tx::Coin(self.header.epoch_fees),
+                donation_pot: ade_types::tx::Coin(
+                    parse_donation_pot(&self.raw_cbor).expect("snapshot UTxOState donation pot"),
+                ),
             },
             protocol_params: self.load_protocol_params(era),
             era,
@@ -708,6 +711,30 @@ fn parse_with_origin_slot(
     // outer wrapper — robust against any extra trailing AnnTip fields.
     let end = skip_cbor(state_cbor, off)?;
     Ok((end, slot))
+}
+
+/// The treasury-donation pot, `UTxOState[5]` (Conway `utxosDonation`, DC-EPOCH-45). A `UTxOState` with
+/// fewer than six fields belongs to an era before Conway, which has no donations: its pot is 0 by
+/// definition, not by default.
+fn parse_donation_pot(state_cbor: &[u8]) -> Result<u64, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+    // ES[0] = AccountState (skip)
+    let off = skip_cbor(state_cbor, es)?;
+    // ES[1] = LedgerState = array(2) [CertState, UTxOState]
+    let (ls_body, _) = read_array_header(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, ls_body)?;
+    // LS[1] = UTxOState = array(6) [UTxO, deposited, fees, GovState, IncrStake, donation]
+    let (utxo_body, utxo_len) = read_array_header(state_cbor, off)?;
+    if utxo_len < 6 {
+        return Ok(0);
+    }
+    let mut off = utxo_body;
+    for _ in 0..5 {
+        off = skip_cbor(state_cbor, off)?;
+    }
+    let (_, donation) = read_uint(state_cbor, off)?;
+    Ok(donation)
 }
 
 fn parse_epoch_fees(state_cbor: &[u8]) -> Result<u64, HarnessError> {
