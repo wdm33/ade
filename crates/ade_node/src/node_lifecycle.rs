@@ -391,23 +391,33 @@ pub(crate) enum WalkApplyFailure {
     Terminal,
 }
 
-/// SLICE LV-8 (DC-EPOCH-46): the ONLY retry decision. Retryable only when all three hold: the
-/// failure is the typed unresolved collateral input, a checkpoint is present, and its cursor is
-/// strictly before the failing block. Every other combination is terminal.
+/// SLICE LV-8 (DC-EPOCH-46): the ONLY retry decision. Retryable only when all four hold: the
+/// failure is the typed unresolved collateral input; a checkpoint is present and its cursor is
+/// strictly before the failing block; and the failing block is in the accumulator's own epoch, so
+/// advancing the checkpoint to it can never carry the checkpoint across a boundary the accumulator
+/// has not yet crossed. The walk already classifies a later-epoch block as a boundary before any
+/// apply (DC-EPOCH-39), so the epoch condition is defence in depth, checked here, at the decision.
+/// Every other combination is terminal.
 pub(crate) fn classify_walk_apply_failure(
     error: &ade_ledger::epoch_accumulator::LedgerTransitionError,
     checkpoint_cursor: Option<SlotNo>,
     failed_at: SlotNo,
+    failed_block_epoch: Option<EpochNo>,
+    accumulator_epoch: Option<EpochNo>,
 ) -> WalkApplyFailure {
     use ade_ledger::collateral::CollateralBalanceError;
     use ade_ledger::epoch_accumulator::LedgerTransitionError;
+    let same_epoch = matches!(
+        (failed_block_epoch, accumulator_epoch),
+        (Some(b), Some(a)) if b == a
+    );
     match (error, checkpoint_cursor) {
         (
             LedgerTransitionError::CollateralBalance(
                 CollateralBalanceError::UnresolvedCollateralInput { .. },
             ),
             Some(cursor),
-        ) if cursor < failed_at => WalkApplyFailure::CheckpointBehind,
+        ) if cursor < failed_at && same_epoch => WalkApplyFailure::CheckpointBehind,
         _ => WalkApplyFailure::Terminal,
     }
 }
@@ -3257,9 +3267,20 @@ fn advance_ledger_state_to_durable_tip_memo(
                         let cp_cursor =
                             reduced_checkpoint.and_then(|cp| cp.last_advanced_slot().ok().flatten());
                         let retried = retried_at == Some(s_bb);
+                        let failed_block_epoch = era_schedule.locate(s_bb).ok().map(|l| l.epoch);
+                        let accumulator_epoch = store
+                            .load_current()
+                            .ok()
+                            .flatten()
+                            .map(|(_, acc)| acc.epoch_state.epoch);
                         if !retried
-                            && classify_walk_apply_failure(&error, cp_cursor, s_bb)
-                                == WalkApplyFailure::CheckpointBehind
+                            && classify_walk_apply_failure(
+                                &error,
+                                cp_cursor,
+                                s_bb,
+                                failed_block_epoch,
+                                accumulator_epoch,
+                            ) == WalkApplyFailure::CheckpointBehind
                         {
                             crate::node_log!(
                                 "epoch-accumulator: checkpoint behind the walk at {} (checkpoint cursor {:?}): \
@@ -8822,7 +8843,13 @@ mod tests {
                     AccumulatorChaindbOutcome::ApplyFailedAt { slot, error } => {
                         assert_eq!(slot, SlotNo(LV8_SPEND));
                         assert_eq!(
-                            classify_walk_apply_failure(&error, cp.last_advanced_slot().unwrap(), slot),
+                            classify_walk_apply_failure(
+                                &error,
+                                cp.last_advanced_slot().unwrap(),
+                                slot,
+                                Some(EpochNo(500)),
+                                Some(EpochNo(500)),
+                            ),
                             WalkApplyFailure::CheckpointBehind,
                             "the measured case: {error:?}"
                         );
@@ -8873,6 +8900,61 @@ mod tests {
         #[test]
         fn lv8_pair_b_retries_once_and_seals_n_plus_2() {
             lv8_pair_crosses_in_one_pass(BLOCK_131625032, BLOCK_131626888, pair_b_input(), 17_308_819);
+        }
+
+        /// CE-LV8-11 (the boundary edge): the dependency is created IN the boundary block (the first block
+        /// of 501) and spent later in 501. The pass must cross 500 -> 501 with the checkpoint positioned
+        /// exactly on the boundary point, never advanced through the boundary by a retry, and only then
+        /// retry inside 501. The sealed N+2 object's source point and checkpoint commitment are compared
+        /// against a checkpoint positioned on the boundary point independently.
+        #[test]
+        fn lv8_a_dependency_created_across_a_boundary_crosses_first_then_retries() {
+            const S_PREV: u64 = 43_000_000; // epoch 500, the boundary point
+            const S_BB: u64 = 43_086_000; // epoch 501, the boundary block, creates 0326ab20...#1
+            const B: u64 = 43_100_000; // epoch 501, spends it as collateral (phase-2 invalid)
+            let build = |tmp: &TempDir| {
+                let cp = sealed_checkpoint(tmp, SlotNo(42_000_000));
+                let db = InMemoryChainDb::new();
+                put_raw(&db, S_PREV);
+                put_bytes(&db, S_BB, BLOCK_130178856, 0xd1);
+                put_bytes(&db, B, BLOCK_130350133, 0xd2);
+                (cp, db)
+            };
+
+            // Reference: a checkpoint positioned on the boundary point, nothing else.
+            let ref_tmp = TempDir::new().unwrap();
+            let (ref_cp, ref_db) = build(&ref_tmp);
+            advance_reduced_checkpoint_forward_to(Some(&ref_cp), &ref_db, SlotNo(S_PREV)).unwrap();
+            let ref_commitment = ref_cp.finalize().unwrap();
+
+            let tmp = TempDir::new().unwrap();
+            let (cp, db) = build(&tmp);
+            let store = sealed_store_at_epoch_500(&tmp, SlotNo(42_000_000));
+            advance_ledger_state_to_durable_tip(
+                Some(&cp),
+                Some(&store),
+                &db,
+                &schedule_86k(),
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .expect("crosses, then the same-pass retry repairs the in-epoch dependency");
+
+            let sealed = store
+                .promotion_leadership_authority_for_epoch(EpochNo(502))
+                .expect("N+2 sealed by the 500 -> 501 crossing");
+            assert_eq!(sealed.source_slot, SlotNo(S_PREV), "sealed from the boundary point");
+            assert_eq!(
+                sealed.source_checkpoint_commitment, ref_commitment,
+                "the crossing read a checkpoint positioned exactly on the boundary point -- not one a \
+                 retry had carried into the next epoch"
+            );
+            let (slot, acc) = store.load_current().unwrap().unwrap();
+            assert_eq!(acc.epoch_state.epoch, EpochNo(501));
+            assert_eq!(slot, SlotNo(B), "the retry inside 501 passed B");
+            assert_eq!(
+                cp.retained_collateral_value(&pair_a_input()).unwrap(),
+                Some(Coin(2_060_733))
+            );
         }
 
         /// CE-LV8-3: the retry is bounded. With the creating block withheld no checkpoint advance can
@@ -8943,15 +9025,36 @@ mod tests {
                 tx_index: 0,
                 txin: pair_a_input(),
             });
+            let e500 = Some(EpochNo(500));
             assert_eq!(
-                classify_walk_apply_failure(&unresolved, Some(SlotNo(LV8_SPEND - 1)), b),
+                classify_walk_apply_failure(&unresolved, Some(SlotNo(LV8_SPEND - 1)), b, e500, e500),
                 WalkApplyFailure::CheckpointBehind
             );
             for cursor in [Some(b), Some(SlotNo(LV8_SPEND + 1)), None] {
                 assert_eq!(
-                    classify_walk_apply_failure(&unresolved, cursor, b),
+                    classify_walk_apply_failure(&unresolved, cursor, b, e500, e500),
                     WalkApplyFailure::Terminal,
                     "cursor {cursor:?}"
+                );
+            }
+            // A failing block outside the accumulator's epoch is never a retry target: advancing the
+            // checkpoint to it would carry it across a boundary the accumulator has not crossed.
+            for (block_epoch, acc_epoch) in [
+                (Some(EpochNo(501)), e500),
+                (Some(EpochNo(499)), e500),
+                (None, e500),
+                (e500, None),
+            ] {
+                assert_eq!(
+                    classify_walk_apply_failure(
+                        &unresolved,
+                        Some(SlotNo(LV8_SPEND - 1)),
+                        b,
+                        block_epoch,
+                        acc_epoch
+                    ),
+                    WalkApplyFailure::Terminal,
+                    "block epoch {block_epoch:?}, accumulator epoch {acc_epoch:?}"
                 );
             }
             for other in [
@@ -8961,7 +9064,7 @@ mod tests {
                 L::InvalidTxCarriesAuthorityEffect { tx_index: 0 },
             ] {
                 assert_eq!(
-                    classify_walk_apply_failure(&other, Some(SlotNo(0)), b),
+                    classify_walk_apply_failure(&other, Some(SlotNo(0)), b, e500, e500),
                     WalkApplyFailure::Terminal,
                     "{other:?}"
                 );

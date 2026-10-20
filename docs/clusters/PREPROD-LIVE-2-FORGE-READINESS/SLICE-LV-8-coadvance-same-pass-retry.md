@@ -52,10 +52,21 @@ walk
  └─ Err(walk fault) ────────────────────────────► HALT typed
 ```
 
-- **One classification function**, pure: `classify_walk_apply_failure(&error, checkpoint_cursor, B)`
-  returns either `CheckpointBehind` or `Terminal`. It is the only place a retry is decided.
-  `CheckpointBehind` requires all three conditions together: the typed `UnresolvedCollateralInput`, a
-  checkpoint present, and its cursor strictly before B.
+- **One classification function**, pure:
+  `classify_walk_apply_failure(&error, checkpoint_cursor, B, B's epoch, the accumulator's epoch)` returns
+  either `CheckpointBehind` or `Terminal`. It is the only place a retry is decided. `CheckpointBehind`
+  requires all four conditions together:
+  - the typed `UnresolvedCollateralInput`;
+  - a checkpoint present;
+  - its cursor strictly before B;
+  - B in the accumulator's own epoch.
+- **The boundary edge (owner, 2026-10-20).** A retry must never carry the checkpoint across a boundary
+  the accumulator has not yet crossed. This is already structural. `advance_accumulator_over_block`
+  decides a crossing from the block's epoch before any apply (BND-1, DC-EPOCH-39, enforced; its test
+  `a_crossing_is_classified_from_the_epochs_even_when_the_apply_would_fail`). So a later-epoch block is
+  `BoundaryRequiredAt` and never `ApplyFailedAt`, and B is always in the accumulator's epoch. The
+  same-epoch condition repeats that guarantee at the retry decision, as defence in depth, and
+  CE-LV8-11 pins the crossing order.
 - **The bound.** The retry is remembered per pass as the slot B it was spent on. The walk is retried at
   most once at any given B. A second failure at that B halts. A later checkpoint-behind failure at a
   different B′ > B gets its own single retry. Each retry strictly advances the cursor past an earlier
@@ -95,6 +106,7 @@ walk
 | **CE-LV8-8** | Every existing suite passes; no new CI-script failures | existing |
 | **CE-LV8-9** | **Live, fresh follower-only bootstrap** of snapshot 6009 against the local docker `cardano-node-preprod`, **with no restart**. It crosses 305→306 and 306→307, then 308→309 and the first header of 310, and the run emits **no** `LeadershipEpochNotSealed` and no `AccumulatorWalkHalted` | live run |
 | **CE-LV8-10** | Negative-tested | mutations below |
+| **CE-LV8-11** | **The boundary edge.** The collateral is created in the boundary block (the first block of 501) and spent later in 501. One pass crosses 500→501 first. The sealed N+2 object's `source_slot` is the boundary point, and its `source_checkpoint_commitment` equals that of a checkpoint positioned on the boundary point independently. Only then is the retry spent inside 501. The classification test adds: a failing block outside the accumulator's epoch, or either epoch unknown, is `Terminal` | `ade_node` unit |
 
 The permanent tests use committed fixtures. The LV-7 census tools stay as evidence utilities only, so
 CI does not depend on a local ImmutableDB.
@@ -113,6 +125,7 @@ is restored byte-exact afterwards.
 | `ApplyFailedAt` back to an observe-only `break` | CE-LV8-3, CE-LV8-4, gate |
 | Walk `Err` arm back to an observe-only `break` | CE-LV8-6, gate |
 | The retry advances the checkpoint to nothing (the advance call removed) | CE-LV8-1, CE-LV8-2 |
+| The same-epoch condition dropped | CE-LV8-11's classification cases, gate |
 
 ## 5. FIXTURES
 
@@ -137,7 +150,7 @@ fixtures):
 
 Run 2026-10-20 on the implementation, before the live leg.
 
-**Tests (CE-LV8-1..6).** `cargo test -p ade_node --lib -- lv8_`: 6 passed.
+**Tests (CE-LV8-1..6, 11).** `cargo test -p ade_node --lib -- lv8_`: 7 passed.
 
 - **Pairs A and B (CE-LV8-1, CE-LV8-2).** Each test proves the first attempt on an identical, separate
   chain: the bare walk returns `ApplyFailedAt` at B, classified `CheckpointBehind`. It then runs one
@@ -152,13 +165,20 @@ Run 2026-10-20 on the implementation, before the live leg.
 - **Walk fault (CE-LV8-6).** It uses an era schedule that begins after the block. An undecodable block
   cannot reach the walk, because recovery admission refuses it first (`NonContiguousCanonicalSpan`).
 
-**Suites (CE-LV8-8).** `cargo test -p ade_node`: every test binary ok (lib 493 passed, 11 ignored).
+- **The boundary edge (CE-LV8-11).** The log of the test run shows the order: `CROSSED boundary 500 -> 501
+  at slot 43086000 (mark from s_prev 43000000)`, then `checkpoint behind the walk at 43100000
+  (checkpoint cursor Some(43000000))`. The sealed 502 object carries `source_slot` 43,000,000 and the
+  independently positioned checkpoint's commitment.
+
+**Suites (CE-LV8-8).** `cargo test -p ade_node`: 652 passed, 0 failed, 11 ignored (645 before LV-8, plus
+7).
 `ci/ci_check_coadvance_retry.sh` passes. The store-semantics lock passes, because `node_lifecycle.rs` is
 not on its surface and no version moved. The registry gates pass with DC-EPOCH-46 registered as
 partial.
 
 **Mutations (CE-LV8-10).** Each was asserted applied and restored byte-exact. The test run is bounded
-(`timeout 600`), and none timed out.
+(`timeout 600`), and none timed out. M1–M7 were run twice: first against the code without the epoch
+condition, then again, with M8, against the final code. The table is the final run.
 
 | mutation | caught by |
 |---|---|
@@ -168,7 +188,8 @@ partial.
 | M4 `<` weakened to `<=` | the classification test; gate (a) "STRICTLY before" |
 | M5 `ApplyFailedAt` back to an observe-only `break` | the bound test, the not-behind test; gate (c) |
 | M6 walk `Err` arm back to an observe-only `break` | the walk-fault test; gate (d) |
-| M7 the retry without the checkpoint advance | pair A, pair B, the bound test; gate (c) |
+| M7 the retry without the checkpoint advance | pair A, pair B, the bound test, the boundary-edge test; gate (c) |
+| M8 the same-epoch condition dropped | the classification test; gate (a). No lifecycle test can catch it, because the walk never hands the arm a later-epoch block (DC-EPOCH-39): this is the defence-in-depth layer, and it is pinned at the decision |
 
 Under M2 the second retry is still stopped, by the classification itself: after the first retry the
 checkpoint's cursor equals B, which is not strictly before it. The per-block marker and the strict

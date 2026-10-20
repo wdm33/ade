@@ -10,7 +10,9 @@ set -euo pipefail
 #
 # Asserts, over the PRODUCTION body of crates/ade_node/src/node_lifecycle.rs:
 #  (a) ONE retry decision, classify_walk_apply_failure: it matches only the typed
-#      UnresolvedCollateralInput, with the checkpoint cursor STRICTLY before the failing block;
+#      UnresolvedCollateralInput, with the checkpoint cursor STRICTLY before the failing block and the
+#      failing block in the accumulator's own epoch (so a retry never carries the checkpoint across a
+#      boundary the accumulator has not crossed);
 #  (b) it has exactly one production caller, the walk loop's ApplyFailedAt arm;
 #  (c) that arm is bounded (one retry per failing block, recorded once), advances the checkpoint to the
 #      failing block before retrying, halts with the typed AccumulatorWalkHalted otherwise, and has no
@@ -56,14 +58,16 @@ CLS="$(isolate '^pub\(crate\) fn classify_walk_apply_failure\(' "$NL_PROD")"
 [[ -n "$CLS" ]] || fail "(a) could not isolate classify_walk_apply_failure"
 grep -qE 'CollateralBalanceError::UnresolvedCollateralInput \{ \.\. \}' <<<"$CLS" \
     || fail "(a) the retry decision does not match the typed UnresolvedCollateralInput"
-grep -qE '\) if cursor < failed_at => WalkApplyFailure::CheckpointBehind,' <<<"$CLS" \
-    || fail "(a) CheckpointBehind is not gated on the checkpoint cursor STRICTLY before the failing block"
+grep -qE '\) if cursor < failed_at && same_epoch => WalkApplyFailure::CheckpointBehind,' <<<"$CLS" \
+    || fail "(a) CheckpointBehind is not gated on the checkpoint cursor STRICTLY before the failing block AND the same epoch"
+grep -qE '\(Some\(b\), Some\(a\)\) if b == a' <<<"$CLS" \
+    || fail "(a) the same-epoch condition does not require both epochs known and equal"
 N_BEHIND="$(grep -cE 'WalkApplyFailure::CheckpointBehind' <<<"$CLS" || true)"
 [[ "$N_BEHIND" == "1" ]] || fail "(a) CheckpointBehind is produced ${N_BEHIND:-0} times, expected 1"
 grep -qE '_ => WalkApplyFailure::Terminal,' <<<"$CLS" || fail "(a) every other case is not Terminal"
 
 # --- (b) exactly one production caller -------------------------------------------------------------
-CALLS="$(grep -cE 'classify_walk_apply_failure\(&error' <<<"$NL_PROD" || true)"
+CALLS="$(grep -cE '&& classify_walk_apply_failure\($' <<<"$NL_PROD" || true)"
 [[ "$CALLS" == "1" ]] || fail "(b) classify_walk_apply_failure has ${CALLS:-0} production callers, expected 1"
 
 # --- (c) the ApplyFailedAt arm ----------------------------------------------------------------------
@@ -71,8 +75,13 @@ COADV="$(isolate '^fn advance_ledger_state_to_durable_tip_memo\(' "$NL_PROD")"
 [[ -n "$COADV" ]] || fail "(c) could not isolate advance_ledger_state_to_durable_tip_memo"
 ARM="$(between 'Ok\(AccumulatorChaindbOutcome::ApplyFailedAt \{' 'Ok\(AccumulatorChaindbOutcome::BoundaryRequiredAt \{' "$COADV")"
 [[ -n "$ARM" ]] || fail "(c) could not isolate the ApplyFailedAt arm"
-grep -qE 'classify_walk_apply_failure\(&error, cp_cursor, s_bb\)' <<<"$ARM" \
-    || fail "(c) the arm does not classify with the checkpoint's own cursor and the failing block"
+CALL="$(awk '/&& classify_walk_apply_failure\($/ { c=1 } c { print } c && /\) == WalkApplyFailure::CheckpointBehind$/ { exit }' <<<"$ARM")"
+tr -d ' \n' <<<"$CALL" | grep -qF '&&classify_walk_apply_failure(&error,cp_cursor,s_bb,failed_block_epoch,accumulator_epoch,)==WalkApplyFailure::CheckpointBehind' \
+    || fail "(c) the arm does not classify with the checkpoint's cursor, the failing block and both epochs"
+grep -qE 'let failed_block_epoch = era_schedule\.locate\(s_bb\)\.ok\(\)\.map\(\|l\| l\.epoch\);' <<<"$ARM" \
+    || fail "(c) the failing block's epoch is not placed by the era schedule"
+grep -qE '\.map\(\|\(_, acc\)\| acc\.epoch_state\.epoch\);' <<<"$ARM" \
+    || fail "(c) the accumulator's epoch is not read from the store"
 grep -qE 'let retried = retried_at == Some\(s_bb\);' <<<"$ARM" || fail "(c) the retry is not bounded per failing block"
 grep -qE '^\s*if !retried$' <<<"$ARM" || fail "(c) a spent retry is not excluded from the retry branch"
 grep -qE 'advance_reduced_checkpoint_forward_to\(reduced_checkpoint, chaindb, s_bb\)\?;' <<<"$ARM" \
@@ -103,14 +112,15 @@ TESTS=(
     'lv8_not_checkpoint_behind_halts_without_a_retry'
     'lv8_classification_is_exact'
     'lv8_a_walk_fault_halts'
+    'lv8_a_dependency_created_across_a_boundary_crosses_first_then_retries'
 )
 OUT="$(cargo test -p ade_node --lib -- lv8_ 2>&1 || true)"
 for t in "${TESTS[@]}"; do
     grep -qE "^test .*::$t \.\.\. ok$" <<<"$OUT" || fail "(e) unit test $t did not run and pass"
 done
-grep -qE '^test result: ok\. 6 passed;' <<<"$OUT" || fail "(e) expected exactly 6 passing LV-8 tests"
+grep -qE '^test result: ok\. 7 passed;' <<<"$OUT" || fail "(e) expected exactly 7 passing LV-8 tests"
 
 if (( FAILED == 0 )); then
-    echo "OK (co-advance retry): one exact retry decision with one caller; the ApplyFailedAt arm advances the checkpoint to the failing block and retries once per block, otherwise halts typed; the walk Err arm halts typed; no observe-only exit; CE tests ran (DC-EPOCH-46)"
+    echo "OK (co-advance retry): one exact retry decision (same epoch as the accumulator, checkpoint strictly behind) with one caller; the ApplyFailedAt arm advances the checkpoint to the failing block and retries once per block, otherwise halts typed; the walk Err arm halts typed; no observe-only exit; CE tests ran (DC-EPOCH-46)"
 fi
 exit $FAILED
