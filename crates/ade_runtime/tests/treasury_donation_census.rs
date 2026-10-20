@@ -101,3 +101,77 @@ fn scan_chunks_for_treasury_donations() {
         "SUMMARY blocks={blocks} txs={txs} slots={first_slot}..{last_slot} donations={donations} total={total}"
     );
 }
+
+/// Reports where each named transaction appears in the scanned chunks, and every later transaction
+/// that names one of its outputs as an input or a collateral input. Opened by SLICE LV-7 to place
+/// the creation of the collateral inputs the live accumulator walk could not resolve.
+///
+/// ```text
+/// ADE_DONATION_CHUNKS="..." ADE_FIND_TXIDS="0326ab20...,90a5961d..." \
+///   cargo test -p ade_runtime --test treasury_donation_census find_txids -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "evidence-only; requires ADE_DONATION_CHUNKS and ADE_FIND_TXIDS"]
+fn find_txids() {
+    let chunks = std::env::var("ADE_DONATION_CHUNKS").expect("set ADE_DONATION_CHUNKS");
+    let wanted: Vec<String> = std::env::var("ADE_FIND_TXIDS")
+        .expect("set ADE_FIND_TXIDS")
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .collect();
+    let hex = |b: &[u8]| -> String { b.iter().map(|x| format!("{x:02x}")).collect() };
+    for path in chunks.split_whitespace() {
+        let data = std::fs::read(path).expect("read chunk");
+        let mut off = 0;
+        while off < data.len() {
+            let start = off;
+            cbor::skip_item(&data, &mut off).expect("block item");
+            let env_bytes = &data[start..off];
+            let env = decode_block_envelope(env_bytes).expect("envelope");
+            if env.era != CardanoEra::Conway {
+                continue;
+            }
+            let block = decode_conway_block(&env_bytes[env.block_start..env.block_end])
+                .expect("conway block");
+            let b = block.decoded();
+            let slot = b.header.body.slot;
+            let invalid = invalid_indices(&b.invalid_txs);
+            let bodies = &b.tx_bodies;
+            let mut boff = 0;
+            let n = match cbor::read_array_header(bodies, &mut boff).expect("tx_bodies array") {
+                ContainerEncoding::Definite(n, _) => n,
+                ContainerEncoding::Indefinite => u64::MAX,
+            };
+            let mut i = 0u64;
+            while i < n && !(n == u64::MAX && cbor::is_break(bodies, boff).expect("break")) {
+                let body_start = boff;
+                let body = decode_conway_tx_body(bodies, &mut boff).expect("tx body");
+                let txid = hex(&ade_crypto::blake2b::blake2b_256(&bodies[body_start..boff]).0);
+                if wanted.contains(&txid) {
+                    println!(
+                        "CREATED txid={txid} slot={slot} block_no={} tx_index={i} phase2_valid={}",
+                        b.header.body.block_number,
+                        !invalid.contains(&i)
+                    );
+                }
+                let named = body
+                    .inputs
+                    .iter()
+                    .map(|x| ("input", x))
+                    .chain(body.collateral_inputs.iter().flatten().map(|x| ("collateral", x)));
+                for (role, txin) in named {
+                    let h = hex(&txin.tx_hash.0);
+                    if wanted.contains(&h) {
+                        println!(
+                            "NAMED {role} {h}#{} slot={slot} block_no={} tx_index={i} phase2_valid={}",
+                            txin.index,
+                            b.header.body.block_number,
+                            !invalid.contains(&i)
+                        );
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+}

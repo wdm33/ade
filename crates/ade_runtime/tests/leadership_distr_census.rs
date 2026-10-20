@@ -571,3 +571,55 @@ fn dump_reward_balances() {
         println!("REWARD {kind} {hex} {}", coin.0);
     }
 }
+
+/// Prints which leadership epochs a store copy holds, the accumulator's applied slot and epoch, and,
+/// when `ADE_CENSUS_CP_REDB` is set, the reduced checkpoint's cursor and whether it resolves each
+/// TxIn in `ADE_CENSUS_TXINS` (`hash#index,...`) from its live table or its collateral retention.
+/// Opened by SLICE LV-7 to read the state at a `LeadershipEpochNotSealed` stop.
+#[test]
+#[ignore = "evidence-only; requires ADE_CENSUS_ACC_REDB pointing at a COPY of a real store"]
+fn dump_sealed_leadership_epochs() {
+    let path = std::env::var("ADE_CENSUS_ACC_REDB")
+        .expect("set ADE_CENSUS_ACC_REDB to a COPY of an epoch-accumulator.redb");
+    let store = EpochAccumulatorStore::open(std::path::Path::new(&path)).expect("open store copy");
+    let (slot, acc) = store
+        .load_current()
+        .expect("load current")
+        .expect("store is sealed");
+    println!(
+        "ACC applied_through_slot={} epoch={}",
+        slot.0, acc.epoch_state.epoch.0
+    );
+    let lo = acc.epoch_state.epoch.0.saturating_sub(4);
+    for e in lo..=acc.epoch_state.epoch.0 + 4 {
+        match store.leadership_authority_for_epoch(EpochNo(e)) {
+            Ok(d) => println!("LEADERSHIP epoch={e} SEALED target={}", d.target_leadership_epoch.0),
+            Err(err) => println!("LEADERSHIP epoch={e} {err:?}"),
+        }
+    }
+    if let Ok(cp_path) = std::env::var("ADE_CENSUS_CP_REDB") {
+        let cp = ade_runtime::chaindb::ReducedUtxoCheckpoint::open(std::path::Path::new(&cp_path))
+            .expect("open checkpoint copy");
+        println!(
+            "CHECKPOINT last_advanced_slot={:?} seed_slot={:?}",
+            cp.last_advanced_slot().expect("cursor").map(|s| s.0),
+            cp.seed_slot().expect("seed").map(|s| s.0)
+        );
+        for spec in std::env::var("ADE_CENSUS_TXINS").unwrap_or_default().split(',') {
+            let Some((h, i)) = spec.trim().split_once('#') else { continue };
+            let mut hash = [0u8; 32];
+            for (k, b) in hash.iter_mut().enumerate() {
+                *b = u8::from_str_radix(&h[2 * k..2 * k + 2], 16).expect("hex");
+            }
+            let txin = ade_types::tx::TxIn {
+                tx_hash: ade_types::Hash32(hash),
+                index: i.parse().expect("index"),
+            };
+            println!(
+                "TXIN {spec} live={:?} retained={:?}",
+                cp.get(&txin).expect("get").map(|(c, _)| c.0),
+                cp.retained_collateral_value(&txin).expect("retained").map(|c| c.0)
+            );
+        }
+    }
+}
