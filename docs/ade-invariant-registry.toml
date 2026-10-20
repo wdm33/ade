@@ -10549,6 +10549,33 @@ evidence = ["REFERENCE, cardano-ledger-conway-1.17.0.0 (node 11.0.1), verbatim: 
 evidence_notes = "ENFORCED: CE-LV6-10 met live (fresh v11 bootstrap of snapshot 6009; treasury after 305->306 equal to the reference, 1,959,103,174,719,172). Ade enacts no treasury withdrawal today (a ratified one is UnsupportedRatifiedAction before any mutation), so clause (b)'s ordering relative to withdrawals is enforced structurally and by the terminal; when withdrawal enactment is implemented, lv6_the_pot_never_funds_a_treasury_withdrawal becomes that slice's affordability test (withdrawal subtracted first, pot added after). The full ledger path credits no valid-transaction pot effects (fees included); the accumulator fold is the single transaction-application authority for the pots."
 
 [[rules]]
+id = "DC-EPOCH-46"
+tier = "release"
+statement = """
+Co-advance same-pass repair (SLICE LV-8). A co-advance pass may not return with leadership authority stale
+solely because the reduced checkpoint had not yet reached data needed by the accumulator. (a) Exactly one
+condition is retryable, decided by the one function `classify_walk_apply_failure`: the walk's apply failed
+at block B with the typed `CollateralBalance(UnresolvedCollateralInput)` while the checkpoint's cursor is
+strictly before B. The checkpoint then advances forward to B and the walk retries once, in the same pass,
+from its unchanged cursor. At most one retry is spent per failing block. (b) Every other apply failure, a
+retry that fails again at the same block, and a walk fault halt the pass with the typed
+`NodeLifecycleError::AccumulatorWalkHalted` at the cause; the authoritative walk has no observe-only exit.
+LeadershipEpochNotSealed and the exact-epoch leadership read are unchanged (defence in depth).
+"""
+source = "docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LV-8-coadvance-same-pass-retry.md; docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LV-7-leadership-epoch-not-sealed-census.md"
+cross_ref = ["DC-EPOCH-22", "DC-EPOCH-32", "DC-EPOCH-39", "DC-LEDGER-PHASE2-01"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (WalkApplyFailure; classify_walk_apply_failure, the one retry decision; advance_ledger_state_to_durable_tip_memo: retried_at, the ApplyFailedAt arm's advance-to-B and single retry, and its typed halt; the walk Err arm's typed halt; NodeLifecycleError::AccumulatorWalkHalted mapped to EXIT_NODE_RELAY_SYNC_FAILED and reported)."
+tests = ["lv8_pair_a_retries_once_and_seals_n_plus_2", "lv8_pair_b_retries_once_and_seals_n_plus_2", "lv8_a_retry_that_fails_again_halts_at_the_block", "lv8_not_checkpoint_behind_halts_without_a_retry", "lv8_classification_is_exact", "lv8_a_walk_fault_halts"]
+ci_scripts = ["ci/ci_check_coadvance_retry.sh"]
+status = "partial"
+authority_surface = "GREEN co-advance control over two BLUE authorities (the epoch accumulator, the sole leadership authority, and the reduced UTxO checkpoint, its collateral resolver). No persisted shape or meaning changes: a pass that used to stall now reaches the state a warm restart already reached deterministically (LV-7 3.4), so store semantics stay at 11."
+cluster = "PREPROD-LIVE-2-FORGE-READINESS"
+introduced_in = "PREPROD-LIVE-2-LV-8"
+strengthened_in = []
+evidence = ["MEASURED, preprod (LV-7): fresh bootstrap of snapshot 6009 stopped with LeadershipEpochNotSealed {307} and, after a warm restart, {310}, in both the v10 and v11 runs at the same blocks. At the 305->306 and 308->309 ticks the walk failed at 130,350,133 and 131,626,888 with UnresolvedCollateralInput for 0326ab20...#1 (created 130,178,856) and 90a5961d...#1 (created 131,625,032), each created after the checkpoint's cursor at walk time (130,118,424 and 131,414,402). The store as stopped: sealed 304..309, 310 not sealed; checkpoint past B with both values retained (2,060,733 and 17,308,819).", "FIXTURES: the four real blocks (130,178,856 / 130,350,133 / 131,625,032 / 131,626,888) drive the co-advance lifecycle in lv8_pair_a/b: first attempt refused at B with the checkpoint behind, checkpoint advanced to B, retained value present, same-pass retry passes B, the boundary crossed, N+2 promotion-certified."]
+evidence_notes = "PARTIAL until CE-LV8-9: a fresh follower-only bootstrap of snapshot 6009 that crosses 305->306, 306->307, 308->309 and the first header of 310 with no restart, emitting no LeadershipEpochNotSealed and no AccumulatorWalkHalted. The boundary arm's observe-only stalls are outside this rule (SLICE LV-8 6)."
+
+[[rules]]
 id = "DC-LEDGER-PHASE2-01"
 tier = "derived"
 statement = """

@@ -369,6 +369,47 @@ pub enum NodeLifecycleError {
     /// recovery-INTEGRITY exception to the S3 observe-only contract: an ordinary follow-time observe fault
     /// still does NOT halt (the accumulator is simply not promoted), but a durable-state contradiction does.
     RecoveryAdmission(RecoveryAdmissionFault),
+    /// SLICE LV-8 (DC-EPOCH-46): the authoritative accumulator walk could not apply a block, and the
+    /// one same-pass repair (advance the reduced checkpoint to the block, retry once) either does not
+    /// apply or already ran. Halts at the cause instead of leaving leadership stale until a later
+    /// `LeadershipEpochNotSealed`. `slot` is the failing block (`None` for a walk fault not tied to
+    /// one); `retried` says whether the same-pass retry was spent on it.
+    AccumulatorWalkHalted {
+        slot: Option<u64>,
+        cause: String,
+        retried: bool,
+    },
+}
+
+/// SLICE LV-8 (DC-EPOCH-46): how the co-advance pass treats a within-epoch apply failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WalkApplyFailure {
+    /// The reduced checkpoint is behind the failing block, so it cannot yet answer that block's
+    /// collateral. BND-2d's retention answers once the checkpoint has applied the block.
+    CheckpointBehind,
+    /// Anything else. The pass halts.
+    Terminal,
+}
+
+/// SLICE LV-8 (DC-EPOCH-46): the ONLY retry decision. Retryable only when all three hold: the
+/// failure is the typed unresolved collateral input, a checkpoint is present, and its cursor is
+/// strictly before the failing block. Every other combination is terminal.
+pub(crate) fn classify_walk_apply_failure(
+    error: &ade_ledger::epoch_accumulator::LedgerTransitionError,
+    checkpoint_cursor: Option<SlotNo>,
+    failed_at: SlotNo,
+) -> WalkApplyFailure {
+    use ade_ledger::collateral::CollateralBalanceError;
+    use ade_ledger::epoch_accumulator::LedgerTransitionError;
+    match (error, checkpoint_cursor) {
+        (
+            LedgerTransitionError::CollateralBalance(
+                CollateralBalanceError::UnresolvedCollateralInput { .. },
+            ),
+            Some(cursor),
+        ) if cursor < failed_at => WalkApplyFailure::CheckpointBehind,
+        _ => WalkApplyFailure::Terminal,
+    }
 }
 
 /// LIVE-LEDGER-EPOCH-TRANSITION S5 (step 2b): the typed reason a recovery ADMISSION failed closed, and the
@@ -503,6 +544,7 @@ fn exit_code_for(e: &NodeLifecycleError) -> i32 {
         | NodeLifecycleError::RecoveryAdmission(_) => EXIT_NODE_WARM_START_RECOVERY_FAILED,
         NodeLifecycleError::RelaySync(_)
         | NodeLifecycleError::FeedMissingRecoveredConsensusInputs
+        | NodeLifecycleError::AccumulatorWalkHalted { .. }
         | NodeLifecycleError::ProductionLeadershipAuthorityUnavailable { .. } => {
             EXIT_NODE_RELAY_SYNC_FAILED
         }
@@ -3124,6 +3166,9 @@ fn advance_ledger_state_to_durable_tip_memo(
         let seed_slot_probe = store.seed_slot();
         census_ms_seed_slot = t_seed.elapsed().as_millis();
         if let Ok(Some(seed_slot)) = seed_slot_probe {
+            // SLICE LV-8 (DC-EPOCH-46): the block the same-pass retry was last spent on. At most one
+            // retry per failing block; each retry moves the walk strictly past an earlier one.
+            let mut retried_at: Option<SlotNo> = None;
             loop {
                 let t_walk = std::time::Instant::now();
                 // BND-2c evidence (emit-only): the accumulator's state IMMEDIATELY BEFORE this walk.
@@ -3202,71 +3247,89 @@ fn advance_ledger_state_to_durable_tip_memo(
                         break;
                     }
                     // BND-1 (DC-EPOCH-39): a within-epoch block that fail-closed is NOT a boundary and
-                    // must not touch the boundary machinery. It is announced once per (slot, cursor) —
-                    // the same memo shape the boundary arm uses, so a permanently-stuck block does not
-                    // reprint every pass — and then the walk stops, observe-only, cursor unchanged.
-                    // No checkpoint rewind, no mark capture, no cross: those are a crossing's work, and
-                    // running them here is precisely the defect the BND census measured.
+                    // must not touch the boundary machinery: no checkpoint rewind, no mark capture, no
+                    // cross. SLICE LV-8 (DC-EPOCH-46): the accumulator is the sole leadership authority,
+                    // so the walk no longer stops observe-only here. If the reduced checkpoint is merely
+                    // behind the block, it advances to the block and the walk retries ONCE in this pass;
+                    // otherwise the pass halts at the cause.
                     Ok(AccumulatorChaindbOutcome::ApplyFailedAt { slot: s_bb, error }) => {
                         let cursor_now = store.last_advanced_slot().ok().flatten();
-                        let already_announced = stalled_boundary
-                            .as_ref()
-                            .is_some_and(|m| m.boundary_slot == s_bb && m.cursor == cursor_now);
-                        if !already_announced {
-                            // BND-2 entry data (emit-only): what the failing block CONTAINS, on the
-                            // announce path only — once per (slot, cursor), never per pass. The
-                            // classification itself is now in the TYPE, so this exists to feed the
-                            // reference-semantics work, not to decide control flow.
-                            let txs = match chaindb.get_block_by_slot(s_bb) {
-                                Ok(Some(sb)) => {
-                                    match ade_ledger::epoch_accumulator::scan_block_tx_authority_effects(
-                                        &sb.bytes,
-                                    ) {
-                                        Ok(scan) => {
-                                            let carriers: Vec<String> = scan
-                                                .iter()
-                                                .filter(|t| {
-                                                    t.phase2_invalid
-                                                        || t.has_certs
-                                                        || t.withdrawal_count > 0
-                                                        || t.has_votes
-                                                        || t.has_proposals
-                                                })
-                                                .map(|t| {
-                                                    format!(
-                                                        "tx{}[invalid={} certs={} wdl={} votes={} proposals={} collateral={:?}]",
-                                                        t.tx_index,
-                                                        t.phase2_invalid,
-                                                        t.has_certs,
-                                                        t.withdrawal_count,
-                                                        t.has_votes,
-                                                        t.has_proposals,
-                                                        t.total_collateral
-                                                    )
-                                                })
-                                                .collect();
-                                            format!("tx_count={} {}", scan.len(), carriers.join(" "))
-                                        }
-                                        Err(e) => format!("scan_fault({e:?})"),
-                                    }
-                                }
-                                Ok(None) => "no_durable_block".to_string(),
-                                Err(e) => format!("read_fault({e:?})"),
-                            };
+                        let cp_cursor =
+                            reduced_checkpoint.and_then(|cp| cp.last_advanced_slot().ok().flatten());
+                        let retried = retried_at == Some(s_bb);
+                        if !retried
+                            && classify_walk_apply_failure(&error, cp_cursor, s_bb)
+                                == WalkApplyFailure::CheckpointBehind
+                        {
                             crate::node_log!(
-                                "epoch-accumulator: WITHIN-EPOCH apply failed at {} (observe-only, NOT a \
-                                 boundary -- no rewind, no mark, no cross): {:?} cursor={:?} {}",
+                                "epoch-accumulator: checkpoint behind the walk at {} (checkpoint cursor {:?}): \
+                                 {:?} -> advancing the reduced checkpoint to {} and retrying the walk once \
+                                 (DC-EPOCH-46)",
                                 s_bb.0,
+                                cp_cursor.map(|c| c.0),
                                 error,
-                                cursor_now.map(|c| c.0),
-                                txs
+                                s_bb.0
                             );
-                            *stalled_boundary = Some(StalledBoundary {
-                                boundary_slot: s_bb,
-                                cursor: cursor_now,
-                            });
+                            advance_reduced_checkpoint_forward_to(reduced_checkpoint, chaindb, s_bb)?;
+                            retried_at = Some(s_bb);
+                            continue;
                         }
-                        break;
+                        // BND-2 entry data: what the failing block CONTAINS, carried in the halt cause.
+                        let txs = match chaindb.get_block_by_slot(s_bb) {
+                            Ok(Some(sb)) => {
+                                match ade_ledger::epoch_accumulator::scan_block_tx_authority_effects(
+                                    &sb.bytes,
+                                ) {
+                                    Ok(scan) => {
+                                        let carriers: Vec<String> = scan
+                                            .iter()
+                                            .filter(|t| {
+                                                t.phase2_invalid
+                                                    || t.has_certs
+                                                    || t.withdrawal_count > 0
+                                                    || t.has_votes
+                                                    || t.has_proposals
+                                            })
+                                            .map(|t| {
+                                                format!(
+                                                    "tx{}[invalid={} certs={} wdl={} votes={} proposals={} collateral={:?}]",
+                                                    t.tx_index,
+                                                    t.phase2_invalid,
+                                                    t.has_certs,
+                                                    t.withdrawal_count,
+                                                    t.has_votes,
+                                                    t.has_proposals,
+                                                    t.total_collateral
+                                                )
+                                            })
+                                            .collect();
+                                        format!("tx_count={} {}", scan.len(), carriers.join(" "))
+                                    }
+                                    Err(e) => format!("scan_fault({e:?})"),
+                                }
+                            }
+                            Ok(None) => "no_durable_block".to_string(),
+                            Err(e) => format!("read_fault({e:?})"),
+                        };
+                        let cause = format!(
+                            "{:?} cursor={:?} cp_cursor={:?} {}",
+                            error,
+                            cursor_now.map(|c| c.0),
+                            cp_cursor.map(|c| c.0),
+                            txs
+                        );
+                        crate::node_log!(
+                            "epoch-accumulator: WITHIN-EPOCH apply failed at {} -- HALTING the pass \
+                             (retried={}, DC-EPOCH-46): {}",
+                            s_bb.0,
+                            retried,
+                            cause
+                        );
+                        return Err(NodeLifecycleError::AccumulatorWalkHalted {
+                            slot: Some(s_bb.0),
+                            cause,
+                            retried,
+                        });
                     }
                     Ok(AccumulatorChaindbOutcome::BoundaryRequiredAt {
                         slot: s_bb,
@@ -3482,14 +3545,20 @@ fn advance_ledger_state_to_durable_tip_memo(
                         }
                     }
                     Err(e) => {
-                        // S4 OBLIGATION (S2 IDD review, MEDIUM-1): swallowing a REAL fault is IDD-§8-compliant
-                        // ONLY while the accumulator is non-authoritative + readiness-gated. At the S4
-                        // authority flip this Err arm MUST halt (swallow only stalls).
+                        // S4 OBLIGATION (S2 IDD review, MEDIUM-1), discharged by SLICE LV-8 (DC-EPOCH-46):
+                        // the accumulator is the sole leadership authority, so a REAL walk fault halts
+                        // the pass here instead of stalling it.
+                        let cause = format!("walk fault: {e:?}");
                         crate::node_log!(
-                            "epoch-accumulator: within-epoch reconcile fault (observe-only): {:?}",
-                            e
+                            "epoch-accumulator: within-epoch reconcile fault -- HALTING the pass \
+                             (DC-EPOCH-46): {}",
+                            cause
                         );
-                        break;
+                        return Err(NodeLifecycleError::AccumulatorWalkHalted {
+                            slot: None,
+                            cause,
+                            retried: false,
+                        });
                     }
                 }
             }
@@ -6102,6 +6171,18 @@ fn report(e: &NodeLifecycleError) {
                  continue with an uncertified or inadmissible durable accumulator."
             );
         }
+        NodeLifecycleError::AccumulatorWalkHalted {
+            slot,
+            cause,
+            retried,
+        } => {
+            eprintln!(
+                "ade_node --mode node: FAIL-CLOSED -- the epoch-accumulator walk could not apply \
+                 the block at slot {slot:?} (same-pass retry spent: {retried}): {cause}. The \
+                 accumulator is the sole leadership authority, so the node halts at the cause \
+                 instead of following on with stale leadership (DC-EPOCH-46)."
+            );
+        }
         NodeLifecycleError::MissingFlag(flag) => {
             eprintln!("ade_node --mode node: {flag} is required");
         }
@@ -8653,6 +8734,267 @@ mod tests {
                 "got {err:?}"
             );
             assert!(store.last_advanced_point().unwrap().is_some(), "store not cleared on a bad target");
+        }
+
+        // ===== SLICE LV-8 (DC-EPOCH-46): same-pass checkpoint advance + one retry =====
+        //
+        // The two real preprod pairs LV-7 found: a block CREATES an output, and a later block's
+        // phase-2-invalid transaction spends it as collateral. Folded with the reduced checkpoint at the
+        // seed, before the creating block, the walk cannot value that collateral: the checkpoint has not
+        // applied the creating block (live table) nor the spending block (BND-2d retention).
+
+        const BLOCK_130178856: &[u8] =
+            include_bytes!("../../ade_ledger/tests/fixtures/block_130178856.cbor");
+        const BLOCK_130350133: &[u8] =
+            include_bytes!("../../ade_ledger/tests/fixtures/block_130350133.cbor");
+        const BLOCK_131625032: &[u8] =
+            include_bytes!("../../ade_ledger/tests/fixtures/block_131625032.cbor");
+        const BLOCK_131626888: &[u8] =
+            include_bytes!("../../ade_ledger/tests/fixtures/block_131626888.cbor");
+
+        const LV8_CREATE: u64 = 43_000_000; // epoch 500
+        const LV8_SPEND: u64 = 43_010_000; // epoch 500, the failing block B
+        const LV8_BOUNDARY: u64 = 43_086_000; // epoch 501
+
+        fn txin_hex(hex: &str, index: u16) -> TxIn {
+            let mut h = [0u8; 32];
+            for (i, b) in h.iter_mut().enumerate() {
+                *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap();
+            }
+            TxIn { tx_hash: Hash32(h), index }
+        }
+
+        fn put_bytes(db: &InMemoryChainDb, slot: u64, bytes: &[u8], tag: u8) {
+            db.put_block(&StoredBlock {
+                hash: Hash32([tag; 32]),
+                slot: SlotNo(slot),
+                bytes: bytes.to_vec(),
+            })
+            .unwrap();
+        }
+
+        /// A chain: [creating block], spending block, boundary block; checkpoint and accumulator both
+        /// sealed at 42,000,000, before all of it.
+        fn lv8_chain(
+            tmp: &TempDir,
+            creating: Option<&[u8]>,
+            spending: &[u8],
+        ) -> (ReducedUtxoCheckpoint, EpochAccumulatorStore, InMemoryChainDb) {
+            let cp = sealed_checkpoint(tmp, SlotNo(42_000_000));
+            let store = sealed_store_at_epoch_500(tmp, SlotNo(42_000_000));
+            let db = InMemoryChainDb::new();
+            if let Some(c) = creating {
+                put_bytes(&db, LV8_CREATE, c, 0xc1);
+            }
+            put_bytes(&db, LV8_SPEND, spending, 0xc2);
+            put_raw(&db, LV8_BOUNDARY);
+            (cp, store, db)
+        }
+
+        fn pair_a_input() -> TxIn {
+            txin_hex("0326ab20d9cf533634f9d6838ae327971ac1606ab69f4378c1fc8009091e225a", 1)
+        }
+        fn pair_b_input() -> TxIn {
+            txin_hex("90a5961dcfa196deb0cf98a4dc391b53858c84df1ecd10f736b9d600b18e4bae", 1)
+        }
+
+        /// The whole lifecycle for one real pair: the first attempt cannot resolve (proven on an
+        /// identical, separate chain), and ONE co-advance call advances the checkpoint, retries, passes
+        /// B, crosses the boundary and seals leadership for N+2.
+        fn lv8_pair_crosses_in_one_pass(creating: &[u8], spending: &[u8], input: TxIn, value: u64) {
+            use ade_runtime::chaindb::{advance_accumulator_over_chaindb, AccumulatorChaindbOutcome};
+            let sched = schedule_86k();
+
+            // The first attempt, alone: the walk with the checkpoint behind refuses at B, naming the input.
+            {
+                let tmp = TempDir::new().unwrap();
+                let (cp, store, db) = lv8_chain(&tmp, Some(creating), spending);
+                let first = advance_accumulator_over_chaindb(
+                    &store,
+                    &db,
+                    &sched,
+                    SlotNo(42_000_000),
+                    SlotNo(LV8_BOUNDARY),
+                    Some(&cp as &dyn ade_ledger::collateral::CollateralValueResolver),
+                )
+                .unwrap();
+                match first {
+                    AccumulatorChaindbOutcome::ApplyFailedAt { slot, error } => {
+                        assert_eq!(slot, SlotNo(LV8_SPEND));
+                        assert_eq!(
+                            classify_walk_apply_failure(&error, cp.last_advanced_slot().unwrap(), slot),
+                            WalkApplyFailure::CheckpointBehind,
+                            "the measured case: {error:?}"
+                        );
+                    }
+                    other => panic!("the first attempt must fail at B with the checkpoint behind, got {other:?}"),
+                }
+            }
+
+            let tmp = TempDir::new().unwrap();
+            let (cp, store, db) = lv8_chain(&tmp, Some(creating), spending);
+            assert_eq!(cp.get(&input).unwrap(), None, "not yet created in the checkpoint");
+            assert_eq!(cp.retained_collateral_value(&input).unwrap(), None, "not yet retained");
+            // The synthetic seed carries no leadership band at all, so N+2 is unavailable before the pass.
+            assert!(store.promotion_leadership_authority_for_epoch(EpochNo(502)).is_err());
+
+            advance_ledger_state_to_durable_tip(
+                Some(&cp),
+                Some(&store),
+                &db,
+                &sched,
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .expect("the same-pass retry repairs the checkpoint-behind case");
+
+            assert_eq!(
+                cp.retained_collateral_value(&input).unwrap(),
+                Some(Coin(value)),
+                "the retained value appeared once the checkpoint applied B"
+            );
+            let (slot, acc) = store.load_current().unwrap().unwrap();
+            assert_eq!(acc.epoch_state.epoch, EpochNo(501), "the accumulator passed B and crossed");
+            assert_eq!(slot, SlotNo(LV8_BOUNDARY));
+            // The read the epoch view's promotion makes (`prepare_authority_for_candidate_slot`).
+            let sealed = store
+                .promotion_leadership_authority_for_epoch(EpochNo(502))
+                .expect("leadership for N+2 is sealed, promotion-certified, in the same pass");
+            assert_eq!(sealed.target_leadership_epoch, EpochNo(502));
+            assert_eq!(cp.last_advanced_slot().unwrap(), Some(SlotNo(LV8_BOUNDARY)));
+        }
+
+        /// CE-LV8-1: pair A, preprod 130,178,856 -> 130,350,133 (`0326ab20...#1`, 2,060,733).
+        #[test]
+        fn lv8_pair_a_retries_once_and_seals_n_plus_2() {
+            lv8_pair_crosses_in_one_pass(BLOCK_130178856, BLOCK_130350133, pair_a_input(), 2_060_733);
+        }
+
+        /// CE-LV8-2: pair B, preprod 131,625,032 -> 131,626,888 (`90a5961d...#1`, 17,308,819).
+        #[test]
+        fn lv8_pair_b_retries_once_and_seals_n_plus_2() {
+            lv8_pair_crosses_in_one_pass(BLOCK_131625032, BLOCK_131626888, pair_b_input(), 17_308_819);
+        }
+
+        /// CE-LV8-3: the retry is bounded. With the creating block withheld no checkpoint advance can
+        /// produce the value, so the one retry fails at the same B and the pass HALTS there, typed.
+        #[test]
+        fn lv8_a_retry_that_fails_again_halts_at_the_block() {
+            let tmp = TempDir::new().unwrap();
+            let (cp, store, db) = lv8_chain(&tmp, None, BLOCK_130350133);
+            let err = advance_ledger_state_to_durable_tip(
+                Some(&cp),
+                Some(&store),
+                &db,
+                &schedule_86k(),
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .expect_err("an unresolvable input after the retry is terminal");
+            match &err {
+                NodeLifecycleError::AccumulatorWalkHalted { slot, cause, retried } => {
+                    assert_eq!(*slot, Some(LV8_SPEND));
+                    assert!(*retried, "the one retry was spent before halting");
+                    assert!(cause.contains("UnresolvedCollateralInput") && cause.contains("0326ab20"), "{cause}");
+                }
+                other => panic!("expected AccumulatorWalkHalted, got {other:?}"),
+            }
+            assert_eq!(
+                cp.last_advanced_slot().unwrap(),
+                Some(SlotNo(LV8_SPEND)),
+                "the retry advanced the checkpoint exactly to B"
+            );
+            let (_, acc) = store.load_current().unwrap().unwrap();
+            assert_eq!(acc.epoch_state.epoch, EpochNo(500), "nothing crossed");
+            assert!(store.promotion_leadership_authority_for_epoch(EpochNo(502)).is_err(), "nothing sealed");
+        }
+
+        /// CE-LV8-4: a checkpoint already at or past B that still cannot answer is not "behind": the
+        /// pass halts at once, with no retry spent.
+        #[test]
+        fn lv8_not_checkpoint_behind_halts_without_a_retry() {
+            let tmp = TempDir::new().unwrap();
+            let (cp, store, db) = lv8_chain(&tmp, None, BLOCK_130350133);
+            advance_reduced_checkpoint_forward_to(Some(&cp), &db, SlotNo(LV8_BOUNDARY)).unwrap();
+            let err = advance_ledger_state_to_durable_tip(
+                Some(&cp),
+                Some(&store),
+                &db,
+                &schedule_86k(),
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .expect_err("terminal");
+            assert!(
+                matches!(
+                    &err,
+                    NodeLifecycleError::AccumulatorWalkHalted { slot: Some(s), retried: false, .. }
+                        if *s == LV8_SPEND
+                ),
+                "got {err:?}"
+            );
+        }
+
+        /// CE-LV8-5: the ONLY retryable case is the typed unresolved collateral input with the
+        /// checkpoint cursor STRICTLY before the failing block.
+        #[test]
+        fn lv8_classification_is_exact() {
+            use ade_ledger::collateral::CollateralBalanceError as C;
+            use ade_ledger::epoch_accumulator::LedgerTransitionError as L;
+            let b = SlotNo(LV8_SPEND);
+            let unresolved = L::CollateralBalance(C::UnresolvedCollateralInput {
+                tx_index: 0,
+                txin: pair_a_input(),
+            });
+            assert_eq!(
+                classify_walk_apply_failure(&unresolved, Some(SlotNo(LV8_SPEND - 1)), b),
+                WalkApplyFailure::CheckpointBehind
+            );
+            for cursor in [Some(b), Some(SlotNo(LV8_SPEND + 1)), None] {
+                assert_eq!(
+                    classify_walk_apply_failure(&unresolved, cursor, b),
+                    WalkApplyFailure::Terminal,
+                    "cursor {cursor:?}"
+                );
+            }
+            for other in [
+                L::ArithmeticOverflow,
+                L::CollateralBalance(C::ArithmeticOverflow { tx_index: 0 }),
+                L::InvalidTxCollateralNeedsUtxo { tx_index: 0 },
+                L::InvalidTxCarriesAuthorityEffect { tx_index: 0 },
+            ] {
+                assert_eq!(
+                    classify_walk_apply_failure(&other, Some(SlotNo(0)), b),
+                    WalkApplyFailure::Terminal,
+                    "{other:?}"
+                );
+            }
+        }
+
+        /// CE-LV8-6: a REAL walk fault halts the pass, typed, rather than returning observe-only. The
+        /// fault here is the walk's own era-schedule placement: the schedule begins after the block, so
+        /// the walk cannot place it (recovery admission and the checkpoint reset do not consult it).
+        #[test]
+        fn lv8_a_walk_fault_halts() {
+            let tmp = TempDir::new().unwrap();
+            let store = sealed_store_at_epoch_500(&tmp, SlotNo(42_000_000));
+            let db = InMemoryChainDb::new();
+            put_raw(&db, LV8_CREATE);
+            let unplaceable = make_node_schedule(SlotNo(44_000_000), EpochNo(511), 86_000, None);
+            assert!(unplaceable.locate(SlotNo(LV8_CREATE)).is_err(), "the fixture must fault the walk");
+            let err = advance_ledger_state_to_durable_tip(
+                None,
+                Some(&store),
+                &db,
+                &unplaceable,
+                &RecoveryAdmissionPolicy::cardano(),
+            )
+            .expect_err("a walk fault is terminal");
+            assert!(
+                matches!(
+                    &err,
+                    NodeLifecycleError::AccumulatorWalkHalted { slot: None, retried: false, cause }
+                        if cause.starts_with("walk fault:")
+                ),
+                "got {err:?}"
+            );
         }
     }
 

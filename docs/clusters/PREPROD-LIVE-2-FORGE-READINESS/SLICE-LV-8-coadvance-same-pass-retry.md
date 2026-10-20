@@ -135,4 +135,43 @@ fixtures):
 
 ## 7. RESULTS
 
-Not yet run.
+Run 2026-10-20 on the implementation, before the live leg.
+
+**Tests (CE-LV8-1..6).** `cargo test -p ade_node --lib -- lv8_`: 6 passed.
+
+- **Pairs A and B (CE-LV8-1, CE-LV8-2).** Each test proves the first attempt on an identical, separate
+  chain: the bare walk returns `ApplyFailedAt` at B, classified `CheckpointBehind`. It then runs one
+  `advance_ledger_state_to_durable_tip` on the second chain:
+  - before: the input is neither live nor retained, and N+2 is unavailable;
+  - after: the retained value is 2,060,733 (pair A) or 17,308,819 (pair B), the accumulator is in 501
+    at the boundary slot, and `promotion_leadership_authority_for_epoch(502)` returns the sealed object
+    with target 502.
+- **The fixture's leadership state.** The synthetic seed store holds no leadership band at all, so its
+  "before" answer is `OldAccumulatorSchemaNotLeadershipCertified`, not `LeadershipEpochNotSealed`. The
+  test asserts unavailability, not that variant.
+- **Walk fault (CE-LV8-6).** It uses an era schedule that begins after the block. An undecodable block
+  cannot reach the walk, because recovery admission refuses it first (`NonContiguousCanonicalSpan`).
+
+**Suites (CE-LV8-8).** `cargo test -p ade_node`: every test binary ok (lib 493 passed, 11 ignored).
+`ci/ci_check_coadvance_retry.sh` passes. The store-semantics lock passes, because `node_lifecycle.rs` is
+not on its surface and no version moved. The registry gates pass with DC-EPOCH-46 registered as
+partial.
+
+**Mutations (CE-LV8-10).** Each was asserted applied and restored byte-exact. The test run is bounded
+(`timeout 600`), and none timed out.
+
+| mutation | caught by |
+|---|---|
+| M1 no retry | pair A, pair B, the bound test; gate (c) |
+| M2 a second retry at the same B | the bound test (`retried` is false); gate (c) "not bounded per failing block" |
+| M3 everything retryable | the classification test, the not-behind test; gate (a) |
+| M4 `<` weakened to `<=` | the classification test; gate (a) "STRICTLY before" |
+| M5 `ApplyFailedAt` back to an observe-only `break` | the bound test, the not-behind test; gate (c) |
+| M6 walk `Err` arm back to an observe-only `break` | the walk-fault test; gate (d) |
+| M7 the retry without the checkpoint advance | pair A, pair B, the bound test; gate (c) |
+
+Under M2 the second retry is still stopped, by the classification itself: after the first retry the
+checkpoint's cursor equals B, which is not strictly before it. The per-block marker and the strict
+cursor test are two independent bounds, and the gate pins both.
+
+**Live (CE-LV8-9).** Not yet run. DC-EPOCH-46 stays partial until it is.
