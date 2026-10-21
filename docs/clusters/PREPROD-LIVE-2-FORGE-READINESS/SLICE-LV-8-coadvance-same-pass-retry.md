@@ -195,4 +195,26 @@ Under M2 the second retry is still stopped, by the classification itself: after 
 checkpoint's cursor equals B, which is not strictly before it. The per-block marker and the strict
 cursor test are two independent bounds, and the gate pins both.
 
-**Live (CE-LV8-9).** Not yet run. DC-EPOCH-46 stays partial until it is.
+**Live (CE-LV8-9).** Passed. A fresh bootstrap of snapshot 6009 on a release build of `6b5c34b9` started
+2026-10-20T23:28:09Z and followed the local docker `cardano-node-preprod` into epoch 310 in one process,
+with no restart:
+- every boundary from 304→305 to 309→310 was crossed;
+- the retry fired at 130,350,133, 130,350,647, 131,626,888 and 131,627,824, each the typed
+  checkpoint-behind case, and each passed on its single retry. Two of those blocks were not in LV-7's
+  measurement, because its runs had stopped at the first block;
+- the node followed epoch-310 headers from slot 132,278,434. The earlier runs stopped before that, at
+  the follow tip 132,271,745;
+- there are no `LeadershipEpochNotSealed`, `AccumulatorWalkHalted`, `HALTING`, `failing closed` or
+  `panicked` lines.
+
+An earlier six-minute attempt on a build of `4a37624c` is excluded from the proof, because it used the
+pre-guard binary. The record is `docs/evidence/run-stores/preprod-live2c/lv8-ce9-no-restart-live.md`.
+DC-EPOCH-46 is enforced.
+
+**CI sweep.** CI sweep observed 47 failures versus the recorded 46-count baseline. The additional
+failure was independently reproduced nondeterministically on pre-LV-8 input and traced to the
+containment gate's grep -q + pipefail pipeline; it is not an LV-8 semantic regression. The extra one is
+`ci/ci_check_node_run_loop_containment.sh`, which is nondeterministic on unchanged input and predates
+LV-8. It pipes a 51,276-byte function body into `grep -q` under `pipefail`, so it can fail on SIGPIPE. It
+failed 4 of 6 runs on this code and 7 of 8 runs on the pre-LV-8 file, and the body it reads is the same
+size in both. No failure is attributable to LV-8.
