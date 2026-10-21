@@ -109,3 +109,21 @@ the pre-LV-8 file, and the 51,276-byte function body it reads is the same size i
   when this record was taken.
 - The 309→310 pass took about 29 minutes (`accumulator_loop_ms=1759655`, of which the walk took
   1,716,993). It admitted 19,823 blocks in one sync step. Pass time is outside LV-8.
+
+## 8. Postscript (2026-10-21): how the run ended
+
+This postscript adds provenance only. LV-8 had already met its closure bar, and this record had
+already noted it, at 2026-10-21T02:37:45Z (§4, §5). Nothing below changes that result.
+
+The same process kept running with no restart. It crossed 309→310, 310→311 (slot 132,710,407),
+311→312 (slot 133,142,429) and 312→313 (slot 133,574,403). Around 2026-10-21T04:08Z, after the follow
+tip reached slot 133,897,405, it terminated with an unrelated fail-closed error decoding a block body
+received from the peer:
+
+```
+ade_node --mode node: relay run-loop sync step failed (Pump("Receive(Validity(Body(Decoding(DecodingError { offset: 9, reason: UnexpectedType }))))")); failing closed (no skip-past, no fallback).
+```
+
+It is a wire/body decode failure, not a leadership or co-advance one. Up to the end of the run,
+neither log has a `LeadershipEpochNotSealed`, `AccumulatorWalkHalted` or `HALTING` line. The decode
+failure is the subject of a separate census slice. The store and logs are kept unmodified.
