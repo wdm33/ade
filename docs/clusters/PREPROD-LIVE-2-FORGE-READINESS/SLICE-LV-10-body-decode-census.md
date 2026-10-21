@@ -87,4 +87,70 @@ separate assurance slice.
 
 ## 7. RESULTS
 
-Not yet run.
+Run 2026-10-21 with `crates/ade_runtime/tests/body_decode_census.rs` over chunks 06197–06200 of the
+docker `cardano-node-preprod` ImmutableDB (slots 133,880,000–133,940,000), and over a copy of the stopped
+store's `chain.db` (sha256 `3f76c5a0266f4014caae…`, the same as the original).
+
+**CE-LV10-1, the block.** Slot 133,902,219, block number 5,184,855, header hash
+`8ddb2e9618495b11dc5bf2820d177ec38453faaf81afbfdb02ab99a7ebc9e2f8`. Its `prev_hash` is Ade's durable tip
+(slot 133,902,215, `9bb45a4c…6948`). Every scanned block before it passes every stage. It is the next
+block after the tip, and the first one refused.
+
+**CE-LV10-2, the bytes.** The block is in chunk `06199` at byte 543,486, as a 1,258-byte envelope with
+sha256 `0fb060f0193cc9c6f8ad7dd8c8e071c14c58d585b142b191143b5193b1310329`. It is saved unmodified at
+`~/.cardano-live1/lv10-census/block_133902219.cbor`, outside the repo. Ade's store held 1,036 of the
+scanned blocks, all received over the wire, and all 1,036 are byte-identical to their chunk entries. So
+the chunk bytes are what the peer serves.
+
+**CE-LV10-3, the reproduction.** `decode_block`, the receive and header entry, accepts the block. So do
+`decode_conway_block` and the header checks. The refusal is in the next stage, the body authority's
+`ade_ledger::witness::decode_witness_infos` (reached from `apply_block_with_verdicts` →
+`decode_validate_tx_bodies`). It returns exactly
+`Decoding(DecodingError { offset: 9, reason: UnexpectedType })`, which the node logs as
+`Validity(Body(…))`. §1 named `decode_block` as the likely site. The measurement corrects that: it is
+the block-validity body step, which `block_delivered` also runs.
+
+**CE-LV10-4, the object and the byte.**
+- Object: tx 0 (`b1db2a411cb651a413840d3c8b112895a5bda2519a8ba6a372b8dd1ffc7746c2`), witness set 0, key 1
+  (native scripts), wrapped in tag 258.
+- The offset is relative to the witness-sets slice. That slice starts at envelope byte 1,074 (inner
+  1,072), so the failing byte is envelope byte 1,083.
+- The script is `83 03 20 82 [8200581c3118…] [8200581ce07c…]`: `script_n_of_k` with threshold
+  `0x20` (CBOR major 1, the negative integer −1) over two key-hash scripts.
+- The unmapped error, from the codec's own `decode_native_scripts`:
+  `UnexpectedCborType { offset: 9, expected: "unsigned integer", actual: 1 }`.
+
+**CE-LV10-5, the class: C1, a valid encoding Ade's codec does not accept.**
+- The Conway CDDL (`conway.cddl:292`) says `script_n_of_k = (3, n : int64, [* native_script])`, with the
+  note "Allegra switched to int64 for script_n_of_k thresholds". The reference checkout is
+  cardano-ledger `cb57dc73`.
+- cardano-ledger decodes the threshold as a Haskell `Int` (`Allegra/Scripts.hs:218`) and evaluates
+  `isValidMOf n … = n <= 0 || …` (`:421–423`). A threshold of zero or below is always satisfied, so this
+  script passes with no signatures.
+- Ade decodes it with `cbor::read_uint` and stores `NativeScript::MOfN(n as u32, …)`
+  (`ade_codec/src/allegra/script.rs:71–73`). That is an unsigned model of a signed field.
+- Not C2: the era is Conway, and it is decoded as Conway. Not C3: every slice boundary checks out, and
+  the error is at the threshold's own byte. Not C4: cardano-node accepted the block into its immutable
+  chain. Not C5: the bytes compared are preserved wire bytes on both sides. C6 is close, but the
+  difference here is not two encodings of one value. The value lies outside the type Ade chose.
+
+**The repair it justifies, not implemented.** Model the threshold as a signed 64-bit integer, decode
+it with the signed reader, and evaluate as cardano-ledger does: `n <= 0` passes, and a positive `n`
+needs `n` passing sub-scripts. The same `n as u32` also truncates a threshold above `u32::MAX`. For
+example, 2^32 would become 0 and pass, where cardano-ledger requires 2^32 signatures and fails. That is
+a latent validity divergence on the same field. The repair belongs in its own slice, with this block
+as the fixture. It touches a consensus decode surface, which is a store-semantics question.
+
+**Separate finding: wire-supplied nesting depth.** On the way to the refused block, the census
+overflowed a 2 MiB thread stack, in release too, on block 5,183,974 (slot 133,883,340). Tx 3 of that
+block carries a native script `[1, [[1, [[1, …]]]]]`, an `all` nested about 5,385 levels deep in 16,185
+bytes, close to the most one transaction can carry under the transaction-size limit. Its CBOR depth is
+10,769. Ade's native-script decoder and `skip_item` recurse once per level, with no depth bound. The
+live node passed this block because `main` (`#[tokio::main]`) awaits the relay loop directly. So
+`pump_block` and its decoders run on the 8 MiB main thread, and the spawned admission wire pump only
+moves bytes (DC-PUMP-01).
+The margin is real but unmeasured. A move of that work to a 2 MiB tokio worker would turn this block
+into a crash. This needs its own assurance slice: a depth bound or an iterative decoder. It is out of
+scope here.
+
+The census ran with `RUST_MIN_STACK=268435456` to get past that block.
