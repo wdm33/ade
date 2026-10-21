@@ -78,7 +78,7 @@ if [[ -z "$LOOP_FN" ]]; then
 fi
 
 # --- guard (pos): received sync drives the tip via run_node_sync ------------
-if ! echo "$LOOP_FN" | grep -qE 'run_node_sync\('; then
+if ! grep -qE 'run_node_sync\(' <<<"$LOOP_FN"; then
     print_fail "run_relay_loop_with_sched must call run_node_sync( — the received-block durable tip-advance driver (DC-SYNC-02)"
 fi
 
@@ -87,7 +87,7 @@ fi
 # durable tip ONLY through admit_forged_block_durably, which routes through the
 # SAME pump_block chokepoint (durable-before-tip). Its routing + byte-identity +
 # no-fork-choice is fenced by ci_check_forged_durable_admit_via_pump.sh.
-if ! echo "$LOOP_FN" | grep -qE 'admit_forged_block_durably\('; then
+if ! grep -qE 'admit_forged_block_durably\(' <<<"$LOOP_FN"; then
     print_fail "run_relay_loop_with_sched must admit a forged block via admit_forged_block_durably( — the own-forged durable tip-advance driver (DC-NODE-12)"
 fi
 
@@ -96,7 +96,7 @@ fi
 # admit_forged_block_durably); each wraps pump_block in node_sync.rs. The loop
 # body itself must never call pump_block directly or mutate the tip.
 for tok in 'pump_block\(' '\.put_block\(' 'AdvanceTip' 'rollback_to_slot\('; do
-    if echo "$LOOP_FN" | grep -qE "$tok"; then
+    if grep -qE "$tok" <<<"$LOOP_FN"; then
         print_fail "run_relay_loop_with_sched reaches a tip-mutation token directly: $tok — the tip advances ONLY through the fenced drivers run_node_sync / admit_forged_block_durably (CN-NODE-02 / DC-SYNC-02 / DC-NODE-12)"
     fi
 done
@@ -108,7 +108,7 @@ done
 # other forge/evidence token stays forbidden, and the fenced call is the SOLE
 # forge entry — no direct `run_real_forge`, no evidence correlation.
 for tok in 'run_real_forge' 'correlate\(' 'Ba02Manifest'; do
-    if echo "$LOOP_FN" | grep -qE "$tok"; then
+    if grep -qE "$tok" <<<"$LOOP_FN"; then
         print_fail "run_relay_loop_with_sched references a forbidden forge/evidence token: $tok — forge ONLY via the fenced forge_one_from_recovered; no direct run_real_forge / evidence (CN-NODE-02)"
     fi
 done
@@ -116,7 +116,7 @@ done
 # The fenced forge call must appear EXACTLY ONCE — the single permitted
 # self-accept forge attempt (CE-E-4). More than one is a second forge path;
 # zero means the forge branch is not wired.
-FORGE_CALLS=$(echo "$LOOP_FN" | grep -cE 'forge_one_from_recovered\(')
+FORGE_CALLS=$(grep -cE 'forge_one_from_recovered\(' <<<"$LOOP_FN")
 if (( FORGE_CALLS != 1 )); then
     print_fail "run_relay_loop_with_sched has $FORGE_CALLS forge_one_from_recovered( call(s) — exactly one fenced forge attempt is required (CE-E-4)"
 fi
@@ -129,21 +129,21 @@ fi
 # serves/broadcasts/gossips directly — no served_chain_admit / push_atomic /
 # broadcast / block_fetch / OutboundCommand here (serve is run_node_serve_task).
 for tok in 'served_chain_admit' 'push_atomic' 'OutboundCommand' 'broadcast' 'block_fetch'; do
-    if echo "$LOOP_FN" | grep -qE "$tok"; then
+    if grep -qE "$tok" <<<"$LOOP_FN"; then
         print_fail "run_relay_loop_with_sched references a serve/broadcast token: $tok — a forged block is self-accept-only; the loop serves/admits/gossips nothing (CE-E-4)"
     fi
 done
 
 # --- guard (neg3): no verdict-as-sync / follower-as-sync --------------------
 for tok in 'derive_verdict' 'run_admission\(' 'ade_core_interop' 'follow\('; do
-    if echo "$LOOP_FN" | grep -qE "$tok"; then
+    if grep -qE "$tok" <<<"$LOOP_FN"; then
         print_fail "run_relay_loop_with_sched references a verdict/follower token: $tok — tip-agreement is not validating sync (DC-SYNC-02)"
     fi
 done
 
 # --- guard (neg4): no second bootstrap / recovery on the loop path ----------
 for tok in 'bootstrap_initial_state\(' 'bootstrap_from_' 'warm_start_recovery\('; do
-    if echo "$LOOP_FN" | grep -qE "$tok"; then
+    if grep -qE "$tok" <<<"$LOOP_FN"; then
         print_fail "run_relay_loop_with_sched references a bootstrap/recovery token: $tok — initial state is obtained ONCE by the dispatcher before the loop (CN-NODE-01/02)"
     fi
 done

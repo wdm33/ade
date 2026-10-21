@@ -42,4 +42,26 @@ here. Any of them that reads a large input can flake the same way.
 
 ## 5. RESULTS
 
-Not yet run.
+Run 2026-10-21.
+
+- **CE-LV9-1.** The gate has no `echo "$LOOP_FN" | grep` left. All eight checks read from
+  `<<<"$LOOP_FN"`.
+- **CE-LV9-2.** On the unchanged tree, the repaired gate passed 50 of 50 runs. As a control, the
+  previous gate on the same tree failed 17 of 20 runs, always at the `run_node_sync(` guard.
+- **CE-LV9-3.** Each mutation edited only the body of `run_relay_loop_with_sched`. Each was asserted
+  applied and the tree restored byte-exact.
+
+  | mutation | repaired gate |
+  |---|---|
+  | `run_node_sync(` call removed | failed 10/10: "must call run_node_sync(" |
+  | a direct `pump_block(` call added | failed 10/10: "reaches a tip-mutation token directly: pump_block\(" |
+  | a second `forge_one_from_recovered(` call added | failed 10/10: "has 2 forge_one_from_recovered( call(s)" |
+
+- **CE-LV9-4.** The full sweep ran 279 `ci/ci_check_*.sh` scripts and 46 failed. That list is
+  identical to the 46-script baseline recorded after LV-6, and the containment gate is not on it.
+  **The stable baseline is 46.**
+
+**Out of scope, counted.** 82 other `ci/` scripts still pipe a variable into `grep -q`, in 310 places,
+and 81 of those scripts run under `pipefail`. Any of them can flake the same way once the text it
+reads is larger than a pipe buffer. None failed nondeterministically in this sweep. They are left for a
+separate slice.
