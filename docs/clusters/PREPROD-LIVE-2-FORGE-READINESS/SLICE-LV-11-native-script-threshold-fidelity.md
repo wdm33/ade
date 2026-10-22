@@ -133,3 +133,50 @@ for the owner, not changed here.
   enforced, this changes nothing; it belongs with the item above.
 - **`From<CodecError> for LedgerError` keeps losing detail.** That is a separate assurance slice.
 - **Adding decoders to the store-semantics lock surface.** That is an owner decision (§5).
+
+## 8. RESULTS
+
+Code commit `a4610e16`.
+
+- **CE-LV11-1, the real block.** `crates/ade_ledger/tests/fixtures/block_133902219.cbor` (1,258 bytes,
+  sha256 `0fb060f0193cc9c6f8ad7dd8c8e071c14c58d585b142b191143b5193b1310329`). `decode_witness_infos`
+  accepts it; tx 0 is `MOfN(-1, [Sig, Sig])`; it passes with no signatures.
+- **CE-LV11-2, decode boundaries.** Exact values for −1, 0, 1, −24, −25, −256, −257, `u32::MAX`,
+  `u32::MAX + 1`, 2^32, `i64::MAX`, `i64::MIN`. Refused with `InvalidCborStructure { "native script MOfN
+  threshold outside int64" }`: `i64::MAX + 1`, `i64::MIN − 1`, `u64::MAX`, `−u64::MAX − 1`. A non-integer
+  threshold is still `UnexpectedCborType`.
+- **CE-LV11-3, evaluation.** `n <= 0` passes with no signatures, over one sub-script and over none, for
+  0, −1, −2, `i64::MIN`. `n = 1` passes with one and fails with none (`ThresholdNotMet { 1, 0 }`). 2^32,
+  `u32::MAX + 1`, `u32::MAX + 2` and `i64::MAX` fail with one passing sub-script, and `ThresholdNotMet`
+  carries the untruncated value. A decoded 2^32 fails end to end. 9 tests in
+  `crates/ade_ledger/tests/lv11_native_script_threshold.rs`.
+- **CE-LV11-4, mutations.** Each was asserted applied, each tree restored byte-exact:
+  - decoder back to `read_uint`: the real-block test fails with `expected: "unsigned integer"`, and the
+    boundary test fails on −1; the gate fails;
+  - threshold truncated through `u32`: the boundary test fails (`decoded as 0`), and the end-to-end 2^32
+    test fails; the gate fails;
+  - the `n <= 0` clause dropped: both zero-or-below tests fail with `ThresholdNotMet`; the gate fails.
+- **CE-LV11-5, gate.** `ci/ci_check_native_script_threshold_signed.sh` passes, with 9 tests ran. Full
+  sweep: 280 scripts, 46 failing, the same list as the LV-9 baseline (the new gate passes).
+- **CE-LV11-6, persisted history.** `persisted_threshold_census` in
+  `crates/ade_runtime/tests/body_decode_census.rs`, over a copy of the stopped store's `chain.db`
+  (sha256 `3f76c5a0266f4014caae…`):
+  - 184,490 blocks, slots 129,813,444 to 133,902,215 (the durable tip), all Conway;
+  - 421,827 witness sets, 35,943 native-script lists, 36,069 top-level scripts, 109,268 script nodes,
+    maximum depth 5,384, no indefinite-length script arrays;
+  - 1,305 `script_n_of_k` thresholds, minimum 1, maximum 122;
+  - **none below 0 and none above `u32::MAX`**;
+  - the repaired `decode_witness_infos` accepts every stored block and yields the same 1,305 thresholds
+    (sorted multisets equal).
+
+  The verdict search: `evaluate_native_script` has one production call site (`rules.rs:2323`, in
+  `decode_validate_tx_bodies`). It increments `native_script_passed` / `native_script_failed`, which are
+  returned in `BlockVerdict` and read nowhere. `BlockVerdict` is not persisted.
+
+  **Decision: no bump.** The old binary accepted exactly the stored blocks, the new binary decodes all of
+  them to the same values, and no verdict reaches durable state. A store written by the previous binary
+  is replay-equivalent under this one, so `STORE_SEMANTICS_VERSION` stays 11.
+- **CE-LV11-7, live.** `docs/evidence/run-stores/preprod-live2c/lv11-ce7-resume-past-negative-threshold.md`:
+  warm start on a copy of the stopped store at 2026-10-22T22:49:44Z, `forward_fold_no_reset` from the
+  durable tip 133,902,215, follow tip 133,937,493 on the first line and 134,005,635 thirty minutes in,
+  no failure line.
