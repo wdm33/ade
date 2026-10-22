@@ -36,8 +36,9 @@ def prod(src):
 bad = []
 types_p, codec_p, ev_p, err_p = prod(types), prod(codec), prod(ev), prod(err)
 
-if not re.search(r"\bMOfN\(\s*i64\s*,\s*Vec<NativeScript>\s*\)", types_p):
-    bad.append("NativeScript::MOfN no longer holds an i64 threshold")
+# LV-12 made the script a flat post-order node list; the threshold lives on NativeScriptNode::MOfN.
+if not re.search(r"\bMOfN\s*\{\s*threshold:\s*i64\s*,\s*arity:\s*u64\s*\}", types_p):
+    bad.append("NativeScriptNode::MOfN no longer holds an i64 threshold")
 
 # The decoder's tag-3 arm: from `3 =>` to the next arm.
 m = re.search(r"\n\s*3\s*=>\s*\{(.*?)\n\s*4\s*=>", codec_p, re.S)
@@ -61,14 +62,14 @@ else:
 if re.search(r"\bas\s+(u32|i32|u16|u8)\b", codec_p):
     bad.append("a narrowing cast appears in the native-script decoder")
 
-m = re.search(r"NativeScript::MOfN\(required, sub_scripts\)\s*=>\s*\{(.*?)\n        NativeScript::", ev_p, re.S)
+m = re.search(r"NativeScriptNode::MOfN\s*\{\s*threshold,\s*\.\.\s*\}\s*=>\s*\{(.*?)\n        NativeScriptNode::", ev_p, re.S)
 ea = m.group(1) if m else ""
 if not ea:
     bad.append("could not isolate the MOfN evaluation arm")
 else:
     if re.search(r"\bas\s+(u32|i32|u16|u8)\b|\bu32\b", ea):
         bad.append("the MOfN evaluation arm narrows to 32 bits")
-    if "u64::try_from(*required)" not in ea:
+    if "u64::try_from(*threshold)" not in ea:
         bad.append("the MOfN evaluation arm no longer treats a threshold <= 0 as satisfied (isValidMOf)")
 
 if not re.search(r"ThresholdNotMet\s*\{\s*required:\s*i64,\s*provided:\s*u64\s*\}", err_p):

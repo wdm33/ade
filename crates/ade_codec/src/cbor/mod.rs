@@ -343,7 +343,47 @@ pub fn read_any_int(data: &[u8], offset: &mut usize) -> Result<(u64, bool, IntWi
 
 /// Skip over an entire CBOR item, advancing offset past it.
 /// Returns the byte range `[start, end)` of the skipped item.
+///
+/// Iterative: the items still owed by each open container are kept on a heap stack, so the call
+/// stack does not grow with the input's nesting depth (DC-LEDGER-SCRIPT-02). Results and errors are
+/// those of the recursive formulation it replaced: every item is read head-first, in order, with any
+/// error reported at the same offset.
 pub fn skip_item(data: &[u8], offset: &mut usize) -> Result<(usize, usize), CodecError> {
+    let start = *offset;
+    // Items still owed by each open container, innermost last; `None` = until a break byte.
+    let mut owed: Vec<Option<u128>> = Vec::new();
+    loop {
+        skip_head(data, offset, &mut owed)?;
+        loop {
+            match owed.last_mut() {
+                None => return Ok((start, *offset)),
+                Some(Some(0)) => {
+                    owed.pop();
+                }
+                Some(Some(n)) => {
+                    *n -= 1;
+                    break;
+                }
+                Some(None) => {
+                    if peek_byte(data, *offset)? == BREAK_BYTE {
+                        *offset += 1;
+                        owed.pop();
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Read one item's head and any inline payload. A container's contents are not read here: the
+/// number of items it owes is pushed onto `owed` for [`skip_item`] to walk.
+fn skip_head(
+    data: &[u8],
+    offset: &mut usize,
+    owed: &mut Vec<Option<u128>>,
+) -> Result<(), CodecError> {
     let start = *offset;
     let (major, ai) = decode_initial(data, offset)?;
 
@@ -357,14 +397,7 @@ pub fn skip_item(data: &[u8], offset: &mut usize) -> Result<(usize, usize), Code
         }
         MAJOR_BYTES | MAJOR_TEXT => {
             if ai == AI_INDEFINITE {
-                loop {
-                    let b = peek_byte(data, *offset)?;
-                    if b == BREAK_BYTE {
-                        *offset += 1;
-                        break;
-                    }
-                    let _ = skip_item(data, offset)?;
-                }
+                owed.push(None);
             } else {
                 let (len, _) = decode_argument(data, offset, ai, start)?;
                 let len = len as usize;
@@ -379,43 +412,23 @@ pub fn skip_item(data: &[u8], offset: &mut usize) -> Result<(usize, usize), Code
         }
         MAJOR_ARRAY => {
             if ai == AI_INDEFINITE {
-                loop {
-                    let b = peek_byte(data, *offset)?;
-                    if b == BREAK_BYTE {
-                        *offset += 1;
-                        break;
-                    }
-                    let _ = skip_item(data, offset)?;
-                }
+                owed.push(None);
             } else {
                 let (count, _) = decode_argument(data, offset, ai, start)?;
-                for _ in 0..count {
-                    let _ = skip_item(data, offset)?;
-                }
+                owed.push(Some(u128::from(count)));
             }
         }
         MAJOR_MAP => {
             if ai == AI_INDEFINITE {
-                loop {
-                    let b = peek_byte(data, *offset)?;
-                    if b == BREAK_BYTE {
-                        *offset += 1;
-                        break;
-                    }
-                    let _ = skip_item(data, offset)?;
-                    let _ = skip_item(data, offset)?;
-                }
+                owed.push(None);
             } else {
                 let (count, _) = decode_argument(data, offset, ai, start)?;
-                for _ in 0..count {
-                    let _ = skip_item(data, offset)?;
-                    let _ = skip_item(data, offset)?;
-                }
+                owed.push(Some(u128::from(count) * 2));
             }
         }
         MAJOR_TAG => {
             let _ = decode_argument(data, offset, ai, start)?;
-            let _ = skip_item(data, offset)?;
+            owed.push(Some(1));
         }
         // Major type 7: simple values and floats
         _ => {
@@ -469,7 +482,7 @@ pub fn skip_item(data: &[u8], offset: &mut usize) -> Result<(usize, usize), Code
         }
     }
 
-    Ok((start, *offset))
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -577,6 +590,9 @@ pub fn is_break(data: &[u8], offset: usize) -> Result<bool, CodecError> {
     let b = peek_byte(data, offset)?;
     Ok(b == BREAK_BYTE)
 }
+
+#[cfg(test)]
+mod skip_differential_tests;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]

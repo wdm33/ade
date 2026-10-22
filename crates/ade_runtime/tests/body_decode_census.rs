@@ -20,7 +20,7 @@ use ade_codec::cbor::{self, envelope::decode_block_envelope, ContainerEncoding};
 use ade_codec::conway::{decode_conway_block, tx::decode_conway_tx_body};
 use ade_ledger::block_validity::decode_block;
 use ade_runtime::chaindb::{ChainDb, PersistentChainDb, PersistentChainDbOptions};
-use ade_types::allegra::script::NativeScript;
+use ade_types::allegra::script::NativeScriptNode;
 use ade_types::{CardanoEra, SlotNo};
 
 fn hex(b: &[u8]) -> String {
@@ -295,6 +295,7 @@ fn persisted_threshold_census() {
     }
     let mut t = Tally::default();
     let mut decoded: Vec<i128> = Vec::new();
+    let mut decoded_nodes = 0u64;
     let (mut first, mut last) = (None, 0u64);
 
     enum Frame {
@@ -429,15 +430,12 @@ fn persisted_threshold_census() {
         // Cross-check: the production witness decoder accepts the block and yields the same thresholds.
         let infos = ade_ledger::witness::decode_witness_infos(ws)
             .unwrap_or_else(|e| panic!("slot {}: decode_witness_infos refused a stored block: {e:?}", b.slot.0));
-        let mut todo: Vec<&NativeScript> = infos.iter().flat_map(|i| i.native_scripts.iter()).collect();
-        while let Some(s) = todo.pop() {
-            match s {
-                NativeScript::All(v) | NativeScript::Any(v) => todo.extend(v.iter()),
-                NativeScript::MOfN(n, v) => {
-                    decoded.push(i128::from(*n));
-                    todo.extend(v.iter());
+        for s in infos.iter().flat_map(|i| i.native_scripts.iter()) {
+            decoded_nodes += s.nodes().len() as u64;
+            for node in s.nodes() {
+                if let NativeScriptNode::MOfN { threshold, .. } = node {
+                    decoded.push(i128::from(*threshold));
                 }
-                _ => {}
             }
         }
     }
@@ -447,6 +445,8 @@ fn persisted_threshold_census() {
     decoded.sort_unstable();
     println!("DECODER CROSS-CHECK: {} thresholds decoded, multiset equal to raw: {}", decoded.len(), raw == decoded);
     assert_eq!(raw, decoded, "the decoder's thresholds differ from the raw CBOR");
+    println!("DECODER CROSS-CHECK: {decoded_nodes} script nodes decoded, raw walk {}", t.nodes);
+    assert_eq!(decoded_nodes, t.nodes, "the decoder's node count differs from the raw CBOR");
 
     println!("STORE TIP slot={} hash={}", tip.slot.0, hex(&tip.hash.0));
     println!("BLOCKS {} (slots {}..={}), non-Conway {}", t.blocks, first.unwrap_or(0), last, t.non_conway);

@@ -12,7 +12,7 @@ use ade_codec::conway::decode_conway_block;
 use ade_ledger::error::NativeScriptFailure;
 use ade_ledger::scripts::{evaluate_native_script, ScriptVerdict};
 use ade_ledger::witness::decode_witness_infos;
-use ade_types::allegra::script::NativeScript;
+use ade_types::allegra::script::{NativeScript, NativeScriptNode};
 use ade_types::Hash28;
 
 /// Preprod slot 133,902,219, block 5,184,855: the first block the LV-8 live node refused. Original
@@ -60,16 +60,19 @@ fn decode_threshold(threshold: Vec<u8>) -> Result<i64, ade_codec::error::CodecEr
     let scripts = decode_native_scripts(&bytes, &mut o)?;
     assert_eq!(o, bytes.len());
     match scripts.as_slice() {
-        [NativeScript::MOfN(n, subs)] => {
-            assert_eq!(subs, &vec![NativeScript::Sig(Hash28(KEY_A))]);
-            Ok(*n)
-        }
-        other => panic!("expected one MOfN, got {other:?}"),
+        [s] => match s.nodes() {
+            [NativeScriptNode::Sig(k), NativeScriptNode::MOfN { threshold, arity: 1 }] => {
+                assert_eq!(k, &Hash28(KEY_A));
+                Ok(*threshold)
+            }
+            other => panic!("expected MOfN over one Sig, got {other:?}"),
+        },
+        other => panic!("expected one script, got {other:?}"),
     }
 }
 
 fn sig(k: [u8; 28]) -> NativeScript {
-    NativeScript::Sig(Hash28(k))
+    NativeScript::sig(Hash28(k))
 }
 
 fn eval(script: &NativeScript, sigs: &[[u8; 28]]) -> ScriptVerdict {
@@ -87,13 +90,11 @@ fn lv11_the_refused_preprod_block_now_decodes_its_negative_threshold() {
     let infos = decode_witness_infos(&ws).expect("the witness sets of block 5,184,855 must decode");
     let tx0 = &infos[0].native_scripts;
     assert_eq!(tx0.len(), 1);
-    match &tx0[0] {
-        NativeScript::MOfN(n, subs) => {
-            assert_eq!(*n, -1);
-            assert_eq!(subs.len(), 2);
-            assert!(subs.iter().all(|s| matches!(s, NativeScript::Sig(_))));
+    match tx0[0].nodes() {
+        [NativeScriptNode::Sig(_), NativeScriptNode::Sig(_), NativeScriptNode::MOfN { threshold, arity: 2 }] => {
+            assert_eq!(*threshold, -1);
         }
-        other => panic!("tx 0 script is not script_n_of_k: {other:?}"),
+        other => panic!("tx 0 script is not script_n_of_k over two Sig: {other:?}"),
     }
 }
 
@@ -167,14 +168,14 @@ fn lv11_a_non_integer_threshold_is_still_refused() {
 #[test]
 fn lv11_a_threshold_of_zero_or_below_is_satisfied_outright() {
     for n in [0i64, -1, -2, i64::MIN] {
-        assert_eq!(eval(&NativeScript::MOfN(n, vec![sig(KEY_A)]), &[]), ScriptVerdict::NativeScriptPassed);
-        assert_eq!(eval(&NativeScript::MOfN(n, vec![]), &[]), ScriptVerdict::NativeScriptPassed);
+        assert_eq!(eval(&NativeScript::m_of_n(n, vec![sig(KEY_A)]), &[]), ScriptVerdict::NativeScriptPassed);
+        assert_eq!(eval(&NativeScript::m_of_n(n, vec![]), &[]), ScriptVerdict::NativeScriptPassed);
     }
 }
 
 #[test]
 fn lv11_a_threshold_of_one_needs_one_passing_sub_script() {
-    let s = NativeScript::MOfN(1, vec![sig(KEY_A)]);
+    let s = NativeScript::m_of_n(1, vec![sig(KEY_A)]);
     assert_eq!(eval(&s, &[KEY_A]), ScriptVerdict::NativeScriptPassed);
     assert_eq!(
         eval(&s, &[]),
@@ -186,7 +187,7 @@ fn lv11_a_threshold_of_one_needs_one_passing_sub_script() {
 fn lv11_a_threshold_above_u32_is_not_truncated_into_a_pass() {
     let u32_max = i64::from(u32::MAX);
     for n in [1i64 << 32, u32_max + 1, u32_max + 2, i64::MAX] {
-        let s = NativeScript::MOfN(n, vec![sig(KEY_A)]);
+        let s = NativeScript::m_of_n(n, vec![sig(KEY_A)]);
         assert_eq!(
             eval(&s, &[KEY_A]),
             ScriptVerdict::NativeScriptFailed(NativeScriptFailure::ThresholdNotMet { required: n, provided: 1 }),
@@ -198,6 +199,6 @@ fn lv11_a_threshold_above_u32_is_not_truncated_into_a_pass() {
 #[test]
 fn lv11_a_decoded_threshold_of_two_to_the_32_fails_end_to_end() {
     let n = decode_threshold(cbor_int(1i128 << 32)).unwrap();
-    let s = NativeScript::MOfN(n, vec![sig(KEY_A)]);
+    let s = NativeScript::m_of_n(n, vec![sig(KEY_A)]);
     assert!(matches!(eval(&s, &[KEY_A]), ScriptVerdict::NativeScriptFailed(_)));
 }
