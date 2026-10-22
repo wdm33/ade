@@ -20,6 +20,7 @@ use ade_codec::cbor::{self, envelope::decode_block_envelope, ContainerEncoding};
 use ade_codec::conway::{decode_conway_block, tx::decode_conway_tx_body};
 use ade_ledger::block_validity::decode_block;
 use ade_runtime::chaindb::{ChainDb, PersistentChainDb, PersistentChainDbOptions};
+use ade_types::allegra::script::NativeScript;
 use ade_types::{CardanoEra, SlotNo};
 
 fn hex(b: &[u8]) -> String {
@@ -256,4 +257,208 @@ fn unmapped_native_script_error() {
     println!("witness set 0: key {key}, tag {tag}, script list at witness_sets offset {o}");
     let r = ade_codec::allegra::script::decode_native_scripts(ws, &mut o);
     println!("decode_native_scripts: {r:?}");
+}
+
+/// SLICE LV-11 CE-LV11-6: every `script_n_of_k` threshold in the blocks an Ade store holds, read raw
+/// from the CBOR (both integer major types, full 64-bit argument), independently of the native-script
+/// decoder. The script walk keeps an explicit stack, so no script's nesting depth depends on thread
+/// stack. Witness-set key 1 is the only place Ade decodes native scripts.
+///
+/// ```text
+/// ADE_CENSUS_CHAINDB=/abs/chain-copy.db \
+///   cargo test -p ade_runtime --test body_decode_census -- --ignored --nocapture persisted_threshold
+/// ```
+#[test]
+#[ignore = "evidence-only; requires ADE_CENSUS_CHAINDB pointing at a COPY of an Ade chain.db"]
+fn persisted_threshold_census() {
+    let path = std::env::var("ADE_CENSUS_CHAINDB").expect("set ADE_CENSUS_CHAINDB (a COPY)");
+    let db = PersistentChainDb::open(PersistentChainDbOptions::at(path)).expect("open chain.db copy");
+    let tip = db.tip().expect("tip").expect("non-empty store");
+
+    #[derive(Default)]
+    struct Tally {
+        blocks: u64,
+        non_conway: u64,
+        witness_sets: u64,
+        script_lists: u64,
+        top_scripts: u64,
+        nodes: u64,
+        mofn: u64,
+        min: Option<i128>,
+        max: Option<i128>,
+        below_zero: u64,
+        above_u32: u64,
+        indefinite_script_arrays: u64,
+        max_depth: usize,
+        outside: Vec<(u64, u64, i128)>,
+        raw: Vec<i128>,
+    }
+    let mut t = Tally::default();
+    let mut decoded: Vec<i128> = Vec::new();
+    let (mut first, mut last) = (None, 0u64);
+
+    enum Frame {
+        List(Option<u64>),
+        Break,
+    }
+
+    for item in db.iter_from_slot(SlotNo(0)).expect("iter") {
+        let b = item.expect("stored block");
+        t.blocks += 1;
+        first.get_or_insert(b.slot.0);
+        last = b.slot.0;
+        let env = decode_block_envelope(&b.bytes).expect("envelope");
+        if env.era != CardanoEra::Conway {
+            t.non_conway += 1;
+            continue;
+        }
+        let block = decode_conway_block(&b.bytes[env.block_start..env.block_end]).expect("conway block");
+        let ws = &block.decoded().witness_sets;
+        let mut o = 0;
+        let sets = match cbor::read_array_header(ws, &mut o).expect("witness_sets") {
+            ContainerEncoding::Definite(n, _) => Some(n),
+            ContainerEncoding::Indefinite => None,
+        };
+        let mut tx = 0u64;
+        loop {
+            match sets {
+                Some(n) if tx == n => break,
+                None if cbor::is_break(ws, o).expect("break") => break,
+                _ => {}
+            }
+            t.witness_sets += 1;
+            let keys = match cbor::read_map_header(ws, &mut o).expect("witness set map") {
+                ContainerEncoding::Definite(n, _) => Some(n),
+                ContainerEncoding::Indefinite => None,
+            };
+            let mut k = 0u64;
+            loop {
+                match keys {
+                    Some(n) if k == n => break,
+                    None if cbor::is_break(ws, o).expect("break") => {
+                        o += 1;
+                        break;
+                    }
+                    _ => {}
+                }
+                k += 1;
+                let (key, _) = cbor::read_uint(ws, &mut o).expect("witness key");
+                if key != 1 {
+                    cbor::skip_item(ws, &mut o).expect("skip witness value");
+                    continue;
+                }
+                t.script_lists += 1;
+                if cbor::peek_major(ws, o).expect("peek") == cbor::MAJOR_TAG {
+                    cbor::read_tag(ws, &mut o).expect("set tag");
+                }
+                let top = match cbor::read_array_header(ws, &mut o).expect("script list") {
+                    ContainerEncoding::Definite(n, _) => Some(n),
+                    ContainerEncoding::Indefinite => None,
+                };
+                t.top_scripts += top.unwrap_or(0);
+                let mut stack = vec![Frame::List(top)];
+                while let Some(frame) = stack.last_mut() {
+                    match frame {
+                        Frame::Break => {
+                            assert!(cbor::is_break(ws, o).expect("break"), "indefinite script not closed");
+                            o += 1;
+                            stack.pop();
+                            continue;
+                        }
+                        Frame::List(Some(0)) => {
+                            stack.pop();
+                            continue;
+                        }
+                        Frame::List(None) => {
+                            if cbor::is_break(ws, o).expect("break") {
+                                o += 1;
+                                stack.pop();
+                                continue;
+                            }
+                        }
+                        Frame::List(Some(n)) => *n -= 1,
+                    }
+                    t.nodes += 1;
+                    t.max_depth = t.max_depth.max(stack.len());
+                    if matches!(cbor::read_array_header(ws, &mut o).expect("script"), ContainerEncoding::Indefinite) {
+                        t.indefinite_script_arrays += 1;
+                        stack.push(Frame::Break);
+                    }
+                    let (ctor, _) = cbor::read_uint(ws, &mut o).expect("script constructor");
+                    let sub = |ws: &[u8], o: &mut usize| match cbor::read_array_header(ws, o).expect("sub-scripts") {
+                        ContainerEncoding::Definite(n, _) => Frame::List(Some(n)),
+                        ContainerEncoding::Indefinite => Frame::List(None),
+                    };
+                    match ctor {
+                        0 => {
+                            cbor::read_bytes(ws, &mut o).expect("key hash");
+                        }
+                        1 | 2 => stack.push(sub(ws, &mut o)),
+                        3 => {
+                            let (arg, neg, _) = cbor::read_any_int(ws, &mut o).expect("threshold");
+                            let v = if neg { -1 - i128::from(arg) } else { i128::from(arg) };
+                            t.mofn += 1;
+                            t.raw.push(v);
+                            t.min = Some(t.min.map_or(v, |m| m.min(v)));
+                            t.max = Some(t.max.map_or(v, |m| m.max(v)));
+                            if v < 0 {
+                                t.below_zero += 1;
+                            }
+                            if v > i128::from(u32::MAX) {
+                                t.above_u32 += 1;
+                            }
+                            if v < 0 || v > i128::from(u32::MAX) {
+                                t.outside.push((b.slot.0, tx, v));
+                            }
+                            stack.push(sub(ws, &mut o));
+                        }
+                        4 | 5 => {
+                            cbor::read_uint(ws, &mut o).expect("slot");
+                        }
+                        other => panic!("slot {} tx {tx}: native script constructor {other}", b.slot.0),
+                    }
+                }
+            }
+            tx += 1;
+        }
+        if sets.is_none() {
+            o += 1;
+        }
+        assert_eq!(o, ws.len(), "slot {}: witness_sets not fully walked", b.slot.0);
+
+        // Cross-check: the production witness decoder accepts the block and yields the same thresholds.
+        let infos = ade_ledger::witness::decode_witness_infos(ws)
+            .unwrap_or_else(|e| panic!("slot {}: decode_witness_infos refused a stored block: {e:?}", b.slot.0));
+        let mut todo: Vec<&NativeScript> = infos.iter().flat_map(|i| i.native_scripts.iter()).collect();
+        while let Some(s) = todo.pop() {
+            match s {
+                NativeScript::All(v) | NativeScript::Any(v) => todo.extend(v.iter()),
+                NativeScript::MOfN(n, v) => {
+                    decoded.push(i128::from(*n));
+                    todo.extend(v.iter());
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut raw: Vec<i128> = Vec::new();
+    std::mem::swap(&mut raw, &mut t.raw);
+    raw.sort_unstable();
+    decoded.sort_unstable();
+    println!("DECODER CROSS-CHECK: {} thresholds decoded, multiset equal to raw: {}", decoded.len(), raw == decoded);
+    assert_eq!(raw, decoded, "the decoder's thresholds differ from the raw CBOR");
+
+    println!("STORE TIP slot={} hash={}", tip.slot.0, hex(&tip.hash.0));
+    println!("BLOCKS {} (slots {}..={}), non-Conway {}", t.blocks, first.unwrap_or(0), last, t.non_conway);
+    println!(
+        "WITNESS SETS {}  native-script lists {}  top-level scripts {}  script nodes {}  max depth {}",
+        t.witness_sets, t.script_lists, t.top_scripts, t.nodes, t.max_depth
+    );
+    println!("INDEFINITE SCRIPT ARRAYS {}", t.indefinite_script_arrays);
+    println!("SCRIPT_N_OF_K {}  min {:?}  max {:?}", t.mofn, t.min, t.max);
+    println!("OUTSIDE 0..=u32::MAX: {} (below 0: {}, above u32::MAX: {})", t.outside.len(), t.below_zero, t.above_u32);
+    for (slot, tx, v) in &t.outside {
+        println!("  slot {slot} tx {tx} threshold {v}");
+    }
+    assert_eq!(last, tip.slot.0, "the walk must end at the store tip");
 }

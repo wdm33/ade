@@ -16,7 +16,7 @@ use ade_types::Hash28;
 /// - Tag 0: Sig — `[0, key_hash(28)]`
 /// - Tag 1: All — `[1, [scripts...]]`
 /// - Tag 2: Any — `[2, [scripts...]]`
-/// - Tag 3: MOfN — `[3, n, [scripts...]]` (array(3))
+/// - Tag 3: MOfN — `[3, n, [scripts...]]` (array(3)), `n` a signed int64
 /// - Tag 4: InvalidBefore — `[4, slot]`
 /// - Tag 5: InvalidHereafter — `[5, slot]`
 pub fn decode_native_script(
@@ -68,9 +68,9 @@ pub fn decode_native_script(
                     detail: "native script MOfN must be array(3)",
                 });
             }
-            let (n, _) = cbor::read_uint(data, offset)?;
+            let n = read_threshold(data, offset)?;
             let scripts = decode_script_array(data, offset)?;
-            Ok(NativeScript::MOfN(n as u32, scripts))
+            Ok(NativeScript::MOfN(n, scripts))
         }
         4 => {
             // InvalidBefore: [4, slot]
@@ -87,6 +87,23 @@ pub fn decode_native_script(
             detail: "unknown native script constructor tag",
         }),
     }
+}
+
+/// Read a `script_n_of_k` threshold: CDDL `int64`, decoded by cardano-ledger as a signed `Int`.
+///
+/// Either CBOR integer major type is accepted; a magnitude outside `i64` is refused, as cborg's
+/// `Int` decoder refuses it.
+fn read_threshold(data: &[u8], offset: &mut usize) -> Result<i64, CodecError> {
+    let start = *offset;
+    let (arg, negative, _) = cbor::read_any_int(data, offset)?;
+    let Ok(magnitude) = i64::try_from(arg) else {
+        return Err(CodecError::InvalidCborStructure {
+            offset: start,
+            detail: "native script MOfN threshold outside int64",
+        });
+    };
+    // Major type 1 encodes -1 - arg; with arg <= i64::MAX this is at least i64::MIN.
+    Ok(if negative { -1 - magnitude } else { magnitude })
 }
 
 fn decode_script_array(

@@ -20,7 +20,10 @@ pub enum NativeScript {
     /// Requires ANY sub-script to pass.
     Any(Vec<NativeScript>),
     /// Requires at least M of N sub-scripts to pass.
-    MOfN(u32, Vec<NativeScript>),
+    ///
+    /// M is the CDDL `int64` threshold, held at its full signed width: an M of zero or below is
+    /// always satisfied (cardano-ledger `isValidMOf`), and no narrowing may change a verdict.
+    MOfN(i64, Vec<NativeScript>),
     /// Transaction is valid only at or after this slot.
     InvalidBefore(u64),
     /// Transaction is valid only before this slot.

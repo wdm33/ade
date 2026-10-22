@@ -135,18 +135,25 @@ pub fn evaluate_native_script(
         }
 
         NativeScript::MOfN(required, sub_scripts) => {
-            let mut passed: u32 = 0;
+            // cardano-ledger isValidMOf: a threshold of zero or below is satisfied outright.
+            let Ok(needed) = u64::try_from(*required) else {
+                return ScriptVerdict::NativeScriptPassed;
+            };
+            if needed == 0 {
+                return ScriptVerdict::NativeScriptPassed;
+            }
+            let mut passed: u64 = 0;
             for sub in sub_scripts {
                 let verdict = evaluate_native_script(sub, available_sigs, current_slot);
                 if verdict == ScriptVerdict::NativeScriptPassed {
                     passed = passed.saturating_add(1);
                     // Short circuit: if we already have enough, stop
-                    if passed >= *required {
+                    if passed >= needed {
                         return ScriptVerdict::NativeScriptPassed;
                     }
                 }
             }
-            if passed >= *required {
+            if passed >= needed {
                 ScriptVerdict::NativeScriptPassed
             } else {
                 ScriptVerdict::NativeScriptFailed(NativeScriptFailure::ThresholdNotMet {

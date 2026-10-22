@@ -436,7 +436,7 @@ pub struct ScriptError {
 pub enum NativeScriptFailure {
     MissingRequiredSignature { key_hash: Hash28 },
     TimelockNotSatisfied { required_slot: SlotNo, current_slot: SlotNo },
-    ThresholdNotMet { required: u32, provided: u32 },
+    ThresholdNotMet { required: i64, provided: u64 },
 }
 
 // ---------------------------------------------------------------------------
