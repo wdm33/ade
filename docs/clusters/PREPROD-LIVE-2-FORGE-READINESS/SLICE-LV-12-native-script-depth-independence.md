@@ -103,3 +103,68 @@ the gate can check that structurally.
   thread runs it no longer matters for native scripts.
 - **Native-script verdict enforcement** (LV-11 §7). This slice keeps the verdict exactly as it is and
   does not start enforcing it.
+
+## 8. RESULTS
+
+Code commit `a82d11b8`.
+
+- **CE-LV12-1, the real block.** `crates/ade_ledger/tests/fixtures/block_133883340.cbor` (44,432 bytes,
+  sha256 `ca0feb0e4ee2169c4d1baea466b1f128c50b81dab6cb50f9e874cf277a5f6710`, extracted from the peer's
+  chunk 06198 and byte-identical to Ade's wire-received copy per LV-10). On a 256 KiB thread, in the debug
+  test profile, `decode_block`, `decode_conway_block`, `decode_witness_infos`, evaluation of every
+  script, clone, equality and drop all complete. The deepest script has more than 5,000 nodes.
+  Before LV-12 the same steps needed ~28 MiB in debug (§1).
+- **CE-LV12-2, constructed worst cases.** Native scripts of 5,500 and 50,000 `all` levels decode,
+  evaluate (pass with the key, `MissingRequiredSignature` without), clone, compare and drop on a 256 KiB
+  thread, alone and inside a witness set. 90,000-level nested arrays go through `skip_item` on a
+  256 KiB thread.
+- **CE-LV12-3, `skip_item` differential.** Against the recursive original, kept verbatim in
+  `crates/ade_codec/src/cbor/skip_differential_tests.rs`: identical result and offset on all eight block
+  fixtures from offset 0 and from every offset in each one's first 4 KiB; on every truncated prefix of the
+  six fixtures up to 16 KiB, and the first and last 4 KiB of prefixes of the two larger ones; and on 19
+  constructed forms (indefinite strings holding containers, map/break misuse, nested tags, huge counts,
+  reserved heads, empty input).
+- **CE-LV12-4, decoder and evaluator differential.** Against the recursive decoder and evaluator, kept
+  in `crates/ade_ledger/tests/lv12_native_script_depth.rs` over a recursive reference type: identical
+  post-order nodes and end offset for every native script in the eight fixtures, including the deep
+  one; identical verdicts, including the failure reported, across signature sets and slots; 4,000
+  generated scripts (depth ≤ 5, definite and indefinite lists, thresholds −2..4), each with every
+  truncation and 40 single-byte corruptions, decoding to the same value or the same error; 15 malformed
+  cases. The LV-11 tests pass, adapted to the new constructors with the same assertions.
+
+  **One intended change.** The recursive decoder preallocated `Vec::with_capacity(n)` from a sub-script
+  count read off the wire, so a forged count such as 2^63 could abort the process on allocation. The flat
+  decoder allocates only for scripts it has read and reports `UnexpectedEof`
+  (`lv12_a_forged_sub_script_count_is_an_error_not_an_allocation`). No valid block is affected.
+- **CE-LV12-5, mutations.** Each was asserted applied and compiled, and each tree was restored
+  byte-exact:
+  - `skip_item` recursive again: the 90,000-level test overflows its stack; the gate fails with
+    `recursion skip_item -> skip_item`;
+  - the decoder recursive again: the deep-script test overflows; the gate fails with
+    `recursion decode_native_script -> decode_native_script`;
+  - the evaluator recursive again: the deep-script test overflows; the gate fails with
+    `recursion evaluate_native_script -> evaluate_native_script`.
+- **CE-LV12-6, gate.** `ci/ci_check_native_script_depth_independent.sh` passes, with 19 tests ran. It
+  checks for call cycles, direct or mutual, among the production functions of `cbor/mod.rs`, the
+  native-script decoder and the evaluator, and refuses a recursive field in `NativeScript` or
+  `NativeScriptNode`. The LV-11 gate's type and evaluator patterns now name `NativeScriptNode::MOfN`;
+  its checks are otherwise unchanged and it passes. Full sweep: 281 scripts, 46 failing, the same list
+  as the LV-9 baseline.
+- **CE-LV12-7, store semantics.** The persisted census over the stopped store's `chain.db` copy, re-run
+  on the default 2 MiB test thread with no `RUST_MIN_STACK` (which LV-10 and LV-11 needed): all 184,490
+  blocks decode, with the same 1,305 thresholds as the raw walk, and 109,268 decoded script nodes against
+  109,268 in the raw walk. With CE-LV12-3/4 showing identical decode outcomes, this is semantics-neutral:
+  no bump, `STORE_SEMANTICS_VERSION` stays 11. `ci_check_store_semantics_lock.sh` passes (none of the
+  changed files is on its surface).
+
+### Found on the way, not fixed here
+
+Several codec decoders still preallocate from an unchecked wire count, for example
+`conway/tx.rs:232` (transaction outputs) and `shelley/cert.rs:40`. Others clamp it with
+`.min(data.len())`. A forged count in a body that reaches decoding could abort the process on
+allocation. This needs its own assurance slice.
+
+- **CE-LV12-8, live.** `docs/evidence/run-stores/preprod-live2c/lv12-ce8-restart-on-flat-scripts.md`.
+  The LV-11 run, after crossing 313→314 and 314→315, halted cleanly on SIGINT at durable tip 134,438,444.
+  The LV-12 binary restarted on the same store at 2026-10-23T00:11:45Z (`forward_fold_no_reset` at the
+  tip) and was following at 134,531,007 five minutes later, with no failure line.

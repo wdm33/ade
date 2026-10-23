@@ -10713,3 +10713,29 @@ introduced_in = "PREPROD-LIVE-2-LV-11"
 strengthened_in = []
 evidence = ["LV-10 census: docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LV-10-body-decode-census.md section 7 (the live stop at slot 133,902,219 traced to threshold -1 read as unsigned).", "LIVE: docs/evidence/run-stores/preprod-live2c/lv11-ce7-resume-past-negative-threshold.md (warm start on the stopped store, forward_fold_no_reset from 133,902,215, follow tip past 134,005,635, no failure line).", "Persisted-history census: SLICE-LV-11 section 8 CE-LV11-6 (184,490 stored blocks, 1,305 thresholds all in 1..=122, decoder cross-check equal)."]
 evidence_notes = "ENFORCED on the live resume plus the in-tree witnesses. Mutation-tested: read_uint restored, u32 truncation restored, and the n <= 0 clause dropped each fail the intended tests for the intended reason and fail the gate. STORE_SEMANTICS_VERSION NOT bumped, by the policy's own test: no stored block holds a threshold outside 0..=u32::MAX, the repaired decoder decodes every stored block to the same values, and no production path reads the native-script verdict, so a store written by the previous binary is replay-equivalent. SCOPE: this rule is the threshold's representation and evaluation only. It does not claim that Ade enforces native-script verdicts -- today nothing consumes them (LV-11 section 7) -- and it does not cover nesting depth (LV-12)."
+
+[[rules]]
+id = "DC-LEDGER-SCRIPT-02"
+tier = "derived"
+statement = """
+No code path that decodes, skips, evaluates, clones, compares or drops a wire-supplied native script,
+or skips any wire-supplied CBOR item, uses call-stack depth proportional to the input's nesting depth.
+Pending work is kept on the heap: cbor::skip_item keeps the items owed per open container on a heap
+stack; NativeScript is a flat post-order node list with no recursive field; the decoder keeps open
+composites on a heap stack; the evaluator is one forward pass over the nodes. There is no depth limit:
+Cardano bounds nesting only by transaction and block size, and a limit below that rejects valid blocks.
+Decode outcomes, error variants and offsets, and evaluation verdicts are those of the recursive
+implementation this replaced.
+"""
+source = "docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LV-12-native-script-depth-independence.md"
+cross_ref = ["DC-LEDGER-SCRIPT-01", "DC-CBOR-01"]
+code_locus = "crates/ade_codec/src/cbor/mod.rs: skip_item + skip_head. crates/ade_types/src/allegra/script.rs: NativeScript (flat, from_post_order) + NativeScriptNode. crates/ade_codec/src/allegra/script.rs: decode_native_script + read_script_head + open_list. crates/ade_ledger/src/scripts.rs: evaluate_native_script + evaluate_node."
+tests = ["lv12_the_deep_preprod_block_decodes_and_evaluates_on_a_256_kib_thread", "lv12_the_deep_preprod_script_is_what_the_recursive_reference_decodes", "lv12_a_script_as_deep_as_a_transaction_allows_round_trips_on_a_256_kib_thread", "lv12_a_deep_script_inside_a_witness_set_decodes_on_a_256_kib_thread", "lv12_every_fixture_script_decodes_and_evaluates_as_the_reference_does", "lv12_generated_scripts_decode_and_evaluate_as_the_reference_does", "lv12_malformed_scripts_fail_exactly_as_the_reference_does", "lv12_a_forged_sub_script_count_is_an_error_not_an_allocation", "lv12_the_flat_type_has_no_recursive_field", "lv12_skip_item_matches_the_recursive_reference_on_every_fixture_and_inner_offset", "lv12_skip_item_matches_the_recursive_reference_on_every_truncated_prefix", "lv12_skip_item_matches_the_recursive_reference_on_constructed_forms", "lv12_skip_item_walks_ninety_thousand_levels_on_a_256_kib_thread", "a_deep_script_drops_clones_and_compares_on_a_small_stack", "from_post_order_accepts_exactly_one_tree"]
+ci_scripts = ["ci/ci_check_native_script_depth_independent.sh"]
+status = "enforced"
+authority_surface = "BLUE block-body decode (CBOR skipping, witness-set native scripts) and the native-script evaluator; release/liveness of the node under adversarial-shaped real-chain input"
+cluster = "PREPROD-LIVE-2-FORGE-READINESS"
+introduced_in = "PREPROD-LIVE-2-LV-12"
+strengthened_in = []
+evidence = ["Measured need before LV-12 for preprod block 5,183,974 (slot 133,883,340): ~1.2 MiB release / ~28 MiB debug to skip its CBOR, ~2.5 MiB release to decode its witness sets -- SLICE-LV-12 section 1.", "SLICE-LV-12 section 8 (results, mutations, persisted census on a default 2 MiB stack).", "LIVE: docs/evidence/run-stores/preprod-live2c/lv12-ce8-restart-on-flat-scripts.md."]
+evidence_notes = "ENFORCED. Mutation-tested: restoring recursion in skip_item, the decoder, or the evaluator each overflows a 256 KiB test thread on the deep input and fails the gate naming the cycle. One intended behaviour change, recorded: the recursive decoder preallocated from a wire sub-script count (a forged count could abort the process on allocation); the flat decoder returns UnexpectedEof. Store semantics NOT bumped: decode outcomes are unchanged (differentials) and all 184,490 persisted blocks of the stopped store decode to the same thresholds and node count. SCOPE: native scripts and generic CBOR skipping only. Plutus data decoding inside aiken/uplc and unchecked wire-count preallocations elsewhere in the codec are recorded as separate findings, not covered."
