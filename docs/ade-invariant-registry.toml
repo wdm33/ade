@@ -10770,3 +10770,29 @@ introduced_in = "PREPROD-LIVE-2-LV-13"
 strengthened_in = []
 evidence = ["SLICE-LV-13 section 8 (census before enforcement, mutations, sweep).", "Census over the 184,490 stored blocks (slots 129,813,444..=133,902,215): 421,827 txs, 36,069 witness native scripts all passing, 324,200 fully resolved txs all exactly valid, 0 missing, 0 extraneous; all six purposes exercised.", "Committed real preprod fixtures: a timelock mint (slot 129,919,360), a reference-script multisig spend (slot 133,860,142), a bootstrap-witness spend (slot 129,817,130)."]
 evidence_notes = "ENFORCED. Mutation-tested: ignoring the evaluator result, letting an open interval end satisfy a timelock (the block-slot behaviour), dropping the Proposing purpose, reporting a reduced pass as exactly valid, and hashing a re-serialization each fail the intended LV-13 test and the gate (the last three also named by the gate's structural checks). Reduced level is explicitly partial: Undetermined is not a validity claim, and both paths continue on it, so a reduced node (the live preprod follower) still accepts a block Cardano rejects for a missing or extraneous script or a failing needed reference native script; exactness on the live block path belongs to the block-path state-backed validity work. A tx spending an output created earlier in the same block does not resolve against the pre-block UTxO, so it gets the reduced level (weaker, never wrong). SCOPE: native-script evaluation and the script closure only. Verifying every supplied witness signature (validateVerifiedWits), redeemer/datum/integrity checks, and the block path's counted-not-enforced Plutus and state-backed verdicts are separate, recorded findings."
+
+[[rules]]
+id = "DC-TXV-08"
+tier = "derived"
+statement = """
+Every vkey witness and every bootstrap witness a Conway transaction supplies, required or not, has an
+Ed25519 signature that verifies under its own 32-byte key over the transaction's preserved body hash
+(cardano-ledger validateVerifiedWits; verifyBootstrapWit uses the key alone, the chain code and attributes
+only feed the key hash). A witness whose key or signature is malformed, or whose signature does not verify,
+rejects the transaction deterministically, and in the block path the block. The check is UTxO-independent
+and runs in both modes, in the block path (verify_conway_witness_closure) and in tx_phase_one. It is
+mechanically distinct from required-signer coverage (verify_required_witnesses, validateNeededWitnesses),
+which is unchanged.
+"""
+source = "docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LV-14-every-supplied-witness-verifies.md"
+cross_ref = ["DC-TXV-05", "DC-LEDGER-SCRIPT-03"]
+code_locus = "crates/ade_ledger/src/tx_validity/witness.rs: verify_supplied_witnesses + WitnessClosureError::{InvalidSuppliedWitnessSignature, InvalidBootstrapWitnessSignature}. crates/ade_ledger/src/witness.rs: BootstrapWitnessRef + decode_bootstrap_witnesses. crates/ade_ledger/src/rules.rs: verify_conway_witness_closure. crates/ade_ledger/src/tx_validity/phase1.rs: tx_phase_one."
+tests = ["lv14_a_bad_signature_on_a_non_required_witness_rejects_in_both_modes", "lv14_required_signer_failures_keep_their_own_errors", "lv14_wrong_size_keys_and_signatures_are_malformed", "lv14_a_native_script_on_a_badly_signed_key_does_not_carry_the_tx", "lv14_a_real_bootstrap_witness_verifies_and_a_flipped_one_rejects_in_both_paths", "lv14_a_real_vkey_signature_flipped_gives_the_same_error_on_both_paths"]
+ci_scripts = ["ci/ci_check_every_supplied_witness_verifies.sh"]
+status = "enforced"
+authority_surface = "BLUE ledger validity: witness signatures of every Conway transaction, in the block path and the standalone path"
+cluster = "PREPROD-LIVE-2-FORGE-READINESS"
+introduced_in = "PREPROD-LIVE-2-LV-14"
+strengthened_in = []
+evidence = ["SLICE-LV-14 section 8.", "Census over the halted LV-12 store (326,471 blocks, slots 129,813,444..=137,096,367, 991,602 txs): 1,028,673 vkey and 314 bootstrap witnesses verified, 0 failures."]
+evidence_notes = "ENFORCED. Mutation-tested: skipping the vkey walk (verifying only required keys again), skipping bootstrap witnesses, and ignoring verify_ed25519's result each fail the intended LV-14 test and the gate, which names each. Order: the required-signer check runs first, so a required key with a bad signature is still InvalidWitnessSignature; any other bad signature is the new error. Store semantics NOT bumped (lock entry neutral at 11): the check writes no state and no persisted block is refused."

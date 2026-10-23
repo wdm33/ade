@@ -86,3 +86,29 @@ bug until shown otherwise.
   UTxO, and the UTxO-dependent native-script obligations of LV-13. Those are the next slice.
 - Bootstrap key hashes in required-signer coverage (`check_required_signers`).
 - Pre-Conway eras.
+
+## 8. RESULTS
+
+Code: `df057072`. Every CE below passed mechanically.
+
+- **CE-LV14-7 (census, before enforcement).** `persisted_witness_signature_census` over the halted LV-12
+  store copy (326,471 blocks, slots 129,813,444..=137,096,367, 991,602 transactions): 1,028,673 vkey witnesses
+  and 314 bootstrap witnesses verified over their preserved body hashes, zero failures. The 314 also confirm
+  on real data that a bootstrap witness verifies under its 32-byte key alone.
+- **CE-LV14-1..6.** `crates/ade_ledger/tests/lv14_every_supplied_witness_verifies.rs`, 6 tests. A bad signature
+  on a non-required witness is `InvalidSuppliedWitnessSignature` in full and reduced mode, and the good
+  signature is accepted. A required key's bad signature stays `InvalidWitnessSignature` and a missing one
+  `MissingRequiredSigner`; in reduced mode, where the payer is not derivable, the same bad signature is still
+  caught by the new check. Wrong sizes on either witness kind are `MalformedWitnessField`. A `sig` native
+  script passing on a badly signed key does not carry the transaction. On the real LV-13 fixtures, one
+  flipped signature byte gives the same structured error from `apply_block_with_verdicts` and from
+  `tx_validity`, twice identically: `InvalidBootstrapWitnessSignature` on the bootstrap transaction, and a
+  witness rejection on the timelock one.
+- **CE-LV14-8 (mutations).** Skipping the vkey walk, skipping bootstrap witnesses, and ignoring
+  `verify_ed25519`'s result each fail the intended test and the gate, and the gate's structural checks name
+  each. (The first gate draft accepted a loop over `vkey_witnesses.iter().take(0)`; it now requires the full
+  walk.)
+- **CE-LV14-9.** Sweep: 283 scripts, the failing set identical to the baseline's 46. LV-13's gate passes.
+- **Store semantics.** Not bumped: `rules.rs` is on the lock surface and the lock records a neutral entry at
+  11. The check writes no state, and the census shows no persisted block is refused.
+- **CE-LV14-10 (live).** `docs/evidence/run-stores/preprod-live2c/lv14-ce10-restart-on-supplied-witnesses.md`.
