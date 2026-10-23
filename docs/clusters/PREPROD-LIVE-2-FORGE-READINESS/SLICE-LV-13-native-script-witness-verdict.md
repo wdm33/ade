@@ -314,6 +314,16 @@ census column above. The `e6910d5a` binary restarted on it (`forward_fold_no_res
 (137,099,113) three minutes later, with no failure line:
 `docs/evidence/run-stores/preprod-live2c/lv13-ce12-restart-on-witness-verdicts.md`.
 
+### What LV-13 does not close
+
+LV-13 closes the UTxO-free part of native-script enforcement, not every UTXOW script obligation. Both paths
+continue on `Undetermined`. So a reduced node, which is what the live preprod follower is, still accepts a
+block whose transaction is missing a required script or carries a passing but extraneous one, or whose
+needed reference native script fails: each needs the needed set or the reference scripts, so each needs the
+UTxO. The function's verdict is not wrong there; the node's acceptance is incomplete. Exactness on the
+authoritative live block path belongs to the block-path state-backed validity work, which also needs the
+sequential intra-block UTxO (a transaction spending an output created earlier in the same block).
+
 ### Found on the way, not fixed here
 
 - Witness signatures are verified only for required signers (`verify_required_witnesses`); Cardano's
