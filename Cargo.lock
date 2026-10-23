@@ -49,6 +49,7 @@ dependencies = [
  "cardano-crypto",
  "curve25519-dalek",
  "ed25519-dalek",
+ "sha3",
 ]
 
 [[package]]

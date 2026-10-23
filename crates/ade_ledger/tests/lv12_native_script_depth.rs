@@ -11,7 +11,7 @@ use ade_codec::cbor::{self, envelope::decode_block_envelope, ContainerEncoding};
 use ade_codec::conway::decode_conway_block;
 use ade_codec::error::CodecError;
 use ade_ledger::error::NativeScriptFailure;
-use ade_ledger::scripts::{evaluate_native_script, ScriptVerdict};
+use ade_ledger::scripts::{evaluate_native_script, ScriptVerdict, ValidityInterval};
 use ade_ledger::witness::decode_witness_infos;
 use ade_types::allegra::script::{NativeScript, NativeScriptNode};
 use ade_types::{Hash28, SlotNo};
@@ -134,7 +134,7 @@ fn ref_decode_array(data: &[u8], offset: &mut usize) -> Result<Vec<Ref>, CodecEr
     }
 }
 
-fn ref_eval(s: &Ref, sigs: &BTreeSet<Hash28>, slot: u64) -> ScriptVerdict {
+fn ref_eval(s: &Ref, sigs: &BTreeSet<Hash28>, iv: &ValidityInterval) -> ScriptVerdict {
     let pass = ScriptVerdict::NativeScriptPassed;
     match s {
         Ref::Sig(k) => {
@@ -146,7 +146,7 @@ fn ref_eval(s: &Ref, sigs: &BTreeSet<Hash28>, slot: u64) -> ScriptVerdict {
         }
         Ref::All(v) => {
             for sub in v {
-                if let ScriptVerdict::NativeScriptFailed(r) = ref_eval(sub, sigs, slot) {
+                if let ScriptVerdict::NativeScriptFailed(r) = ref_eval(sub, sigs, iv) {
                     return ScriptVerdict::NativeScriptFailed(r);
                 }
             }
@@ -154,7 +154,7 @@ fn ref_eval(s: &Ref, sigs: &BTreeSet<Hash28>, slot: u64) -> ScriptVerdict {
         }
         Ref::Any(v) => {
             for sub in v {
-                if ref_eval(sub, sigs, slot) == pass {
+                if ref_eval(sub, sigs, iv) == pass {
                     return pass;
                 }
             }
@@ -167,7 +167,7 @@ fn ref_eval(s: &Ref, sigs: &BTreeSet<Hash28>, slot: u64) -> ScriptVerdict {
             }
             let mut passed = 0u64;
             for sub in v {
-                if ref_eval(sub, sigs, slot) == pass {
+                if ref_eval(sub, sigs, iv) == pass {
                     passed += 1;
                     if passed >= needed {
                         return pass;
@@ -176,27 +176,34 @@ fn ref_eval(s: &Ref, sigs: &BTreeSet<Hash28>, slot: u64) -> ScriptVerdict {
             }
             ScriptVerdict::NativeScriptFailed(NativeScriptFailure::ThresholdNotMet { required: *n, provided: passed })
         }
-        Ref::InvalidBefore(r) => {
-            if slot >= *r {
-                pass
-            } else {
-                ScriptVerdict::NativeScriptFailed(NativeScriptFailure::TimelockNotSatisfied {
-                    required_slot: SlotNo(*r),
-                    current_slot: SlotNo(slot),
-                })
-            }
-        }
-        Ref::InvalidHereafter(r) => {
-            if slot < *r {
-                pass
-            } else {
-                ScriptVerdict::NativeScriptFailed(NativeScriptFailure::TimelockNotSatisfied {
-                    required_slot: SlotNo(*r),
-                    current_slot: SlotNo(slot),
-                })
-            }
+        Ref::InvalidBefore(r) => match iv.invalid_before {
+            Some(start) if *r <= start => pass,
+            start => ScriptVerdict::NativeScriptFailed(NativeScriptFailure::TimelockStartNotMet {
+                lock_start: SlotNo(*r),
+                tx_start: start.map(SlotNo),
+            }),
+        },
+        Ref::InvalidHereafter(r) => match iv.invalid_hereafter {
+            Some(expiry) if expiry <= *r => pass,
+            expiry => ScriptVerdict::NativeScriptFailed(NativeScriptFailure::TimelockExpiryNotMet {
+                lock_expiry: SlotNo(*r),
+                tx_expiry: expiry.map(SlotNo),
+            }),
+        },
+    }
+}
+
+/// Intervals that put every timelock on both sides of its bound, with open ends.
+fn intervals(points: &[u64]) -> Vec<ValidityInterval> {
+    let mut out = vec![ValidityInterval::UNBOUNDED];
+    for &a in points {
+        out.push(ValidityInterval { invalid_before: Some(a), invalid_hereafter: None });
+        out.push(ValidityInterval { invalid_before: None, invalid_hereafter: Some(a) });
+        for &b in points {
+            out.push(ValidityInterval { invalid_before: Some(a), invalid_hereafter: Some(b) });
         }
     }
+    out
 }
 
 /// The reference tree in post-order, for comparison with the flat form.
@@ -331,13 +338,13 @@ fn lv12_the_deep_preprod_block_decodes_and_evaluates_on_a_256_kib_thread() {
         let deepest = infos
             .iter()
             .flat_map(|i| i.native_scripts.iter())
-            .map(|s| s.nodes().len())
+            .map(|s| s.script.nodes().len())
             .max()
             .unwrap();
         let mut verdicts = Vec::new();
         for i in &infos {
             for s in &i.native_scripts {
-                verdicts.push(evaluate_native_script(s, &i.available_key_hashes, 133_883_340));
+                verdicts.push(evaluate_native_script(&s.script, &i.available_key_hashes, &ValidityInterval::UNBOUNDED));
             }
         }
         let copy = infos.clone();
@@ -371,10 +378,12 @@ fn lv12_the_deep_preprod_script_is_what_the_recursive_reference_decodes() {
                 ref_post_order(r, &mut v);
                 assert_eq!(n.nodes(), v.as_slice());
                 for i in &infos {
-                    assert_eq!(
-                        evaluate_native_script(n, &i.available_key_hashes, 133_883_340),
-                        ref_eval(r, &i.available_key_hashes, 133_883_340)
-                    );
+                    for iv in intervals(&[0, 133_883_340]) {
+                        assert_eq!(
+                            evaluate_native_script(n, &i.available_key_hashes, &iv),
+                            ref_eval(r, &i.available_key_hashes, &iv)
+                        );
+                    }
                 }
                 found += 1;
             }
@@ -397,8 +406,8 @@ fn lv12_a_script_as_deep_as_a_transaction_allows_round_trips_on_a_256_kib_thread
             let mut o = 0;
             let s = decode_native_script(&bytes, &mut o).unwrap();
             assert_eq!(o, bytes.len());
-            let with_sig = evaluate_native_script(&s, &[key(0x42)].into_iter().collect(), 0);
-            let without = evaluate_native_script(&s, &BTreeSet::new(), 0);
+            let with_sig = evaluate_native_script(&s, &[key(0x42)].into_iter().collect(), &ValidityInterval::UNBOUNDED);
+            let without = evaluate_native_script(&s, &BTreeSet::new(), &ValidityInterval::UNBOUNDED);
             let c = s.clone();
             let equal = c == s;
             let nodes = s.nodes().len();
@@ -423,7 +432,7 @@ fn lv12_a_deep_script_inside_a_witness_set_decodes_on_a_256_kib_thread() {
     ws.extend(nested_all(50_000));
     let n = on_stack(SMALL_STACK, move || {
         let infos = decode_witness_infos(&ws).unwrap();
-        infos[0].native_scripts[0].nodes().len()
+        infos[0].native_scripts[0].script.nodes().len()
     });
     assert_eq!(n, 50_001);
 }
@@ -482,8 +491,8 @@ fn lv12_every_fixture_script_decodes_and_evaluates_as_the_reference_does() {
                     ref_post_order(r, &mut v);
                     assert_eq!(n.nodes(), v.as_slice(), "block {name} list at {o}");
                     for sigs in [BTreeSet::new(), [key(0)].into_iter().collect()] {
-                        for slot in [0u64, 133_000_000, u64::MAX] {
-                            assert_eq!(evaluate_native_script(n, &sigs, slot), ref_eval(r, &sigs, slot));
+                        for iv in intervals(&[0, 133_000_000, u64::MAX]) {
+                            assert_eq!(evaluate_native_script(n, &sigs, &iv), ref_eval(r, &sigs, &iv));
                         }
                     }
                     scripts += 1;
@@ -511,8 +520,8 @@ fn lv12_generated_scripts_decode_and_evaluate_as_the_reference_does() {
             let s = decode_native_script(&bytes, &mut 0).unwrap();
             let r = ref_decode(&bytes, &mut 0).unwrap();
             for sigs in &sig_sets {
-                for slot in [0u64, 150, 299, 1_000] {
-                    assert_eq!(evaluate_native_script(&s, sigs, slot), ref_eval(&r, sigs, slot));
+                for iv in intervals(&[0, 150, 299, 1_000]) {
+                    assert_eq!(evaluate_native_script(&s, sigs, &iv), ref_eval(&r, sigs, &iv));
                 }
             }
             // Every truncation and every single-byte corruption decodes to the same error or value.

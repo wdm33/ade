@@ -10,7 +10,7 @@ use ade_codec::allegra::script::decode_native_scripts;
 use ade_codec::cbor::envelope::decode_block_envelope;
 use ade_codec::conway::decode_conway_block;
 use ade_ledger::error::NativeScriptFailure;
-use ade_ledger::scripts::{evaluate_native_script, ScriptVerdict};
+use ade_ledger::scripts::{evaluate_native_script, ScriptVerdict, ValidityInterval};
 use ade_ledger::witness::decode_witness_infos;
 use ade_types::allegra::script::{NativeScript, NativeScriptNode};
 use ade_types::Hash28;
@@ -77,7 +77,7 @@ fn sig(k: [u8; 28]) -> NativeScript {
 
 fn eval(script: &NativeScript, sigs: &[[u8; 28]]) -> ScriptVerdict {
     let available: BTreeSet<Hash28> = sigs.iter().map(|k| Hash28(*k)).collect();
-    evaluate_native_script(script, &available, 0)
+    evaluate_native_script(script, &available, &ValidityInterval::UNBOUNDED)
 }
 
 // ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ fn lv11_the_refused_preprod_block_now_decodes_its_negative_threshold() {
     let infos = decode_witness_infos(&ws).expect("the witness sets of block 5,184,855 must decode");
     let tx0 = &infos[0].native_scripts;
     assert_eq!(tx0.len(), 1);
-    match tx0[0].nodes() {
+    match tx0[0].script.nodes() {
         [NativeScriptNode::Sig(_), NativeScriptNode::Sig(_), NativeScriptNode::MOfN { threshold, arity: 2 }] => {
             assert_eq!(*threshold, -1);
         }
@@ -102,7 +102,7 @@ fn lv11_the_refused_preprod_block_now_decodes_its_negative_threshold() {
 fn lv11_the_real_negative_threshold_script_passes_with_no_signatures() {
     let ws = witness_sets_of(BLOCK_133902219);
     let infos = decode_witness_infos(&ws).unwrap();
-    let script = &infos[0].native_scripts[0];
+    let script = &infos[0].native_scripts[0].script;
     assert_eq!(eval(script, &[]), ScriptVerdict::NativeScriptPassed);
 }
 

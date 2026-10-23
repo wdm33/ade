@@ -24,6 +24,7 @@
 pub mod encoding;
 pub mod phase1;
 pub mod required_signers;
+pub mod script_witnesses;
 pub mod transition;
 pub mod verdict;
 pub mod witness;

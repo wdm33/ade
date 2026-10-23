@@ -16,6 +16,7 @@ pub mod ed25519;
 pub mod error;
 pub mod kes;
 pub mod kes_sum;
+pub mod sha3;
 pub mod traits;
 pub mod utxo_set_commitment;
 pub mod vrf;
@@ -28,6 +29,7 @@ pub use ed25519::{
     Ed25519VerificationKey,
 };
 pub use error::CryptoError;
+pub use self::sha3::sha3_256;
 pub use kes::{
     verify_kes, verify_kes_signature, verify_opcert, KesPeriod, KesSignature, KesVerificationKey,
     OperationalCertData, SUM6_KES_SIG_LEN,

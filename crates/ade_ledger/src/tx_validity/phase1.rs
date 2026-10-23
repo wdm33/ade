@@ -189,6 +189,19 @@ pub fn tx_phase_one(ledger: &LedgerState, decoded: &DecodedTx) -> Result<(), TxV
     super::verify_required_witnesses(&decoded.tx_id, &required, &decoded.vkey_witnesses)
         .map_err(TxValidityError::Witness)?;
 
+    // 1b. Witness-script closure (DC-LEDGER-SCRIPT-03), the same seam the block path calls: exact
+    //     when every spend and reference input resolves, reduced otherwise.
+    let context = if ledger.track_utxo {
+        super::script_witnesses::ResolvedScriptContext::resolve_from_utxo(&decoded.body, |t| {
+            utxo_lookup(&ledger.utxo_state, t)
+        })
+        .map_err(|e| TxValidityError::Phase1(LedgerError::ScriptWitnessDerivation(e)))?
+    } else {
+        None
+    };
+    super::script_witnesses::check_script_witnesses(&decoded.body, &decoded.witness_info, context.as_ref())
+        .map_err(TxValidityError::Phase1)?;
+
     // 2. UTxO-dependent state-backed checks — the SAME authority the block
     //    loop calls (input resolution / value-fee balance / collateral /
     //    network id). Gated on `track_utxo`, mirroring the block path: the

@@ -334,7 +334,7 @@ fn apply_shelley_era_block_with_verdicts(
     // against the pre-block UTxO; tx-derived sources are checked
     // regardless of track_utxo (the slice doc track_utxo note).
     if era == CardanoEra::Conway {
-        verify_conway_witness_closure(block, &current_state)?;
+        verdict.native_script_passed = verify_conway_witness_closure(block, &current_state)?;
     }
 
     let utxo_state = if current_state.track_utxo {
@@ -421,7 +421,7 @@ fn apply_shelley_era_block_classified(
     // against the pre-block UTxO; tx-derived sources are checked
     // regardless of track_utxo (the slice doc track_utxo note).
     if era == CardanoEra::Conway {
-        verify_conway_witness_closure(block, &current_state)?;
+        verdict.native_script_passed = verify_conway_witness_closure(block, &current_state)?;
     }
 
     // Track UTxO only when explicitly enabled.
@@ -578,14 +578,15 @@ pub(crate) fn track_utxo(
 fn verify_conway_witness_closure(
     block: &ade_types::shelley::block::ShelleyBlock,
     state: &LedgerState,
-) -> Result<(), LedgerError> {
+) -> Result<u64, LedgerError> {
+    use crate::tx_validity::script_witnesses::{check_script_witnesses, ResolvedScriptContext};
     use crate::tx_validity::{
         required_signers, tx_derived_required_signers, verify_required_witnesses, ResolvedInputs,
         ResolvedOutput, VKeyWitnessRef,
     };
 
     if block.tx_count == 0 {
-        return Ok(());
+        return Ok(0);
     }
 
     let track = state.track_utxo;
@@ -593,6 +594,19 @@ fn verify_conway_witness_closure(
 
     // Decode witness sets once (each is a Vec<VKeyWitness> from key 0).
     let witness_sets = shelley_witness_sets(block)?;
+    // And their scripts and signer hashes, for the witness-script closure.
+    let witness_infos = crate::witness::decode_witness_infos(&block.witness_sets)?;
+    let empty_info = crate::witness::WitnessInfo {
+        available_key_hashes: std::collections::BTreeSet::new(),
+        native_scripts: Vec::new(),
+        plutus_script_hashes: std::collections::BTreeSet::new(),
+        bootstrap_key_hashes: std::collections::BTreeSet::new(),
+        has_plutus_v1: false,
+        has_plutus_v2: false,
+        has_plutus_v3: false,
+        total_ex_units: crate::witness::TotalExUnits::default(),
+    };
+    let mut native_scripts = 0u64;
 
     let mut body_offset = 0;
     let body_data = &block.tx_bodies;
@@ -652,6 +666,20 @@ fn verify_conway_witness_closure(
         verify_required_witnesses(&body_hash, &required, witnesses)
             .map_err(LedgerError::WitnessClosure)?;
 
+        // 3. Witness-script closure (DC-LEDGER-SCRIPT-03): exact when every spend and reference
+        //    input resolves in the pre-block UTxO, otherwise the reduced level, which rejects only
+        //    a failing witness-set native script. A tx spending an output created earlier in the
+        //    same block does not resolve here, so it gets the reduced level: weaker, never wrong.
+        let info = witness_infos.get(tx_idx).unwrap_or(&empty_info);
+        let context = if track {
+            ResolvedScriptContext::resolve_from_utxo(&body, |t| utxo.get(t))
+                .map_err(LedgerError::ScriptWitnessDerivation)?
+        } else {
+            None
+        };
+        check_script_witnesses(&body, info, context.as_ref())?;
+        native_scripts += info.native_scripts.len() as u64;
+
         tx_idx += 1;
         Ok(())
     };
@@ -669,7 +697,7 @@ fn verify_conway_witness_closure(
         }
     }
 
-    Ok(())
+    Ok(native_scripts)
 }
 
 /// Decode each tx's vkey witnesses (witness-set key 0) into the
@@ -2228,11 +2256,10 @@ pub struct BlockVerdict {
     pub plutus_deferred_count: u64,
     /// Non-Plutus txs (native scripts evaluated, or no scripts).
     pub non_plutus_count: u64,
-    /// Native scripts evaluated and passed.
+    /// Witness-set native scripts that passed the witness-script closure (Conway).
     pub native_script_passed: u64,
-    /// Native scripts evaluated and failed (structural — tx still accepted
-    /// because witness-level script failure is a Phase 2 ledger rule, not
-    /// a structural rejection at this level).
+    /// Always 0 on an applied block: a failing witness-set native script rejects the block
+    /// (DC-LEDGER-SCRIPT-03). Kept for the verdict's shape.
     pub native_script_failed: u64,
     /// Alonzo+ txs rejected by the state-backed Phase-1 composer.
     /// Only incremented when `track_utxo=true` and all inputs resolve; txs
@@ -2260,7 +2287,7 @@ pub struct BlockVerdict {
 ///
 /// Parses both tx_bodies and witness_sets in parallel. Uses witness-confirmed
 /// Plutus detection (keys 3/6/7 in witness set) rather than body-only heuristics.
-/// Evaluates native scripts against available vkey hashes and current slot.
+/// The native-script counters are filled by the witness-script closure for Conway blocks.
 fn decode_validate_tx_bodies(
     block: &ade_types::shelley::block::ShelleyBlock,
     era: CardanoEra,
@@ -2279,8 +2306,6 @@ fn decode_validate_tx_bodies(
         });
     }
 
-    let current_slot = block.header.body.slot;
-
     // Parse witness sets for all txs
     let witness_infos = crate::witness::decode_witness_infos(&block.witness_sets)?;
 
@@ -2292,8 +2317,6 @@ fn decode_validate_tx_bodies(
     let mut tx_count = 0u64;
     let mut plutus_deferred_count = 0u64;
     let mut non_plutus_count = 0u64;
-    let mut native_script_passed = 0u64;
-    let mut native_script_failed = 0u64;
     let mut tx_idx = 0usize;
 
     let mut process_one = |body_data: &[u8], body_offset: &mut usize| -> Result<(), LedgerError> {
@@ -2314,34 +2337,11 @@ fn decode_validate_tx_bodies(
         let is_deferred = has_plutus_in_witnesses
             || body_posture == crate::scripts::ScriptPosture::PlutusPresentDeferred;
 
+        // Native-script verdicts are decided by the witness-script closure
+        // (tx_validity::script_witnesses, DC-LEDGER-SCRIPT-03), not counted here.
         if is_deferred {
             plutus_deferred_count += 1;
         } else {
-            // Evaluate native scripts if present
-            if let Some(w) = witness_info {
-                for script in &w.native_scripts {
-                    let verdict = crate::scripts::evaluate_native_script(
-                        script,
-                        &w.available_key_hashes,
-                        current_slot,
-                    );
-                    match verdict {
-                        crate::scripts::ScriptVerdict::NativeScriptPassed => {
-                            native_script_passed += 1;
-                        }
-                        crate::scripts::ScriptVerdict::NativeScriptFailed(_) => {
-                            native_script_failed += 1;
-                        }
-                        crate::scripts::ScriptVerdict::PlutusPassed { .. }
-                        | crate::scripts::ScriptVerdict::PlutusFailed { .. } => {
-                            // Plutus verdicts do not arise from
-                            // evaluate_native_script (native scripts
-                            // never produce Plutus verdicts). The
-                            // match is exhaustive for future-proofing.
-                        }
-                    }
-                }
-            }
             non_plutus_count += 1;
         }
 
@@ -2367,8 +2367,8 @@ fn decode_validate_tx_bodies(
         tx_count,
         plutus_deferred_count,
         non_plutus_count,
-        native_script_passed,
-        native_script_failed,
+        native_script_passed: 0,
+        native_script_failed: 0,
         state_backed_phase1_rejected: 0,
         plutus_eval_passed: 0,
         plutus_eval_failed: 0,
@@ -2405,6 +2405,8 @@ pub fn run_phase_one_composers_diagnostic(
     let empty_wi = crate::witness::WitnessInfo {
         available_key_hashes: std::collections::BTreeSet::new(),
         native_scripts: Vec::new(),
+        plutus_script_hashes: std::collections::BTreeSet::new(),
+        bootstrap_key_hashes: std::collections::BTreeSet::new(),
         has_plutus_v1: false,
         has_plutus_v2: false,
         has_plutus_v3: false,
@@ -2537,6 +2539,8 @@ fn run_phase_one_composers(
     let empty_wi = crate::witness::WitnessInfo {
         available_key_hashes: std::collections::BTreeSet::new(),
         native_scripts: Vec::new(),
+        plutus_script_hashes: std::collections::BTreeSet::new(),
+        bootstrap_key_hashes: std::collections::BTreeSet::new(),
         has_plutus_v1: false,
         has_plutus_v2: false,
         has_plutus_v3: false,
@@ -2881,6 +2885,8 @@ mod tests {
         let wi = crate::witness::WitnessInfo {
             available_key_hashes: BTreeSet::new(),
             native_scripts: Vec::new(),
+            plutus_script_hashes: std::collections::BTreeSet::new(),
+            bootstrap_key_hashes: std::collections::BTreeSet::new(),
             has_plutus_v1: false,
             has_plutus_v2: false,
             has_plutus_v3: false,

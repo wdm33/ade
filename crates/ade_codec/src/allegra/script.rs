@@ -202,20 +202,25 @@ fn read_threshold(data: &[u8], offset: &mut usize) -> Result<i64, CodecError> {
 fn decode_script_array(
     data: &[u8],
     offset: &mut usize,
-) -> Result<Vec<NativeScript>, CodecError> {
+) -> Result<Vec<(NativeScript, core::ops::Range<usize>)>, CodecError> {
     let enc = cbor::read_array_header(data, offset)?;
+    let read_one = |offset: &mut usize| -> Result<(NativeScript, core::ops::Range<usize>), CodecError> {
+        let start = *offset;
+        let script = decode_native_script(data, offset)?;
+        Ok((script, start..*offset))
+    };
     match enc {
         ContainerEncoding::Definite(n, _) => {
             let mut scripts = Vec::new();
             for _ in 0..n {
-                scripts.push(decode_native_script(data, offset)?);
+                scripts.push(read_one(offset)?);
             }
             Ok(scripts)
         }
         ContainerEncoding::Indefinite => {
             let mut scripts = Vec::new();
             while !cbor::is_break(data, *offset)? {
-                scripts.push(decode_native_script(data, offset)?);
+                scripts.push(read_one(offset)?);
             }
             *offset += 1;
             Ok(scripts)
@@ -228,5 +233,14 @@ pub fn decode_native_scripts(
     data: &[u8],
     offset: &mut usize,
 ) -> Result<Vec<NativeScript>, CodecError> {
+    Ok(decode_script_array(data, offset)?.into_iter().map(|(script, _)| script).collect())
+}
+
+/// Like [`decode_native_scripts`], also returning each script's byte range in `data`. A native
+/// script's hash is taken over exactly these wire bytes, never over a re-encoding (T-ENC-01).
+pub fn decode_native_scripts_preserved(
+    data: &[u8],
+    offset: &mut usize,
+) -> Result<Vec<(NativeScript, core::ops::Range<usize>)>, CodecError> {
     decode_script_array(data, offset)
 }

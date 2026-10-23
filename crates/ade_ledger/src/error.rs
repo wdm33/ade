@@ -40,7 +40,13 @@ pub enum LedgerError {
     TransactionNotYetValid(ValidityError),
 
     // Script domain
+    /// A witness-set native script fails, so Cardano rejects the tx (as not-validating if the
+    /// script is needed, as extraneous if not), decided without UTxO context (DC-LEDGER-SCRIPT-03).
     NativeScriptFailed(ScriptError),
+    /// Cardano's exact witness-script closure failed (DC-LEDGER-SCRIPT-03).
+    ScriptWitnessClosure(crate::tx_validity::script_witnesses::ScriptClosureFailures),
+    /// A field the witness-script closure reads is malformed.
+    ScriptWitnessDerivation(crate::tx_validity::script_witnesses::ScriptWitnessError),
 
     // Minting domain
     MintWithoutPolicy(MintError),
@@ -426,7 +432,7 @@ pub struct ValidityError {
 // Script domain errors
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptError {
     pub script_hash: Hash28,
     pub reason: NativeScriptFailure,
@@ -435,7 +441,10 @@ pub struct ScriptError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeScriptFailure {
     MissingRequiredSignature { key_hash: Hash28 },
-    TimelockNotSatisfied { required_slot: SlotNo, current_slot: SlotNo },
+    /// `invalid_before(lock_start)`: the tx starts before the lock, or has no start (−∞).
+    TimelockStartNotMet { lock_start: SlotNo, tx_start: Option<SlotNo> },
+    /// `invalid_hereafter(lock_expiry)`: the tx expires after the lock, or has no expiry (+∞).
+    TimelockExpiryNotMet { lock_expiry: SlotNo, tx_expiry: Option<SlotNo> },
     ThresholdNotMet { required: i64, provided: u64 },
 }
 
@@ -638,7 +647,17 @@ impl core::fmt::Display for LedgerError {
                 )
             }
             LedgerError::NativeScriptFailed(e) => {
-                write!(f, "native script failed: {:?}", e.script_hash)
+                write!(f, "native script failed: {:?}: {:?}", e.script_hash, e.reason)
+            }
+            LedgerError::ScriptWitnessClosure(e) => {
+                write!(
+                    f,
+                    "script witness closure failed: not validating {:?}, extraneous {:?}, missing {:?}",
+                    e.not_validating, e.extraneous, e.missing
+                )
+            }
+            LedgerError::ScriptWitnessDerivation(e) => {
+                write!(f, "script witness closure could not be derived: {e:?}")
             }
             LedgerError::MintWithoutPolicy(e) => {
                 write!(f, "mint without policy: {:?}", e.policy_id)

@@ -191,7 +191,7 @@ fn decode_babbage_outputs(
 ///
 /// Array format: `[address, value, datum_option?, script_ref?]`
 /// Map format: `{0: address, 1: value, 2?: datum_option, 3?: script_ref}`
-pub(crate) fn decode_babbage_tx_out(
+pub fn decode_babbage_tx_out(
     data: &[u8],
     offset: &mut usize,
 ) -> Result<BabbageTxOut, CodecError> {

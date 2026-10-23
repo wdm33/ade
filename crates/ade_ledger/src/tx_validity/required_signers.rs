@@ -366,12 +366,19 @@ fn payment_key_hash(address: &[u8]) -> Result<Option<Hash28>, RequiredSignerErro
     }
 }
 
+/// A credential as the wire discriminates it. The signer closure keeps the key hashes; the
+/// script-witness closure (`super::script_witnesses`) keeps the script hashes. One walker per field
+/// feeds both, so the two cannot disagree about which credential a field carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Credential {
+    Key(Hash28),
+    Script(Hash28),
+}
+
 /// Classify a reward account's stake credential. The reward-account
 /// header (CDDL "reward addresses") is `bits 7-5 = 111`, bit 4 selects
 /// key-hash (0) vs script-hash (1), then 28 bytes of credential.
-fn reward_account_key_hash(
-    reward_account: &[u8],
-) -> Result<Option<Hash28>, RequiredSignerError> {
+fn reward_account_credential(reward_account: &[u8]) -> Result<Credential, RequiredSignerError> {
     if reward_account.is_empty() {
         return Err(RequiredSignerError::MalformedField {
             field: RequiredSignerField::Withdrawals,
@@ -379,10 +386,6 @@ fn reward_account_key_hash(
         });
     }
     let header = reward_account[0];
-    let is_script = (header & 0x10) != 0;
-    if is_script {
-        return Ok(None);
-    }
     if reward_account.len() < 1 + 28 {
         return Err(RequiredSignerError::MalformedField {
             field: RequiredSignerField::Withdrawals,
@@ -391,7 +394,11 @@ fn reward_account_key_hash(
     }
     let mut h = [0u8; 28];
     h.copy_from_slice(&reward_account[1..29]);
-    Ok(Some(Hash28(h)))
+    if (header & 0x10) != 0 {
+        Ok(Credential::Script(Hash28(h)))
+    } else {
+        Ok(Credential::Key(Hash28(h)))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -402,15 +409,25 @@ fn collect_withdrawal_keys(
     data: &[u8],
     req: &mut RequiredSigners,
 ) -> Result<(), RequiredSignerError> {
+    walk_withdrawal_credentials(data, &mut |c| {
+        if let Credential::Key(kh) = c {
+            req.require(SignerSource::WithdrawalKey, kh);
+        }
+    })
+}
+
+/// Every withdrawal's reward-account credential, in wire order.
+pub(crate) fn walk_withdrawal_credentials(
+    data: &[u8],
+    sink: &mut impl FnMut(Credential),
+) -> Result<(), RequiredSignerError> {
     let mut offset = 0;
     skip_optional_tag(data, &mut offset, RequiredSignerField::Withdrawals)?;
     let enc = read_map(data, &mut offset, RequiredSignerField::Withdrawals)?;
     let mut process = |data: &[u8], offset: &mut usize| -> Result<(), RequiredSignerError> {
         let (account, _) = read_bytes(data, offset, RequiredSignerField::Withdrawals)?;
         let _ = skip(data, offset, RequiredSignerField::Withdrawals)?; // coin
-        if let Some(kh) = reward_account_key_hash(&account)? {
-            req.require(SignerSource::WithdrawalKey, kh);
-        }
+        sink(reward_account_credential(&account)?);
         Ok(())
     };
     iterate(data, &mut offset, enc, RequiredSignerField::Withdrawals, &mut process)
@@ -424,19 +441,32 @@ fn collect_certificate_keys(
     data: &[u8],
     req: &mut RequiredSigners,
 ) -> Result<(), RequiredSignerError> {
+    walk_certificate_credentials(data, &mut |c| {
+        if let Credential::Key(kh) = c {
+            req.require(SignerSource::CertificateKey, kh);
+        }
+    })
+}
+
+/// Every credential a certificate must be witnessed by, in wire order (cardano-ledger
+/// `getVKeyWitnessConwayTxCert` for keys, `getScriptWitnessConwayTxCert` for scripts).
+pub(crate) fn walk_certificate_credentials(
+    data: &[u8],
+    sink: &mut impl FnMut(Credential),
+) -> Result<(), RequiredSignerError> {
     let mut offset = 0;
     skip_optional_tag(data, &mut offset, RequiredSignerField::Certificates)?;
     let enc = read_array(data, &mut offset, RequiredSignerField::Certificates)?;
     let mut process = |data: &[u8], offset: &mut usize| -> Result<(), RequiredSignerError> {
-        collect_one_certificate(data, offset, req)
+        walk_one_certificate(data, offset, sink)
     };
     iterate(data, &mut offset, enc, RequiredSignerField::Certificates, &mut process)
 }
 
-fn collect_one_certificate(
+fn walk_one_certificate(
     data: &[u8],
     offset: &mut usize,
-    req: &mut RequiredSigners,
+    sink: &mut impl FnMut(Credential),
 ) -> Result<(), RequiredSignerError> {
     // Each certificate is an array whose first element is an integer tag.
     // We read the tag + the grammar-relevant element(s), then drain the
@@ -447,20 +477,18 @@ fn collect_one_certificate(
     let mut consumed: u64 = 1;
 
     match tag {
-        // tag 0: account_registration (RegCert SNothing) — NO witness.
+        // tag 0: account_registration (RegCert SNothing) — NO witness, key or script.
         // tag 5/6: removed in Conway (genesis deleg / MIR); structurally
-        //   rejected upstream. No key hash here.
+        //   rejected upstream. No credential here.
         0 | 5 | 6 => {}
         // tag 1/2/7/8/9/10/11/12/13: stake credential is element 1.
         1 | 2 | 7 | 8 | 9 | 10 | 11 | 12 | 13 => {
-            if let Some(kh) = read_credential_key_hash(data, offset)? {
-                req.require(SignerSource::CertificateKey, kh);
-            }
+            sink(read_credential(data, offset)?);
             consumed += 1;
         }
         // tag 3: pool_registration — operator key + all pool_owners.
         3 => {
-            collect_pool_registration_keys(data, offset, req)?;
+            walk_pool_registration_keys(data, offset, sink)?;
             // pool_params is a flattened single logical element group; we
             // consumed operator..pool_owners explicitly. Drain the rest of
             // the cert array (relays, pool_metadata) by element count below
@@ -469,15 +497,12 @@ fn collect_one_certificate(
         }
         // tag 4: pool_retirement — element 1 is the pool key hash (raw).
         4 => {
-            let kh = read_raw_hash28(data, offset, RequiredSignerField::Certificates)?;
-            req.require(SignerSource::CertificateKey, kh);
+            sink(Credential::Key(read_raw_hash28(data, offset, RequiredSignerField::Certificates)?));
             consumed += 1;
         }
         // tag 14/15/16/17/18: credential is element 1 (committee cold / DRep).
         14..=18 => {
-            if let Some(kh) = read_credential_key_hash(data, offset)? {
-                req.require(SignerSource::CertificateKey, kh);
-            }
+            sink(read_credential(data, offset)?);
             consumed += 1;
         }
         _ => {
@@ -497,15 +522,14 @@ fn collect_one_certificate(
 /// `(operator: pool_keyhash, vrf_keyhash, pledge, cost, margin,
 ///   reward_account, pool_owners: set<addr_keyhash>, relays, pool_metadata)`.
 /// The cert array is flattened. Consumes operator..pool_owners (7 elements);
-/// relays + pool_metadata are drained by the caller.
-fn collect_pool_registration_keys(
+/// relays + pool_metadata are drained by the caller. Pool ids are never scripts.
+fn walk_pool_registration_keys(
     data: &[u8],
     offset: &mut usize,
-    req: &mut RequiredSigners,
+    sink: &mut impl FnMut(Credential),
 ) -> Result<(), RequiredSignerError> {
     // operator (pool_keyhash, raw 28-byte bstr)
-    let operator = read_raw_hash28(data, offset, RequiredSignerField::Certificates)?;
-    req.require(SignerSource::CertificateKey, operator);
+    sink(Credential::Key(read_raw_hash28(data, offset, RequiredSignerField::Certificates)?));
     skip(data, offset, RequiredSignerField::Certificates)?; // vrf_keyhash
     skip(data, offset, RequiredSignerField::Certificates)?; // pledge
     skip(data, offset, RequiredSignerField::Certificates)?; // cost
@@ -515,8 +539,7 @@ fn collect_pool_registration_keys(
     skip_optional_tag(data, offset, RequiredSignerField::Certificates)?;
     let enc = read_array(data, offset, RequiredSignerField::Certificates)?;
     let mut process = |data: &[u8], offset: &mut usize| -> Result<(), RequiredSignerError> {
-        let kh = read_raw_hash28(data, offset, RequiredSignerField::Certificates)?;
-        req.require(SignerSource::CertificateKey, kh);
+        sink(Credential::Key(read_raw_hash28(data, offset, RequiredSignerField::Certificates)?));
         Ok(())
     };
     iterate(data, offset, enc, RequiredSignerField::Certificates, &mut process)
@@ -530,29 +553,35 @@ fn collect_voter_keys(
     data: &[u8],
     req: &mut RequiredSigners,
 ) -> Result<(), RequiredSignerError> {
+    walk_voter_credentials(data, &mut |c| {
+        if let Credential::Key(kh) = c {
+            req.require(SignerSource::GovernanceVoter, kh);
+        }
+    })
+}
+
+/// Every voter's credential, in wire order. voter = [tag, hash28]; tags 0/2/4 = addr_keyhash
+/// (committee hot / DRep / stake pool), 1/3 = script_hash (committee hot / DRep).
+pub(crate) fn walk_voter_credentials(
+    data: &[u8],
+    sink: &mut impl FnMut(Credential),
+) -> Result<(), RequiredSignerError> {
     let mut offset = 0;
     skip_optional_tag(data, &mut offset, RequiredSignerField::VotingProcedures)?;
     let enc = read_map(data, &mut offset, RequiredSignerField::VotingProcedures)?;
     let mut process = |data: &[u8], offset: &mut usize| -> Result<(), RequiredSignerError> {
-        // voter = [tag, hash28]; tags 0/2/4 = addr_keyhash, 1/3 = script_hash.
         let v_enc = read_array(data, offset, RequiredSignerField::VotingProcedures)?;
         let (tag, _) = read_uint(data, offset, RequiredSignerField::VotingProcedures)?;
-        match tag {
-            0 | 2 | 4 => {
-                let kh = read_raw_hash28(data, offset, RequiredSignerField::VotingProcedures)?;
-                req.require(SignerSource::GovernanceVoter, kh);
-            }
-            1 | 3 => {
-                // script-hash voter — not a vkey signer.
-                skip(data, offset, RequiredSignerField::VotingProcedures)?;
-            }
+        let hash = match tag {
+            0..=4 => read_raw_hash28(data, offset, RequiredSignerField::VotingProcedures)?,
             _ => {
                 return Err(RequiredSignerError::MalformedField {
                     field: RequiredSignerField::VotingProcedures,
                     offset: *offset,
                 });
             }
-        }
+        };
+        sink(if tag == 1 || tag == 3 { Credential::Script(hash) } else { Credential::Key(hash) });
         // tag (1) + the hash element (1) consumed.
         drain_array_tail(data, offset, v_enc, 2, RequiredSignerField::VotingProcedures)?;
         // Skip the value map {+ gov_action_id => voting_procedure}.
@@ -572,24 +601,14 @@ fn collect_voter_keys(
 // Credential helpers
 // ---------------------------------------------------------------------------
 
-/// credential = [0, addr_keyhash // 1, script_hash]. Returns the key hash
-/// only when the leading tag is 0 (key-hash); tag 1 (script-hash) returns
-/// `None`. Also handles `drep = [0, addr_keyhash // 1, script_hash // 2 // 3]`
-/// (tags 2/3 are AlwaysAbstain/NoConfidence — no credential, never reached
-/// as a cert credential element). committee_cold/drep credentials reuse
-/// the same `[tag, hash]` shape.
-fn read_credential_key_hash(
-    data: &[u8],
-    offset: &mut usize,
-) -> Result<Option<Hash28>, RequiredSignerError> {
+/// credential = [0, addr_keyhash // 1, script_hash]. committee_cold and DRep credentials in
+/// certificates reuse the same `[tag, hash]` shape.
+fn read_credential(data: &[u8], offset: &mut usize) -> Result<Credential, RequiredSignerError> {
     let enc = read_array(data, offset, RequiredSignerField::Certificates)?;
     let (tag, _) = read_uint(data, offset, RequiredSignerField::Certificates)?;
     let result = match tag {
-        0 => Some(read_raw_hash28(data, offset, RequiredSignerField::Certificates)?),
-        1 => {
-            skip(data, offset, RequiredSignerField::Certificates)?; // script_hash
-            None
-        }
+        0 => Credential::Key(read_raw_hash28(data, offset, RequiredSignerField::Certificates)?),
+        1 => Credential::Script(read_raw_hash28(data, offset, RequiredSignerField::Certificates)?),
         _ => {
             return Err(RequiredSignerError::MalformedField {
                 field: RequiredSignerField::Certificates,
@@ -597,7 +616,7 @@ fn read_credential_key_hash(
             });
         }
     };
-    // tag (1) + the hash/script element (1) consumed.
+    // tag (1) + the hash element (1) consumed.
     drain_array_tail(data, offset, enc, 2, RequiredSignerField::Certificates)?;
     Ok(result)
 }

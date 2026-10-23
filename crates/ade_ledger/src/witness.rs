@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use ade_codec::allegra::script::decode_native_scripts;
+use ade_codec::allegra::script::decode_native_scripts_preserved;
 use ade_codec::cbor::{self, ContainerEncoding};
 use ade_types::allegra::script::NativeScript;
 use ade_types::Hash28;
@@ -350,6 +350,27 @@ pub struct TotalExUnits {
     pub cpu: i64,
 }
 
+/// A witness-set native script with its hash, `Blake2b-224(0x00 ‖ wire bytes)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WitnessNativeScript {
+    pub hash: Hash28,
+    pub script: NativeScript,
+}
+
+/// Cardano's script-hash language prefixes (`hashScript`).
+pub const NATIVE_SCRIPT_PREFIX: u8 = 0x00;
+pub const PLUTUS_V1_PREFIX: u8 = 0x01;
+pub const PLUTUS_V2_PREFIX: u8 = 0x02;
+pub const PLUTUS_V3_PREFIX: u8 = 0x03;
+
+/// `Blake2b-224(prefix ‖ bytes)`: a script hash over the script's preserved bytes.
+pub fn prefixed_script_hash(prefix: u8, bytes: &[u8]) -> Hash28 {
+    let mut pre = Vec::with_capacity(1 + bytes.len());
+    pre.push(prefix);
+    pre.extend_from_slice(bytes);
+    ade_crypto::blake2b_224(&pre)
+}
+
 /// Structured classification of what a witness set contains.
 ///
 /// Deterministic: same CBOR input always produces the same classification.
@@ -358,8 +379,12 @@ pub struct TotalExUnits {
 pub struct WitnessInfo {
     /// Available verification key hashes (from VKey witnesses).
     pub available_key_hashes: BTreeSet<Hash28>,
-    /// Parsed native scripts (key 1 in witness set map).
-    pub native_scripts: Vec<NativeScript>,
+    /// Native scripts (key 1), in wire order, each hashed over its own bytes.
+    pub native_scripts: Vec<WitnessNativeScript>,
+    /// Hashes of the Plutus V1/V2/V3 witness scripts (keys 3/6/7), over each script's bytes.
+    pub plutus_script_hashes: BTreeSet<Hash28>,
+    /// Key hashes of bootstrap witnesses (key 2), cardano-ledger `bootstrapWitKeyHash`.
+    pub bootstrap_key_hashes: BTreeSet<Hash28>,
     /// Whether Plutus V1 scripts are present (key 3).
     pub has_plutus_v1: bool,
     /// Whether Plutus V2 scripts are present (key 6).
@@ -434,6 +459,8 @@ fn decode_single_witness_info(
     let mut info = WitnessInfo {
         available_key_hashes: BTreeSet::new(),
         native_scripts: Vec::new(),
+        plutus_script_hashes: std::collections::BTreeSet::new(),
+        bootstrap_key_hashes: std::collections::BTreeSet::new(),
         has_plutus_v1: false,
         has_plutus_v2: false,
         has_plutus_v3: false,
@@ -454,22 +481,29 @@ fn decode_single_witness_info(
             1 => {
                 // Native scripts: parse for evaluation (may be tag(258)-wrapped)
                 skip_optional_tag(data, offset)?;
-                info.native_scripts = decode_native_scripts(data, offset)?;
+                info.native_scripts = decode_native_scripts_preserved(data, offset)?
+                    .into_iter()
+                    .map(|(script, range)| WitnessNativeScript {
+                        hash: prefixed_script_hash(NATIVE_SCRIPT_PREFIX, &data[range]),
+                        script,
+                    })
+                    .collect();
+            }
+            2 => {
+                skip_optional_tag(data, offset)?;
+                info.bootstrap_key_hashes = decode_bootstrap_key_hashes(data, offset)?;
             }
             3 => {
-                // Plutus V1 scripts: detect presence, skip content
                 info.has_plutus_v1 = true;
-                let _ = cbor::skip_item(data, offset)?;
+                hash_plutus_scripts(data, offset, PLUTUS_V1_PREFIX, &mut info.plutus_script_hashes)?;
             }
             6 => {
-                // Plutus V2 scripts (Babbage+): detect presence, skip
                 info.has_plutus_v2 = true;
-                let _ = cbor::skip_item(data, offset)?;
+                hash_plutus_scripts(data, offset, PLUTUS_V2_PREFIX, &mut info.plutus_script_hashes)?;
             }
             7 => {
-                // Plutus V3 scripts (Conway+): detect presence, skip
                 info.has_plutus_v3 = true;
-                let _ = cbor::skip_item(data, offset)?;
+                hash_plutus_scripts(data, offset, PLUTUS_V3_PREFIX, &mut info.plutus_script_hashes)?;
             }
             5 => {
                 // Redeemers: sum ex_units across all entries. See
@@ -478,7 +512,7 @@ fn decode_single_witness_info(
                 info.total_ex_units = sum_redeemer_ex_units(data, offset)?;
             }
             _ => {
-                // Keys 2 (bootstrap), 4 (datums), others: skip.
+                // Key 4 (datums), others: skip.
                 let _ = cbor::skip_item(data, offset)?;
             }
         }
@@ -500,6 +534,92 @@ fn decode_single_witness_info(
     }
 
     Ok(info)
+}
+
+/// Hash each Plutus script of one witness-set list (`[* bytes]`, maybe tag-258 wrapped) over the
+/// bytestring's content, as cardano-ledger hashes a `PlutusBinary`.
+fn hash_plutus_scripts(
+    data: &[u8],
+    offset: &mut usize,
+    prefix: u8,
+    out: &mut BTreeSet<Hash28>,
+) -> Result<(), LedgerError> {
+    skip_optional_tag(data, offset)?;
+    let enc = cbor::read_array_header(data, offset)?;
+    let mut read_one = |offset: &mut usize| -> Result<(), LedgerError> {
+        let (bytes, _) = cbor::read_bytes(data, offset)?;
+        out.insert(prefixed_script_hash(prefix, &bytes));
+        Ok(())
+    };
+    match enc {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                read_one(offset)?;
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, *offset)? {
+                read_one(offset)?;
+            }
+            *offset += 1;
+        }
+    }
+    Ok(())
+}
+
+/// The constant head of the Byron address-root payload `[0, [0, vkey ‖ chain_code], attributes]`
+/// that `bootstrapWitKeyHash` hashes (cardano-ledger `Keys/Bootstrap.hs`).
+const BOOTSTRAP_ROOT_PREFIX: [u8; 6] = [0x83, 0x00, 0x82, 0x00, 0x58, 0x40];
+
+/// Key hash of one bootstrap witness:
+/// `Blake2b-224(SHA3-256(prefix ‖ vkey(32) ‖ chain_code(32) ‖ attributes))`.
+pub fn bootstrap_key_hash(vkey: &[u8], chain_code: &[u8], attributes: &[u8]) -> Hash28 {
+    let mut payload = Vec::with_capacity(6 + vkey.len() + chain_code.len() + attributes.len());
+    payload.extend_from_slice(&BOOTSTRAP_ROOT_PREFIX);
+    payload.extend_from_slice(vkey);
+    payload.extend_from_slice(chain_code);
+    payload.extend_from_slice(attributes);
+    ade_crypto::blake2b_224(&ade_crypto::sha3_256(&payload).0)
+}
+
+/// Key hashes of bootstrap witnesses: `[* [vkey, signature, chain_code, attributes]]`.
+fn decode_bootstrap_key_hashes(
+    data: &[u8],
+    offset: &mut usize,
+) -> Result<BTreeSet<Hash28>, LedgerError> {
+    let enc = cbor::read_array_header(data, offset)?;
+    let mut hashes = BTreeSet::new();
+    let mut read_one = |offset: &mut usize| -> Result<(), LedgerError> {
+        match cbor::read_array_header(data, offset)? {
+            ContainerEncoding::Definite(4, _) => {}
+            _ => {
+                return Err(LedgerError::Decoding(crate::error::DecodingError {
+                    offset: *offset,
+                    reason: crate::error::DecodingFailureReason::InvalidStructure,
+                }));
+            }
+        }
+        let (vkey, _) = cbor::read_bytes(data, offset)?;
+        let _ = cbor::skip_item(data, offset)?; // signature
+        let (chain_code, _) = cbor::read_bytes(data, offset)?;
+        let (attributes, _) = cbor::read_bytes(data, offset)?;
+        hashes.insert(bootstrap_key_hash(&vkey, &chain_code, &attributes));
+        Ok(())
+    };
+    match enc {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                read_one(offset)?;
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, *offset)? {
+                read_one(offset)?;
+            }
+            *offset += 1;
+        }
+    }
+    Ok(hashes)
 }
 
 /// Extract key hashes from VKey witnesses.
@@ -574,6 +694,8 @@ mod tests {
         let info = WitnessInfo {
             available_key_hashes: BTreeSet::new(),
             native_scripts: Vec::new(),
+            plutus_script_hashes: std::collections::BTreeSet::new(),
+            bootstrap_key_hashes: std::collections::BTreeSet::new(),
             has_plutus_v1: true,
             has_plutus_v2: false,
             has_plutus_v3: false,
@@ -587,6 +709,8 @@ mod tests {
         let info = WitnessInfo {
             available_key_hashes: BTreeSet::new(),
             native_scripts: Vec::new(),
+            plutus_script_hashes: std::collections::BTreeSet::new(),
+            bootstrap_key_hashes: std::collections::BTreeSet::new(),
             has_plutus_v1: false,
             has_plutus_v2: false,
             has_plutus_v3: false,

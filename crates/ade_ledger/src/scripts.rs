@@ -73,16 +73,32 @@ pub enum ScriptPosture {
     PlutusPresentDeferred,
 }
 
-/// Evaluate a native script against available signatures and the current slot.
+/// A transaction's validity interval: body key 8 (`validity_interval_start`) and key 3 (`ttl`).
+/// A missing start is −∞ and a missing expiry is +∞ (cardano-ledger `ValidityInterval`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ValidityInterval {
+    pub invalid_before: Option<u64>,
+    pub invalid_hereafter: Option<u64>,
+}
+
+impl ValidityInterval {
+    /// No bound on either side.
+    pub const UNBOUNDED: ValidityInterval =
+        ValidityInterval { invalid_before: None, invalid_hereafter: None };
+}
+
+/// Evaluate a native script against the transaction's signer key hashes and validity interval.
 ///
-/// Deterministic: same inputs always produce the same verdict.
-/// Handles all six native script constructors:
-/// - Sig: checks if the key hash is in available_sigs
+/// Deterministic: same inputs always produce the same verdict. cardano-ledger `evalTimelock`:
+/// - Sig: the key hash is in `signers`
 /// - All: all sub-scripts must pass; the first failure in order is reported
 /// - Any: at least one sub-script must pass
 /// - MOfN: at least M sub-scripts must pass (M <= 0 always passes)
-/// - InvalidBefore: current_slot >= required_slot
-/// - InvalidHereafter: current_slot < required_slot
+/// - InvalidBefore(lock): `lock <= tx start`; never holds when the tx has no start
+/// - InvalidHereafter(lock): `tx expiry <= lock`; never holds when the tx has no expiry
+///
+/// The containing block's slot plays no part: timelocks constrain the transaction's own interval,
+/// which the ledger separately requires to contain the slot.
 ///
 /// One forward pass over the post-order nodes: each node's sub-script verdicts are the last `arity`
 /// entries of a heap stack, so stack use does not grow with nesting depth (DC-LEDGER-SCRIPT-02).
@@ -90,15 +106,15 @@ pub enum ScriptPosture {
 /// short-circuiting evaluator reaches.
 pub fn evaluate_native_script(
     script: &NativeScript,
-    available_sigs: &BTreeSet<Hash28>,
-    current_slot: u64,
+    signers: &BTreeSet<Hash28>,
+    interval: &ValidityInterval,
 ) -> ScriptVerdict {
     let mut verdicts: Vec<ScriptVerdict> = Vec::new();
     for node in script.nodes() {
         // from_post_order guarantees the stack holds at least `arity` verdicts here.
         let arity = usize::try_from(node.arity()).unwrap_or(usize::MAX).min(verdicts.len());
         let subs = verdicts.split_off(verdicts.len() - arity);
-        verdicts.push(evaluate_node(node, &subs, available_sigs, current_slot));
+        verdicts.push(evaluate_node(node, &subs, signers, interval));
     }
     verdicts.pop().unwrap_or(ScriptVerdict::NativeScriptPassed)
 }
@@ -106,12 +122,12 @@ pub fn evaluate_native_script(
 fn evaluate_node(
     node: &NativeScriptNode,
     subs: &[ScriptVerdict],
-    available_sigs: &BTreeSet<Hash28>,
-    current_slot: u64,
+    signers: &BTreeSet<Hash28>,
+    interval: &ValidityInterval,
 ) -> ScriptVerdict {
     match node {
         NativeScriptNode::Sig(key_hash) => {
-            if available_sigs.contains(key_hash) {
+            if signers.contains(key_hash) {
                 ScriptVerdict::NativeScriptPassed
             } else {
                 ScriptVerdict::NativeScriptFailed(
@@ -165,31 +181,23 @@ fn evaluate_node(
             }
         }
 
-        NativeScriptNode::InvalidBefore(required_slot) => {
-            if current_slot >= *required_slot {
-                ScriptVerdict::NativeScriptPassed
-            } else {
-                ScriptVerdict::NativeScriptFailed(
-                    NativeScriptFailure::TimelockNotSatisfied {
-                        required_slot: ade_types::SlotNo(*required_slot),
-                        current_slot: ade_types::SlotNo(current_slot),
-                    },
-                )
-            }
-        }
+        // lteNegInfty lock txStart: false when the start is −∞.
+        NativeScriptNode::InvalidBefore(lock) => match interval.invalid_before {
+            Some(start) if *lock <= start => ScriptVerdict::NativeScriptPassed,
+            tx_start => ScriptVerdict::NativeScriptFailed(NativeScriptFailure::TimelockStartNotMet {
+                lock_start: ade_types::SlotNo(*lock),
+                tx_start: tx_start.map(ade_types::SlotNo),
+            }),
+        },
 
-        NativeScriptNode::InvalidHereafter(required_slot) => {
-            if current_slot < *required_slot {
-                ScriptVerdict::NativeScriptPassed
-            } else {
-                ScriptVerdict::NativeScriptFailed(
-                    NativeScriptFailure::TimelockNotSatisfied {
-                        required_slot: ade_types::SlotNo(*required_slot),
-                        current_slot: ade_types::SlotNo(current_slot),
-                    },
-                )
-            }
-        }
+        // ltePosInfty txExp lock: false when the expiry is +∞.
+        NativeScriptNode::InvalidHereafter(lock) => match interval.invalid_hereafter {
+            Some(expiry) if expiry <= *lock => ScriptVerdict::NativeScriptPassed,
+            tx_expiry => ScriptVerdict::NativeScriptFailed(NativeScriptFailure::TimelockExpiryNotMet {
+                lock_expiry: ade_types::SlotNo(*lock),
+                tx_expiry: tx_expiry.map(ade_types::SlotNo),
+            }),
+        },
     }
 }
 
@@ -210,7 +218,7 @@ mod tests {
     fn sig_passes_when_key_present() {
         let key = Hash28([0x01; 28]);
         let available = sigs(&[[0x01; 28]]);
-        let verdict = evaluate_native_script(&NativeScript::sig(key), &available, 0);
+        let verdict = evaluate_native_script(&NativeScript::sig(key), &available, &ValidityInterval::UNBOUNDED);
         assert_eq!(verdict, ScriptVerdict::NativeScriptPassed);
     }
 
@@ -218,7 +226,7 @@ mod tests {
     fn sig_fails_when_key_absent() {
         let key = Hash28([0x01; 28]);
         let available = sigs(&[[0x02; 28]]);
-        let verdict = evaluate_native_script(&NativeScript::sig(key.clone()), &available, 0);
+        let verdict = evaluate_native_script(&NativeScript::sig(key.clone()), &available, &ValidityInterval::UNBOUNDED);
         assert_eq!(
             verdict,
             ScriptVerdict::NativeScriptFailed(NativeScriptFailure::MissingRequiredSignature {
@@ -238,7 +246,7 @@ mod tests {
             NativeScript::sig(Hash28([0x02; 28])),
         ]);
         let available = sigs(&[[0x01; 28], [0x02; 28]]);
-        let verdict = evaluate_native_script(&script, &available, 0);
+        let verdict = evaluate_native_script(&script, &available, &ValidityInterval::UNBOUNDED);
         assert_eq!(verdict, ScriptVerdict::NativeScriptPassed);
     }
 
@@ -249,7 +257,7 @@ mod tests {
             NativeScript::sig(Hash28([0x03; 28])),
         ]);
         let available = sigs(&[[0x01; 28]]);
-        let verdict = evaluate_native_script(&script, &available, 0);
+        let verdict = evaluate_native_script(&script, &available, &ValidityInterval::UNBOUNDED);
         match verdict {
             ScriptVerdict::NativeScriptFailed(_) => {}
             _ => unreachable!(),
@@ -260,7 +268,7 @@ mod tests {
     fn all_empty_passes() {
         let script = NativeScript::all(vec![]);
         let available = BTreeSet::new();
-        let verdict = evaluate_native_script(&script, &available, 0);
+        let verdict = evaluate_native_script(&script, &available, &ValidityInterval::UNBOUNDED);
         assert_eq!(verdict, ScriptVerdict::NativeScriptPassed);
     }
 
@@ -275,7 +283,7 @@ mod tests {
             NativeScript::sig(Hash28([0x02; 28])),
         ]);
         let available = sigs(&[[0x02; 28]]);
-        let verdict = evaluate_native_script(&script, &available, 0);
+        let verdict = evaluate_native_script(&script, &available, &ValidityInterval::UNBOUNDED);
         assert_eq!(verdict, ScriptVerdict::NativeScriptPassed);
     }
 
@@ -286,7 +294,7 @@ mod tests {
             NativeScript::sig(Hash28([0x02; 28])),
         ]);
         let available = sigs(&[[0x03; 28]]);
-        let verdict = evaluate_native_script(&script, &available, 0);
+        let verdict = evaluate_native_script(&script, &available, &ValidityInterval::UNBOUNDED);
         assert_eq!(
             verdict,
             ScriptVerdict::NativeScriptFailed(NativeScriptFailure::ThresholdNotMet {
@@ -300,7 +308,7 @@ mod tests {
     fn any_empty_fails() {
         let script = NativeScript::any(vec![]);
         let available = BTreeSet::new();
-        let verdict = evaluate_native_script(&script, &available, 0);
+        let verdict = evaluate_native_script(&script, &available, &ValidityInterval::UNBOUNDED);
         assert_eq!(
             verdict,
             ScriptVerdict::NativeScriptFailed(NativeScriptFailure::ThresholdNotMet {
@@ -322,7 +330,7 @@ mod tests {
             NativeScript::sig(Hash28([0x03; 28])),
         ]);
         let available = sigs(&[[0x01; 28], [0x03; 28]]);
-        let verdict = evaluate_native_script(&script, &available, 0);
+        let verdict = evaluate_native_script(&script, &available, &ValidityInterval::UNBOUNDED);
         assert_eq!(verdict, ScriptVerdict::NativeScriptPassed);
     }
 
@@ -334,7 +342,7 @@ mod tests {
             NativeScript::sig(Hash28([0x03; 28])),
         ]);
         let available = sigs(&[[0x01; 28]]);
-        let verdict = evaluate_native_script(&script, &available, 0);
+        let verdict = evaluate_native_script(&script, &available, &ValidityInterval::UNBOUNDED);
         assert_eq!(
             verdict,
             ScriptVerdict::NativeScriptFailed(NativeScriptFailure::ThresholdNotMet {
@@ -350,69 +358,72 @@ mod tests {
             NativeScript::sig(Hash28([0x01; 28])),
         ]);
         let available = BTreeSet::new();
-        let verdict = evaluate_native_script(&script, &available, 0);
+        let verdict = evaluate_native_script(&script, &available, &ValidityInterval::UNBOUNDED);
         assert_eq!(verdict, ScriptVerdict::NativeScriptPassed);
     }
 
     // -----------------------------------------------------------------------
-    // Timelock tests
+    // Timelock tests: against the transaction's validity interval (cardano-ledger evalTimelock)
     // -----------------------------------------------------------------------
 
+    fn iv(start: Option<u64>, expiry: Option<u64>) -> ValidityInterval {
+        ValidityInterval { invalid_before: start, invalid_hereafter: expiry }
+    }
+
+    fn eval_iv(script: &NativeScript, start: Option<u64>, expiry: Option<u64>) -> ScriptVerdict {
+        evaluate_native_script(script, &BTreeSet::new(), &iv(start, expiry))
+    }
+
     #[test]
-    fn invalid_before_passes_when_at_slot() {
+    fn invalid_before_holds_when_the_tx_starts_at_or_after_the_lock() {
         let script = NativeScript::invalid_before(100);
-        let verdict = evaluate_native_script(&script, &BTreeSet::new(), 100);
-        assert_eq!(verdict, ScriptVerdict::NativeScriptPassed);
+        assert_eq!(eval_iv(&script, Some(100), None), ScriptVerdict::NativeScriptPassed);
+        assert_eq!(eval_iv(&script, Some(101), None), ScriptVerdict::NativeScriptPassed);
+        assert_eq!(
+            eval_iv(&script, Some(99), None),
+            ScriptVerdict::NativeScriptFailed(NativeScriptFailure::TimelockStartNotMet {
+                lock_start: ade_types::SlotNo(100),
+                tx_start: Some(ade_types::SlotNo(99)),
+            })
+        );
     }
 
     #[test]
-    fn invalid_before_passes_when_after_slot() {
-        let script = NativeScript::invalid_before(100);
-        let verdict = evaluate_native_script(&script, &BTreeSet::new(), 200);
-        assert_eq!(verdict, ScriptVerdict::NativeScriptPassed);
+    fn invalid_before_never_holds_without_a_tx_start() {
+        let script = NativeScript::invalid_before(0);
+        assert_eq!(
+            eval_iv(&script, None, Some(10)),
+            ScriptVerdict::NativeScriptFailed(NativeScriptFailure::TimelockStartNotMet {
+                lock_start: ade_types::SlotNo(0),
+                tx_start: None,
+            })
+        );
     }
 
     #[test]
-    fn invalid_before_fails_when_before_slot() {
-        let script = NativeScript::invalid_before(100);
-        let verdict = evaluate_native_script(&script, &BTreeSet::new(), 50);
-        match verdict {
-            ScriptVerdict::NativeScriptFailed(NativeScriptFailure::TimelockNotSatisfied {
-                required_slot,
-                current_slot,
-            }) => {
-                assert_eq!(required_slot, ade_types::SlotNo(100));
-                assert_eq!(current_slot, ade_types::SlotNo(50));
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    #[test]
-    fn invalid_hereafter_passes_when_before_slot() {
+    fn invalid_hereafter_holds_when_the_tx_expires_at_or_before_the_lock() {
         let script = NativeScript::invalid_hereafter(200);
-        let verdict = evaluate_native_script(&script, &BTreeSet::new(), 100);
-        assert_eq!(verdict, ScriptVerdict::NativeScriptPassed);
+        assert_eq!(eval_iv(&script, None, Some(200)), ScriptVerdict::NativeScriptPassed);
+        assert_eq!(eval_iv(&script, None, Some(199)), ScriptVerdict::NativeScriptPassed);
+        assert_eq!(
+            eval_iv(&script, None, Some(201)),
+            ScriptVerdict::NativeScriptFailed(NativeScriptFailure::TimelockExpiryNotMet {
+                lock_expiry: ade_types::SlotNo(200),
+                tx_expiry: Some(ade_types::SlotNo(201)),
+            })
+        );
     }
 
     #[test]
-    fn invalid_hereafter_fails_when_at_slot() {
-        let script = NativeScript::invalid_hereafter(200);
-        let verdict = evaluate_native_script(&script, &BTreeSet::new(), 200);
-        match verdict {
-            ScriptVerdict::NativeScriptFailed(NativeScriptFailure::TimelockNotSatisfied { .. }) => {}
-            _ => unreachable!(),
-        }
-    }
-
-    #[test]
-    fn invalid_hereafter_fails_when_after_slot() {
-        let script = NativeScript::invalid_hereafter(200);
-        let verdict = evaluate_native_script(&script, &BTreeSet::new(), 300);
-        match verdict {
-            ScriptVerdict::NativeScriptFailed(NativeScriptFailure::TimelockNotSatisfied { .. }) => {}
-            _ => unreachable!(),
-        }
+    fn invalid_hereafter_never_holds_without_a_tx_expiry() {
+        let script = NativeScript::invalid_hereafter(u64::MAX);
+        assert_eq!(
+            eval_iv(&script, Some(0), None),
+            ScriptVerdict::NativeScriptFailed(NativeScriptFailure::TimelockExpiryNotMet {
+                lock_expiry: ade_types::SlotNo(u64::MAX),
+                tx_expiry: None,
+            })
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -421,46 +432,29 @@ mod tests {
 
     #[test]
     fn time_window_script() {
-        // Valid only in slot range [100, 200)
+        // Satisfied only by a tx interval inside [100, 200].
         let script = NativeScript::all(vec![
             NativeScript::invalid_before(100),
             NativeScript::invalid_hereafter(200),
         ]);
-
-        // Too early
-        let v = evaluate_native_script(&script, &BTreeSet::new(), 50);
-        assert!(matches!(v, ScriptVerdict::NativeScriptFailed(_)));
-
-        // In range
-        let v = evaluate_native_script(&script, &BTreeSet::new(), 150);
-        assert_eq!(v, ScriptVerdict::NativeScriptPassed);
-
-        // Too late
-        let v = evaluate_native_script(&script, &BTreeSet::new(), 250);
-        assert!(matches!(v, ScriptVerdict::NativeScriptFailed(_)));
+        assert!(matches!(eval_iv(&script, Some(50), Some(150)), ScriptVerdict::NativeScriptFailed(_)));
+        assert_eq!(eval_iv(&script, Some(120), Some(180)), ScriptVerdict::NativeScriptPassed);
+        assert!(matches!(eval_iv(&script, Some(150), Some(250)), ScriptVerdict::NativeScriptFailed(_)));
+        assert!(matches!(eval_iv(&script, Some(150), None), ScriptVerdict::NativeScriptFailed(_)));
     }
 
     #[test]
     fn sig_plus_timelock() {
-        // Requires signature AND slot >= 50
         let script = NativeScript::all(vec![
             NativeScript::sig(Hash28([0xaa; 28])),
             NativeScript::invalid_before(50),
         ]);
-
         let available = sigs(&[[0xaa; 28]]);
-
-        // Has sig but too early
-        let v = evaluate_native_script(&script, &available, 10);
+        let v = evaluate_native_script(&script, &available, &iv(Some(10), None));
         assert!(matches!(v, ScriptVerdict::NativeScriptFailed(_)));
-
-        // Has sig and at correct slot
-        let v = evaluate_native_script(&script, &available, 50);
+        let v = evaluate_native_script(&script, &available, &iv(Some(50), None));
         assert_eq!(v, ScriptVerdict::NativeScriptPassed);
-
-        // Correct slot but missing sig
-        let empty = BTreeSet::new();
-        let v = evaluate_native_script(&script, &empty, 50);
+        let v = evaluate_native_script(&script, &BTreeSet::new(), &iv(Some(50), None));
         assert!(matches!(v, ScriptVerdict::NativeScriptFailed(_)));
     }
 
@@ -472,8 +466,8 @@ mod tests {
         ]);
         let available = sigs(&[[0x01; 28]]);
 
-        let v1 = evaluate_native_script(&script, &available, 5);
-        let v2 = evaluate_native_script(&script, &available, 5);
+        let v1 = evaluate_native_script(&script, &available, &iv(Some(5), None));
+        let v2 = evaluate_native_script(&script, &available, &iv(Some(5), None));
         assert_eq!(v1, v2);
     }
 
