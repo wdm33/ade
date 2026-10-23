@@ -39,4 +39,4 @@ pub use required_signers::{
 };
 pub use transition::{tx_validity, TxValidityOutcome};
 pub use verdict::{TxRejectClass, TxValidityError, TxValidityVerdict};
-pub use witness::{verify_required_witnesses, VKeyWitnessRef, WitnessClosureError, WitnessField};
+pub use witness::{verify_required_witnesses, verify_supplied_witnesses, VKeyWitnessRef, WitnessClosureError, WitnessField};

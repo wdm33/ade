@@ -357,6 +357,15 @@ pub struct WitnessNativeScript {
     pub script: NativeScript,
 }
 
+/// A bootstrap witness as supplied: `[vkey, signature, chain_code, attributes]` (witness-set key 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapWitnessRef {
+    pub vkey: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub chain_code: Vec<u8>,
+    pub attributes: Vec<u8>,
+}
+
 /// Cardano's script-hash language prefixes (`hashScript`).
 pub const NATIVE_SCRIPT_PREFIX: u8 = 0x00;
 pub const PLUTUS_V1_PREFIX: u8 = 0x01;
@@ -385,6 +394,8 @@ pub struct WitnessInfo {
     pub plutus_script_hashes: BTreeSet<Hash28>,
     /// Key hashes of bootstrap witnesses (key 2), cardano-ledger `bootstrapWitKeyHash`.
     pub bootstrap_key_hashes: BTreeSet<Hash28>,
+    /// The bootstrap witnesses themselves, in wire order, for signature verification (DC-TXV-08).
+    pub bootstrap_witnesses: Vec<BootstrapWitnessRef>,
     /// Whether Plutus V1 scripts are present (key 3).
     pub has_plutus_v1: bool,
     /// Whether Plutus V2 scripts are present (key 6).
@@ -461,6 +472,7 @@ fn decode_single_witness_info(
         native_scripts: Vec::new(),
         plutus_script_hashes: std::collections::BTreeSet::new(),
         bootstrap_key_hashes: std::collections::BTreeSet::new(),
+        bootstrap_witnesses: Vec::new(),
         has_plutus_v1: false,
         has_plutus_v2: false,
         has_plutus_v3: false,
@@ -491,7 +503,12 @@ fn decode_single_witness_info(
             }
             2 => {
                 skip_optional_tag(data, offset)?;
-                info.bootstrap_key_hashes = decode_bootstrap_key_hashes(data, offset)?;
+                info.bootstrap_witnesses = decode_bootstrap_witnesses(data, offset)?;
+                info.bootstrap_key_hashes = info
+                    .bootstrap_witnesses
+                    .iter()
+                    .map(|w| bootstrap_key_hash(&w.vkey, &w.chain_code, &w.attributes))
+                    .collect();
             }
             3 => {
                 info.has_plutus_v1 = true;
@@ -582,13 +599,13 @@ pub fn bootstrap_key_hash(vkey: &[u8], chain_code: &[u8], attributes: &[u8]) -> 
     ade_crypto::blake2b_224(&ade_crypto::sha3_256(&payload).0)
 }
 
-/// Key hashes of bootstrap witnesses: `[* [vkey, signature, chain_code, attributes]]`.
-fn decode_bootstrap_key_hashes(
+/// Bootstrap witnesses: `[* [vkey, signature, chain_code, attributes]]`.
+fn decode_bootstrap_witnesses(
     data: &[u8],
     offset: &mut usize,
-) -> Result<BTreeSet<Hash28>, LedgerError> {
+) -> Result<Vec<BootstrapWitnessRef>, LedgerError> {
     let enc = cbor::read_array_header(data, offset)?;
-    let mut hashes = BTreeSet::new();
+    let mut out = Vec::new();
     let mut read_one = |offset: &mut usize| -> Result<(), LedgerError> {
         match cbor::read_array_header(data, offset)? {
             ContainerEncoding::Definite(4, _) => {}
@@ -600,10 +617,10 @@ fn decode_bootstrap_key_hashes(
             }
         }
         let (vkey, _) = cbor::read_bytes(data, offset)?;
-        let _ = cbor::skip_item(data, offset)?; // signature
+        let (signature, _) = cbor::read_bytes(data, offset)?;
         let (chain_code, _) = cbor::read_bytes(data, offset)?;
         let (attributes, _) = cbor::read_bytes(data, offset)?;
-        hashes.insert(bootstrap_key_hash(&vkey, &chain_code, &attributes));
+        out.push(BootstrapWitnessRef { vkey, signature, chain_code, attributes });
         Ok(())
     };
     match enc {
@@ -619,7 +636,7 @@ fn decode_bootstrap_key_hashes(
             *offset += 1;
         }
     }
-    Ok(hashes)
+    Ok(out)
 }
 
 /// Extract key hashes from VKey witnesses.
@@ -696,6 +713,7 @@ mod tests {
             native_scripts: Vec::new(),
             plutus_script_hashes: std::collections::BTreeSet::new(),
             bootstrap_key_hashes: std::collections::BTreeSet::new(),
+            bootstrap_witnesses: Vec::new(),
             has_plutus_v1: true,
             has_plutus_v2: false,
             has_plutus_v3: false,
@@ -711,6 +729,7 @@ mod tests {
             native_scripts: Vec::new(),
             plutus_script_hashes: std::collections::BTreeSet::new(),
             bootstrap_key_hashes: std::collections::BTreeSet::new(),
+            bootstrap_witnesses: Vec::new(),
             has_plutus_v1: false,
             has_plutus_v2: false,
             has_plutus_v3: false,

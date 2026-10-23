@@ -74,6 +74,7 @@ fn empty_witness() -> WitnessInfo {
         native_scripts: Vec::new(),
         plutus_script_hashes: std::collections::BTreeSet::new(),
         bootstrap_key_hashes: std::collections::BTreeSet::new(),
+        bootstrap_witnesses: Vec::new(),
         has_plutus_v1: false,
         has_plutus_v2: false,
         has_plutus_v3: false,

@@ -78,7 +78,9 @@ impl TxValidityError {
                     TxRejectClass::MissingRequiredSigner
                 }
                 WitnessClosureError::InvalidWitnessSignature { .. }
-                | WitnessClosureError::MalformedWitnessField { .. } => {
+                | WitnessClosureError::MalformedWitnessField { .. }
+                | WitnessClosureError::InvalidSuppliedWitnessSignature { .. }
+                | WitnessClosureError::InvalidBootstrapWitnessSignature { .. } => {
                     TxRejectClass::WitnessInvalid
                 }
             },

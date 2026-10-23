@@ -713,3 +713,75 @@ fn persisted_script_witness_census() {
     }
     assert_eq!(last, tip.slot.0, "the walk must end at the store tip");
 }
+
+/// LV-14 census: every supplied vkey and bootstrap witness of every stored Conway transaction is
+/// verified over its preserved body hash (DC-TXV-08), before the check rejects anything.
+/// cardano-node accepted every block here, so any failure is an Ade bug until shown otherwise.
+#[test]
+#[ignore = "evidence-only; requires ADE_CENSUS_CHAINDB pointing at a COPY of an Ade chain.db"]
+fn persisted_witness_signature_census() {
+    use ade_ledger::tx_validity::{verify_supplied_witnesses, VKeyWitnessRef};
+    use ade_ledger::witness::decode_witness_info_single;
+
+    let path = std::env::var("ADE_CENSUS_CHAINDB").expect("set ADE_CENSUS_CHAINDB (a COPY)");
+    let db = PersistentChainDb::open(PersistentChainDbOptions::at(path)).expect("open chain.db copy");
+    let tip = db.tip().expect("tip").expect("non-empty store");
+
+    fn elements(data: &[u8]) -> Vec<&[u8]> {
+        let mut o = 0;
+        let n = match cbor::read_array_header(data, &mut o).expect("array") {
+            ContainerEncoding::Definite(n, _) => Some(n),
+            ContainerEncoding::Indefinite => None,
+        };
+        let mut out = Vec::new();
+        loop {
+            match n {
+                Some(n) if out.len() as u64 == n => break,
+                None if cbor::is_break(data, o).expect("break") => break,
+                _ => {}
+            }
+            let (s, e) = cbor::skip_item(data, &mut o).expect("element");
+            out.push(&data[s..e]);
+        }
+        out
+    }
+
+    let (mut blocks, mut txs, mut vkeys, mut boots) = (0u64, 0u64, 0u64, 0u64);
+    let (mut first, mut last) = (None, 0u64);
+    let mut failures: Vec<String> = Vec::new();
+    for item in db.iter_from_slot(SlotNo(0)).expect("iter") {
+        let b = item.expect("stored block");
+        blocks += 1;
+        first.get_or_insert(b.slot.0);
+        last = b.slot.0;
+        let env = decode_block_envelope(&b.bytes).expect("envelope");
+        if env.era != CardanoEra::Conway {
+            continue;
+        }
+        let block = decode_conway_block(&b.bytes[env.block_start..env.block_end]).expect("conway block");
+        let blk = block.decoded();
+        for (i, (body, ws)) in elements(&blk.tx_bodies).into_iter().zip(elements(&blk.witness_sets)).enumerate() {
+            txs += 1;
+            let body_hash = ade_crypto::blake2b_256(body);
+            let vk: Vec<VKeyWitnessRef> = ade_ledger::shelley::decode_conway_vkey_witness_set_single(ws)
+                .expect("vkey witnesses")
+                .into_iter()
+                .map(|w| VKeyWitnessRef { vkey: w.vkey, signature: w.signature })
+                .collect();
+            let wi = decode_witness_info_single(ws).expect("witness set");
+            vkeys += vk.len() as u64;
+            boots += wi.bootstrap_witnesses.len() as u64;
+            if let Err(e) = verify_supplied_witnesses(&body_hash, &vk, &wi.bootstrap_witnesses) {
+                failures.push(format!("slot {} tx {i} id {}: {e:?}", b.slot.0, hex(&body_hash.0)));
+            }
+        }
+    }
+    println!("STORE TIP slot={} hash={}", tip.slot.0, hex(&tip.hash.0));
+    println!("BLOCKS {blocks} (slots {}..={last})  TXS {txs}", first.unwrap_or(0));
+    println!("VKEY WITNESSES VERIFIED {vkeys}  BOOTSTRAP WITNESSES VERIFIED {boots}");
+    println!("FAILURES {}", failures.len());
+    for f in failures.iter().take(50) {
+        println!("  {f}");
+    }
+    assert_eq!(last, tip.slot.0, "the walk must end at the store tip");
+}

@@ -601,6 +601,7 @@ fn verify_conway_witness_closure(
         native_scripts: Vec::new(),
         plutus_script_hashes: std::collections::BTreeSet::new(),
         bootstrap_key_hashes: std::collections::BTreeSet::new(),
+        bootstrap_witnesses: Vec::new(),
         has_plutus_v1: false,
         has_plutus_v2: false,
         has_plutus_v3: false,
@@ -666,11 +667,15 @@ fn verify_conway_witness_closure(
         verify_required_witnesses(&body_hash, &required, witnesses)
             .map_err(LedgerError::WitnessClosure)?;
 
+        // 2b. Every supplied witness verifies, required or not (DC-TXV-08). Distinct from 2.
+        let info = witness_infos.get(tx_idx).unwrap_or(&empty_info);
+        crate::tx_validity::verify_supplied_witnesses(&body_hash, witnesses, &info.bootstrap_witnesses)
+            .map_err(LedgerError::WitnessClosure)?;
+
         // 3. Witness-script closure (DC-LEDGER-SCRIPT-03): exact when every spend and reference
         //    input resolves in the pre-block UTxO, otherwise the reduced level, which rejects only
         //    a failing witness-set native script. A tx spending an output created earlier in the
         //    same block does not resolve here, so it gets the reduced level: weaker, never wrong.
-        let info = witness_infos.get(tx_idx).unwrap_or(&empty_info);
         let context = if track {
             ResolvedScriptContext::resolve_from_utxo(&body, |t| utxo.get(t))
                 .map_err(LedgerError::ScriptWitnessDerivation)?
@@ -2407,6 +2412,7 @@ pub fn run_phase_one_composers_diagnostic(
         native_scripts: Vec::new(),
         plutus_script_hashes: std::collections::BTreeSet::new(),
         bootstrap_key_hashes: std::collections::BTreeSet::new(),
+        bootstrap_witnesses: Vec::new(),
         has_plutus_v1: false,
         has_plutus_v2: false,
         has_plutus_v3: false,
@@ -2541,6 +2547,7 @@ fn run_phase_one_composers(
         native_scripts: Vec::new(),
         plutus_script_hashes: std::collections::BTreeSet::new(),
         bootstrap_key_hashes: std::collections::BTreeSet::new(),
+        bootstrap_witnesses: Vec::new(),
         has_plutus_v1: false,
         has_plutus_v2: false,
         has_plutus_v3: false,
@@ -2887,6 +2894,7 @@ mod tests {
             native_scripts: Vec::new(),
             plutus_script_hashes: std::collections::BTreeSet::new(),
             bootstrap_key_hashes: std::collections::BTreeSet::new(),
+            bootstrap_witnesses: Vec::new(),
             has_plutus_v1: false,
             has_plutus_v2: false,
             has_plutus_v3: false,

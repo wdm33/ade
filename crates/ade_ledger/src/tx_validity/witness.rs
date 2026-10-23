@@ -50,6 +50,12 @@ pub enum WitnessClosureError {
         which: WitnessField,
         key_hash: Hash28,
     },
+    /// A supplied vkey witness, required or not, whose signature over the preserved body hash does
+    /// not verify (cardano-ledger `validateVerifiedWits`, `InvalidWitnessesUTXOW`; DC-TXV-08).
+    InvalidSuppliedWitnessSignature { key_hash: Hash28 },
+    /// A supplied bootstrap witness whose signature over the preserved body hash does not verify
+    /// (`verifyBootstrapWit`). `key_hash` is its `bootstrapWitKeyHash`.
+    InvalidBootstrapWitnessSignature { key_hash: Hash28 },
 }
 
 /// Which witness field was malformed.
@@ -137,6 +143,44 @@ pub fn verify_required_witnesses(
         });
     }
 
+    Ok(())
+}
+
+/// Every supplied witness verifies (DC-TXV-08, cardano-ledger `validateVerifiedWits`): each vkey
+/// witness and each bootstrap witness, required or not, has an Ed25519 signature that verifies under
+/// its own key over `body_hash`. A bootstrap witness is checked with its 32-byte key alone
+/// (`verifyBootstrapWit`); its chain code and attributes only feed its key hash.
+///
+/// Distinct from [`verify_required_witnesses`], which proves required keys are covered. Fail-fast in
+/// wire order: vkey witnesses first, then bootstrap witnesses.
+pub fn verify_supplied_witnesses(
+    body_hash: &Hash32,
+    vkey_witnesses: &[VKeyWitnessRef],
+    bootstrap_witnesses: &[crate::witness::BootstrapWitnessRef],
+) -> Result<(), WitnessClosureError> {
+    let check = |vkey: &[u8], signature: &[u8], key_hash: Hash28| -> Result<bool, WitnessClosureError> {
+        let vk = Ed25519VerificationKey::from_bytes(vkey).map_err(|_| WitnessClosureError::MalformedWitnessField {
+            which: WitnessField::VerificationKey,
+            key_hash: key_hash.clone(),
+        })?;
+        let sig = Ed25519Signature::from_bytes(signature).map_err(|_| WitnessClosureError::MalformedWitnessField {
+            which: WitnessField::Signature,
+            key_hash,
+        })?;
+        Ok(matches!(verify_ed25519(&vk, &body_hash.0, &sig), Ok(true)))
+    };
+    for w in vkey_witnesses {
+        let key_hash = blake2b_224(&w.vkey);
+        if !check(&w.vkey, &w.signature, key_hash.clone())? {
+            return Err(WitnessClosureError::InvalidSuppliedWitnessSignature { key_hash });
+        }
+    }
+    for w in bootstrap_witnesses {
+        let key_hash = crate::witness::bootstrap_key_hash(&w.vkey, &w.chain_code, &w.attributes);
+        if !check(&w.vkey, &w.signature, key_hash.clone())? {
+            return Err(WitnessClosureError::InvalidBootstrapWitnessSignature { key_hash });
+        }
+    }
     Ok(())
 }
 

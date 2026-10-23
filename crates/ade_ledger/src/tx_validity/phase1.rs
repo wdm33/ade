@@ -189,6 +189,14 @@ pub fn tx_phase_one(ledger: &LedgerState, decoded: &DecodedTx) -> Result<(), TxV
     super::verify_required_witnesses(&decoded.tx_id, &required, &decoded.vkey_witnesses)
         .map_err(TxValidityError::Witness)?;
 
+    // 1a. Every supplied witness verifies, required or not (DC-TXV-08). Distinct from 1.
+    super::verify_supplied_witnesses(
+        &decoded.tx_id,
+        &decoded.vkey_witnesses,
+        &decoded.witness_info.bootstrap_witnesses,
+    )
+    .map_err(TxValidityError::Witness)?;
+
     // 1b. Witness-script closure (DC-LEDGER-SCRIPT-03), the same seam the block path calls: exact
     //     when every spend and reference input resolves, reduced otherwise.
     let context = if ledger.track_utxo {
