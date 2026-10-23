@@ -232,3 +232,92 @@ non-zero finding is an Ade bug until shown otherwise.
 - Unchecked wire-count preallocation; Plutus-data stack safety; the store-semantics lock list.
 - Adding bootstrap key hashes to the required-signer coverage set (`check_required_signers`). That is
   Cardano-correct too, but it is a different check.
+
+## 8. RESULTS
+
+Code: `e6910d5a`. Every CE below passed mechanically.
+
+### Census before enforcement (CE-LV13-8)
+
+`persisted_script_witness_census` (`crates/ade_runtime/tests/body_decode_census.rs`) ran the authority, not
+yet wired to reject, over every block of two store copies. It built a forward UTxO from the outputs created
+inside the interval; a phase-2-invalid transaction consumes its collateral and produces its collateral return.
+
+| | stopped LV-8 store | halted LV-12 live store |
+|---|---|---|
+| slots | 129,813,444..=133,902,215 | 129,813,444..=137,096,367 |
+| blocks / transactions | 184,490 / 421,827 | 326,471 / 991,602 |
+| witness native scripts (all passing, corrected evaluator) | 36,069 | 46,866 |
+| of which with a timelock / verdict changed vs block slot | 28,758 / 0 | 33,567 / 0 |
+| witness Plutus scripts | 149,425 | 1,241,984 |
+| txs with bootstrap witnesses | 142 | 272 |
+| reduced definite rejects | 0 | 0 |
+| fully resolved txs / exactly valid | 324,200 / 324,200 | 866,432 / 866,432 |
+| exact not-validating / extraneous / missing | 0 / 0 / 0 | 0 / 0 / 0 |
+| needed reference native / Plutus scripts | 2 / 16,021 | 2 / 108,079 |
+| needed: spending, rewarding, certifying, minting, voting, proposing | 65,859; 3,011; 719; 71,282; 127; 1 | 153,028; 31,059; 1,939; 1,161,025; 221; 3 |
+
+Zero findings. The exact level's zero missing and zero extraneous findings, over 1.24M Plutus witness
+scripts and every needed category, are also the check that Ade's hashes and needed set agree with what
+cardano-node accepted. No timelock in the interval sits where the block-slot rule and the interval rule
+disagree, so the correction changes no historical verdict; the boundaries are pinned by constructed cases
+(CE-LV13-2).
+
+### CE-LV13-1..7, 9
+
+`crates/ade_ledger/tests/lv13_native_script_witness_verdict.rs`, 22 tests, plus the evaluator's interval
+tests in `scripts.rs` and `sha3_256`'s FIPS 202 vectors. Three committed real preprod fixtures, each with the
+outputs its inputs resolve to, as the census dumped them:
+
+| fixture | what it carries | exact verdict |
+|---|---|---|
+| `lv13_timelock_block.cbor`, slot 129,919,360 tx 0 | a needed timelocked minting script in the witness set | valid |
+| `lv13_refnative_block.cbor`, slot 133,860,142 tx 0 | a script-address spend satisfied by a reference native multisig (3-of-160) | valid |
+| `lv13_bootstrap_block.cbor`, slot 129,817,130 tx 1 | a bootstrap witness spending a Byron input | its key hash equals the address root |
+
+The timelock fixture, with its lock moved out of reach (same byte length), is rejected by the block path
+(`apply_block_with_verdicts`, reduced) and by `tx_validity` with the same `NativeScriptFailed`, twice
+identically; with the UTxO, the changed bytes are exactly one missing and one extraneous hash. Dropping the
+reference multisig's signers is exactly not-validating.
+
+### CE-LV13-10 (mutations)
+
+Each applied, compiled, failed its intended test and the gate, and was restored byte-exact:
+
+| mutation | intended test | gate |
+|---|---|---|
+| ignore the evaluator's result | `..._failing_native_script_is_rejected_at_both_levels` | suite fails |
+| an open interval end satisfies a timelock (block-slot behaviour) | `..._invalid_before_holds_from_the_lock_and_never_without_a_start` | suite fails |
+| drop the Proposing purpose | `..._needed_set_covers_every_conway_purpose` | also names the purpose |
+| report a reduced pass as exactly valid | `..._a_needed_passing_native_script_is_accepted` | also names the exact-verdict rule |
+| hash a re-serialization of the parsed script | `..._a_real_timelock_mint_is_exactly_valid` | also names the wire-bytes rule |
+
+### CE-LV13-11 (no regression)
+
+Sweep: 282 scripts. Against the LV-12 baseline (281, the same 46 failing) the first run added two, both the
+store-semantics lock: `rules.rs` and `phase.rs` are on its surface. Reconciled as below, both pass, and the
+failing set is the baseline's 46. The LV-11 and LV-12 gates pass with their tests on the interval argument
+(the LV-12 recursive reference now uses Cardano's interval semantics, over interval grids instead of slots).
+
+### Store semantics
+
+Not bumped; the lock records a `semantics_neutral = true` entry at version 11. The closure only accepts or
+rejects: on an accepted block every authoritative output is computed as before, and the one changed value,
+`BlockVerdict.native_script_passed`, is not persisted or read by any rule. A store from the previous binary
+is replay-equivalent unless it holds a block the new reject path refuses, and the census shows neither store
+does.
+
+### CE-LV13-12 (live)
+
+The LV-12 node on `ade-preprod-lv11` halted cleanly at durable tip 137,096,367; that store is the second
+census column above. The `e6910d5a` binary restarted on it (`forward_fold_no_reset`) and was at the peer tip
+(137,099,113) three minutes later, with no failure line:
+`docs/evidence/run-stores/preprod-live2c/lv13-ce12-restart-on-witness-verdicts.md`.
+
+### Found on the way, not fixed here
+
+- Witness signatures are verified only for required signers (`verify_required_witnesses`); Cardano's
+  `validateVerifiedWits` verifies every vkey and bootstrap witness. A native script's `sig` is satisfied by
+  key-hash membership, as in Cardano, so a bad signature on a non-required witness is a gap of that rule.
+- A transaction spending an output created earlier in the same block gets the reduced level in the block
+  path, which resolves against the pre-block UTxO. Weaker, never wrong.

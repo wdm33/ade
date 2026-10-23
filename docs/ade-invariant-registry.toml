@@ -10739,3 +10739,34 @@ introduced_in = "PREPROD-LIVE-2-LV-12"
 strengthened_in = []
 evidence = ["Measured need before LV-12 for preprod block 5,183,974 (slot 133,883,340): ~1.2 MiB release / ~28 MiB debug to skip its CBOR, ~2.5 MiB release to decode its witness sets -- SLICE-LV-12 section 1.", "SLICE-LV-12 section 8 (results, mutations, persisted census on a default 2 MiB stack).", "LIVE: docs/evidence/run-stores/preprod-live2c/lv12-ce8-restart-on-flat-scripts.md."]
 evidence_notes = "ENFORCED. Mutation-tested: restoring recursion in skip_item, the decoder, or the evaluator each overflows a 256 KiB test thread on the deep input and fails the gate naming the cycle. One intended behaviour change, recorded: the recursive decoder preallocated from a wire sub-script count (a forged count could abort the process on allocation); the flat decoder returns UnexpectedEof. Store semantics NOT bumped: decode outcomes are unchanged (differentials) and all 184,490 persisted blocks of the stopped store decode to the same thresholds and node count. SCOPE: native scripts and generic CBOR skipping only. Plutus data decoding inside aiken/uplc and unchecked wire-count preallocations elsewhere in the codec are recorded as separate findings, not covered."
+
+[[rules]]
+id = "DC-LEDGER-SCRIPT-03"
+tier = "derived"
+statement = """
+A Conway transaction's witness-script closure is decided by one authority (tx_validity::script_witnesses),
+called by both the block path (verify_conway_witness_closure) and the standalone path (tx_phase_one),
+with two evidence levels. Without full UTxO context (reduced mode, or any spend or reference input
+unresolved) it rejects exactly when a witness-set native script fails evaluation, and is otherwise
+Undetermined, never valid: a failing provided script is either needed (cardano-ledger
+ScriptWitnessNotValidatingUTXOW) or extraneous (ExtraneousScriptWitnessesUTXOW), so the rejection is
+sound without the UTxO. With every spend and reference input resolved it gives cardano-ledger
+babbageUtxowTransition's exact script closure: needed native scripts (witness or reference) that do not
+validate, extraneous witness scripts, missing scripts, over all six getConwayScriptsNeeded purposes
+(spending, rewarding, certifying, minting, voting, proposing). Timelocks are evaluated against the
+transaction's validity interval (a missing start is -inf, a missing expiry +inf), never the block slot.
+The signer set is vkey witnesses union bootstrap witnesses (keyHashWitnessesTxWits). Every script hash is
+Blake2b-224(language prefix || preserved wire bytes), never a re-encoding.
+"""
+source = "docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LV-13-native-script-witness-verdict.md"
+cross_ref = ["DC-LEDGER-SCRIPT-01", "DC-LEDGER-SCRIPT-02", "DC-TXV-05", "T-ENC-01"]
+code_locus = "crates/ade_ledger/src/tx_validity/script_witnesses.rs: check_script_witnesses + native_script_verdict + reduced_verdict + exact_verdict + scripts_needed + reference_scripts + decode_script_ref + ResolvedScriptContext. crates/ade_ledger/src/scripts.rs: evaluate_native_script(ValidityInterval). crates/ade_ledger/src/witness.rs: WitnessNativeScript + prefixed_script_hash + bootstrap_key_hash. crates/ade_ledger/src/tx_validity/required_signers.rs: walk_withdrawal_credentials + walk_certificate_credentials + walk_voter_credentials (shared with the signer closure). crates/ade_ledger/src/rules.rs: verify_conway_witness_closure. crates/ade_ledger/src/tx_validity/phase1.rs: tx_phase_one. crates/ade_crypto/src/sha3.rs: sha3_256."
+tests = ["lv13_a_needed_passing_native_script_is_accepted", "lv13_the_same_tx_with_a_failing_native_script_is_rejected_at_both_levels", "lv13_failing_all_any_and_n_of_k_each_reject", "lv13_a_threshold_of_zero_or_below_passes_exactly_as_cardano", "lv13_invalid_before_holds_from_the_lock_and_never_without_a_start", "lv13_invalid_hereafter_holds_up_to_the_lock_and_never_without_an_expiry", "lv13_the_block_slot_does_not_decide_a_timelock", "lv13_a_missing_required_native_script_is_missing", "lv13_a_reference_script_satisfies_the_need_and_a_witness_copy_is_extraneous", "lv13_a_failing_needed_reference_native_script_does_not_validate", "lv13_an_extra_passing_script_is_undetermined_without_context_and_extraneous_with_it", "lv13_an_extra_failing_script_is_a_definite_reject_and_exactly_extraneous", "lv13_the_needed_set_covers_every_conway_purpose", "lv13_a_native_script_hash_is_over_its_own_bytes_not_a_re_encoding", "lv13_a_plutus_witness_counts_toward_the_closure_but_is_not_evaluated_here", "lv13_a_script_ref_decodes_to_the_hash_of_its_native_bytes", "lv13_a_real_timelock_mint_is_exactly_valid", "lv13_a_real_reference_script_multisig_spend_is_exactly_valid", "lv13_a_real_bootstrap_witness_key_hash_is_its_byron_address_root", "lv13_the_block_path_accepts_the_real_block_and_rejects_it_with_a_failing_timelock", "lv13_the_mutated_real_script_is_exactly_missing_and_extraneous", "lv13_verdicts_are_deterministic", "invalid_before_holds_when_the_tx_starts_at_or_after_the_lock", "invalid_before_never_holds_without_a_tx_start", "invalid_hereafter_holds_when_the_tx_expires_at_or_before_the_lock", "invalid_hereafter_never_holds_without_a_tx_expiry", "fips_202_vectors"]
+ci_scripts = ["ci/ci_check_native_script_witness_verdict.sh"]
+status = "enforced"
+authority_surface = "BLUE ledger validity: the witness-script closure of every Conway transaction, in the block path (block acceptance) and the standalone path (single-transaction validity)"
+cluster = "PREPROD-LIVE-2-FORGE-READINESS"
+introduced_in = "PREPROD-LIVE-2-LV-13"
+strengthened_in = []
+evidence = ["SLICE-LV-13 section 8 (census before enforcement, mutations, sweep).", "Census over the 184,490 stored blocks (slots 129,813,444..=133,902,215): 421,827 txs, 36,069 witness native scripts all passing, 324,200 fully resolved txs all exactly valid, 0 missing, 0 extraneous; all six purposes exercised.", "Committed real preprod fixtures: a timelock mint (slot 129,919,360), a reference-script multisig spend (slot 133,860,142), a bootstrap-witness spend (slot 129,817,130)."]
+evidence_notes = "ENFORCED. Mutation-tested: ignoring the evaluator result, letting an open interval end satisfy a timelock (the block-slot behaviour), dropping the Proposing purpose, reporting a reduced pass as exactly valid, and hashing a re-serialization each fail the intended LV-13 test and the gate (the last three also named by the gate's structural checks). Reduced level is explicitly partial: Undetermined is not a validity claim. A tx spending an output created earlier in the same block does not resolve against the pre-block UTxO, so it gets the reduced level (weaker, never wrong). SCOPE: native-script evaluation and the script closure only. Verifying every supplied witness signature (validateVerifiedWits), redeemer/datum/integrity checks, and the block path's counted-not-enforced Plutus and state-backed verdicts are separate, recorded findings."
