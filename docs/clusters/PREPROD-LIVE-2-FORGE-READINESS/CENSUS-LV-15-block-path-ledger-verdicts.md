@@ -136,3 +136,42 @@ value with multi-assets, datum, script reference). There are three ways forward:
 
 Whichever you choose, the UTxO-free rules (§4.1) and moving the accumulator's checks to admission (§4.2) do
 not depend on this decision.
+
+## 7. Decision (owner, after this census)
+
+**(a).** The full UTxO view becomes the single UTxO authority for admission. The reduced checkpoint is not
+widened into a competing validator; after cutover it is a derived replay aid. (c) is rejected because it
+keeps known disagreements with Cardano; (b) is rejected because it rebuilds a second full UTxO beside the
+existing one.
+
+Rules this sets:
+
+- **One admission authority.** Admission builds one ephemeral working state from the durable full UTxO and
+  the accumulator's cert/account/gov/treasury state, and folds the block's transactions in order: tx *n*
+  sees every output, account and gov change made by tx 0..*n*−1. After acceptance the stores commit the
+  already-decided result; they do not interpret the block again. No intermediate shape where admission
+  validates against one state and the accumulator later executes the transaction from another.
+- **Two shapes stay distinct.** `isValid = True`: phase-1 rules pass, scripts exact, Plutus succeeds,
+  normal effects. `isValid = False`: phase-1 rules pass, Plutus fails as Cardano expects, collateral effects
+  only. An `isValid = False` transaction is a valid transition, not an invalid transaction.
+- **Store semantics bump at cutover.** After cutover the full UTxO store is required input to the verdict,
+  so a checkpoint set missing or mismatching it is refused, never started reduced. Bootstrap, WAL/checkpoint
+  identity, recovery and compatibility checks bind it.
+- **Byte authority.** Before cutover, prove that the full UTxO store keeps the protocol bytes of reference
+  scripts and inline datums needed for their hashes and script contexts, with no semantic re-encoding on a
+  hash-critical path. Being called "full UTxO" is not enough.
+
+Order of the slices:
+
+1. **UTxO-free admission obligations** — validity interval, tx/output/block size, network ids, collateral
+   count, tx and block ex-units. Rejection only: each needs no unavailable context and can only refuse
+   blocks Cardano refuses. Not presented as "the ledger transition".
+2. **Full-UTxO live capability** — seed the full UTxO store from Mithril, advance it sequentially, recover it
+   byte-identically, bind it into checkpoint identity. Verdicts otherwise unchanged while it proves itself.
+3. **Unified ledger cutover** — admission takes the full UTxO and accumulator state and becomes the one
+   sequential per-transaction transition; post-admission stores persist its result. Store-semantics bump.
+
+Assurance: *true* — one authoritative sequential transition, replay-equivalent recovery; *derived* — Conway
+UTXOW/UTXO/UTXOS exactly, including `isValid` and the evolving intra-block state; *release* — differential
+blocks, chained transactions, double spends, restart/bootstrap identity, mutation gates; *operational* —
+disk, bootstrap time and runtime cost of the full UTxO.
