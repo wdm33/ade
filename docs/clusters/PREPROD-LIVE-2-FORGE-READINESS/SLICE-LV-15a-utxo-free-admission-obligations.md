@@ -125,4 +125,48 @@ block the new checks refuse, which the census rules out.
 
 ## 8. Results
 
-(filled after implementation)
+Code: `bbde0036`.
+
+- **CE-LV15a-1** Census before enforcement:
+  - **Halted LV-12 store:** 326,471 blocks (slots 129,813,444..=137,096,367) and 991,602 txs. That
+    includes 493,369 with a validity bound (95,851 with both bounds; tightest margin one slot on each
+    side), 85,416 with withdrawals, 399,042 with a body network id, and 411 bootstrap outputs (largest
+    attributes 28 bytes). **0 failures.**
+  - **Stopped LV-14 store, before the live restart:** 330,060 blocks to 137,174,181 and 997,827 txs.
+    **0 failures.**
+- **CE-LV15a-2..6** `crates/ade_ledger/tests/lv15a_utxo_free_admission_obligations.rs`, 9 tests, all pass:
+  - **Interval:** the half-open edges.
+  - **Network ids:** each check, with output, collateral return, withdrawal and body field rejected on
+    the wrong network.
+  - **Bootstrap network:** a real preprod bootstrap address passes on preprod and fails on mainnet. The
+    same shape without the magic attribute (CRC recomputed, and the test's CRC checked against the
+    chain's) is mainnet. An unreadable one is malformed. The full path's `check_address_network` agrees on
+    all three.
+  - **Bootstrap attributes:** 64 bytes pass, 65 reject.
+  - **Declared body size:** patching each of three real blocks' header body size by ±1 rejects in both
+    modes.
+  - **Block-path interval:** moving each fixture block's slot to a tx's `invalid_hereafter`, or to one
+    before its `invalid_before`, rejects in both modes. Both bounds are exercised by real txs.
+  - **Block-path network:** a real block with the mainnet network id rejects in both modes.
+  - **Standalone path:** checks the network.
+- **CE-LV15a-7** Mutations (a) to (e) each fail the intended test, and the gate names each. Every file was
+  restored byte-exact. (a) is named after a structural check on `check_utxo_free_tx` was added.
+- **CE-LV15a-8** `ci/ci_check_utxo_free_admission_obligations.sh` passes, 9 tests ran.
+- **CE-LV15a-9** Sweep: 284 scripts, 46 failing, identical to the LV-14 baseline.
+- **CE-LV15a-10** Live:
+  - **Restart:** the LV-15a binary restarted on the live store at 137,174,181 with
+    `forward_fold_no_reset`. It reached the peer tip, 137,179,326 (block 5,330,670), with no failure line.
+    See `docs/evidence/run-stores/preprod-live2c/lv15a-ce10-restart-on-utxo-free-obligations.md`.
+  - **Previous run:** the LV-14 run before it followed for about 21 h 40 min without stopping on its own.
+    It was stopped with SIGTERM for this restart.
+
+Also changed:
+- Test fixtures that applied real preprod blocks under the mainnet default network id
+  (`LedgerState::new`) now set preprod's (0).
+- `addr_high_nibble_ignored` no longer treats high nibble 8 as a Shelley address.
+
+Both followed from the stricter rule. Neither weakens a test.
+
+Registry: DC-TXV-09 and DC-VAL-07, enforced. Store semantics: neutral entry at 11.
+
+**Not closed here (LV-15b):** every parameter-dependent UTxO-free rule. See §1.
