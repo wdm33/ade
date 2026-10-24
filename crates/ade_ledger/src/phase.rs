@@ -94,6 +94,7 @@ pub fn classify_failure_phase(err: &LedgerError) -> ValidationPhase {
         LedgerError::NativeScriptFailed(_) => ValidationPhase::Phase1,
         LedgerError::ScriptWitnessClosure(_) => ValidationPhase::Phase1,
         LedgerError::ScriptWitnessDerivation(_) => ValidationPhase::Phase1,
+        LedgerError::UtxoFreeObligation(_) => ValidationPhase::Phase1,
         LedgerError::MintWithoutPolicy(_) => ValidationPhase::Phase1,
         LedgerError::InvalidCertificate(_) => ValidationPhase::Phase1,
         LedgerError::EpochTransition(_) => ValidationPhase::Phase1,

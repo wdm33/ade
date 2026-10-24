@@ -197,7 +197,12 @@ pub fn tx_phase_one(ledger: &LedgerState, decoded: &DecodedTx) -> Result<(), TxV
     )
     .map_err(TxValidityError::Witness)?;
 
-    // 1b. Witness-script closure (DC-LEDGER-SCRIPT-03), the same seam the block path calls: exact
+    // 1b. The slot-free UTxO-free obligations (DC-TXV-09). The validity interval needs a slot, which
+    //     the standalone path does not carry.
+    super::utxo_free::check_tx_networks(&decoded.body, ledger.protocol_params.network_id)
+        .map_err(|e| TxValidityError::Phase1(LedgerError::UtxoFreeObligation(e)))?;
+
+    // 1c. Witness-script closure (DC-LEDGER-SCRIPT-03), the same seam the block path calls: exact
     //     when every spend and reference input resolves, reduced otherwise.
     let context = if ledger.track_utxo {
         super::script_witnesses::ResolvedScriptContext::resolve_from_utxo(&decoded.body, |t| {

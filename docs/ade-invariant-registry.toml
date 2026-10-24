@@ -10796,3 +10796,53 @@ introduced_in = "PREPROD-LIVE-2-LV-14"
 strengthened_in = []
 evidence = ["SLICE-LV-14 section 8.", "Census over the halted LV-12 store (326,471 blocks, slots 129,813,444..=137,096,367, 991,602 txs): 1,028,673 vkey and 314 bootstrap witnesses verified, 0 failures."]
 evidence_notes = "ENFORCED. Mutation-tested: skipping the vkey walk (verifying only required keys again), skipping bootstrap witnesses, and ignoring verify_ed25519's result each fail the intended LV-14 test and the gate, which names each. Order: the required-signer check runs first, so a required key with a bad signature is still InvalidWitnessSignature; any other bad signature is the new error. Store semantics NOT bumped (lock entry neutral at 11): the check writes no state and no persisted block is refused."
+
+[[rules]]
+id = "DC-TXV-09"
+tier = "derived"
+statement = """
+Every Conway transaction in a block is inside its validity interval at the block's slot (half-open:
+invalid_before <= slot < invalid_hereafter, cardano-ledger inInterval), every output and collateral return,
+every withdrawal reward account and the optional body network field carry the node's network id
+(validateWrongNetwork, validateWrongNetworkWithdrawal, validateWrongNetworkInTxBody; a bootstrap address is
+testnet iff its attributes carry the network magic, as getNetwork reads it), and every bootstrap output's
+attributes total at most 64 bytes (validateOutputBootAddrAttrsTooBig). A violation rejects the transaction,
+and in the block path the block, deterministically, in both modes and both isValid shapes. The checks read
+only the transaction, the slot and the network id, never the UTxO or protocol parameters, so a rejection is
+always a transaction Cardano rejects. The standalone path (tx_phase_one) runs the slot-free part; it carries
+no slot. The full path's check_address_network uses the same definition of an address's network.
+"""
+source = "docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LV-15a-utxo-free-admission-obligations.md"
+cross_ref = ["DC-TXV-08", "DC-LEDGER-SCRIPT-03", "DC-VAL-07"]
+code_locus = "crates/ade_ledger/src/tx_validity/utxo_free.rs: check_utxo_free_tx, check_validity_interval, check_tx_networks, address_network, read_bootstrap_attributes. crates/ade_ledger/src/rules.rs: verify_conway_witness_closure. crates/ade_ledger/src/tx_validity/phase1.rs: tx_phase_one. crates/ade_ledger/src/late_era_validation.rs: check_address_network."
+tests = ["lv15a_the_validity_interval_is_half_open", "lv15a_each_network_check_rejects_the_wrong_network", "lv15a_a_bootstrap_address_network_is_its_magic_attribute", "lv15a_bootstrap_attributes_may_total_64_bytes", "lv15a_the_block_path_rejects_a_block_outside_a_tx_validity_interval", "lv15a_the_block_path_checks_the_network_in_both_modes", "lv15a_the_standalone_path_checks_the_network", "lv15a_the_obligations_compose"]
+ci_scripts = ["ci/ci_check_utxo_free_admission_obligations.sh"]
+status = "enforced"
+authority_surface = "BLUE ledger validity: UTxO-free, parameter-free obligations of every Conway transaction at admission"
+cluster = "PREPROD-LIVE-2-FORGE-READINESS"
+introduced_in = "PREPROD-LIVE-2-LV-15a"
+strengthened_in = []
+evidence = ["SLICE-LV-15a section 8.", "Census over the halted LV-12 store (326,471 blocks, slots 129,813,444..=137,096,367, 991,602 txs; 493,369 with a validity bound, 85,416 with withdrawals, 399,042 with a body network id, 411 bootstrap outputs): 0 failures."]
+evidence_notes = "ENFORCED. Mutation-tested: dropping the interval check, <= for < on the upper bound, skipping the collateral return in the output network check, and ignoring a bootstrap output's magic attribute each fail the intended LV-15a test and the gate, which names each. The bootstrap reader is lenient (no CRC, no canonical lengths), so it is weaker than Cardano's decoder, never stricter. Parameter-dependent UTxO-free rules (max tx size, output size, collateral count, ex-units, ref-input disjointness) are NOT here: admission's parameter copy is not authoritative on the live path (LV-15b). Store semantics NOT bumped (lock entry neutral at 11)."
+
+[[rules]]
+id = "DC-VAL-07"
+tier = "derived"
+statement = """
+A Conway block's header body size equals the length of its body: the four preserved body segments (tx
+bodies, witness sets, auxiliary data, invalid transactions) concatenated, as cardano-ledger bBodySize
+measures encCBORGroup (BBODY WrongBlockBodySizeBBODY). A mismatch rejects the block deterministically in both
+modes. The check reads only the block's bytes.
+"""
+source = "docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LV-15a-utxo-free-admission-obligations.md"
+cross_ref = ["DC-VAL-02", "DC-TXV-09"]
+code_locus = "crates/ade_ledger/src/tx_validity/utxo_free.rs: check_declared_body_size. crates/ade_ledger/src/rules.rs: apply_shelley_era_block_with_verdicts, apply_shelley_era_block_classified."
+tests = ["lv15a_the_declared_body_size_must_equal_the_body"]
+ci_scripts = ["ci/ci_check_utxo_free_admission_obligations.sh"]
+status = "enforced"
+authority_surface = "BLUE ledger validity: block body size against the header"
+cluster = "PREPROD-LIVE-2-FORGE-READINESS"
+introduced_in = "PREPROD-LIVE-2-LV-15a"
+strengthened_in = []
+evidence = ["SLICE-LV-15a section 8.", "Census over the halted LV-12 store (326,471 blocks): 0 mismatches."]
+evidence_notes = "ENFORCED. Mutation-tested: removing the call from the block path fails lv15a_the_declared_body_size_must_equal_the_body and the gate names it. The header and body size LIMITS (maxBHSize, maxBBSize) and the block ex-units limit are parameter-dependent and NOT here (LV-15b). Store semantics NOT bumped (lock entry neutral at 11)."

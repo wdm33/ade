@@ -421,13 +421,30 @@ pub(crate) fn walk_withdrawal_credentials(
     data: &[u8],
     sink: &mut impl FnMut(Credential),
 ) -> Result<(), RequiredSignerError> {
+    let mut result = Ok(());
+    walk_withdrawal_accounts(data, &mut |account| {
+        if result.is_ok() {
+            match reward_account_credential(account) {
+                Ok(c) => sink(c),
+                Err(e) => result = Err(e),
+            }
+        }
+    })?;
+    result
+}
+
+/// Every withdrawal's raw reward-account bytes, in map order.
+pub(crate) fn walk_withdrawal_accounts(
+    data: &[u8],
+    sink: &mut impl FnMut(&[u8]),
+) -> Result<(), RequiredSignerError> {
     let mut offset = 0;
     skip_optional_tag(data, &mut offset, RequiredSignerField::Withdrawals)?;
     let enc = read_map(data, &mut offset, RequiredSignerField::Withdrawals)?;
     let mut process = |data: &[u8], offset: &mut usize| -> Result<(), RequiredSignerError> {
         let (account, _) = read_bytes(data, offset, RequiredSignerField::Withdrawals)?;
         let _ = skip(data, offset, RequiredSignerField::Withdrawals)?; // coin
-        sink(reward_account_credential(&account)?);
+        sink(&account);
         Ok(())
     };
     iterate(data, &mut offset, enc, RequiredSignerField::Withdrawals, &mut process)

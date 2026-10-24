@@ -324,11 +324,8 @@ pub fn check_tx_network_id(declared: Option<u8>, current: u8) -> Result<(), Ledg
 /// Shelley-format addresses (Shelley+) encode the network ID in the
 /// low nibble of the first byte. Mainnet = 1, testnets = 0.
 ///
-/// Byron bootstrap addresses have a different encoding; callers are
-/// responsible for classifying and handling those separately (Byron
-/// addresses in late eras are validated via CBOR magic, not via this
-/// function). This function is intended for Shelley/Alonzo+ outputs
-/// where the first byte's low nibble is authoritative.
+/// Byron bootstrap addresses carry no nibble: their network is testnet iff
+/// the address attributes hold the network magic (key 2), else mainnet.
 ///
 /// Babbage+: this function must also be called for `collateralReturn`
 /// (Haskell's `allOutputs` widening). Callers are responsible for
@@ -336,38 +333,15 @@ pub fn check_tx_network_id(declared: Option<u8>, current: u8) -> Result<(), Ledg
 ///
 /// Mirrors Haskell `validateWrongNetwork` (per-address predicate).
 pub fn check_address_network(address: &[u8], current: u8) -> Result<(), LedgerError> {
-    if address.is_empty() {
-        // An empty address cannot be validated; treat as violation.
-        return Err(LedgerError::WrongNetworkInOutput(WrongNetworkOutputError {
-            address_first_byte: 0,
+    // One definition of an address's network (cardano-ledger `getNetwork`), shared with admission:
+    // the header nibble for a Shelley address; for a bootstrap address, testnet iff its attributes
+    // carry the network magic. An unreadable bootstrap address is rejected, as Cardano's decoder does.
+    match crate::tx_validity::utxo_free::address_network(address) {
+        Ok(network) if network == current => Ok(()),
+        _ => Err(LedgerError::WrongNetworkInOutput(WrongNetworkOutputError {
+            address_first_byte: address.first().copied().unwrap_or(0),
             current,
-        }));
-    }
-    let first = address[0];
-
-    // Byron bootstrap addresses have no network field. Haskell:
-    //   wrongNetwork (AddrBootstrap _) = Nothing
-    //   wrongNetwork (Addr net _ _)    = if net == myNet then Nothing else Just net
-    // Byron-address bytes (inside the outer CBOR bstr) begin with CBOR
-    // array headers like 0x82 / 0x83 — high nibble = 0x8. Shelley+ types
-    // use high nibbles 0x0–0x7 (base / pointer / enterprise / reward).
-    // Concretely: `type = (first >> 4)`, Byron bootstrap => type in {8, 9}.
-    // We treat the whole 0x8_ range as bootstrap (defensive: legacy Byron
-    // wire forms start with array headers and never legitimately collide
-    // with Shelley type codes, which are 0..=0xE with bit 7 = 1 reserved).
-    let addr_type_high = first >> 4;
-    if addr_type_high == 0x8 {
-        return Ok(());
-    }
-
-    let network_nibble = first & 0x0f;
-    if network_nibble == current {
-        Ok(())
-    } else {
-        Err(LedgerError::WrongNetworkInOutput(WrongNetworkOutputError {
-            address_first_byte: first,
-            current,
-        }))
+        })),
     }
 }
 
@@ -955,7 +929,8 @@ mod tests {
     fn addr_high_nibble_ignored() {
         // Different high nibbles (address types) all share the same
         // network byte check; only the low nibble matters here.
-        for high in 0x0..=0xF {
+        // High nibble 8 is a bootstrap address, whose network is not a nibble.
+        for high in (0x0..=0xF).filter(|h| *h != 0x8) {
             let addr = vec![(high << 4) | 1u8, 0xaa];
             assert!(check_address_network(&addr, 1).is_ok(),
                 "high nibble {:x} should not affect network check", high);

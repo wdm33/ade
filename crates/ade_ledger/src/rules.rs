@@ -334,6 +334,8 @@ fn apply_shelley_era_block_with_verdicts(
     // against the pre-block UTxO; tx-derived sources are checked
     // regardless of track_utxo (the slice doc track_utxo note).
     if era == CardanoEra::Conway {
+        crate::tx_validity::utxo_free::check_declared_body_size(block)
+            .map_err(LedgerError::UtxoFreeObligation)?;
         verdict.native_script_passed = verify_conway_witness_closure(block, &current_state)?;
     }
 
@@ -421,6 +423,8 @@ fn apply_shelley_era_block_classified(
     // against the pre-block UTxO; tx-derived sources are checked
     // regardless of track_utxo (the slice doc track_utxo note).
     if era == CardanoEra::Conway {
+        crate::tx_validity::utxo_free::check_declared_body_size(block)
+            .map_err(LedgerError::UtxoFreeObligation)?;
         verdict.native_script_passed = verify_conway_witness_closure(block, &current_state)?;
     }
 
@@ -591,6 +595,8 @@ fn verify_conway_witness_closure(
 
     let track = state.track_utxo;
     let utxo = &state.utxo_state.utxos;
+    let slot = SlotNo(block.header.body.slot);
+    let network_id = state.protocol_params.network_id;
 
     // Decode witness sets once (each is a Vec<VKeyWitness> from key 0).
     let witness_sets = shelley_witness_sets(block)?;
@@ -620,6 +626,10 @@ fn verify_conway_witness_closure(
         let body_end = *offset;
         let body_wire = &data[body_start..body_end];
         let body_hash = ade_crypto::blake2b_256(body_wire);
+
+        // 0. Obligations that need neither the UTxO nor protocol parameters (DC-TXV-09).
+        crate::tx_validity::utxo_free::check_utxo_free_tx(&body, slot, network_id)
+            .map_err(LedgerError::UtxoFreeObligation)?;
 
         // 1. Required signers.
         let required = if track {

@@ -68,8 +68,9 @@ read is therefore a Cardano rejection too.
 One BLUE module, `crates/ade_ledger/src/tx_validity/utxo_free.rs`:
 
 - `check_utxo_free_tx(body: &ConwayTxBody, slot: SlotNo, network_id: u8) -> Result<(), UtxoFreeRejection>`
-  — the five per-transaction checks, in Cardano's order (interval, output network, withdrawal network,
-  body network, then bootstrap attributes, though order does not change acceptance).
+  — the five per-transaction checks: `check_validity_interval(body, slot)` then
+  `check_tx_networks(body, network_id)` (output network, withdrawal network, body network, bootstrap
+  attributes). Order does not change acceptance.
 - `bootstrap_address_network` / `bootstrap_attributes_size`, over one lenient read of the Byron address:
   `[tag24(bytes [root, attrs, type]), crc]`. Lenient means it checks no CRC and no canonical lengths, so
   it is weaker than Cardano's decoder, never stricter. An address it cannot read at all is
@@ -80,8 +81,9 @@ Wiring (Conway blocks only, Ade's live era):
 
 - the block rule runs in `apply_shelley_era_block_with_verdicts` / `_classified`, before the per-tx loop;
 - the per-tx rule runs first inside the per-tx loop of `verify_conway_witness_closure`, which already
-  decodes each body once — so the rejection reaches both the reduced and full modes, and `tx_phase_one`
-  calls it too, so the standalone path agrees;
+  decodes each body once — so the rejection reaches both the reduced and full modes. `tx_phase_one`
+  calls the slot-free part (`check_tx_networks`); it carries no slot, so the standalone path does not
+  check the validity interval;
 - `check_address_network` is corrected for bootstrap addresses by delegating to the same reader, so the
   full path stops understating, with one definition of an address's network.
 

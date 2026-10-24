@@ -326,6 +326,7 @@ fn real_tx(envelope: &[u8], i: usize) -> (Vec<u8>, Vec<u8>) {
 fn block_state(inner: &[u8]) -> LedgerState {
     let slot = ade_codec::conway::decode_conway_block(inner).unwrap().decoded().header.body.slot;
     let mut state = LedgerState::new(CardanoEra::Conway);
+    state.protocol_params.network_id = 0; // the fixture blocks are preprod's
     state.epoch_state.epoch = mainnet_shelley_schedule().locate(SlotNo(slot)).unwrap().epoch;
     state.epoch_state.slot = SlotNo(slot.saturating_sub(1));
     state

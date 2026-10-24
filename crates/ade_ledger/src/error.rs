@@ -47,6 +47,9 @@ pub enum LedgerError {
     ScriptWitnessClosure(crate::tx_validity::script_witnesses::ScriptClosureFailures),
     /// A field the witness-script closure reads is malformed.
     ScriptWitnessDerivation(crate::tx_validity::script_witnesses::ScriptWitnessError),
+    /// An admission obligation that needs neither the UTxO nor protocol parameters failed
+    /// (DC-TXV-09, DC-VAL-07).
+    UtxoFreeObligation(crate::tx_validity::utxo_free::UtxoFreeRejection),
 
     // Minting domain
     MintWithoutPolicy(MintError),
@@ -659,6 +662,7 @@ impl core::fmt::Display for LedgerError {
             LedgerError::ScriptWitnessDerivation(e) => {
                 write!(f, "script witness closure could not be derived: {e:?}")
             }
+            LedgerError::UtxoFreeObligation(e) => write!(f, "admission obligation failed: {e}"),
             LedgerError::MintWithoutPolicy(e) => {
                 write!(f, "mint without policy: {:?}", e.policy_id)
             }

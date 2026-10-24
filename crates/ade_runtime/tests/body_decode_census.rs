@@ -785,3 +785,102 @@ fn persisted_witness_signature_census() {
     }
     assert_eq!(last, tip.slot.0, "the walk must end at the store tip");
 }
+
+/// LV-15a census: every stored Conway block against the admission obligations that need neither the
+/// UTxO nor protocol parameters (DC-TXV-09, DC-VAL-07), before they reject anything. cardano-node
+/// accepted every block here, so any failure is an Ade bug until shown otherwise.
+#[test]
+#[ignore = "evidence-only; requires ADE_CENSUS_CHAINDB pointing at a COPY of an Ade chain.db"]
+fn persisted_utxo_free_obligation_census() {
+    use ade_ledger::tx_validity::utxo_free::{
+        check_declared_body_size, check_utxo_free_tx, read_bootstrap_attributes,
+    };
+
+    const PREPROD_NETWORK_ID: u8 = 0;
+    let path = std::env::var("ADE_CENSUS_CHAINDB").expect("set ADE_CENSUS_CHAINDB (a COPY)");
+    let db = PersistentChainDb::open(PersistentChainDbOptions::at(path)).expect("open chain.db copy");
+    let tip = db.tip().expect("tip").expect("non-empty store");
+
+    let (mut blocks, mut txs, mut bounded, mut both_bounds, mut boot_outputs, mut withdrawals, mut body_net) =
+        (0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
+    let (mut min_margin_start, mut min_margin_end) = (u64::MAX, u64::MAX);
+    let mut max_boot_attrs = 0usize;
+    let (mut first, mut last) = (None, 0u64);
+    let mut failures: Vec<String> = Vec::new();
+    for item in db.iter_from_slot(SlotNo(0)).expect("iter") {
+        let b = item.expect("stored block");
+        blocks += 1;
+        first.get_or_insert(b.slot.0);
+        last = b.slot.0;
+        let env = decode_block_envelope(&b.bytes).expect("envelope");
+        if env.era != CardanoEra::Conway {
+            continue;
+        }
+        let block = decode_conway_block(&b.bytes[env.block_start..env.block_end]).expect("conway block");
+        let blk = block.decoded();
+        if let Err(e) = check_declared_body_size(blk) {
+            failures.push(format!("slot {} block body size: {e:?}", b.slot.0));
+        }
+        let slot = SlotNo(blk.header.body.slot);
+        let data = &blk.tx_bodies;
+        let mut o = 0;
+        let n = match cbor::read_array_header(data, &mut o).expect("tx array") {
+            ContainerEncoding::Definite(n, _) => Some(n),
+            ContainerEncoding::Indefinite => None,
+        };
+        let mut i = 0u64;
+        loop {
+            match n {
+                Some(n) if i == n => break,
+                None if cbor::is_break(data, o).expect("break") => break,
+                _ => {}
+            }
+            i += 1;
+            let body = decode_conway_tx_body(data, &mut o).expect("conway tx body");
+            txs += 1;
+            if body.validity_interval_start.is_some() || body.ttl.is_some() {
+                bounded += 1;
+            }
+            if let Some(s) = body.validity_interval_start {
+                min_margin_start = min_margin_start.min(slot.0.saturating_sub(s.0));
+            }
+            if let Some(h) = body.ttl {
+                min_margin_end = min_margin_end.min(h.0.saturating_sub(slot.0));
+            }
+            if body.validity_interval_start.is_some() && body.ttl.is_some() {
+                both_bounds += 1;
+            }
+            if body.withdrawals.is_some() {
+                withdrawals += 1;
+            }
+            if body.network_id.is_some() {
+                body_net += 1;
+            }
+            for out in body.outputs.iter().chain(body.collateral_return.iter()) {
+                if out.address.first().is_some_and(|h| h >> 4 == 0x8) {
+                    if boot_outputs == 0 {
+                        println!("FIRST BOOTSTRAP OUTPUT slot {} address {}", b.slot.0, hex(&out.address));
+                    }
+                    boot_outputs += 1;
+                    if let Some(a) = read_bootstrap_attributes(&out.address) {
+                        max_boot_attrs = max_boot_attrs.max(a.derivation_payload_len + a.unknown_len);
+                    }
+                }
+            }
+            if let Err(e) = check_utxo_free_tx(&body, slot, PREPROD_NETWORK_ID) {
+                failures.push(format!("slot {} tx {}: {e:?}", b.slot.0, i - 1));
+            }
+        }
+    }
+    println!("STORE TIP slot={} hash={}", tip.slot.0, hex(&tip.hash.0));
+    println!("BLOCKS {blocks} (slots {}..={last})  TXS {txs}", first.unwrap_or(0));
+    println!("TXS WITH A VALIDITY BOUND {bounded} (both bounds {both_bounds})");
+    println!("TIGHTEST MARGINS: slot - invalid_before = {min_margin_start}, invalid_hereafter - slot = {min_margin_end}");
+    println!("TXS WITH WITHDRAWALS {withdrawals}  TXS WITH BODY NETWORK ID {body_net}");
+    println!("BOOTSTRAP OUTPUTS {boot_outputs}  LARGEST BOOTSTRAP ATTRIBUTES {max_boot_attrs}");
+    println!("FAILURES {}", failures.len());
+    for f in failures.iter().take(50) {
+        println!("  {f}");
+    }
+    assert_eq!(last, tip.slot.0, "the walk must end at the store tip");
+}

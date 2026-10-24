@@ -44,6 +44,7 @@ fn live_follower_path_crosses_reduced_at_conway_boundary() {
 
     // A reduced follower: track_utxo=false Conway, positioned ONE epoch behind the block so the crossing fires.
     let mut state = LedgerState::new(CardanoEra::Conway);
+    state.protocol_params.network_id = 0; // the fixture blocks are preprod's
     state.track_utxo = false;
     state.epoch_state.epoch = EpochNo(block_epoch.0 - 1);
     state.epoch_state.slot = SlotNo(slot.saturating_sub(1));
@@ -91,6 +92,7 @@ fn crossed_reduced_state() -> LedgerState {
         .expect("the fixture slot maps to an epoch")
         .epoch;
     let mut state = LedgerState::new(CardanoEra::Conway);
+    state.protocol_params.network_id = 0; // the fixture blocks are preprod's
     state.track_utxo = false;
     state.epoch_state.epoch = EpochNo(block_epoch.0 - 1);
     state.epoch_state.slot = SlotNo(slot.saturating_sub(1));
@@ -247,6 +249,7 @@ fn live_follower_within_epoch_keeps_authoritative_seed() {
 
     // SAME epoch as the block -> detect_epoch_transition returns None -> no boundary.
     let mut state = LedgerState::new(CardanoEra::Conway);
+    state.protocol_params.network_id = 0; // the fixture blocks are preprod's
     state.track_utxo = false;
     state.epoch_state.epoch = block_epoch;
     state.epoch_state.slot = SlotNo(slot.saturating_sub(1));

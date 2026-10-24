@@ -817,6 +817,7 @@ fn reduced_state(inner: &[u8]) -> LedgerState {
     let decoded = ade_codec::conway::decode_conway_block(inner).unwrap();
     let slot = decoded.decoded().header.body.slot;
     let mut state = LedgerState::new(CardanoEra::Conway);
+    state.protocol_params.network_id = 0; // the fixture blocks are preprod's
     state.track_utxo = false;
     state.epoch_state.epoch = mainnet_shelley_schedule().locate(SlotNo(slot)).unwrap().epoch;
     state.epoch_state.slot = SlotNo(slot.saturating_sub(1));
