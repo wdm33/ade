@@ -164,3 +164,57 @@ This section is a proposal for the owner to decide, not a plan of record. LV-15b
 - Skipped indices: `ledgerdb_state.rs` `read_conway_pparams` (16 prices, 19 maxValSize, 21..30 except thresholds, lifetime and deposits).
 - Live order: `node_lifecycle.rs` relay loop: `run_node_sync`, then `advance_ledger_state_to_durable_tip_memo`. Accumulator order: `epoch_accumulator.rs` `apply_selected_block_core`, where boundaries run before `apply_within_epoch`.
 - Cardano timing: `Conway/Rules/Epoch.hs` (curPParams set only in EPOCH; ratification extracted from the pulser).
+
+## 8. Ratification timing, settled (owner decision: before any LV-15b-1 production code)
+
+The owner upgraded §4's open question to a derived compatibility proof obligation, using the late-vote case.
+
+### Oracle
+
+cardano-ledger cb57dc73 `eras/conway/impl/testlib/Test/Cardano/Ledger/Conway/Imp/EpochSpec.hs`, "proposal is accepted after two epochs". This is the Haskell transition run on exactly that case:
+1. A ParameterChange is submitted, with no votes, and an epoch passes.
+2. The committee, DRep and SPO vote Yes during epoch E. `isDRepAccepted` is now true over the current state.
+3. `passEpoch` (E→E+1): `getParamValue shouldReturn initialParamValue`, so the parameter is **unchanged**.
+4. `passEpoch` (E+1→E+2): the parameter **is** the proposed value.
+
+The test was not executed here, because there is no Haskell toolchain on this machine. Its assertions are the reference's own result at the pinned commit. The source explains why:
+- the E→E+1 boundary applies `extractDRepPulsingState`, the result of the pulser seeded at the start of E;
+- it applies that result to the current proposals, which keep the newer votes (`proposalsApplyEnactment`, with the comment in `Conway/Rules/Epoch.hs`);
+- it then seeds a fresh pulser (`setFreshDRepPulsingState`) that sees those votes.
+
+### Ade
+
+`epoch_accumulator::tests::lv15b_a_vote_cast_during_epoch_e_enacts_at_e_plus_1_in_ade_but_e_plus_2_in_cardano` runs the same case through `apply_epoch_boundary_with_registrations`, the boundary both the accumulator and replay use:
+1. **1340→1341:** nothing enacts and the proposal is carried.
+2. **During 1341:** two committee Yes votes are added.
+3. **1341→1342:** Ade enacts (`maxTxExUnits` mem becomes 16,500,000) and removes the proposal.
+
+It passes today, which means **Ade diverges: it enacts one epoch early**. The test records the current behaviour. LV-15b-1 must invert its 1342 assertions and add the E+1→E+2 enactment.
+
+### What the divergence covers
+
+The pulser freezes every input to ratification at the start of E (`Conway/Governance.hs` `setFreshDRepPulsingState`). Ade reads the version current at E→E+1 for each of them (`rules.rs`, the `ConwayGovernanceEpochInput` build):
+
+| pulser snapshot field (taken at E start) | Ade reads at E→E+1 |
+|---|---|
+| `dpProposals` (proposals and votes) | current `gov.proposals` |
+| `dpAccounts` (DRep delegations), `dpInstantStake` | current `vote_delegations` over the pre-boundary mark |
+| `dpStakePoolDistr` = the mark pool distribution built at E (`ssStakeMarkPoolDistr snapshots1`) | the pre-boundary **go** pool stakes, which come from the snapshot built at E−2 |
+| `dpDRepState` (expiry) | current `drep_expiry` |
+| `dpCommitteeState` (hot keys) | current `committee_hot_keys` |
+| `dpEnactState` (pparams, committee, constitution, roots, treasury) | current values |
+| `dpCurrentEpoch` = E | `new_epoch − 1` = E (this one agrees) |
+
+The SPO-basis row was already recorded as deferred in CRE S3: "DRep-mark-vs-SPO-go basis → S6". The vote-timing row is new.
+
+The divergence is live-reachable today, independent of LV-15b. Any supported ParameterChange whose deciding vote arrives during the ending epoch enacts a boundary early. With it go one epoch early:
+- the deposit refund;
+- the proposal removal, and with it the reward-account balance, and so the stake.
+
+The preprod (`e641ec80…#0`) and preview (`69c948cd…#0`) matches are consistent with their votes having landed before the ratifying epoch began. That was not checked against the chain.
+
+### Consequence for LV-15b-1
+
+The invariant "before admitting the first block of E, Ade has executed exactly the Cardano-compatible boundary transition" cannot hold while the boundary ratifies over boundary-current state. Making it hold needs a new piece of durable accumulator state, the ratification snapshot taken at each boundary, plus a bootstrap import of the snapshot's DRep pulsing state (`ConwayGovState` index 6). The bootstrap decoder skips that index today.
+
+This exceeds what §6 scoped for LV-15b-1. It is put to the owner as a scope decision, not started.

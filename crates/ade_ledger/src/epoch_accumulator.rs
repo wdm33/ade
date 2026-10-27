@@ -5050,6 +5050,65 @@ mod tests {
         assert_eq!(replay.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards.get(&e1), Some(&Coin(100_000_000_000)), "sibling refund");
     }
 
+    /// LV-15b ratification-timing witness. Records what Ade does TODAY on the late-vote case; cardano-ledger
+    /// disagrees, and LV-15b-1 must invert the 1342 assertions.
+    ///
+    /// The case is cardano-ledger cb57dc73 `Conway/Imp/EpochSpec.hs` "proposal is accepted after two epochs":
+    /// - a ParameterChange is pending when epoch E (1341 here) starts, with no votes;
+    /// - the votes arrive during E;
+    /// - Cardano leaves the parameter unchanged across E→E+1 and enacts it at E+1→E+2.
+    ///
+    /// The E→E+1 boundary enacts whatever the DRep pulser ratified, and that pulser was seeded at the start of
+    /// E (`Conway/Rules/Epoch.hs`: `extractDRepPulsingState`, then `setFreshDRepPulsingState`). Ade instead
+    /// ratifies at the boundary over the proposals and votes current at that moment, so it enacts one epoch
+    /// early.
+    #[test]
+    fn lv15b_a_vote_cast_during_epoch_e_enacts_at_e_plus_1_in_ade_but_e_plus_2_in_cardano() {
+        const WITNESS: &[u8] = &[
+            0xa2, 0x14, 0x82, 0x1a, 0x00, 0xfb, 0xc5, 0x20, 0x1b, 0x00, 0x00, 0x00, 0x02, 0x54, 0x0b, 0xe4,
+            0x00, 0x15, 0x82, 0x1a, 0x04, 0x4a, 0xa2, 0x00, 0x1b, 0x00, 0x00, 0x00, 0x04, 0xa8, 0x17, 0xc8,
+            0x00,
+        ];
+        let root = GovActionId { tx_hash: Hash32([0x60; 32]), index: 0 };
+        let action = GovAction::ParameterChange {
+            prev_action: Some(root.clone()), update: Vec::from(WITNESS), policy_hash: None,
+        };
+        let mut acc = s4_acc_with_gov(vec![s4_gas(0x69, action, Vec::new(), 1345, 100_000_000_000, 0xe0)]);
+        acc.protocol_params.max_block_ex_units =
+            crate::pparams::MaxBlockExUnits::Bound { mem: 62_000_000, steps: 20_000_000_000 };
+        acc.gov_state.as_mut().unwrap().prev_pparam_action =
+            crate::state::PreviousPParamAction::Enacted(root);
+        let initial_mem = acc.protocol_params.max_tx_ex_units_mem;
+        let base = BoundaryBaseStake { boundary_point: SlotNo(0), canonical_credential_stake: BTreeMap::new() };
+
+        // 1340 → 1341 (start of E): no votes, nothing ratifies, the proposal is carried.
+        let (mut at_e, _) =
+            apply_epoch_boundary_with_registrations(&acc.as_ledger_view(), EpochNo(1341), None, Some(&base), 21_600)
+                .expect("into E");
+        assert_eq!(at_e.protocol_params.max_tx_ex_units_mem, initial_mem, "nothing enacted entering E");
+        let gov = at_e.gov_state.as_authoritative_mut().unwrap().as_mut().unwrap();
+        assert_eq!(gov.proposals.len(), 1, "the proposal is carried into E");
+
+        // During E: the committee votes Yes (what apply_field19_votes records for a block in E).
+        gov.proposals[0].committee_votes = vec![
+            (StakeCredential::KeyHash(Hash28([0xC1; 28])), Vote::Yes),
+            (StakeCredential::KeyHash(Hash28([0xC2; 28])), Vote::Yes),
+        ];
+
+        // E → E+1. Cardano: unchanged (`getParamValue shouldReturn initialParamValue`). Ade today: enacted.
+        let (at_e1, _) =
+            apply_epoch_boundary_with_registrations(&at_e, EpochNo(1342), None, Some(&base), 21_600)
+                .expect("into E+1");
+        assert_eq!(
+            at_e1.protocol_params.max_tx_ex_units_mem, 16_500_000,
+            "Ade enacts a vote cast during E at E→E+1; Cardano would still hold {initial_mem} here",
+        );
+        assert!(
+            at_e1.gov_state.as_authoritative().unwrap().as_ref().unwrap().proposals.is_empty(),
+            "Ade removes the proposal at E→E+1; Cardano keeps it, with its votes, until E+1→E+2",
+        );
+    }
+
     /// GATE 2 — the 1340→1341 replay correction. Five expiring proposals crossed via the DIRECT-REPLAY path now
     /// REFUND (previously the replay path dropped expired proposals with no refund — the bug this slice corrects).
     /// Mirrors the CE-3d −500B shape: +400,000 ADA to 0xe0 (4) + +100,000 ADA to 0xe1 (1).
