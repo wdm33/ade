@@ -218,3 +218,50 @@ The preprod (`e641ec80…#0`) and preview (`69c948cd…#0`) matches are consiste
 The invariant "before admitting the first block of E, Ade has executed exactly the Cardano-compatible boundary transition" cannot hold while the boundary ratifies over boundary-current state. Making it hold needs a new piece of durable accumulator state, the ratification snapshot taken at each boundary, plus a bootstrap import of the snapshot's DRep pulsing state (`ConwayGovState` index 6). The bootstrap decoder skips that index today.
 
 This exceeds what §6 scoped for LV-15b-1. It is put to the owner as a scope decision, not started.
+
+## 9. What the Mithril snapshot actually carries for ratification
+
+Owner decision after §8: the repair is its own slice, **LV-15b-0**, with store semantics 12. LV-15b-1 follows under store semantics 13. Where §8 says "LV-15b-1 must invert", read LV-15b-0. Before LV-15b-0 is scoped, this section records the serialized pulser in the real snapshot bytes Ade consumes.
+
+### The encoding, from the source
+
+`Conway/Governance/DRepPulser.hs` (cb57dc73) has these instances:
+- `EncCBOR (DRepPulsingState)` writes `DRComplete` in both cases. A mid-run `DRPulsing` value is first finished with `finishDRepPulser`. The wire form is `array(2)[PulsingSnapshot, RatifyState]`.
+- `DecCBOR` accepts only that form.
+- No pulse progress, pulse size or scheduler state reaches the bytes.
+
+The two halves are:
+- `PulsingSnapshot` = `array(4)[proposals, drepDistr, drepState, poolDistr]`: the frozen E-start inputs.
+- `RatifyState` = `array(4)[enactState, enacted, expired, delayed]`: the finished ratification result over them. `enactState` = `array(7)[committee, constitution, curPParams, prevPParams, treasury, withdrawals, prevGovActionIds]`.
+
+`futurePParams` (index 5) is `Sum 0 NoPParamsUpdate | 1 Definite pp | 2 Potential (Maybe pp)`. It is derived from the same `RatifyState` (`predictFuturePParams`).
+
+### The bytes
+
+A disposable Python `cbor2` reader, independent of Ade's decoder and not committed, read `UTxOState.govState` indices 5 and 6 from three Mithril-restored `state` files:
+
+| snapshot | epoch | [6] form | snapshot proposals / current | ratify result | [5] |
+|---|---|---|---|---|---|
+| preprod `ledger/129813427` | 304 | `array(2)` (DRComplete) | 3 / 3 | enacted `e641ec80…#0`, expired `90de87d4…#0`, not delayed | Potential (Just pp) |
+| preview `ledger/118881828` | 1375 | `array(2)` (DRComplete) | 23 / 27: 4 proposals submitted after the freeze | nothing enacted or expired | NoPParamsUpdate |
+| preview `ledger/115676685` (judge) | 1338 | `array(2)` (DRComplete) | 46 / 47: 1 proposal after the freeze | nothing enacted or expired | NoPParamsUpdate |
+
+In the 1338 snapshot, proposal `b1d1e5be…#0` has 3 DRep votes in the frozen snapshot and 4 in the current proposals. That is the §8 late-vote case in real chain bytes: a vote cast after the freeze that the imminent boundary must not count. Whether counting it would change that boundary's outcome was not checked.
+
+### What the boundary consumes, from the source
+
+At E→E+1, `Conway/Rules/Epoch.hs` uses only `rsEnactState`, `rsEnacted` and `rsExpired` from the finished result. It applies them to current state:
+- **Proposals:** removal of the enacted and expired proposals and their subtrees is applied to the *current* proposals (`proposalsApplyEnactment`). Proposals and votes added after the freeze survive.
+- **Treasury withdrawals:** the amounts come from the frozen result (`ensWithdrawals`). They are paid from the *current* treasury, and only to accounts registered *now*. Withdrawals to unregistered accounts stay in the treasury (`applyEnactedWithdrawals`).
+- **Deposit refunds:** these go to the *current* accounts. Refunds to unregistered accounts go to the treasury (`returnProposalDeposits`).
+- **Committee and constitution:** these come from `rsEnactState`.
+- **Parameters:** these come from `nextEpochPParams` (the solidified `futurePParams`), which equals `rsEnactState`'s `curPParams` when a parameter change was enacted.
+- **Next freeze:** `setFreshDRepPulsingState` then freezes the post-boundary state, with the pool distribution being the mark just built at this boundary.
+
+### Consequence for LV-15b-0
+
+The frozen inputs fully determine the result: the pulser only spreads a pure computation across the epoch. So Ade can compute the ratification result at the boundary where the inputs freeze, persist that result, and consume it at the next boundary. This is the same form the snapshot carries, and no pulsing machinery enters Ade.
+
+A bootstrap imports index 6's `RatifyState` as the pending result for the seed epoch's closing boundary. The seed's `PulsingSnapshot` is not needed to consume it.
+
+The remaining LV-15b-0 obligation is that Ade's eager result, computed at E's start over E's frozen inputs, equals what the pulser would produce. That is the ratification rule over the correct inputs, including the mark SPO distribution.
