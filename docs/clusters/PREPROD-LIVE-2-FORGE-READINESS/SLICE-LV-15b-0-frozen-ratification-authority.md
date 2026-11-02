@@ -45,6 +45,13 @@ Tiering:
 | release | Differential result equality against cardano-node's own snapshot; the late-vote fixtures; bootstrap and restart identity; mutation gates. |
 | operational | How or when the result is computed inside E is irrelevant. Ade computes eagerly at the freeze. Cardano's pulser, pulse size and scheduler are not modelled. |
 
+**What the step-1 census proves, and what it does not.** The census (§7 step 1) proves *reconstruction*
+equivalence. Ade's dumped state, combined by hand under the corrected model, equals Cardano's frozen
+distributions for every enumerated entry at two preprod boundaries. It does not prove *native transition*
+equivalence: Ade's own v12 transitions producing those distributions. Nor does it cover governance
+lifecycle states absent from those two epochs. The slice closes only on native results (CE-9). Until
+then the corrected distributions are a model, not proven authority.
+
 ## 2. Cardano's behaviour (cardano-ledger cb57dc73)
 
 From CENSUS-LV-15b §8 and §9:
@@ -94,6 +101,11 @@ So beyond timing, the DRep stake computation is known to differ in three ways:
 The SPO stake also omits deposits. §1's derived tier is not met by moving the call one epoch; these
 differences are in scope.
 
+The delegation lifecycle also differs (census §4; `gov_cert.rs`, `delegation.rs`):
+- account unregistration keeps the credential's vote delegation;
+- DRep unregistration only removes the DRep's expiry, keeping its delegators;
+- a vote delegation to an unregistered credential DRep is accepted.
+
 The bootstrap decoder skips `ConwayGovState` index 6 (`ledgerdb_state.rs`, `read_conway_pparams_from_utxo_state`).
 At the seed's closing boundary, Ade recomputes ratification from current state instead of using the
 snapshot's result.
@@ -140,15 +152,49 @@ credential in `vote_delegations`, its stake is:
 A credential DRep counts only if its credential is in `drep_expiry` (registered). This replaces
 `derive_drep_voting_stake` on the authority path.
 
-**Delegation lifecycle (census §4).** Two certificate effects change the frozen inputs:
-- `AccountUnregistration` and `AccountUnregistrationDeposit` remove the credential's vote delegation, as
-  Cardano's account removal does;
-- `DRepUnregistration` removes the vote delegation of every credential delegated to that DRep
-  (`clearDRepDelegations`).
+**Delegation lifecycle (census §4).** These are the reference rules (cardano-ledger cb57dc73), for every
+protocol version from 10 on:
+- **Account unregistration** (`Rules/Deleg.hs` `ConwayUnRegCert`, `State/Account.hs`
+  `unregisterConwayAccount`) extracts the whole Conway account state. That is the balance, the deposit,
+  the pool delegation and the DRep delegation. Ade already removes the first three. This slice makes
+  `AccountUnregistration` and `AccountUnregistrationDeposit` also remove the vote delegation, in the same
+  certificate step.
+- **DRep unregistration** (`Rules/GovCert.hs` `ConwayUnRegDRep`) clears the DRep delegation of every
+  account in that DRep's `drepDelegs` (`clearDRepDelegations`). Ade keeps no reverse index. The
+  equivalent is to remove every `vote_delegations` entry targeting `DRepCredential(cred)`, together with
+  the expiry. `drepDelegs` is exactly the set of accounts currently delegated to that DRep (maintained by
+  `unDelegReDelegDRep` and reset by the PV10 hard fork), so the two are the same set.
+- **Delegation to an unregistered DRep** (`Rules/Deleg.hs` `checkDRepRegistered`) is rejected with
+  `DelegateeDRepNotRegisteredDELEG` outside the PV9 bootstrap phase. The PV10 hard fork
+  (`Rules/HardFork.hs` `updateDRepDelegations`) removed every dangling delegation that existed. Ade's
+  vote-delegation certificate gets the same check, as a typed `LedgerError`.
 
-The registered-account requirement above is then an invariant check, not a filter: a vote delegation of
-an unregistered credential is unrepresentable after these fixes, and the derive fails closed if it ever
-sees one.
+The reference expected result for a delegation to an unregistered DRep is therefore not "excluded from the
+distribution". It is "cannot exist". `computeDRepDistr`'s `Map.member cred regDReps` filter is defensive;
+its own comment says the delegation "is guaranteed to exist". Ade states this as an invariant, not a
+filter. `derive_frozen_drep_distribution` fails closed with a typed terminal if it ever sees a vote
+delegation from an unregistered account, or to an unregistered credential DRep. Neither case is silently
+dropped.
+
+**Protocol-version floor.** These rules hold from PV10. Before relying on them, step 2 confirms that
+Ade cannot hold a Conway state below PV10, and adds a typed bootstrap refusal if it can. PV9 bootstrap
+semantics are out of scope.
+
+### 4.2a Temporal separation in the types
+
+The frozen derivation reads from three sources observed at different points. Each gets a distinct type,
+so none can be passed where another is expected. There is no generic "stake" function with flags.
+- **`FrozenPoolStake`**: the mark built at this boundary, before the boundary credits. It is used only for
+  the SPO distribution.
+- **`PostBoundaryBalances`**: the UTxO stake and reward balances after every boundary credit. They are
+  used only for the DRep distribution.
+- **`FrozenGovernanceView`**: the proposals, votes, DRep registrations and expiry, committee, parameters
+  and roots of the constructed next state.
+
+`FrozenRatificationInput` has one constructor. It takes the constructed next state and the boundary's base
+stake, and builds all three. `ratify_frozen` takes only a `FrozenRatificationInput`. The consuming
+boundary's `apply_ratification_record` takes the record and a `CurrentGovernanceState`, a fourth type that
+cannot be converted into any of the three.
 
 **`derive_frozen_pool_distribution`** computes the SPO distribution: the mark pool stakes built at this
 boundary, plus the deposits of proposals whose return credential is delegated to that pool, for pools present
@@ -234,6 +280,10 @@ The import is checked against `rsEnactState`:
 A mismatch is a typed bootstrap refusal. A snapshot whose index 6 is absent or not `DRComplete` is a typed
 refusal; there is no recompute fallback.
 
+The imported cert state must also satisfy §4.2's lifecycle invariant. A snapshot with a DRep delegation
+from an unregistered account, or to an unregistered credential DRep, is a typed refusal. It is not
+cleaned up on import.
+
 ### 4.6 Store semantics 12
 
 - Encode the record in the governance snapshot and the accumulator. `EPOCH_ACCUMULATOR_SCHEMA_VERSION` goes
@@ -280,10 +330,24 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
 
   It includes one case where the change would flip the outcome under boundary-current reads.
 - **CE-LV15b0-3a Delegation lifecycle.**
-  - An account that deregisters during E has no vote delegation afterwards, and is absent from E+1's DRep
-    distribution.
-  - A DRep that deregisters and re-registers does not regain its old delegators.
+  - An account that deregisters during E has no vote delegation afterwards. Its balance, deposit and pool
+    delegation are also gone, and it is absent from E+1's DRep distribution.
+  - That account then re-registers without delegating its vote. It has no vote delegation and is still
+    absent from the DRep distribution. It counts again only after a new vote-delegation certificate.
+  - A DRep deregisters, and every account that delegated to it loses its vote delegation. The same DRep
+    credential then re-registers: none of the old delegators return, and its distribution entry is absent
+    until a new delegation arrives.
   - The census credential `94857be3…` case is replayed as a fixture.
+- **CE-LV15b0-3b Delegation to an unregistered DRep (reference-derived).** The expected results come from
+  the cited cardano-ledger rules (§4.2), not from Ade:
+  - a vote-delegation certificate naming an unregistered credential DRep is rejected with the typed error
+    (`DelegateeDRepNotRegisteredDELEG`);
+  - a DRep registration and a delegation to it in the same transaction, in that order, is accepted;
+  - `derive_frozen_drep_distribution` given a constructed state with a dangling delegation returns the
+    typed terminal; it does not exclude the entry;
+  - a bootstrap snapshot carrying a dangling delegation is refused (§4.5).
+
+  The real-chain side is the step-1 census: zero dangling delegations at 305 and 322.
 - **CE-LV15b0-4 SPO stake basis.** The SPO distribution is the mark built at E start plus deposits, not `go`.
   The fixture's mark and go differ so that the outcome flips between them.
 - **CE-LV15b0-5 Committee freeze.** A hot-key authorization or resignation during E does not change E's
@@ -312,12 +376,31 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
   - the expired ids;
   - `delayed`.
 
-  At least one boundary on preprod is required. A preview boundary is also checked if a store is available.
-  This is the center of the slice: it does not close on timing alone.
-- **CE-LV15b0-10 Restart identity.** Stop and restart mid-epoch: the reloaded record is byte-identical, and so
-  is the record after the next boundary.
+  The record must come from Ade's own v12 transitions. No test-only correction, no hand combination of
+  dumped fields, and no oracle-derived runtime input is allowed. The required boundaries are those of the
+  step-1 census:
+  - **305**: a fresh v12 bootstrap of Mithril snapshot 6009 imports epoch 304's record. It then crosses
+    304→305 and freezes 305 natively. Compare with `oracle-end304-node/db/ledger/130133280`.
+  - **322**: the same store follows the chain from 305 across every boundary to 321→322. It is not
+    restarted from a v11 store, which §4.6 refuses. Compare with the saved copy of the peer's
+    `db/ledger/137850288`.
+  - **The live boundary the run reaches last**: compare with a snapshot copied from the local docker peer
+    during that epoch.
+
+  A preview boundary is also checked if a store is available. This is the center of the slice: it does not
+  close on timing alone.
+- **CE-LV15b0-10 Restart identity.** Two runs from the same store copy must give byte-identical
+  authoritative outputs, both after the reload and after the next boundary:
+  - **warm restart**: a clean stop mid-epoch, then a restart;
+  - **crash recovery**: SIGKILL mid-epoch, with no clean shutdown, then a restart.
+
+  The outputs compared are the record, including both frozen distributions; the vote delegations and DRep
+  registrations; and the governance fingerprint.
 - **CE-LV15b0-11 Replay identity.** The accumulator split and unsplit, and the direct-replay path, produce
-  identical records and identical governance deltas at every boundary in the fixtures.
+  identical records and identical governance deltas at every boundary in the fixtures. In addition, a
+  **cold replay** gives the same outputs at the same chain point as the live store (CE-10's list, plus the
+  delegation lifecycle state). The cold replay is a second fresh bootstrap of the same snapshot, folded
+  over the same blocks.
 - **CE-LV15b0-12 Store refusal.** A v11 store is refused with the typed error; a fresh Mithril bootstrap
   writes 12.
 - **CE-LV15b0-13 Mutations.** Each must be killed by its intended test and named by the gate:
@@ -325,20 +408,34 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
   - (b) freeze before applying the previous record, which changes the proposal set seen;
   - (c) SPO basis `go` instead of the new mark;
   - (d) drop proposal deposits from the DRep distribution;
-  - (e) drop the registered-DRep filter;
+  - (e) drop the fail-closed check on a dangling delegation, so the derive silently skips it;
   - (f) skip pruning later-submitted siblings;
   - (g) route refunds by registration at the freeze;
   - (h) accept a record whose `frozen_at` is not `new_epoch − 1`;
   - (i) on bootstrap, recompute instead of importing;
   - (j) a production rule reads the record's frozen distributions;
   - (k) account unregistration leaves the vote delegation;
-  - (l) take DRep reward balances from the mark instead of post-boundary balances.
+  - (l) take DRep reward balances from the mark instead of post-boundary balances;
+  - (m) DRep unregistration leaves its delegators' vote delegations, killed by CE-3a's re-registration case;
+  - (n) a vote delegation to an unregistered credential DRep is accepted, killed by CE-3b.
 - **CE-LV15b0-14 Gate.** `ci/ci_check_frozen_ratification_authority.sh` runs the hermetic tests and asserts
   they ran, the structural check from §5.1, and the store version.
 - **CE-LV15b0-15 Sweep.** Failures identical to the LV-15a baseline (284 scripts, 46 failing), except
   where this slice changes them and says so.
-- **CE-LV15b0-16 Live.** A fresh v12 Mithril bootstrap on preprod follows across at least one boundary to
-  the peer tip with no failure line. CE-9 is taken on that boundary.
+- **CE-LV15b0-16 Live.** The CE-9 run, a fresh v12 bootstrap of snapshot 6009 on preprod, follows from 304
+  to the peer tip with no failure line. It crosses every boundary from 305 on, and CE-9 is taken at 305,
+  at 322 and at the last live boundary. The run's evidence must record:
+  - the node's own PID, not a wrapper's;
+  - its exit status and termination reason if it stops;
+  - its last durable progress point;
+  - which of three kinds any stop was: a clean shutdown on a signal Ade received and logged, a clean halt
+    the loop chose, or an unexpected disappearance.
+
+  A zero failure-line count is not liveness evidence. Liveness is a live PID plus a growing log and an
+  advancing durable tip.
+
+  This CE closes the slice's live leg only. It is not a sustained-operation claim, which stays blocked by
+  §9.
 
 ## 7. Order of work
 
@@ -357,12 +454,14 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
    304→305 and 321→322, the corrected model equals Cardano entry for entry: DReps 181/181 and 194/194,
    pools 505/505 and 514/514. It added the delegation-lifecycle fixes (§4.2) and the post-boundary balance
    rule.
-2. **Pure functions.** The record type, `derive_frozen_*`, `ratify_frozen` and `apply_ratification_record`,
-   with CE-1..7.
+2. **Pure functions.** The delegation-lifecycle certificate fixes; the temporal input types (§4.2a); the
+   record type; `derive_frozen_*`, `ratify_frozen` and `apply_ratification_record`. With CE-1..7, 3a
+   and 3b, and the PV-floor check.
 3. **Boundary order and persistence.** Wiring, and store semantics 12. CE-10..12.
 4. **Bootstrap import.** CE-8.
 5. **Mutations and gate.** CE-13 and CE-14, then the sweep (CE-15).
-6. **Live.** CE-16 and CE-9.
+6. **Live and native reproduction.** CE-16 and CE-9 at 305, 322 and the last live boundary, plus CE-10's
+   warm and crash restarts and CE-11's cold replay on copies of that store.
 
 ## 8. Not in this slice
 
@@ -370,3 +469,18 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
 - Admission and forge parameter authority, the complete parameter record, and the tick-before-body split.
   These are LV-15b-1.
 - Parameter-dependent rejection. That is LV-15b-2.
+- The unexplained clean stops (§9).
+
+## 9. Open, separate: unexplained clean stops
+
+The LV-13 and LV-15a runs each ended in a clean halt with no logged cause
+(`lv15a-run-ended-clean-halt-2026-10-27.md`). A restarted copy crossing 321→322 shows that the boundary
+does not fail deterministically on that path. It does not show that the halt was harmless, and it does not
+exclude a defect that depends on state or scheduling. The open issue has three tiers:
+- **operational**: process liveness and unexplained termination;
+- **release**: sustained live-follow evidence is unproven;
+- **true-tier risk**: RED scheduling or lifecycle behaviour may end processing while admissible work
+  remains.
+
+The issue does not block this slice's pure or wiring work. It blocks any claim of sustained live operation
+until it is resolved or bounded by evidence. CE-16's stop classification is the first new evidence for it.
