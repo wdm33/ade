@@ -129,15 +129,26 @@ runs at the consuming boundary. It reads no votes and no stake:
 
 ### 4.2 Frozen distributions
 
-**`derive_frozen_drep_distribution`** computes the DRep distribution. For each credential in
-`vote_delegations`, its stake is:
+**`derive_frozen_drep_distribution`** computes the DRep distribution. For each **registered** stake
+credential in `vote_delegations`, its stake is:
 - base UTxO stake from the boundary's `BoundaryBaseStake.canonical_credential_stake`, the instant-stake
   analogue;
-- plus its post-RUPD reward balance;
+- plus its reward balance *after* every boundary credit, including deposit refunds. The mark does not
+  qualify, because it is taken before those credits (census §2 (c));
 - plus the deposits of post-boundary proposals whose return address is that credential.
 
 A credential DRep counts only if its credential is in `drep_expiry` (registered). This replaces
 `derive_drep_voting_stake` on the authority path.
+
+**Delegation lifecycle (census §4).** Two certificate effects change the frozen inputs:
+- `AccountUnregistration` and `AccountUnregistrationDeposit` remove the credential's vote delegation, as
+  Cardano's account removal does;
+- `DRepUnregistration` removes the vote delegation of every credential delegated to that DRep
+  (`clearDRepDelegations`).
+
+The registered-account requirement above is then an invariant check, not a filter: a vote delegation of
+an unregistered credential is unrepresentable after these fixes, and the derive fails closed if it ever
+sees one.
 
 **`derive_frozen_pool_distribution`** computes the SPO distribution: the mark pool stakes built at this
 boundary, plus the deposits of proposals whose return credential is delegated to that pool, for pools present
@@ -268,6 +279,11 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
   - a DRep registration or expiry change.
 
   It includes one case where the change would flip the outcome under boundary-current reads.
+- **CE-LV15b0-3a Delegation lifecycle.**
+  - An account that deregisters during E has no vote delegation afterwards, and is absent from E+1's DRep
+    distribution.
+  - A DRep that deregisters and re-registers does not regain its old delegators.
+  - The census credential `94857be3…` case is replayed as a fixture.
 - **CE-LV15b0-4 SPO stake basis.** The SPO distribution is the mark built at E start plus deposits, not `go`.
   The fixture's mark and go differ so that the outcome flips between them.
 - **CE-LV15b0-5 Committee freeze.** A hot-key authorization or resignation during E does not change E's
@@ -314,7 +330,9 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
   - (g) route refunds by registration at the freeze;
   - (h) accept a record whose `frozen_at` is not `new_epoch − 1`;
   - (i) on bootstrap, recompute instead of importing;
-  - (j) a production rule reads the record's frozen distributions.
+  - (j) a production rule reads the record's frozen distributions;
+  - (k) account unregistration leaves the vote delegation;
+  - (l) take DRep reward balances from the mark instead of post-boundary balances.
 - **CE-LV15b0-14 Gate.** `ci/ci_check_frozen_ratification_authority.sh` runs the hermetic tests and asserts
   they ran, the structural check from §5.1, and the store version.
 - **CE-LV15b0-15 Sweep.** Failures identical to the LV-15a baseline (284 scripts, 46 failing), except
@@ -334,6 +352,11 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
    - which epoch's SPO distribution is consumed (`go` against the new mark).
 
    Every difference is explained before code.
+
+   **Done:** `docs/evidence/run-stores/preprod-live2c/lv15b0-step1-frozen-distribution-census.md`. At
+   304→305 and 321→322, the corrected model equals Cardano entry for entry: DReps 181/181 and 194/194,
+   pools 505/505 and 514/514. It added the delegation-lifecycle fixes (§4.2) and the post-boundary balance
+   rule.
 2. **Pure functions.** The record type, `derive_frozen_*`, `ratify_frozen` and `apply_ratification_record`,
    with CE-1..7.
 3. **Boundary order and persistence.** Wiring, and store semantics 12. CE-10..12.
