@@ -130,14 +130,28 @@ It returns the record (§4.3). It contains everything `plan_conway_governance_ep
 today: the threshold scan, lineage, the single supported winner, its built parameters, and the pruned set.
 Its expiry is `expires_after < E`, Cardano's `reCurrentEpoch`.
 
-**`apply_ratification_record(record, current_proposals, is_registered_now) -> ConwayGovernanceEpochPlan`**
-runs at the consuming boundary. It reads no votes and no stake:
-- it removes the enacted and expired ids from the current proposals;
-- it removes every current `ParameterChange` whose lineage descends from a pruned sibling. This includes
-  ones submitted after the freeze, as `proposalsApplyEnactment` does;
+**`apply_ratification_record(record, new_epoch, current, is_registered_now) -> ConwayGovernanceEpochPlan`**
+runs at the consuming boundary. It reads no votes and no stake. It follows `proposalsApplyEnactment`
+(cardano-ledger cb57dc73, `Governance/Proposals.hs`), in this order:
+- it removes the expired ids **with their descendants in every purpose tree**
+  (`proposalsRemoveWithDescendants`). Ade's planner removed only the expired proposal itself, which was a
+  gap independent of timing;
+- it removes the enacted winner;
+- it removes the winner's siblings (current `ParameterChange`s sharing its superseded root, including ones
+  submitted after the freeze) with their descendants. The winner's own children are the new lineage and
+  stay;
 - it routes every removed deposit by registration now.
 
+A sibling that is also expired is removed as expired, as Cardano does; the refund is the same.
+
 `ConwayGovernanceEpochPlan` and its single application point in `rules.rs` are unchanged.
+
+**Implementation shape.** Both halves live in `governance.rs` as `decide_ratification` (the planner's old
+Phases 1–2, verbatim, taking the ratification epoch explicitly) and `apply_decision`. The frozen wrappers
+`ratify_frozen` and `apply_ratification_record` are in `governance::frozen`.
+`plan_conway_governance_epoch` stays public for the census and fixture tests, as exactly
+`apply_decision(decide_ratification(...))` over one proposal set. That leaves one implementation of each
+half. It is not an authority path: the gate (CE-14) fails if boundary code calls it.
 
 ### 4.2 Frozen distributions
 
@@ -206,32 +220,39 @@ measures. It is not assumed.
 ### 4.3 The record
 
 ```rust
-pub struct RatificationRecord {
-    pub frozen_at: EpochNo,                         // E; consumed only at E→E+1
-    pub source: RatificationSource,                 // Frozen | ImportedFromSnapshot
-    pub drep_distribution: BTreeMap<DRep, Coin>,    // evidence for CE-9; read by no rule
-    pub pool_distribution: BTreeMap<PoolId, Coin>,  // evidence for CE-9; read by no rule
-    pub outcome: RatificationOutcome,
+pub struct RatificationRecord {                     // all fields private to governance::frozen
+    frozen_at: EpochNo,                             // E; consumed only at E→E+1
+    source: RatificationSource,                     // Frozen | ImportedFromSnapshot
+    drep_distribution: BTreeMap<DRep, Coin>,        // evidence for CE-9; read by no rule
+    pool_distribution: BTreeMap<PoolId, Coin>,      // evidence for CE-9; read by no rule
+    outcome: RatificationOutcome,
 }
 
 pub enum RatificationOutcome {
-    Decided {
-        enacted: Option<EnactedParameterChange>,    // id, superseded parent root, built pparams
-        pruned: BTreeSet<GovActionId>,
-        expired: BTreeSet<GovActionId>,
-        delayed: bool,
-    },
+    Decided(RatificationDecision),                  // Cardano's rsEnacted / rsExpired
     // A threshold-passing action Ade cannot enact (UnsupportedRatifiedAction, ChainedEnactment,
     // CompetingRatifiableActions, …). Persisted, not raised at the freeze: the halt happens at the
     // consuming boundary, the same boundary where Ade halts today.
     Unenactable(GovernanceTerminal),
 }
+
+pub struct RatificationDecision {
+    pub enacted: Option<EnactedParameterChange>,    // id, superseded parent root, built pparams
+    pub expired: BTreeSet<GovActionId>,
+}
 ```
+
+Two fields of the first draft are gone:
+- **`pruned`**: Cardano computes pruning when the result is applied, over the proposals current then.
+  Freezing it as well would give two sources for one removal.
+- **`delayed`**: `rsDelayed` is true only after a delaying action is enacted. Ade maps any enacted
+  non-`ParameterChange` to `Unenactable`, so a `Decided` record always has `delayed = false`. CE-9 checks
+  that the snapshot agrees.
 
 The distributions are evidence for the decision already made, not authority for any later transition.
 They are encoded, fingerprinted and replayed byte-identically, so a change to them is visible. No rule may
 read them, and that is enforced mechanically:
-- the fields are private to `governance.rs`;
+- the fields are private to `governance::frozen`;
 - the only accessors are encode, decode, fingerprint and the CE-9 comparator;
 - the gate (CE-14) fails if any other production code names them.
 
@@ -354,6 +375,7 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
   committee tally.
 - **CE-LV15b0-6 Application to current state.**
   - Enacted and expired proposals are removed from the current set.
+  - An expired proposal's descendants go with it, in every purpose tree, each refunded.
   - A sibling of the winner submitted after the freeze is pruned along with its descendants.
   - A deposit whose return account deregisters during E goes to the treasury, and one that registers goes to
     the account.
@@ -374,7 +396,7 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
   - the frozen proposal ids;
   - the enacted ids;
   - the expired ids;
-  - `delayed`.
+  - `rsDelayed`, which must be false wherever Ade's outcome is `Decided`.
 
   The record must come from Ade's own v12 transitions. No test-only correction, no hand combination of
   dumped fields, and no oracle-derived runtime input is allowed. The required boundaries are those of the
@@ -417,7 +439,8 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
   - (k) account unregistration leaves the vote delegation;
   - (l) take DRep reward balances from the mark instead of post-boundary balances;
   - (m) DRep unregistration leaves its delegators' vote delegations, killed by CE-3a's re-registration case;
-  - (n) a vote delegation to an unregistered credential DRep is accepted, killed by CE-3b.
+  - (n) a vote delegation to an unregistered credential DRep is accepted, killed by CE-3b;
+  - (o) an expired proposal's descendants are kept.
 - **CE-LV15b0-14 Gate.** `ci/ci_check_frozen_ratification_authority.sh` runs the hermetic tests and asserts
   they ran, the structural check from §5.1, and the store version.
 - **CE-LV15b0-15 Sweep.** Failures identical to the LV-15a baseline (284 scripts, 46 failing), except
