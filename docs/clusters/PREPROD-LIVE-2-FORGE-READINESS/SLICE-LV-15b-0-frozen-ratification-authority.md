@@ -241,6 +241,7 @@ measures. It is not assumed.
 pub struct RatificationRecord {                     // all fields private to governance::frozen
     frozen_at: EpochNo,                             // E; consumed only at E→E+1
     source: RatificationSource,                     // Frozen | ImportedFromSnapshot
+    frozen_proposals: BTreeSet<GovActionId>,        // evidence for CE-9 (psProposals ids); read by no rule
     drep_distribution: BTreeMap<DRep, Coin>,        // evidence for CE-9; read by no rule
     pool_distribution: BTreeMap<PoolId, Coin>,      // evidence for CE-9; read by no rule
     outcome: RatificationOutcome,
@@ -272,14 +273,22 @@ The distributions are evidence for the decision already made, not authority for 
 They are encoded, fingerprinted and replayed byte-identically, so a change to them is visible. No rule may
 read them, and that is enforced mechanically:
 - the fields are private to `governance::frozen`;
-- the only accessors are encode, decode, fingerprint and the CE-9 comparator;
+- the only readers are the record codec (which the fingerprint and the seed commitment use) and the CE-9
+  comparator `RatificationRecord::differential`, which returns counts and equalities, never the values;
 - the gate (CE-14) fails if any other production code names them.
 
 They are what makes the record directly comparable with the snapshot's `psDRepDistr` and `psPoolDistr`.
 
 The record lives in `ConwayGovState` as a required field, so both the accumulator and direct-replay paths
-carry it. There is no `Option` and no default. A Conway governance state without a record cannot be
-constructed, and every constructor names its source.
+carry it. There is no `Option` and no default. The field follows the repo's versioned-lineage pattern
+(`DormantEpochs`, `PreviousPParamAction`): `RatificationState::Recorded(record)`, or `Unversioned` for a
+state that predates the record (V1–V3 governance bytes, harness reconstructions). `Unversioned` is never
+promoted to a record. A Conway boundary that meets it halts with
+`GovernanceTerminal::RatificationRecordAbsent`, with zero mutation. Every record names its source.
+
+`Unenactable` carries a closed `UnenactableReason`, not an arbitrary terminal. It holds exactly the three
+terminals `decide_ratification` can return (`UnsupportedRatifiedAction`, `UnversionedStateOnEnactPath`,
+`DormantRequired`). Any other terminal raised while freezing halts the freeze itself.
 
 **Why the halt is deferred.** Halting at the freeze would stop the node a whole epoch before the boundary
 that needs the unsupported action. Deferring it keeps today's halt point. The decision itself is still fixed
@@ -317,12 +326,25 @@ the record.
 - **Enacted action outside the supported subset:** maps to `Unenactable` with the same terminal Ade's own
   ratifier would give.
 
+cardano-ledger serializes index 6 only as `DRComplete`: a pulser still running is finished before
+encoding (`DRepPulser.hs`, `encCBOR (DRPulsing …)`). So every snapshot carries the finished result. A
+field that is not `array(2)[PulsingSnapshot, RatifyState]` is malformed and refused.
+
 The import is checked against `rsEnactState`:
 - the built parameters' supported fields must equal `ensCurPParams`;
 - the new root must equal `ensPrevGovActionIds`' parameter root.
 
-A mismatch is a typed bootstrap refusal. A snapshot whose index 6 is absent or not `DRComplete` is a typed
-refusal; there is no recompute fallback.
+A mismatch is a typed bootstrap refusal (`NativeNonUtxoError::RatificationImport`). There is no recompute
+fallback. `rsDelayed` set on a decision Ade can apply is refused too. The record is bound into the seed
+commitment (v14).
+
+**Checked on real bytes (2026-11-02).** `ade_runtime/tests/lv15b0_real_pulser_import.rs` decodes two
+preprod snapshots and passes both cross-checks:
+- the epoch-305 file (`130133280`): 181 DReps, 505 pools;
+- the epoch-323 file (`137907732`): 194 DReps, 514 pools.
+
+Both decided nothing for their own epoch. This proves the decoding only. It is not CE-9, which compares
+Ade's native freeze with these files.
 
 The imported cert state must also satisfy §4.2's lifecycle invariant. A snapshot with a DRep delegation
 from an unregistered account, or to an unregistered credential DRep, is a typed refusal. It is not
@@ -440,9 +462,13 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
   step-1 census:
   - **305**: a fresh v12 bootstrap of Mithril snapshot 6009 imports epoch 304's record. It then crosses
     304→305 and freezes 305 natively. Compare with `oracle-end304-node/db/ledger/130133280`.
-  - **322**: the same store follows the chain from 305 across every boundary to 321→322. It is not
-    restarted from a v11 store, which §4.6 refuses. Compare with the saved copy of the peer's
-    `db/ledger/137850288`.
+  - **322 → 323**: the same store follows the chain from 305 across every boundary. It is not restarted
+    from a v11 store, which §4.6 refuses. The raw epoch-322 snapshot (`db/ledger/137850288`) was not
+    retained after the census; only its census figures survive (DReps 194/194, pools 514/514). The
+    comparison file is therefore the epoch-323 snapshot, copied from the peer on 2026-11-02 to
+    `/mnt/store/cardano/.cardano-live1/lv15b0-reference/137907732/` (state sha256 `cef3cebe…b738`). The
+    store compares at 323 after crossing 321→322 and 322→323. Its 322 record is checked against the census
+    figures.
   - **The live boundary the run reaches last**: compare with a snapshot copied from the local docker peer
     during that epoch.
 
@@ -525,8 +551,56 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
    these are tested rules, not proven-equivalent transitions.
 3. **Boundary order and persistence.** Wiring, and store semantics 12. CE-10..12. Lands on `main`
    together with step 2.
+
+   **Done locally (with steps 4–5):**
+   - `ConwayGovState.ratification` (`RatificationState`), governance encoding V4, and the record in the
+     governance fingerprint.
+   - Store semantics 12, accumulator schema 7, snapshot framing 5. A v11 store, a v6 accumulator and a v4
+     framing blob are each refused.
+   - The boundary applies, then freezes, in `apply_epoch_boundary_with_registrations` only.
+   - Boundary tests: the late vote enacts at E+1→E+2; changes after the freeze don't change the outcome; a
+     state without a record and a record from another epoch are refused; the record's evidence is the
+     post-boundary accounts and the new mark.
+
+   CE-10 and CE-11 on a real store are step 6.
 4. **Bootstrap import.** CE-8.
+
+   **Done locally:**
+   - `govState[6]` is decoded and imported with Ade's own classification, cross-checked, and bound into the
+     seed commitment (v14).
+   - Dangling delegations and PV < 10 are refused.
+   - The corpus harness imports the same way (`import_ratification_from_conway_gov_state`).
+   - Checked on the real epoch-305 and epoch-323 preprod snapshots (§4.5). CE-8 at snapshot 6009 itself
+     happens at step 6's bootstrap.
 5. **Mutations and gate.** CE-13 and CE-14, then the sweep (CE-15).
+
+   **CE-13 done locally.** All 15 mutations were applied by a disposable driver (not committed). Each was
+   asserted applied exactly once, killed by its intended test, and the file restored byte-exact (sha256):
+
+   | mutation | killed by |
+   |---|---|
+   | (a) apply re-ratifies over current votes (the composed planner at the boundary) | `ce_lv15b0_1_a_vote_cast_during_epoch_e_enacts_at_e_plus_2` |
+   | (b) freeze over the pre-boundary state | `ce_lv15b0_1_a_vote_cast_during_epoch_e_enacts_at_e_plus_2` |
+   | (c) SPO basis `go` instead of the new mark | `ce_lv15b0_3_4_boundary_evidence_is_post_boundary_accounts_and_the_new_mark` |
+   | (d) drop proposal deposits from the DRep distribution | `ce_lv15b0_drep_distribution_counts_every_term_for_every_delegator` |
+   | (e) skip a dangling delegation instead of failing closed | `ce_lv15b0_3b_dangling_delegation_is_a_terminal_not_excluded` |
+   | (f) skip pruning later-submitted siblings | `ce_lv15b0_6_application_prunes_late_siblings_and_routes_by_registration_now` |
+   | (g) route refunds ignoring current registration | `ce_lv15b0_6_application_prunes_late_siblings_and_routes_by_registration_now` |
+   | (h) accept a record from another epoch | `record_from_another_epoch_is_refused` |
+   | (i) bootstrap fabricates a record instead of importing | `lv15b0_pulser_parameters_mismatch_is_refused` |
+   | (j) a production rule reads the evidence | the gate, (c) |
+   | (k) account unregistration leaves the vote delegation | `ce_lv15b0_3a_account_unregistration_…` |
+   | (l) DRep stake from the mark instead of post-boundary accounts | `ce_lv15b0_3_4_boundary_evidence_…` |
+   | (m) DRep unregistration leaves its delegators | `ce_lv15b0_3a_drep_reregistration_does_not_regain_old_delegators` |
+   | (n) a delegation to an unregistered DRep is accepted | `ce_lv15b0_3b_vote_delegation_to_unregistered_drep_is_rejected` |
+   | (o) an expired proposal's descendants are kept | `lv15b0_expired_proposal_removes_its_descendants` |
+
+   (g) is approximated as "routing ignores current registration". Registration at the freeze is not an
+   input to the apply step, so it cannot be read there.
+
+   **CE-14:** `ci/ci_check_frozen_ratification_authority.sh` passes. `ci/ci_check_donation_pot.sh` (e)
+   now accepts a seed commitment tag of v13 or later (v13 introduced the pot binding, which it still checks
+   directly).
 6. **Live and native reproduction.** CE-16 and CE-9 at 305, 322 and the last live boundary, plus CE-10's
    warm and crash restarts and CE-11's cold replay on copies of that store.
 
@@ -559,3 +633,19 @@ missing on this machine, so that crate's tests do not build. Workspace test runs
 `ade_plutus`, and the result is reported as "all crates except `ade_plutus`", never as a passing
 workspace. The limitation is not waived as a slice gate: CE-15's sweep and the closure test run must
 either have the fixture restored or list this exclusion explicitly.
+
+Two `ade_testkit` failures are older than this slice. Each fails the same way at `d07e09cf` or with
+inputs this slice does not touch:
+- `conway_deposit_params_single_decoder::harness_and_blue_decoder_agree_on_conway_deposit_params`: its
+  synthetic mark has stake for a pool with no frozen parameters (an LV-4 fixture gap). This slice gave its
+  fixture a real `govState[6]` so it gets past the pulser. The rest of the failure is unchanged at
+  `d07e09cf`.
+- `epoch_oracle_comparison::committee_oracle_mainnet_575_576_noop_agreement`: it calls
+  `evaluate_ratification` directly with the harness's DRep expiries and `DormantEpochs::Unversioned`, so it
+  gets `DormantRequired`. Neither the call nor its inputs changed here.
+
+The `ade_testkit` corpus suite does not finish in this environment. Three tests
+(`all_boundaries_stateful_summary`, `boundary_fingerprint_matches_pins`,
+`stake_dist_sum_vs_pool_stakes_sum`) are skipped, and the run still hits its time limit inside
+`epoch_oracle_comparison`. `conway_epoch_508_boundary_comparison`, which this slice's record requirement
+first broke, passes once the harness imports the snapshot's record.
