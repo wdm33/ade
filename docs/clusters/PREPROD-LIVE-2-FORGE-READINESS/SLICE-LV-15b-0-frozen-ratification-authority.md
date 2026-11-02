@@ -171,8 +171,14 @@ pub enum RatificationOutcome {
 }
 ```
 
-The distributions are authoritative state, encoded and fingerprinted, even though no rule reads them. They
-are what makes the record directly comparable with the snapshot's `psDRepDistr` and `psPoolDistr`.
+The distributions are evidence for the decision already made, not authority for any later transition.
+They are encoded, fingerprinted and replayed byte-identically, so a change to them is visible. No rule may
+read them, and that is enforced mechanically:
+- the fields are private to `governance.rs`;
+- the only accessors are encode, decode, fingerprint and the CE-9 comparator;
+- the gate (CE-14) fails if any other production code names them.
+
+They are what makes the record directly comparable with the snapshot's `psDRepDistr` and `psPoolDistr`.
 
 The record lives in `ConwayGovState` as a required field, so both the accumulator and direct-replay paths
 carry it. There is no `Option` and no default. A Conway governance state without a record cannot be
@@ -307,7 +313,8 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
   - (f) skip pruning later-submitted siblings;
   - (g) route refunds by registration at the freeze;
   - (h) accept a record whose `frozen_at` is not `new_epoch − 1`;
-  - (i) on bootstrap, recompute instead of importing.
+  - (i) on bootstrap, recompute instead of importing;
+  - (j) a production rule reads the record's frozen distributions.
 - **CE-LV15b0-14 Gate.** `ci/ci_check_frozen_ratification_authority.sh` runs the hermetic tests and asserts
   they ran, the structural check from §5.1, and the store version.
 - **CE-LV15b0-15 Sweep.** Failures identical to the LV-15a baseline (284 scripts, 46 failing), except
@@ -317,9 +324,16 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
 
 ## 7. Order of work
 
-1. **Census, before code.** Compute today's `derive_drep_voting_stake` and the `go` pool stakes at a real
-   boundary and diff them against the snapshot's `psDRepDistr` and `psPoolDistr`. This records how large the
-   §3 differences are on the real chain.
+1. **Census, before code.** At a real boundary, diff Ade's inputs against the snapshot's `psDRepDistr` and
+   `psPoolDistr`. Each cause is measured separately, so the result is a causal map, not one aggregate gap:
+   - reward balances in DRep voting stake;
+   - proposal deposits in DRep voting stake;
+   - credentials delegated to a DRep but not to a pool;
+   - stake delegated to unregistered DReps, which Cardano excludes;
+   - proposal deposits in SPO voting stake;
+   - which epoch's SPO distribution is consumed (`go` against the new mark).
+
+   Every difference is explained before code.
 2. **Pure functions.** The record type, `derive_frozen_*`, `ratify_frozen` and `apply_ratification_record`,
    with CE-1..7.
 3. **Boundary order and persistence.** Wiring, and store semantics 12. CE-10..12.
