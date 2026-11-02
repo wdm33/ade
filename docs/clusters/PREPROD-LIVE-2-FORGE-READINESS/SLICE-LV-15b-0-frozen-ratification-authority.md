@@ -190,8 +190,26 @@ filter. `derive_frozen_drep_distribution` fails closed with a typed terminal if 
 delegation from an unregistered account, or to an unregistered credential DRep. Neither case is silently
 dropped.
 
-**Protocol-version floor.** These rules hold from PV10. Before relying on them, step 2 confirms that
-Ade cannot hold a Conway state below PV10, and adds a typed bootstrap refusal if it can. PV9 bootstrap
+How each part of this is established:
+- **Derived:** valid Cardano transitions from PV10 on cannot produce a dangling DRep delegation. This rests
+  on the reference source above, not on the census.
+- **True:** Ade never silently ignores or repairs unexpected authoritative state. A dangling delegation is
+  a typed terminal, not a filter.
+- **Release:** constructed negative tests show the deterministic rejection at every entry point that can
+  carry one in: block application, the freeze, bootstrap import and store recovery.
+
+The reference rules do not prove Ade cannot meet such a delegation through a corrupted checkpoint, older
+persisted state or a malformed import. That is why the terminal exists.
+
+These are two different failure authorities and stay separate types. A certificate that delegates to an
+unregistered DRep is an ordinary invalid transaction (`CertFailureReason::DRepNotRegistered`); the block
+is rejected and the state is unchanged. A dangling delegation found in authoritative state is a broken
+internal invariant (`GovernanceTerminal::DanglingVoteDelegation`), and it halts.
+
+**Protocol-version floor.** These rules hold from PV10. Bootstrap refuses a Conway state below PV10
+with `NativeNonUtxoError::UnsupportedProtocolVersion`. The check is in `decode_native_nonutxo_state`, a
+pure decode, so it fires before any state is constructed or persisted. It restricts Ade's supported
+bootstrap inputs. It does not claim that protocol versions below 10 are invalid on Cardano. PV9 bootstrap
 semantics are out of scope.
 
 ### 4.2a Temporal separation in the types
@@ -242,7 +260,8 @@ pub struct RatificationDecision {
 }
 ```
 
-Two fields of the first draft are gone:
+Two fields of the first draft are gone. They existed only in this document; no store ever persisted
+them, so dropping them changes no recovery behaviour and adds no dependence on another snapshot moment:
 - **`pruned`**: Cardano computes pruning when the result is applied, over the proposals current then.
   Freezing it as well would give two sources for one removal.
 - **`delayed`**: `rsDelayed` is true only after a delaying action is enacted. Ade maps any enacted
@@ -280,6 +299,10 @@ Inside `apply_epoch_boundary_with_registrations`, on Conway:
 
 The accumulator and replay paths both go through this one function, so they stay identical.
 
+This function is the only epoch-transition authority. Consume, apply and freeze are steps inside it. No
+governance code decides on its own when an epoch starts or ends, and no second boundary path exists for
+the record.
+
 ### 4.5 Bootstrap
 
 `read_conway_pparams_from_utxo_state` decodes index 6 instead of skipping it:
@@ -311,6 +334,20 @@ cleaned up on import.
   6 → 7, and the record goes into the governance fingerprint.
 - `STORE_SEMANTICS_VERSION` goes 11 → 12. A v11 store is refused with the existing typed refusal. The record
   cannot be synthesized from end-of-epoch state, which is the bug. Recovery is a fresh Mithril bootstrap.
+  No migration is specified, so none is offered; a version bump alone is not migration evidence.
+
+**Step 2 already changes live execution.** The step 2 rules are not behind the unwired record. They are
+reachable in production today:
+- block application (`rules.rs` `accumulate_tx_certs` → `apply_conway_gov_cert`, and
+  `apply_stake_deregistration`): account and DRep unregistration, and the rejection of a delegation to an
+  unregistered DRep;
+- the boundary planner (`rules.rs` → `plan_conway_governance_epoch`): removal of an expired proposal's
+  descendants;
+- bootstrap (`decode_native_nonutxo_state`): the protocol-version floor.
+
+A v11 store can hold vote delegations that these rules now say cannot exist, such as delegations left
+behind by an earlier account or DRep unregistration. Running the step 2 rules over such a store would mix
+semantics. Step 2's code therefore reaches `main` only together with store semantics 12, never alone.
 
 ### 4.7 Treasury withdrawals
 
@@ -480,7 +517,14 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
 2. **Pure functions.** The delegation-lifecycle certificate fixes; the temporal input types (§4.2a); the
    record type; `derive_frozen_*`, `ratify_frozen` and `apply_ratification_record`. With CE-1..7, 3a
    and 3b, and the PV-floor check.
-3. **Boundary order and persistence.** Wiring, and store semantics 12. CE-10..12.
+
+   **Done locally (a1d36385, not on `main`):** the unit tests pass. The rules change live execution
+   (§4.6), so they need more than unit tests: CE-9's differential must show that the lifecycle changes
+   and the expired-descendant removal give Cardano's results. That covers which descendants are removed,
+   where each refund goes, the effect on reward balances, and the next frozen distributions. Until then
+   these are tested rules, not proven-equivalent transitions.
+3. **Boundary order and persistence.** Wiring, and store semantics 12. CE-10..12. Lands on `main`
+   together with step 2.
 4. **Bootstrap import.** CE-8.
 5. **Mutations and gate.** CE-13 and CE-14, then the sweep (CE-15).
 6. **Live and native reproduction.** CE-16 and CE-9 at 305, 322 and the last live boundary, plus CE-10's
@@ -507,3 +551,11 @@ exclude a defect that depends on state or scheduling. The open issue has three t
 
 The issue does not block this slice's pure or wiring work. It blocks any claim of sustained live operation
 until it is resolved or bounded by evidence. CE-16's stop classification is the first new evidence for it.
+
+## 10. Test-environment limitation: `ade_plutus` fixture
+
+`ade_plutus`'s `conway_validity_range_reproducer` test needs `target/aiken_divergent_fixture`, which is
+missing on this machine, so that crate's tests do not build. Workspace test runs for this slice exclude
+`ade_plutus`, and the result is reported as "all crates except `ade_plutus`", never as a passing
+workspace. The limitation is not waived as a slice gate: CE-15's sweep and the closure test run must
+either have the fixture restored or list this exclusion explicitly.
