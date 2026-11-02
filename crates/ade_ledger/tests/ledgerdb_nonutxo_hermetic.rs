@@ -197,6 +197,10 @@ struct Knobs {
     donation: u64,
     /// Drop `UTxOState` to five fields (no donation pot) -- must be refused, never read as 0.
     utxo_state_without_donation: bool,
+    /// Override `govState[6]`, the DRep pulser (LV-15b-0).
+    drep_pulser_override: Option<Vec<u8>>,
+    /// The vote delegation of the one UMap account (`None` = no vote delegation).
+    umap_drep: Option<Vec<u8>>,
 }
 
 impl Default for Knobs {
@@ -215,8 +219,39 @@ impl Default for Knobs {
             gov_state_short: false,
             donation: 0,
             utxo_state_without_donation: false,
+            drep_pulser_override: None,
+            umap_drep: None,
         }
     }
+}
+
+/// `govState[6]` = `array(2)[PulsingSnapshot, RatifyState]` (always `DRComplete` on the wire). Nothing enacted:
+/// `ensCurPParams` = `enact_pparams`, the parameter root is `pparam_root`, one expired id, `rsDelayed` = `delayed`.
+fn drep_pulser(enact_pparams: &[u8], pparam_root: Vec<u8>, delayed: bool) -> Vec<u8> {
+    concat(&[
+        arr(2),
+        // PulsingSnapshot = [psProposals, psDRepDistr, psDRepState, psPoolDistr]
+        arr(4),
+        arr(0),
+        concat(&[map(1), arr(2), uint(0), bytes(&[0xD1; 28]), uint(777)]),
+        map(0),
+        concat(&[map(1), bytes(&POOL_ID), uint(1_000_000)]),
+        // RatifyState = [EnactState, rsEnacted, rsExpired, rsDelayed]
+        arr(4),
+        concat(&[
+            arr(7),
+            arr(0),
+            arr(0),
+            enact_pparams.to_vec(),
+            enact_pparams.to_vec(),
+            uint(0),
+            map(0),
+            concat(&[arr(4), pparam_root, arr(0), arr(0), arr(0)]),
+        ]),
+        arr(0),
+        concat(&[tag(258), arr(1), arr(2), bytes(&[0x90; 32]), uint(0)]),
+        vec![if delayed { 0xf5 } else { 0xf4 }],
+    ])
 }
 
 fn build_state(k: &Knobs) -> Vec<u8> {
@@ -230,7 +265,8 @@ fn build_state(k: &Knobs) -> Vec<u8> {
     ]);
     // DState = [umap(1), futureGenDelegs, genDelegs, iRewards]; umap entry = cred -> [reward, deposit, pool, null]
     let umap_entry_key = concat(&[arr(2), uint(1), bytes(&[0x22; 28])]);
-    let umap_entry_val = concat(&[arr(4), uint(500), uint(2_000_000), bytes(&POOL_ID), vec![NULL]]);
+    let umap_drep = k.umap_drep.clone().unwrap_or_else(|| vec![NULL]);
+    let umap_entry_val = concat(&[arr(4), uint(500), uint(2_000_000), bytes(&POOL_ID), umap_drep]);
     let dstate = concat(&[
         arr(4),
         concat(&[map(1), umap_entry_key, umap_entry_val]),
@@ -270,9 +306,9 @@ fn build_state(k: &Knobs) -> Vec<u8> {
             arr(0),          // committee (SNothing = array(0))
             arr(0),          // constitution
             pparams.clone(), // curPParams
-            pparams,         // prevPParams (full Conway PParams — now READ for the census, no longer skipped)
+            pparams.clone(), // prevPParams (full Conway PParams — now READ for the census, no longer skipped)
             arr(0),          // futurePParams
-            arr(0),          // drepPulser
+            k.drep_pulser_override.clone().unwrap_or_else(|| drep_pulser(&pparams, arr(0), false)),
         ])
     };
     let utxo_state = if k.utxo_state_without_donation {
@@ -771,4 +807,101 @@ fn a_utxo_state_without_a_donation_pot_is_refused() {
         decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC),
         Err(NativeNonUtxoError::ProtocolParamsMissing(m)) if m.contains("donation")
     ));
+}
+
+// ---- LV-15b-0: the snapshot epoch's finished ratification (govState[6]) ----
+
+/// CE-LV15b0-8 (decode): the pulser is imported as the record frozen at the snapshot epoch, with the snapshot's
+/// expired set, and is bound into the seed commitment.
+#[test]
+fn lv15b0_drep_pulser_is_imported_as_the_snapshot_epoch_record() {
+    use ade_ledger::governance::frozen::{RatificationOutcome, RatificationSource};
+    let (s, c) = decode_native_nonutxo_state(&build_state(&Knobs::default()), point(), 296, TESTNET_MAGIC)
+        .expect("decode");
+    assert_eq!(s.ratification.frozen_at(), ade_types::EpochNo(296));
+    assert_eq!(s.ratification.source(), RatificationSource::ImportedFromSnapshot);
+    match s.ratification.outcome() {
+        RatificationOutcome::Decided(d) => {
+            assert!(d.enacted.is_none());
+            assert_eq!(d.expired.len(), 1);
+        }
+        other => panic!("expected Decided, got {other:?}"),
+    }
+    // A change to the evidence alone (psDRepDistr 777 -> 778) moves the commitment.
+    let mut k = Knobs::default();
+    let pp = conway_pparams();
+    let mut pulser = drep_pulser(&pp, arr(0), false);
+    let at = pulser.windows(3).position(|w| w == [0x19, 0x03, 0x09]).expect("777 encoded as 0x19 0x0309");
+    pulser[at + 2] = 0x0a;
+    k.drep_pulser_override = Some(pulser);
+    let (_, c2) = decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC).expect("decode");
+    assert_ne!(c, c2, "the seed commitment binds the imported evidence");
+}
+
+/// CE-LV15b0-8: a decision whose parameters disagree with the snapshot's own `ensCurPParams` is refused.
+#[test]
+fn lv15b0_pulser_parameters_mismatch_is_refused() {
+    let mut k = Knobs::default();
+    k.drep_pulser_override = Some(drep_pulser(&conway_pparams_with_min_fee_a(45), arr(0), false));
+    assert_eq!(
+        decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC).err(),
+        Some(NativeNonUtxoError::RatificationImport(
+            ade_ledger::governance::frozen::RatificationImportRefusal::EnactedParametersMismatch
+        ))
+    );
+}
+
+/// CE-LV15b0-8: a parameter root after the decision that differs from the current root is refused.
+#[test]
+fn lv15b0_pulser_root_mismatch_is_refused() {
+    let mut k = Knobs::default();
+    let root = concat(&[arr(1), arr(2), bytes(&[0x60; 32]), uint(0)]);
+    k.drep_pulser_override = Some(drep_pulser(&conway_pparams(), root, false));
+    assert!(matches!(
+        decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC).err(),
+        Some(NativeNonUtxoError::RatificationImport(
+            ade_ledger::governance::frozen::RatificationImportRefusal::EnactedRootMismatch { .. }
+        ))
+    ));
+}
+
+/// CE-LV15b0-8: `rsDelayed` with a decision Ade can apply is refused (a delaying action was enacted).
+#[test]
+fn lv15b0_pulser_delayed_without_unenactable_action_is_refused() {
+    let mut k = Knobs::default();
+    k.drep_pulser_override = Some(drep_pulser(&conway_pparams(), arr(0), true));
+    assert_eq!(
+        decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC).err(),
+        Some(NativeNonUtxoError::RatificationImport(
+            ade_ledger::governance::frozen::RatificationImportRefusal::DelayedWithoutUnenactableAction
+        ))
+    );
+}
+
+/// A pulser that is not `array(2)` is malformed, never skipped or defaulted.
+#[test]
+fn lv15b0_malformed_pulser_is_refused() {
+    let mut k = Knobs::default();
+    k.drep_pulser_override = Some(arr(0));
+    assert!(matches!(
+        decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC).err(),
+        Some(NativeNonUtxoError::MalformedCbor(_))
+    ));
+}
+
+/// CE-LV15b0-3b (bootstrap): a snapshot whose account delegates to an unregistered DRep is refused, not cleaned
+/// up; one delegating to the registered DRep is accepted.
+#[test]
+fn lv15b0_dangling_vote_delegation_in_a_snapshot_is_refused() {
+    let mut k = Knobs::default();
+    k.umap_drep = Some(concat(&[arr(2), uint(0), bytes(&[0xD9; 28])]));
+    assert!(matches!(
+        decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC).err(),
+        Some(NativeNonUtxoError::DanglingVoteDelegation {
+            kind: ade_ledger::governance::DanglingVoteDelegationKind::UnregisteredDRep,
+            ..
+        })
+    ));
+    k.umap_drep = Some(concat(&[arr(2), uint(0), bytes(&[0xD1; 28])]));
+    assert!(decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC).is_ok());
 }

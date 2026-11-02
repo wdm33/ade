@@ -136,8 +136,9 @@ use crate::utxo::UTxOState;
 /// credential (key/script tag kept) and carry each pool's frozen reward parameters; a v4 snapshot has
 /// neither, so it is refused rather than read as "no pool parameters". v6 (LV-6) = the embedded epoch
 /// state carries the treasury-donation pot; a v5 record has none, so it is refused rather than read as an
-/// empty pot.
-pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = 6;
+/// empty pot. v7 (LV-15b-0) = the embedded governance state carries the frozen ratification record; a v6
+/// record has none, and one cannot be rebuilt from its end-of-epoch state, so it is refused.
+pub const EPOCH_ACCUMULATOR_SCHEMA_VERSION: u32 = 7;
 
 /// The non-UTxO authority a self-sustaining ledger maintains beside the disk-backed reduced UTxO
 /// checkpoint. Closed record — all fields required at construction; no `Default`, no
@@ -2406,6 +2407,7 @@ mod tests {
             .insert(pool(0x44), sample_pool_params(0x44, key_account(0x0B)));
         acc.protocol_params = conway_params();
         acc.gov_state = Some(ConwayGovState {
+            ratification: crate::state::RatificationState::Unversioned,
             prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
@@ -2680,13 +2682,13 @@ mod tests {
         // deposit params or the bootstrap-RUPD feeSS (delta_fees).
         let acc = populated();
         let bytes = encode_epoch_accumulator(&acc);
-        // outer array header is one byte; the version uint follows. v6 (=0x06) → patch down to a v1 store (0x01).
+        // outer array header is one byte; the version uint follows. v7 (=0x07) → patch down to a v1 store (0x01).
         let mut buf = bytes.clone();
-        assert_eq!(buf[1], 0x06);
+        assert_eq!(buf[1], 0x07);
         buf[1] = 0x01;
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::UnknownVersion {
-                expected: 6,
+                expected: 7,
                 found: 1,
             }) => {}
             other => panic!("expected UnknownVersion, got {other:?}"),
@@ -2702,11 +2704,11 @@ mod tests {
         let acc = populated();
         let bytes = encode_epoch_accumulator(&acc);
         let mut buf = bytes.clone();
-        assert_eq!(buf[1], 0x06, "current version is v6");
+        assert_eq!(buf[1], 0x07, "current version is v7");
         buf[1] = 0x03; // a fee-pot-era store, pre snapshot-inclusion fix
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::UnknownVersion {
-                expected: 6,
+                expected: 7,
                 found: 3,
             }) => {}
             other => panic!("a pre-C v3 store must fail closed (re-bootstrap required), got {other:?}"),
@@ -2718,11 +2720,11 @@ mod tests {
     #[test]
     fn codec_rejects_pre_lv4_store_rebootstrap_required() {
         let mut buf = encode_epoch_accumulator(&populated());
-        assert_eq!(buf[1], 0x06);
+        assert_eq!(buf[1], 0x07);
         buf[1] = 0x04;
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::UnknownVersion {
-                expected: 6,
+                expected: 7,
                 found: 4,
             }) => {}
             other => panic!("a pre-LV-4 v4 store must fail closed, got {other:?}"),
@@ -2734,14 +2736,30 @@ mod tests {
     #[test]
     fn codec_rejects_pre_lv6_store_rebootstrap_required() {
         let mut buf = encode_epoch_accumulator(&populated());
-        assert_eq!(buf[1], 0x06);
+        assert_eq!(buf[1], 0x07);
         buf[1] = 0x05;
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::UnknownVersion {
-                expected: 6,
+                expected: 7,
                 found: 5,
             }) => {}
             other => panic!("a pre-LV-6 v5 store must fail closed, got {other:?}"),
+        }
+    }
+
+    // LV-15b-0: a v6 store's governance state has no frozen ratification record, and one cannot be rebuilt from
+    // end-of-epoch state. It fails closed on decode.
+    #[test]
+    fn codec_rejects_pre_lv15b0_store_rebootstrap_required() {
+        let mut buf = encode_epoch_accumulator(&populated());
+        assert_eq!(buf[1], 0x07);
+        buf[1] = 0x06;
+        match decode_epoch_accumulator(&buf) {
+            Err(EpochAccumulatorCodecError::UnknownVersion {
+                expected: 7,
+                found: 6,
+            }) => {}
+            other => panic!("a pre-LV-15b-0 v6 store must fail closed, got {other:?}"),
         }
     }
 
@@ -2771,16 +2789,16 @@ mod tests {
 
     #[test]
     fn codec_rejects_non_canonical_via_reencode_backstop() {
-        // Re-encode the version uint non-minimally: 0x06 (minimal) → 0x18 0x06 (1-byte-argument uint,
-        // same value 6). The value decodes correctly but re-encodes minimally, so the byte-canonical
+        // Re-encode the version uint non-minimally: 0x07 (minimal) → 0x18 0x07 (1-byte-argument uint,
+        // same value 7). The value decodes correctly but re-encodes minimally, so the byte-canonical
         // backstop (re-encode != input) rejects it fail-closed — the discipline that a valid value MUST
         // have exactly one accepted encoding.
         let bytes = encode_epoch_accumulator(&populated());
-        assert_eq!(bytes[1], 0x06, "version is encoded minimally");
+        assert_eq!(bytes[1], 0x07, "version is encoded minimally");
         let mut buf = Vec::with_capacity(bytes.len() + 1);
         buf.push(bytes[0]); // outer array header
         buf.push(0x18); // uint, 1-byte argument follows
-        buf.push(0x06); // = 6 (non-minimal)
+        buf.push(0x07); // = 7 (non-minimal)
         buf.extend_from_slice(&bytes[2..]);
         match decode_epoch_accumulator(&buf) {
             Err(EpochAccumulatorCodecError::MalformedCbor) => {}
@@ -3607,6 +3625,7 @@ mod tests {
         //     succeeds and sets drep_expiry = current_epoch + drep_activity.
         let drep = key_cred(0xAA);
         let gov = ConwayGovState {
+            ratification: crate::state::RatificationState::Unversioned,
             prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
@@ -4223,6 +4242,7 @@ mod tests {
 
     fn s3_empty_gov(lifetime: u64) -> ConwayGovState {
         ConwayGovState {
+            ratification: crate::state::RatificationState::Unversioned,
             prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: std::collections::BTreeMap::new(),
@@ -4626,6 +4646,21 @@ mod tests {
         acc
     }
 
+    /// `acc` as a boundary entering its epoch would have left it: with the ratification record frozen over its
+    /// current proposals and votes (LV-15b-0).
+    fn s4_frozen(acc: &mut EpochAccumulator) {
+        let mut view = acc.as_ledger_view();
+        let base = BoundaryBaseStake { boundary_point: SlotNo(0), canonical_credential_stake: BTreeMap::new() };
+        crate::governance::frozen::freeze_as_entered_for_test(&mut view, &base);
+        let recorded = view.gov_state.as_authoritative().unwrap().as_ref().unwrap().ratification.clone();
+        acc.gov_state.as_mut().unwrap().ratification = recorded;
+    }
+
+    fn s4_frozen_view(mut acc: EpochAccumulator) -> crate::state::LedgerState {
+        s4_frozen(&mut acc);
+        acc.as_ledger_view()
+    }
+
     /// Run the CRE S4.3 single governance authority against the accumulator's state, exactly as the boundary fn
     /// does (same inputs + the frozen pre-boundary registration view). Returns the plan or the structured terminal.
     fn s4_plan_for(
@@ -4864,7 +4899,7 @@ mod tests {
     /// ledger so the pot is the only treasury movement.
     #[test]
     fn lv6_the_boundary_moves_the_whole_pot_once_and_zeroes_it() {
-        let mut ledger = s4_acc_with_gov(Vec::new()).as_ledger_view();
+        let mut ledger = s4_frozen_view(s4_acc_with_gov(Vec::new()));
         ledger.epoch_state.treasury = Coin(1_952_221_204_641_186);
         ledger.epoch_state.donation_pot = Coin(500_000 + 500_000);
         let after = lv6_boundary(&ledger, 1341);
@@ -4881,7 +4916,7 @@ mod tests {
     fn lv6_donations_and_unclaimed_deposits_both_reach_the_treasury() {
         // 0xee is NOT registered: the expiring proposal's deposit is unclaimed -> treasury.
         let mut ledger =
-            s4_acc_with_gov(vec![s4_gas(0x01, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xee)]).as_ledger_view();
+            s4_frozen_view(s4_acc_with_gov(vec![s4_gas(0x01, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xee)]));
         ledger.epoch_state.donation_pot = Coin(1_000_000);
         let t0 = ledger.epoch_state.treasury.0;
         let after = lv6_boundary(&ledger, 1341);
@@ -4906,7 +4941,7 @@ mod tests {
             (StakeCredential::KeyHash(Hash28([0xC1; 28])), Vote::Yes),
             (StakeCredential::KeyHash(Hash28([0xC2; 28])), Vote::Yes),
         ];
-        let mut ledger = s4_acc_with_gov(vec![s4_gas(0x01, tw, votes, 1345, 0, 0xe0)]).as_ledger_view();
+        let mut ledger = s4_frozen_view(s4_acc_with_gov(vec![s4_gas(0x01, tw, votes, 1345, 0, 0xe0)]));
         ledger.epoch_state.treasury = Coin(1_000);
         ledger.epoch_state.donation_pot = Coin(1_000);
         let before = ledger.clone();
@@ -4929,7 +4964,7 @@ mod tests {
     /// DC-EPOCH-45 (f): overflow adding the pot to the treasury is a typed terminal, never a saturation.
     #[test]
     fn lv6_a_pot_that_would_overflow_the_treasury_is_a_terminal() {
-        let mut ledger = s4_acc_with_gov(Vec::new()).as_ledger_view();
+        let mut ledger = s4_frozen_view(s4_acc_with_gov(Vec::new()));
         ledger.epoch_state.treasury = Coin(u64::MAX - 5);
         ledger.epoch_state.donation_pot = Coin(10);
         let base = BoundaryBaseStake { boundary_point: SlotNo(0), canonical_credential_stake: BTreeMap::new() };
@@ -4947,11 +4982,10 @@ mod tests {
     /// one expiring (0x01 → registered 0xe0) + one carried (0x02) proposal, so the ONLY boundary delta is the
     /// governance delta.
     fn s43a_zero_reward_ledger() -> crate::state::LedgerState {
-        s4_acc_with_gov(vec![
+        s4_frozen_view(s4_acc_with_gov(vec![
             s4_gas(0x01, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
             s4_gas(0x02, s4_tw(), Vec::new(), 1366, 100_000_000_000, 0xe1),
-        ])
-        .as_ledger_view()
+        ]))
     }
 
     /// GATE 1 — cross-path equality. The single authority lives inside the shared boundary fn and ignores the
@@ -5009,7 +5043,7 @@ mod tests {
             crate::pparams::MaxBlockExUnits::Bound { mem: 62_000_000, steps: 20_000_000_000 };
         acc.gov_state.as_mut().unwrap().prev_pparam_action =
             crate::state::PreviousPParamAction::Enacted(root.clone());
-        let ledger = acc.as_ledger_view();
+        let ledger = s4_frozen_view(acc);
 
         let base = BoundaryBaseStake { boundary_point: SlotNo(0), canonical_credential_stake: BTreeMap::new() };
         let (replay, _) = apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&base), 21_600)
@@ -5051,20 +5085,19 @@ mod tests {
         assert_eq!(replay.cert_state.as_authoritative().expect("authoritative cert state in test").delegation.rewards.get(&e1), Some(&Coin(100_000_000_000)), "sibling refund");
     }
 
-    /// LV-15b ratification-timing witness. Records what Ade does TODAY on the late-vote case; cardano-ledger
-    /// disagrees, and LV-15b-1 must invert the 1342 assertions.
+    /// CE-LV15b0-1 (boundary): a vote cast during epoch E does not enact at E→E+1; it enacts at E+1→E+2.
     ///
     /// The case is cardano-ledger cb57dc73 `Conway/Imp/EpochSpec.hs` "proposal is accepted after two epochs":
     /// - a ParameterChange is pending when epoch E (1341 here) starts, with no votes;
     /// - the votes arrive during E;
     /// - Cardano leaves the parameter unchanged across E→E+1 and enacts it at E+1→E+2.
     ///
-    /// The E→E+1 boundary enacts whatever the DRep pulser ratified, and that pulser was seeded at the start of
-    /// E (`Conway/Rules/Epoch.hs`: `extractDRepPulsingState`, then `setFreshDRepPulsingState`). Ade instead
-    /// ratifies at the boundary over the proposals and votes current at that moment, so it enacts one epoch
-    /// early.
+    /// The E→E+1 boundary applies what was ratified over the state frozen at the start of E
+    /// (`Conway/Rules/Epoch.hs`: `extractDRepPulsingState`, then `setFreshDRepPulsingState`), so the late votes
+    /// count only in the next cycle. Before LV-15b-0 Ade ratified at the boundary over the votes current then
+    /// and enacted one epoch early; this test recorded that, and is now inverted.
     #[test]
-    fn lv15b_a_vote_cast_during_epoch_e_enacts_at_e_plus_1_in_ade_but_e_plus_2_in_cardano() {
+    fn ce_lv15b0_1_a_vote_cast_during_epoch_e_enacts_at_e_plus_2() {
         const WITNESS: &[u8] = &[
             0xa2, 0x14, 0x82, 0x1a, 0x00, 0xfb, 0xc5, 0x20, 0x1b, 0x00, 0x00, 0x00, 0x02, 0x54, 0x0b, 0xe4,
             0x00, 0x15, 0x82, 0x1a, 0x04, 0x4a, 0xa2, 0x00, 0x1b, 0x00, 0x00, 0x00, 0x04, 0xa8, 0x17, 0xc8,
@@ -5082,32 +5115,151 @@ mod tests {
         let initial_mem = acc.protocol_params.max_tx_ex_units_mem;
         let base = BoundaryBaseStake { boundary_point: SlotNo(0), canonical_credential_stake: BTreeMap::new() };
 
-        // 1340 → 1341 (start of E): no votes, nothing ratifies, the proposal is carried.
+        // 1340 → 1341 (start of E): no votes, nothing ratifies, the proposal is carried and E's record is frozen
+        // over it.
         let (mut at_e, _) =
-            apply_epoch_boundary_with_registrations(&acc.as_ledger_view(), EpochNo(1341), None, Some(&base), 21_600)
+            apply_epoch_boundary_with_registrations(&s4_frozen_view(acc), EpochNo(1341), None, Some(&base), 21_600)
                 .expect("into E");
         assert_eq!(at_e.protocol_params.max_tx_ex_units_mem, initial_mem, "nothing enacted entering E");
         let gov = at_e.gov_state.as_authoritative_mut().unwrap().as_mut().unwrap();
         assert_eq!(gov.proposals.len(), 1, "the proposal is carried into E");
+        match &gov.ratification {
+            crate::state::RatificationState::Recorded(r) => assert_eq!(r.frozen_at(), EpochNo(1341)),
+            other => panic!("entering E freezes E's record, got {other:?}"),
+        }
 
         // During E: the committee votes Yes (what apply_field19_votes records for a block in E).
-        gov.proposals[0].committee_votes = vec![
+        let yes = vec![
             (StakeCredential::KeyHash(Hash28([0xC1; 28])), Vote::Yes),
             (StakeCredential::KeyHash(Hash28([0xC2; 28])), Vote::Yes),
         ];
+        gov.proposals[0].committee_votes = yes.clone();
 
-        // E → E+1. Cardano: unchanged (`getParamValue shouldReturn initialParamValue`). Ade today: enacted.
+        // E → E+1: unchanged, as in Cardano (`getParamValue shouldReturn initialParamValue`); the proposal stays,
+        // with its votes.
         let (at_e1, _) =
             apply_epoch_boundary_with_registrations(&at_e, EpochNo(1342), None, Some(&base), 21_600)
                 .expect("into E+1");
+        assert_eq!(at_e1.protocol_params.max_tx_ex_units_mem, initial_mem, "not enacted at E→E+1");
+        let gov_e1 = at_e1.gov_state.as_authoritative().unwrap().as_ref().unwrap();
+        assert_eq!(gov_e1.proposals.len(), 1, "kept until E+1→E+2");
+        assert_eq!(gov_e1.proposals[0].committee_votes, yes, "with its votes");
+
+        // E+1 → E+2: the record frozen at the start of E+1 saw the votes, so it enacts now.
+        let (at_e2, _) =
+            apply_epoch_boundary_with_registrations(&at_e1, EpochNo(1343), None, Some(&base), 21_600)
+                .expect("into E+2");
+        assert_eq!(at_e2.protocol_params.max_tx_ex_units_mem, 16_500_000, "enacted at E+1→E+2");
+        assert!(at_e2.gov_state.as_authoritative().unwrap().as_ref().unwrap().proposals.is_empty());
+    }
+
+    /// CE-LV15b0-3 / CE-LV15b0-4 (boundary): the record frozen at a real boundary counts a vote-only delegator's
+    /// base UTxO stake and returning deposit toward its DRep, and takes the SPO distribution from the mark built
+    /// at this boundary (not `go`, which is empty here).
+    #[test]
+    fn ce_lv15b0_3_4_boundary_evidence_is_post_boundary_accounts_and_the_new_mark() {
+        let voter = StakeCredential::KeyHash(Hash28([0xe0; 28]));
+        let staker = StakeCredential::KeyHash(Hash28([0xA1; 28]));
+        let drep = ade_types::conway::cert::DRep::KeyHash(Hash28([0xD1; 28]));
+        let p = pool(0x11);
+        let mut acc =
+            s4_acc_with_gov(vec![s4_gas(0x01, s4_tw(), Vec::new(), 1366, 7_000, 0xe0)]);
+        {
+            let gov = acc.gov_state.as_mut().unwrap();
+            gov.drep_expiry.insert(StakeCredential::KeyHash(Hash28([0xD1; 28])), 1400);
+            gov.vote_delegations.insert(voter.clone(), drep.clone());
+            gov.num_dormant = crate::state::DormantEpochs::Bound(0);
+        }
+        acc.cert_state.delegation.registrations.insert(staker.clone(), Coin(2_000_000));
+        acc.cert_state.delegation.delegations.insert(staker.clone(), p.clone());
+        acc.cert_state.delegation.rewards.insert(staker.clone(), Coin(700));
+        let ledger = s4_frozen_view(acc);
+        let base = BoundaryBaseStake {
+            boundary_point: SlotNo(0),
+            canonical_credential_stake: [(voter, Coin(500)), (staker, Coin(300))].into_iter().collect(),
+        };
+        let (after, _) = apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&base), 21_600)
+            .expect("boundary");
+        let gov = after.gov_state.as_authoritative().unwrap().as_ref().unwrap();
+        let record = match &gov.ratification {
+            crate::state::RatificationState::Recorded(r) => r,
+            other => panic!("expected a record, got {other:?}"),
+        };
+        let (proposals, dreps, pools) = record.evidence();
+        assert_eq!(record.frozen_at(), EpochNo(1341));
+        assert_eq!(proposals.len(), 1, "the carried proposal is in the frozen set");
+        assert_eq!(dreps.get(&drep), Some(&Coin(500 + 7_000)), "UTxO stake + returning deposit");
+        let mark = &after.epoch_state.snapshots.as_authoritative().unwrap().mark.0;
+        assert_eq!(mark.pool_stakes.get(&p), Some(&Coin(1_000)), "the new mark: base 300 + reward 700");
+        assert_eq!(pools.get(&p), Some(&Coin(1_000)), "the SPO distribution is the new mark");
+    }
+
+    /// DC-EPOCH-47: a Conway boundary over a governance state without a record halts with zero mutation; the
+    /// record is never rebuilt from end-of-epoch state.
+    #[test]
+    fn lv15b0_boundary_refuses_a_state_without_a_record() {
+        let ledger = s4_acc_with_gov(vec![s4_gas(0x01, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0)])
+            .as_ledger_view();
+        let before = ledger.clone();
+        let base = BoundaryBaseStake { boundary_point: SlotNo(0), canonical_credential_stake: BTreeMap::new() };
+        let err = apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&base), 21_600)
+            .unwrap_err();
+        assert_eq!(err, crate::governance::GovernanceTerminal::RatificationRecordAbsent { boundary: EpochNo(1341) });
+        assert_eq!(ledger, before);
+    }
+
+    /// DC-EPOCH-47: a record is consumed only at the boundary ending its epoch. Skipping a boundary (1340's
+    /// record presented at 1341→1342) halts.
+    #[test]
+    fn lv15b0_boundary_refuses_a_record_from_another_epoch() {
+        let mut ledger = s4_frozen_view(s4_acc_with_gov(Vec::new()));
+        ledger.epoch_state.epoch = EpochNo(1341);
+        let base = BoundaryBaseStake { boundary_point: SlotNo(0), canonical_credential_stake: BTreeMap::new() };
+        let err = apply_epoch_boundary_with_registrations(&ledger, EpochNo(1342), None, Some(&base), 21_600)
+            .unwrap_err();
         assert_eq!(
-            at_e1.protocol_params.max_tx_ex_units_mem, 16_500_000,
-            "Ade enacts a vote cast during E at E→E+1; Cardano would still hold {initial_mem} here",
+            err,
+            crate::governance::GovernanceTerminal::RatificationRecordEpochMismatch {
+                frozen_at: EpochNo(1340),
+                boundary: EpochNo(1342),
+            }
         );
-        assert!(
-            at_e1.gov_state.as_authoritative().unwrap().as_ref().unwrap().proposals.is_empty(),
-            "Ade removes the proposal at E→E+1; Cardano keeps it, with its votes, until E+1→E+2",
-        );
+    }
+
+    /// CE-LV15b0-5 / CE-LV15b0-7 (boundary): committee and parameter changes during E do not change E's
+    /// outcome. After the freeze saw a passing committee vote, the committee is replaced, the quorum made
+    /// unreachable and the thresholds raised; the boundary still enacts, because it reads none of them.
+    #[test]
+    fn ce_lv15b0_5_7_changes_after_the_freeze_do_not_change_the_outcome() {
+        const WITNESS: &[u8] = &[
+            0xa2, 0x14, 0x82, 0x1a, 0x00, 0xfb, 0xc5, 0x20, 0x1b, 0x00, 0x00, 0x00, 0x02, 0x54, 0x0b, 0xe4,
+            0x00, 0x15, 0x82, 0x1a, 0x04, 0x4a, 0xa2, 0x00, 0x1b, 0x00, 0x00, 0x00, 0x04, 0xa8, 0x17, 0xc8,
+            0x00,
+        ];
+        let root = GovActionId { tx_hash: Hash32([0x60; 32]), index: 0 };
+        let action = GovAction::ParameterChange {
+            prev_action: Some(root.clone()), update: Vec::from(WITNESS), policy_hash: None,
+        };
+        let yes = vec![
+            (StakeCredential::KeyHash(Hash28([0xC1; 28])), Vote::Yes),
+            (StakeCredential::KeyHash(Hash28([0xC2; 28])), Vote::Yes),
+        ];
+        let mut acc = s4_acc_with_gov(vec![s4_gas(0x69, action, yes, 1345, 100_000_000_000, 0xe0)]);
+        acc.protocol_params.max_block_ex_units =
+            crate::pparams::MaxBlockExUnits::Bound { mem: 62_000_000, steps: 20_000_000_000 };
+        acc.gov_state.as_mut().unwrap().prev_pparam_action = crate::state::PreviousPParamAction::Enacted(root);
+        let mut ledger = s4_frozen_view(acc);
+        {
+            let gov = ledger.gov_state.as_authoritative_mut().unwrap().as_mut().unwrap();
+            gov.committee = [(StakeCredential::KeyHash(Hash28([0xC9; 28])), 1400u64)].into_iter().collect();
+            gov.committee_quorum = (1, 1);
+            gov.drep_voting_thresholds = vec![(1, 1); 10];
+            gov.pool_voting_thresholds = vec![(1, 1); 5];
+        }
+        let base = BoundaryBaseStake { boundary_point: SlotNo(0), canonical_credential_stake: BTreeMap::new() };
+        let (after, _) = apply_epoch_boundary_with_registrations(&ledger, EpochNo(1341), None, Some(&base), 21_600)
+            .expect("boundary");
+        assert_eq!(after.protocol_params.max_tx_ex_units_mem, 16_500_000, "E's frozen decision is applied");
     }
 
     /// GATE 2 — the 1340→1341 replay correction. Five expiring proposals crossed via the DIRECT-REPLAY path now
@@ -5115,14 +5267,13 @@ mod tests {
     /// Mirrors the CE-3d −500B shape: +400,000 ADA to 0xe0 (4) + +100,000 ADA to 0xe1 (1).
     #[test]
     fn cre_s4_3a_replay_path_refunds_all_five_expiries() {
-        let ledger = s4_acc_with_gov(vec![
+        let ledger = s4_frozen_view(s4_acc_with_gov(vec![
             s4_gas(0x01, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
             s4_gas(0x02, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
             s4_gas(0x03, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
             s4_gas(0x04, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe0),
             s4_gas(0x05, s4_tw(), Vec::new(), 1339, 100_000_000_000, 0xe1),
-        ])
-        .as_ledger_view();
+        ]));
         // The expired-deposit refund is the shared boundary authority (base-independent); supply an empty base
         // (Conway requires the base input). `apply_epoch_boundary_full` would terminal here — this ledger is
         // track_utxo=false, so the direct path has no UTxO to derive the base from (fail-closed, by design).
@@ -5151,7 +5302,7 @@ mod tests {
     /// constructed, so a terminal is a pure `Err` with no partial finalization.
     #[test]
     fn cre_s4_3a_potentially_ratifiable_terminals_both_paths() {
-        let ledger = s4_acc_with_gov(vec![s4_gas(
+        let ledger = s4_frozen_view(s4_acc_with_gov(vec![s4_gas(
             0x01,
             s4_tw(),
             vec![
@@ -5161,8 +5312,7 @@ mod tests {
             1339,
             100_000_000_000,
             0xe0,
-        )])
-        .as_ledger_view();
+        )]));
         // The governance terminal fires BEFORE the base-stake check (gov plan is step 0, mark is step 4), so both
         // paths return the governance terminal — the direct path via `apply_epoch_boundary_full` (base-less here),
         // the accumulator path with an (irrelevant) empty base.
@@ -5206,6 +5356,7 @@ mod tests {
             .delegation
             .registrations
             .insert(StakeCredential::KeyHash(Hash28([0xe0; 28])), Coin(2_000_000));
+        s4_frozen(&mut acc);
         let delta_treasury = Coin(1_000);
         let delta_reserves = Coin(2_000);
         let mut rd = BTreeMap::new();
@@ -5267,17 +5418,24 @@ mod tests {
         let rules_src = include_str!("rules.rs");
         let old_prepass = concat!("fn apply_gov", "_deposit_refunds");
         let old_planner = concat!("plan_deposit", "_refunds");
-        let authority = concat!("plan_conway_governance", "_epoch(");
+        // LV-15b-0: the boundary applies the frozen record and freezes the next one; it never runs the composed
+        // planner, which would re-decide over the state current at the boundary.
+        let authority = concat!("apply_ratification", "_record(");
+        let freeze = concat!("ratify", "_frozen(");
+        let planner = concat!("plan_conway_governance", "_epoch(");
         assert!(!acc_src.contains(old_prepass), "the accumulator gov pre-pass must not return");
         assert!(
             !acc_src.contains(old_planner) && !rules_src.contains(old_planner),
             "the old CPDE planner is gone (no second authority)",
         );
+        let rules_prod = rules_src.split(concat!("#[cfg", "(test)]")).next().unwrap_or(rules_src);
         assert_eq!(
-            rules_src.matches(authority).count(),
+            rules_prod.matches(authority).count(),
             1,
             "exactly one production applier of the governance authority (the shared boundary fn)",
         );
+        assert_eq!(rules_prod.matches(freeze).count(), 1, "exactly one production freeze (the shared boundary fn)");
+        assert_eq!(rules_prod.matches(planner).count(), 0, "the boundary never runs the composed planner");
         // TOTAL single-authority: the accumulator's PRODUCTION code (before its sole `#[cfg(test)]` marker)
         // makes ZERO planner calls — the one occurrence in this file is the `s4_plan_for` TEST helper. A future
         // production pre-pass under ANY name pushes this above 0 and trips the gate (closes the review's

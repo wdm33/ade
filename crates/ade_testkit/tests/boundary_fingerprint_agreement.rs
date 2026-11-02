@@ -87,6 +87,11 @@ struct BoundaryHashes {
 /// the byron→shelley HFC capture). Source for this regen run: corpus
 /// described in `corpus/snapshots/registry.toml`.
 ///
+/// The two Conway pins (`babbage_pre_hfc`, which loads as Conway, and `conway_epoch_508`) were regenerated
+/// for LV-15b-0: the loader now imports each snapshot's finished ratification (`govState[6]`) into the
+/// governance state, and the V4 governance fingerprint binds it. Only the `governance` component (and so
+/// `combined`) moved; with the import disabled both reproduce the previous pins exactly.
+///
 /// Note: the `utxo` component is the same across all snapshots because
 /// `LoadedSnapshot::to_ledger_state` does not reconstruct the UTxO from
 /// the compact on-disk format (documented limitation of the bridge).
@@ -121,7 +126,7 @@ const SNAPSHOTS: &[(&str, &str, &str)] = &[
     (
         "babbage_pre_hfc",
         "snapshot_133660855.tar.gz",
-        "3a761e47a8963284b74383db934c31e3334d7fe34ef9d359b4138d763fac9e15",
+        "d4ce29c425756a4ac5e21bd5fb1caf4416a1c3607959d551136c1eddafd97a72",
     ),
     (
         "shelley_epoch_209",
@@ -151,7 +156,7 @@ const SNAPSHOTS: &[(&str, &str, &str)] = &[
     (
         "conway_epoch_508",
         "snapshot_134092810.tar.gz",
-        "e49c176c3f5a6e9b79f48b9c3b190de56dc1948a369a7ae5637f89c200266dfb",
+        "fc76b18796216c5a343f5850461abf2a93b573f826ed74cd9c2e7fb5bd7e159e",
     ),
 ];
 

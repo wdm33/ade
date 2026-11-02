@@ -1541,6 +1541,7 @@ mod tests {
         let s2 = store(&tmp2);
         let mut boot_empty = acc_bootstrap();
         boot_empty.gov_state = Some(ConwayGovState {
+            ratification: ade_ledger::state::RatificationState::Unversioned,
             prev_pparam_action: ade_ledger::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: std::collections::BTreeMap::new(),

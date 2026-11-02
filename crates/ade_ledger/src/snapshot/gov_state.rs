@@ -25,12 +25,18 @@ use ade_codec::CodecError;
 use ade_types::conway::cert::DRep;
 use ade_types::conway::governance::{GovAction, GovActionId, GovActionState, Vote};
 use ade_types::shelley::cert::StakeCredential;
-use ade_types::tx::Coin;
+use ade_types::tx::{Coin, PoolId};
 use ade_types::{EpochNo, Hash28, Hash32};
 
+use crate::governance::frozen::{
+    RatificationOutcome, RatificationRecord, RatificationSource, UnenactableReason,
+};
+use crate::governance::{
+    CanonicalFieldSet, EnactedParameterChange, RatificationDecision, UnsupportedActionKind,
+};
 use crate::pparams::{ConwayOnlyDepositParams, MinUtxoRule, ProtocolParameters};
 use crate::rational::Rational;
-use crate::state::{ConwayGovState, DormantEpochs, PreviousPParamAction};
+use crate::state::{ConwayGovState, DormantEpochs, PreviousPParamAction, RatificationState};
 
 use super::cert_state::read_stake_credential;
 use super::error::{SnapshotDecodeError, StructuralReason};
@@ -202,7 +208,10 @@ pub fn encode_gov_state(g: &ConwayGovState) -> Vec<u8> {
     let dormant_bound = matches!(g.num_dormant, DormantEpochs::Bound(_));
     let prev_known = !matches!(g.prev_pparam_action, PreviousPParamAction::Unversioned);
     debug_assert!(!prev_known || dormant_bound, "V3 prev_pparam_action requires Bound num_dormant");
-    let n_fields: u64 = GOV_FIELDS + (dormant_bound as u64) + (prev_known as u64);
+    // V4 (+ Recorded ratification) = 12. A record implies a V3 state.
+    let recorded = matches!(g.ratification, RatificationState::Recorded(_));
+    debug_assert!(!recorded || prev_known, "V4 ratification requires a V3 state");
+    let n_fields: u64 = GOV_FIELDS + (dormant_bound as u64) + (prev_known as u64) + (recorded as u64);
     write_array_header(
         &mut buf,
         ContainerEncoding::Definite(n_fields, canonical_width(n_fields)),
@@ -314,6 +323,10 @@ pub fn encode_gov_state(g: &ConwayGovState) -> Vec<u8> {
             write_gov_action_id(&mut buf, id);
         }
     }
+    // ratification (V4 ONLY; Unversioned emits nothing, keeping V1-V3 byte-identical).
+    if let RatificationState::Recorded(r) = &g.ratification {
+        write_ratification_record(&mut buf, r);
+    }
     buf
 }
 
@@ -322,7 +335,7 @@ pub fn decode_gov_state(bytes: &[u8]) -> Result<ConwayGovState, SnapshotDecodeEr
     // VERSIONED: a 9-field array is V1 (`Unversioned`); a 10-field array is V2 (`Bound`, `num_dormant`
     // appended). Any other arity is a structural error. Historical V1 bytes decode unchanged.
     let n_gov_fields = read_array_len(bytes, &mut o)?;
-    if n_gov_fields != GOV_FIELDS && n_gov_fields != GOV_FIELDS + 1 && n_gov_fields != GOV_FIELDS + 2 {
+    if !(GOV_FIELDS..=GOV_FIELDS + 3).contains(&n_gov_fields) {
         return Err(SnapshotDecodeError::Structural {
             reason: StructuralReason::ArrayLengthMismatch,
         });
@@ -396,7 +409,7 @@ pub fn decode_gov_state(bytes: &[u8]) -> Result<ConwayGovState, SnapshotDecodeEr
     };
     // prev_pparam_action: V3 (11 fields) carries it (array(0)=NoPreviousAction, array(1)[id]=Enacted); V1/V2
     // predate it -> Unversioned (NEVER fabricated).
-    let prev_pparam_action = if n_gov_fields == GOV_FIELDS + 2 {
+    let prev_pparam_action = if n_gov_fields >= GOV_FIELDS + 2 {
         let n = read_array_len(bytes, &mut o)?;
         match n {
             0 => PreviousPParamAction::NoPreviousAction,
@@ -410,7 +423,14 @@ pub fn decode_gov_state(bytes: &[u8]) -> Result<ConwayGovState, SnapshotDecodeEr
     } else {
         PreviousPParamAction::Unversioned
     };
+    // ratification: V4 (12 fields) carries the record; V1-V3 predate it -> Unversioned (never synthesized).
+    let ratification = if n_gov_fields == GOV_FIELDS + 3 {
+        RatificationState::Recorded(read_ratification_record(bytes, &mut o)?)
+    } else {
+        RatificationState::Unversioned
+    };
     Ok(ConwayGovState {
+        ratification,
         proposals,
         committee,
         committee_quorum: (q_num, q_den),
@@ -946,6 +966,228 @@ fn read_vote(bytes: &[u8], o: &mut usize) -> Result<Vote, SnapshotDecodeError> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// RatificationRecord (LV-15b-0, governance V4)
+// ---------------------------------------------------------------------------
+//
+// record   = array(6)[frozen_at, source(0 Frozen | 1 ImportedFromSnapshot), [frozen proposal id, ...],
+//                     {DRep => coin}, {pool28 => coin}, outcome]
+// outcome  = array(2)[0, decision] | array(2)[1, reason]
+// decision = array(2)[null | array(3)[id, null | superseded_root, bytes(encode_pparams)], [expired id, ...]]
+// reason   = array(4)[0, id, kind, [key, ...]] | array(2)[1, id] | array(1)[2]
+//
+// Map keys and the expired list are strictly ascending; the decoder refuses anything else.
+
+fn structural(reason: StructuralReason) -> SnapshotDecodeError {
+    SnapshotDecodeError::Structural { reason }
+}
+
+fn unsupported_kind_tag(k: UnsupportedActionKind) -> u64 {
+    match k {
+        UnsupportedActionKind::NotParameterChange => 0,
+        UnsupportedActionKind::UnsupportedPParamField => 1,
+        UnsupportedActionKind::NoEnactableField => 2,
+        UnsupportedActionKind::ChangedSteps => 3,
+        UnsupportedActionKind::OversizedUpdate => 4,
+        UnsupportedActionKind::MalformedUpdate => 5,
+        UnsupportedActionKind::ChainedEnactment => 6,
+        UnsupportedActionKind::CompetingRatifiableActions => 7,
+    }
+}
+
+fn unsupported_kind_from_tag(t: u64) -> Result<UnsupportedActionKind, SnapshotDecodeError> {
+    Ok(match t {
+        0 => UnsupportedActionKind::NotParameterChange,
+        1 => UnsupportedActionKind::UnsupportedPParamField,
+        2 => UnsupportedActionKind::NoEnactableField,
+        3 => UnsupportedActionKind::ChangedSteps,
+        4 => UnsupportedActionKind::OversizedUpdate,
+        5 => UnsupportedActionKind::MalformedUpdate,
+        6 => UnsupportedActionKind::ChainedEnactment,
+        7 => UnsupportedActionKind::CompetingRatifiableActions,
+        _ => return Err(structural(StructuralReason::EraTagOutOfRange)),
+    })
+}
+
+pub(crate) fn write_ratification_record(buf: &mut Vec<u8>, r: &RatificationRecord) {
+    let (proposals, dreps, pools) = r.evidence();
+    write_array_header(buf, ContainerEncoding::Definite(6, IntWidth::Inline));
+    write_uint_canonical(buf, r.frozen_at().0);
+    write_uint_canonical(
+        buf,
+        match r.source() {
+            RatificationSource::Frozen => 0,
+            RatificationSource::ImportedFromSnapshot => 1,
+        },
+    );
+    write_array_header(buf, ContainerEncoding::Definite(proposals.len() as u64, canonical_width(proposals.len() as u64)));
+    for id in proposals {
+        write_gov_action_id(buf, id);
+    }
+    write_map_header(buf, ContainerEncoding::Definite(dreps.len() as u64, canonical_width(dreps.len() as u64)));
+    for (d, c) in dreps {
+        write_drep(buf, d);
+        write_uint_canonical(buf, c.0);
+    }
+    write_map_header(buf, ContainerEncoding::Definite(pools.len() as u64, canonical_width(pools.len() as u64)));
+    for (p, c) in pools {
+        write_bytes_canonical(buf, &p.0 .0);
+        write_uint_canonical(buf, c.0);
+    }
+    write_array_header(buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+    match r.outcome() {
+        RatificationOutcome::Decided(d) => {
+            write_uint_canonical(buf, 0);
+            write_array_header(buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+            match &d.enacted {
+                None => write_null(buf),
+                Some(e) => {
+                    write_array_header(buf, ContainerEncoding::Definite(3, IntWidth::Inline));
+                    write_gov_action_id(buf, &e.action_id);
+                    write_opt_gov_action_id(buf, e.superseded_root.as_ref());
+                    write_bytes_canonical(buf, &encode_pparams(&e.pparams));
+                }
+            }
+            write_array_header(
+                buf,
+                ContainerEncoding::Definite(d.expired.len() as u64, canonical_width(d.expired.len() as u64)),
+            );
+            for id in &d.expired {
+                write_gov_action_id(buf, id);
+            }
+        }
+        RatificationOutcome::Unenactable(reason) => {
+            write_uint_canonical(buf, 1);
+            match reason {
+                UnenactableReason::UnsupportedRatifiedAction { action_id, kind, unsupported_keys } => {
+                    write_array_header(buf, ContainerEncoding::Definite(4, IntWidth::Inline));
+                    write_uint_canonical(buf, 0);
+                    write_gov_action_id(buf, action_id);
+                    write_uint_canonical(buf, unsupported_kind_tag(*kind));
+                    let keys = &unsupported_keys.0;
+                    write_array_header(
+                        buf,
+                        ContainerEncoding::Definite(keys.len() as u64, canonical_width(keys.len() as u64)),
+                    );
+                    for k in keys {
+                        write_uint_canonical(buf, *k);
+                    }
+                }
+                UnenactableReason::UnversionedStateOnEnactPath { action_id } => {
+                    write_array_header(buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+                    write_uint_canonical(buf, 1);
+                    write_gov_action_id(buf, action_id);
+                }
+                UnenactableReason::DormantRequired => {
+                    write_array_header(buf, ContainerEncoding::Definite(1, IntWidth::Inline));
+                    write_uint_canonical(buf, 2);
+                }
+            }
+        }
+    }
+}
+
+/// Insert `k` only if it is strictly greater than every key already present.
+fn insert_ascending<K: Ord, V>(m: &mut BTreeMap<K, V>, k: K, v: V) -> Result<(), SnapshotDecodeError> {
+    if m.last_key_value().is_some_and(|(last, _)| *last >= k) {
+        return Err(structural(StructuralReason::ArrayLengthMismatch));
+    }
+    m.insert(k, v);
+    Ok(())
+}
+
+pub(crate) fn read_ratification_record(
+    bytes: &[u8],
+    o: &mut usize,
+) -> Result<RatificationRecord, SnapshotDecodeError> {
+    expect_array(bytes, o, 6)?;
+    let frozen_at = EpochNo(read_u64(bytes, o)?);
+    let source = match read_u64(bytes, o)? {
+        0 => RatificationSource::Frozen,
+        1 => RatificationSource::ImportedFromSnapshot,
+        _ => return Err(structural(StructuralReason::EraTagOutOfRange)),
+    };
+    let mut proposals: BTreeSet<GovActionId> = BTreeSet::new();
+    for _ in 0..read_array_len(bytes, o)? {
+        let id = read_gov_action_id(bytes, o)?;
+        if proposals.last().is_some_and(|last| *last >= id) {
+            return Err(structural(StructuralReason::ArrayLengthMismatch));
+        }
+        proposals.insert(id);
+    }
+    let mut dreps: BTreeMap<DRep, Coin> = BTreeMap::new();
+    for _ in 0..read_map_len(bytes, o)? {
+        let d = read_drep(bytes, o)?;
+        let c = Coin(read_u64(bytes, o)?);
+        insert_ascending(&mut dreps, d, c)?;
+    }
+    let mut pools: BTreeMap<PoolId, Coin> = BTreeMap::new();
+    for _ in 0..read_map_len(bytes, o)? {
+        let (h, _) = read_bytes(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
+        let arr: [u8; 28] =
+            h.as_slice().try_into().map_err(|_| structural(StructuralReason::Hash28LengthMismatch))?;
+        let c = Coin(read_u64(bytes, o)?);
+        insert_ascending(&mut pools, PoolId(Hash28(arr)), c)?;
+    }
+    expect_array(bytes, o, 2)?;
+    let outcome = match read_u64(bytes, o)? {
+        0 => {
+            expect_array(bytes, o, 2)?;
+            let enacted = if *o < bytes.len() && bytes[*o] == 0xF6 {
+                *o += 1;
+                None
+            } else {
+                expect_array(bytes, o, 3)?;
+                let action_id = read_gov_action_id(bytes, o)?;
+                let superseded_root = read_opt_gov_action_id(bytes, o)?;
+                let (pp, _) = read_bytes(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
+                Some(EnactedParameterChange {
+                    action_id,
+                    superseded_root,
+                    pparams: Box::new(decode_pparams(&pp)?),
+                })
+            };
+            let mut expired: BTreeSet<GovActionId> = BTreeSet::new();
+            for _ in 0..read_array_len(bytes, o)? {
+                let id = read_gov_action_id(bytes, o)?;
+                if expired.last().is_some_and(|last| *last >= id) {
+                    return Err(structural(StructuralReason::ArrayLengthMismatch));
+                }
+                expired.insert(id);
+            }
+            RatificationOutcome::Decided(RatificationDecision { enacted, expired })
+        }
+        1 => {
+            let n = read_array_len(bytes, o)?;
+            let reason = match (n, read_u64(bytes, o)?) {
+                (4, 0) => {
+                    let action_id = read_gov_action_id(bytes, o)?;
+                    let kind = unsupported_kind_from_tag(read_u64(bytes, o)?)?;
+                    let mut keys: BTreeSet<u64> = BTreeSet::new();
+                    for _ in 0..read_array_len(bytes, o)? {
+                        let k = read_u64(bytes, o)?;
+                        if keys.last().is_some_and(|last| *last >= k) {
+                            return Err(structural(StructuralReason::ArrayLengthMismatch));
+                        }
+                        keys.insert(k);
+                    }
+                    UnenactableReason::UnsupportedRatifiedAction {
+                        action_id,
+                        kind,
+                        unsupported_keys: CanonicalFieldSet(keys),
+                    }
+                }
+                (2, 1) => UnenactableReason::UnversionedStateOnEnactPath { action_id: read_gov_action_id(bytes, o)? },
+                (1, 2) => UnenactableReason::DormantRequired,
+                _ => return Err(structural(StructuralReason::ArrayLengthMismatch)),
+            };
+            RatificationOutcome::Unenactable(reason)
+        }
+        _ => return Err(structural(StructuralReason::EraTagOutOfRange)),
+    };
+    Ok(RatificationRecord::from_parts(frozen_at, source, proposals, dreps, pools, outcome))
+}
+
 fn read_u64(bytes: &[u8], o: &mut usize) -> Result<u64, SnapshotDecodeError> {
     let (v, _is_neg, _w) = read_any_int(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
     Ok(v)
@@ -1111,6 +1353,7 @@ mod tests {
 
     fn make_gov_state() -> ConwayGovState {
         let mut g = ConwayGovState {
+            ratification: crate::state::RatificationState::Unversioned,
             prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
@@ -1211,6 +1454,7 @@ mod tests {
     #[test]
     fn gov_state_round_trip_empty() {
         let g = ConwayGovState {
+            ratification: crate::state::RatificationState::Unversioned,
             prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
@@ -1280,5 +1524,127 @@ mod tests {
         assert_eq!(decode_gov_state(&b2_3).expect("decode").num_dormant, DormantEpochs::Bound(3));
         assert_ne!(b1, b2_0, "Unversioned and Bound(0) are NOT byte-equal (no fabricated-0 collision)");
         assert_ne!(b2_0, b2_3, "Bound(0) and Bound(3) are NOT byte-equal");
+    }
+
+    fn v4_records() -> Vec<RatificationRecord> {
+        let id = |b: u8| GovActionId { tx_hash: Hash32([b; 32]), index: b as u32 };
+        let dreps: BTreeMap<DRep, Coin> = [
+            (DRep::KeyHash(Hash28([0xD1; 28])), Coin(7)),
+            (DRep::ScriptHash(Hash28([0xD2; 28])), Coin(0)),
+            (DRep::AlwaysAbstain, Coin(5)),
+            (DRep::AlwaysNoConfidence, Coin(u64::MAX)),
+        ]
+        .into_iter()
+        .collect();
+        let pools: BTreeMap<PoolId, Coin> =
+            [(PoolId(Hash28([0x01; 28])), Coin(0)), (PoolId(Hash28([0x02; 28])), Coin(9))].into_iter().collect();
+        let pp = ProtocolParameters {
+            max_block_ex_units: crate::pparams::MaxBlockExUnits::Bound { mem: 72_000_000, steps: 20_000_000_000 },
+            ..Default::default()
+        };
+        let outcomes = vec![
+            RatificationOutcome::Decided(RatificationDecision { enacted: None, expired: BTreeSet::new() }),
+            RatificationOutcome::Decided(RatificationDecision {
+                enacted: Some(EnactedParameterChange {
+                    action_id: id(0x69),
+                    superseded_root: Some(id(0x60)),
+                    pparams: Box::new(pp.clone()),
+                }),
+                expired: [id(0x10), id(0x11)].into_iter().collect(),
+            }),
+            RatificationOutcome::Decided(RatificationDecision {
+                enacted: Some(EnactedParameterChange { action_id: id(0x69), superseded_root: None, pparams: Box::new(pp) }),
+                expired: BTreeSet::new(),
+            }),
+            RatificationOutcome::Unenactable(UnenactableReason::UnsupportedRatifiedAction {
+                action_id: id(0x80),
+                kind: UnsupportedActionKind::UnsupportedPParamField,
+                unsupported_keys: CanonicalFieldSet([16u64, 42].into_iter().collect()),
+            }),
+            RatificationOutcome::Unenactable(UnenactableReason::UnversionedStateOnEnactPath { action_id: id(0x81) }),
+            RatificationOutcome::Unenactable(UnenactableReason::DormantRequired),
+        ];
+        let mut out = Vec::new();
+        for (i, outcome) in outcomes.into_iter().enumerate() {
+            let source =
+                if i % 2 == 0 { RatificationSource::Frozen } else { RatificationSource::ImportedFromSnapshot };
+            let proposals = [id(0x10), id(0x69)].into_iter().collect();
+            out.push(RatificationRecord::from_parts(EpochNo(305), source, proposals, dreps.clone(), pools.clone(), outcome));
+        }
+        out
+    }
+
+    fn v4_gov(r: RatificationRecord) -> ConwayGovState {
+        let mut g = make_gov_state();
+        g.num_dormant = DormantEpochs::Bound(2);
+        g.prev_pparam_action = PreviousPParamAction::NoPreviousAction;
+        g.ratification = RatificationState::Recorded(r);
+        g
+    }
+
+    /// CE-LV15b0-10/11 (codec): every record shape round-trips through the V4 governance encoding byte-exactly,
+    /// and a V4 state is a 12-field array.
+    #[test]
+    fn lv15b0_v4_record_round_trips_byte_exact() {
+        for r in v4_records() {
+            let g = v4_gov(r);
+            let enc = encode_gov_state(&g);
+            assert_eq!(enc[0], 0x8c, "V4 governance is a 12-element array");
+            let dec = decode_gov_state(&enc).expect("decode");
+            assert_eq!(dec, g);
+            assert_eq!(encode_gov_state(&dec), enc, "V4 fixpoint");
+        }
+    }
+
+    /// A V3 state (no record) decodes as `Unversioned`, never as a synthesized record, and stays byte-identical.
+    #[test]
+    fn lv15b0_v3_bytes_decode_unversioned() {
+        let mut g = v4_gov(v4_records().remove(0));
+        g.ratification = RatificationState::Unversioned;
+        let enc = encode_gov_state(&g);
+        assert_eq!(enc[0], 0x8b, "V3 governance is an 11-element array");
+        assert_eq!(decode_gov_state(&enc).expect("decode").ratification, RatificationState::Unversioned);
+    }
+
+    /// The record's evidence is part of the encoding: two records differing only in one distribution entry encode
+    /// differently, so a change to the evidence is visible in the store and the fingerprint.
+    #[test]
+    fn lv15b0_evidence_only_change_is_visible() {
+        let r = v4_records().remove(0);
+        let (proposals, dreps, pools) = r.evidence();
+        let mut dreps2 = dreps.clone();
+        dreps2.insert(DRep::AlwaysAbstain, Coin(6));
+        let r2 = RatificationRecord::from_parts(
+            r.frozen_at(),
+            r.source(),
+            proposals.clone(),
+            dreps2,
+            pools.clone(),
+            r.outcome().clone(),
+        );
+        let (a, b) = (v4_gov(r), v4_gov(r2));
+        assert_ne!(encode_gov_state(&a), encode_gov_state(&b));
+        let fp = |g: &ConwayGovState| {
+            let mut s = crate::state::LedgerState::new(ade_types::CardanoEra::Conway);
+            s.gov_state = crate::state::GovStateProjection::Authoritative(Some(g.clone()));
+            crate::fingerprint::fingerprint(&s).combined
+        };
+        assert_ne!(fp(&a), fp(&b), "the governance fingerprint binds the evidence");
+    }
+
+    /// The decoder refuses a map whose keys are not strictly ascending; it never collapses a duplicate.
+    #[test]
+    fn lv15b0_record_decoder_refuses_non_ascending_keys() {
+        let r = v4_records().remove(0);
+        let mut buf = Vec::new();
+        write_ratification_record(&mut buf, &r);
+        // Swap the pool map's two 28-byte keys (each `0x58 0x1c` + 28 bytes) so they descend.
+        let at = |b: u8| buf.windows(30).position(|w| w[0] == 0x58 && w[1] == 0x1c && w[2..] == [b; 28]).unwrap();
+        let (k1, k2) = (at(0x01), at(0x02));
+        for i in 0..28 {
+            buf.swap(k1 + 2 + i, k2 + 2 + i);
+        }
+        let mut o = 0;
+        assert!(read_ratification_record(&buf, &mut o).is_err());
     }
 }

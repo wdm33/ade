@@ -837,44 +837,33 @@ pub fn apply_epoch_boundary_with_registrations(
     let cert = state.cert_state.require_full(state.epoch_state.slot)?;
     let gov = state.gov_state.require_full(state.epoch_state.slot)?;
 
-    // 0. CRE S4.3 — plan the Conway governance epoch FIRST, from the immutable pre-boundary view, BEFORE any
-    // reward/treasury/proposal mutation. A terminal (potentially-ratifiable / malformed / dormant-required)
-    // returns HERE with zero resulting-state change. This is the SINGLE governance authority shared by the
-    // accumulator-follow and direct-replay boundaries — neither caller decides proposal removal or deposit
-    // routing independently. The plan is APPLIED once below, into the constructed next state.
+    // 0. CONSUME + APPLY (LV-15b-0 §4.4 steps 1-2, DC-EPOCH-47). Ratification for this boundary was DECIDED at the
+    // start of the ending epoch and frozen into the pre-boundary governance state's record; here it is only applied,
+    // to the proposals and registrations current now. Nothing read here (votes, stake, committee, thresholds,
+    // expiry) can change that decision. A state without a record, a record from another epoch, or an
+    // `Unenactable` record returns HERE with zero resulting-state change, BEFORE any reward/treasury/proposal
+    // mutation. The accumulator-follow and direct-replay boundaries both go through this function, so neither
+    // decides proposal removal or deposit routing independently.
     let gov_plan: Option<crate::governance::ConwayGovernanceEpochPlan> =
         if state.era == ade_types::CardanoEra::Conway {
             if let Some(gov) = gov.as_ref() {
-                let drep_stake = crate::governance::derive_drep_voting_stake(
-                    &gov.vote_delegations,
-                    &snaps.mark.0,
-                );
-                let committee_quorum = crate::rational::Rational::new(
-                    gov.committee_quorum.0 as i128,
-                    gov.committee_quorum.1.max(1) as i128,
-                )
-                .unwrap_or_else(crate::rational::Rational::one);
-                let input = crate::governance::ConwayGovernanceEpochInput {
-                    proposals: &gov.proposals,
-                    drep_stake: &drep_stake,
-                    pool_stake: &snaps.go.0.pool_stakes,
-                    committee_members: &gov.committee,
-                    committee_quorum: &committee_quorum,
-                    pool_thresholds: &gov.pool_voting_thresholds,
-                    drep_thresholds: &gov.drep_voting_thresholds,
-                    committee_hot_keys: &gov.committee_hot_keys,
-                    drep_expiry: &gov.drep_expiry,
-                    num_dormant: &gov.num_dormant,
-                    current_pparams: &state.protocol_params,
-                    current_prev_pparam_action: &gov.prev_pparam_action,
-                    new_epoch: new_epoch.0,
+                let record = match &gov.ratification {
+                    crate::state::RatificationState::Recorded(r) => r,
+                    crate::state::RatificationState::Unversioned => {
+                        return Err(crate::governance::GovernanceTerminal::RatificationRecordAbsent {
+                            boundary: new_epoch,
+                        })
+                    }
                 };
-                // Freeze the registration view used for deposit routing: the PRE-boundary registrations
-                // (no caller re-checks registration against a partially-updated state).
+                // Deposit routing reads the PRE-boundary registrations (no caller re-checks registration against a
+                // partially-updated state).
                 let registrations = &cert.delegation.registrations;
-                Some(crate::governance::plan_conway_governance_epoch(&input, |c| {
-                    registrations.contains_key(c)
-                })?)
+                Some(crate::governance::frozen::apply_ratification_record(
+                    record,
+                    new_epoch,
+                    &crate::governance::frozen::CurrentGovernanceState::pre_boundary(gov),
+                    |c| registrations.contains_key(c),
+                )?)
             } else {
                 None
             }
@@ -1519,6 +1508,8 @@ pub fn apply_epoch_boundary_with_registrations(
                     }
                     crate::governance::PrevPParamActionDelta::Unchanged => gov.prev_pparam_action.clone(),
                 },
+                // Consumed above; replaced by the record frozen over the constructed next state (§4.4 step 3).
+                ratification: gov.ratification.clone(),
             })
         }
         _ => gov.clone(),
@@ -1611,6 +1602,25 @@ pub fn apply_epoch_boundary_with_registrations(
         gov_state: crate::state::GovStateProjection::Authoritative(new_gov_state),
         conway_deposit_params: state.conway_deposit_params.clone(),
     };
+
+    // LV-15b-0 §4.4 step 3 (DC-EPOCH-47): FREEZE the ratification of the epoch just entered over the constructed
+    // next state, replacing the record consumed above. It is applied, unchanged, at the boundary that ends this
+    // epoch. This function is the only place a record is frozen.
+    let mut new_state = new_state;
+    if new_state.era == ade_types::CardanoEra::Conway {
+        let base = boundary_base_stake.ok_or(crate::governance::GovernanceTerminal::BoundaryBaseStakeRequired {
+            boundary_point: state.epoch_state.slot,
+        })?;
+        let record = match crate::governance::frozen::FrozenRatificationInput::at_boundary(&new_state, base)? {
+            Some(input) => Some(crate::governance::frozen::ratify_frozen(&input)?),
+            None => None,
+        };
+        if let (Some(record), crate::state::GovStateProjection::Authoritative(Some(g))) =
+            (record, &mut new_state.gov_state)
+        {
+            g.ratification = crate::state::RatificationState::Recorded(record);
+        }
+    }
 
     Ok((new_state, accounting))
 }
@@ -3153,6 +3163,7 @@ mod cert_state_dispatch {
 
     fn empty_gov() -> ConwayGovState {
         ConwayGovState {
+            ratification: crate::state::RatificationState::Unversioned,
             prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: std::collections::BTreeMap::new(),
@@ -3337,12 +3348,17 @@ mod cert_state_dispatch {
             drep_votes: Vec::new(),
             spo_votes: Vec::new(),
             deposit: Coin(0),
-            return_addr: Vec::new(),
+            return_addr: [vec![0xe0], vec![0xE5; 28]].concat(),
             gov_action: GovAction::NoConfidence { prev_action: None },
             proposed_in: EpochNo(499),
             expires_after: EpochNo(510),
         }];
         state.gov_state = crate::state::GovStateProjection::Authoritative(Some(gov));
+        let empty_base = crate::epoch_accumulator::BoundaryBaseStake {
+            boundary_point: state.epoch_state.slot,
+            canonical_credential_stake: std::collections::BTreeMap::new(),
+        };
+        crate::governance::frozen::freeze_as_entered_for_test(&mut state, &empty_base);
 
         // CRE S4.3a: a threshold-passing (potentially-ratifiable) action is TERMINAL at the boundary on BOTH the
         // replay and accumulator paths — S4.3a performs NO enactment. The boundary must NOT silently dissolve the

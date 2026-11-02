@@ -173,9 +173,27 @@ fn build_state() -> Vec<u8> {
         arr(0),
         arr(0),
         pparams.clone(),
-        pparams,
+        pparams.clone(),
         arr(0),
-        arr(0),
+        // drepPulser = DRComplete [PulsingSnapshot (empty), RatifyState (nothing enacted, ensCurPParams = cur)].
+        concat(&[
+            arr(2),
+            concat(&[arr(4), arr(0), map(0), map(0), map(0)]),
+            arr(4),
+            concat(&[
+                arr(7),
+                arr(0),
+                arr(0),
+                pparams.clone(),
+                pparams,
+                uint(0),
+                map(0),
+                concat(&[arr(4), arr(0), arr(0), arr(0), arr(0)]),
+            ]),
+            arr(0),
+            arr(0),
+            vec![0xf4],
+        ]),
     ]);
     let utxo_state = concat(&[
         arr(6),

@@ -295,6 +295,7 @@ mod tests {
             .block_production
             .insert(PoolId(Hash28([0x44; 28])), 7);
         s.gov_state = crate::state::GovStateProjection::Authoritative(Some(ConwayGovState {
+            ratification: crate::state::RatificationState::Unversioned,
             prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),

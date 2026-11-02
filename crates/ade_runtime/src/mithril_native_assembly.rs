@@ -387,6 +387,9 @@ pub fn assemble_native_mithril_seed(
         // under the current terminal. That activation is S4.3, WITH the PotentiallyRatifiable terminal
         // replaced by oracle-verified ratify-then-enact — so the SPO field stays empty (skipped) here.
         gov_state: GovStateProjection::Authoritative(Some(ade_ledger::state::ConwayGovState {
+            // LV-15b-0: the snapshot epoch's finished ratification (govState[6]), imported and cross-checked at
+            // decode; the seed boundary applies it.
+            ratification: ade_ledger::state::RatificationState::Recorded(s1a.ratification.clone()),
             proposals: s1a.imported_gov.proposals.clone(),
             committee: s1a.imported_gov.committee.clone(),
             committee_quorum: s1a.imported_gov.committee_quorum.unwrap_or((1, 1)),
@@ -798,6 +801,7 @@ mod tests {
                 gov_action_deposit: Coin(100_000_000_000),
                 drep_activity: 33,
             },
+            ratification: ade_ledger::governance::frozen::RatificationRecord::fixture_decided_nothing(EpochNo(507)),
         }
     }
 

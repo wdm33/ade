@@ -168,6 +168,7 @@ mod tests {
     }
     fn empty_gov() -> ConwayGovState {
         ConwayGovState {
+            ratification: crate::state::RatificationState::Unversioned,
             prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),

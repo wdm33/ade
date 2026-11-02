@@ -10,9 +10,9 @@
 //! Wraps `(LedgerState, PraosChainDepState)` as a single
 //! byte payload with:
 //!
-//! * a versioned schema tag (`SCHEMA_VERSION == 4`; v2 = the embedded cert state is the
+//! * a versioned schema tag (`SCHEMA_VERSION == 5`; v2 = the embedded cert state is the
 //!   6-field encoding with future_pools, ECA-0a; v3 = LV-4 stake snapshots; v4 = LV-6 epoch state with the
-//!   donation pot) — unknown versions (incl. an old v1
+//!   donation pot; v5 = LV-15b-0 governance state with the frozen ratification record) — unknown versions (incl. an old v1
 //!   persistent-cache blob) reject before any payload work (DC-STORE-09);
 //! * the source state's combined `LedgerFingerprint.combined` hash
 //!   embedded inline — verified after decode (DC-STORE-08).
@@ -51,7 +51,9 @@ use super::ledger::{decode_ledger_state, encode_ledger_state};
 // structural ArrayLengthMismatch from the embedded cert-state decode.
 // v3 (LV-4): the embedded stake snapshots carry whole credentials and frozen pool parameters
 // (`array(3)`); a v2 blob rejects as UnknownVersion.
-pub const SCHEMA_VERSION: u32 = 4;
+// v5 (LV-15b-0): the embedded governance state carries the frozen ratification record; a v4 blob rejects as
+// UnknownVersion rather than load a state the boundary would refuse.
+pub const SCHEMA_VERSION: u32 = 5;
 
 const FIELDS: u64 = 4;
 
@@ -180,6 +182,7 @@ mod tests {
                 PoolId(Hash28([0xCD; 28])),
             );
         s.gov_state = crate::state::GovStateProjection::Authoritative(Some(ConwayGovState {
+            ratification: crate::state::RatificationState::Unversioned,
             prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
@@ -235,14 +238,14 @@ mod tests {
         let cd = sample_chain_dep();
         let mut bytes = encode_snapshot(&l, &cd).expect("encode");
         // Array header is 0x84 (definite array(4) inline); version is the next
-        // byte. Patch SCHEMA_VERSION=4 (0x04) → the pre-LV-6 3 (0x03), which must be refused.
+        // byte. Patch SCHEMA_VERSION=5 (0x05) → the pre-LV-15b-0 4 (0x04), which must be refused.
         assert_eq!(bytes[0], 0x84);
-        assert_eq!(bytes[1], 0x04);
-        bytes[1] = 0x03;
+        assert_eq!(bytes[1], 0x05);
+        bytes[1] = 0x04;
         match decode_snapshot(&bytes) {
             Err(SnapshotDecodeError::UnknownVersion { expected, found }) => {
                 assert_eq!(expected, SCHEMA_VERSION);
-                assert_eq!(found, 3);
+                assert_eq!(found, 4);
             }
             other => panic!("expected UnknownVersion, got {other:?}"),
         }

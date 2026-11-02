@@ -129,7 +129,16 @@
 /// its last treasury step, and a bootstrap imports it from the snapshot. A v10 store applied donations to
 /// nothing, so its treasury is short by every donation since its seed. It is refused, not repaired.
 /// Measured on preprod: two epoch-305 donations of 500,000, treasury 1,000,000 short after 305→306.
-pub const STORE_SEMANTICS_VERSION: u32 = 11;
+///
+/// Version 12 (LV-15b-0, DC-EPOCH-47): ratification for the boundary E→E+1 is decided from the authority
+/// frozen at the start of E and persisted in the governance state as a record; the boundary only applies
+/// it. Account unregistration removes the account's vote delegation, DRep unregistration removes every
+/// delegation to that DRep, a delegation to an unregistered DRep is rejected, and an expired proposal is
+/// removed with its descendants. A v11 store holds no record, and the record cannot be rebuilt from
+/// end-of-epoch state, which is the defect; its vote delegations may also include entries these rules make
+/// impossible. It is refused, not repaired or migrated. Measured on preprod: at 304→305 and 321→322 the
+/// v11 boundary read the end-of-epoch mark where Cardano reads the start-of-epoch distributions.
+pub const STORE_SEMANTICS_VERSION: u32 = 12;
 
 /// A durable artifact that carries authoritative semantics and therefore must be version-marked.
 ///

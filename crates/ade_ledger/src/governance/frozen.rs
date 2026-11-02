@@ -23,15 +23,15 @@
 use std::collections::BTreeMap;
 
 use ade_types::conway::cert::DRep;
-use ade_types::conway::governance::GovActionState;
+use ade_types::conway::governance::{GovActionId, GovActionState};
 use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::{Coin, PoolId};
 use ade_types::EpochNo;
 
 use super::{
-    apply_decision, decide_ratification, ConwayGovernanceEpochInput, ConwayGovernanceEpochPlan,
-    DRepStakeDistribution, DanglingVoteDelegationKind, GovernanceTerminal, MalformedGovDetail,
-    RatificationDecision,
+    apply_decision, decide_ratification, CanonicalFieldSet, ConwayGovernanceEpochInput,
+    ConwayGovernanceEpochPlan, DRepStakeDistribution, DanglingVoteDelegationKind, GovernanceTerminal,
+    MalformedGovDetail, RatificationDecision, UnsupportedActionKind,
 };
 use crate::delegation::DelegationState;
 use crate::epoch::StakeSnapshot;
@@ -123,7 +123,55 @@ pub enum RatificationOutcome {
     Decided(RatificationDecision),
     /// A threshold-passing action Ade cannot enact, or a ratification-time terminal. Persisted, not raised at the
     /// freeze: it halts at the consuming boundary, with zero mutation. Votes cast later cannot clear it.
-    Unenactable(GovernanceTerminal),
+    Unenactable(UnenactableReason),
+}
+
+/// The ratification-time terminals a record may persist: exactly those [`decide_ratification`] returns. Any other
+/// terminal is not a decision about the proposals and is raised at the freeze instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnenactableReason {
+    /// [`GovernanceTerminal::UnsupportedRatifiedAction`].
+    UnsupportedRatifiedAction {
+        action_id: GovActionId,
+        kind: UnsupportedActionKind,
+        unsupported_keys: CanonicalFieldSet,
+    },
+    /// [`GovernanceTerminal::UnversionedStateOnEnactPath`].
+    UnversionedStateOnEnactPath { action_id: GovActionId },
+    /// [`GovernanceTerminal::DormantRequired`].
+    DormantRequired,
+}
+
+impl UnenactableReason {
+    fn from_terminal(t: GovernanceTerminal) -> Result<Self, GovernanceTerminal> {
+        match t {
+            GovernanceTerminal::UnsupportedRatifiedAction { action_id, kind, unsupported_keys } => {
+                Ok(Self::UnsupportedRatifiedAction { action_id, kind, unsupported_keys })
+            }
+            GovernanceTerminal::UnversionedStateOnEnactPath { action_id } => {
+                Ok(Self::UnversionedStateOnEnactPath { action_id })
+            }
+            GovernanceTerminal::DormantRequired => Ok(Self::DormantRequired),
+            other => Err(other),
+        }
+    }
+
+    /// The terminal the consuming boundary halts with.
+    pub fn terminal(&self) -> GovernanceTerminal {
+        match self {
+            Self::UnsupportedRatifiedAction { action_id, kind, unsupported_keys } => {
+                GovernanceTerminal::UnsupportedRatifiedAction {
+                    action_id: action_id.clone(),
+                    kind: *kind,
+                    unsupported_keys: unsupported_keys.clone(),
+                }
+            }
+            Self::UnversionedStateOnEnactPath { action_id } => {
+                GovernanceTerminal::UnversionedStateOnEnactPath { action_id: action_id.clone() }
+            }
+            Self::DormantRequired => GovernanceTerminal::DormantRequired,
+        }
+    }
 }
 
 /// The ratification frozen at the start of `frozen_at`, consumed once at `frozen_at`→`frozen_at + 1`.
@@ -136,6 +184,7 @@ pub enum RatificationOutcome {
 pub struct RatificationRecord {
     frozen_at: EpochNo,
     source: RatificationSource,
+    frozen_proposals: std::collections::BTreeSet<GovActionId>,
     drep_distribution: BTreeMap<DRep, Coin>,
     pool_distribution: BTreeMap<PoolId, Coin>,
     outcome: RatificationOutcome,
@@ -150,6 +199,28 @@ impl RatificationRecord {
     }
     pub fn outcome(&self) -> &RatificationOutcome {
         &self.outcome
+    }
+
+    /// The evidence: the proposal ids the freeze saw, and the DRep and pool distributions. Only the record codec
+    /// may call this; the gate fails on any other caller.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn evidence(
+        &self,
+    ) -> (&std::collections::BTreeSet<GovActionId>, &BTreeMap<DRep, Coin>, &BTreeMap<PoolId, Coin>) {
+        (&self.frozen_proposals, &self.drep_distribution, &self.pool_distribution)
+    }
+
+    /// Rebuild a record from its persisted or imported parts. Only the record codec and the bootstrap import may
+    /// call this; the gate fails on any other caller.
+    pub(crate) fn from_parts(
+        frozen_at: EpochNo,
+        source: RatificationSource,
+        frozen_proposals: std::collections::BTreeSet<GovActionId>,
+        drep_distribution: BTreeMap<DRep, Coin>,
+        pool_distribution: BTreeMap<PoolId, Coin>,
+        outcome: RatificationOutcome,
+    ) -> Self {
+        Self { frozen_at, source, frozen_proposals, drep_distribution, pool_distribution, outcome }
     }
 }
 
@@ -265,11 +336,12 @@ pub fn ratify_frozen(input: &FrozenRatificationInput<'_>) -> Result<Ratification
     };
     let outcome = match decide_ratification(&decide_input, frozen_at.0) {
         Ok(decision) => RatificationOutcome::Decided(decision),
-        Err(terminal) => RatificationOutcome::Unenactable(terminal),
+        Err(terminal) => RatificationOutcome::Unenactable(UnenactableReason::from_terminal(terminal)?),
     };
     Ok(RatificationRecord {
         frozen_at,
         source: RatificationSource::Frozen,
+        frozen_proposals: gov.proposals.iter().map(|p| p.action_id.clone()).collect(),
         drep_distribution,
         pool_distribution,
         outcome,
@@ -293,7 +365,205 @@ pub fn apply_ratification_record(
     }
     match &record.outcome {
         RatificationOutcome::Decided(decision) => apply_decision(decision, current.proposals, is_registered_now),
-        RatificationOutcome::Unenactable(terminal) => Err(terminal.clone()),
+        RatificationOutcome::Unenactable(reason) => Err(reason.terminal()),
+    }
+}
+
+/// The finished ratification a bootstrap snapshot carries (`govState[6]` = `DRComplete PulsingSnapshot
+/// RatifyState`), decoded but not yet interpreted.
+pub struct SnapshotRatification {
+    /// The ids of `psProposals`: the proposals the pulser saw.
+    pub proposals: std::collections::BTreeSet<GovActionId>,
+    /// `psDRepDistr`.
+    pub drep_distribution: BTreeMap<DRep, Coin>,
+    /// `psPoolDistr`, stake only.
+    pub pool_distribution: BTreeMap<PoolId, Coin>,
+    /// `rsEnacted`, in enactment order.
+    pub enacted: Vec<GovActionState>,
+    /// `rsExpired`.
+    pub expired: std::collections::BTreeSet<GovActionId>,
+    /// `rsDelayed`.
+    pub delayed: bool,
+    /// `rsEnactState.ensCurPParams`: the parameters after the enactments.
+    pub enacted_pparams: ProtocolParameters,
+    /// `rsEnactState.ensPrevGovActionIds.pgaPParamUpdate`: the parameter root after the enactments.
+    pub enacted_pparam_root: Option<GovActionId>,
+}
+
+/// Why a snapshot's finished ratification cannot be imported. Each is a bootstrap refusal; nothing is repaired.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RatificationImportRefusal {
+    /// `rsDelayed` is set but Ade's classification of `rsEnacted` is a decision it can apply: a delaying action
+    /// was enacted that Ade did not recognise as one.
+    DelayedWithoutUnenactableAction,
+    /// The parameters Ade builds for the decision differ from `ensCurPParams`.
+    EnactedParametersMismatch,
+    /// The parameter root after the decision differs from `ensPrevGovActionIds.pgaPParamUpdate`.
+    EnactedRootMismatch { expected: Option<GovActionId>, snapshot: Option<GovActionId> },
+}
+
+/// Import a snapshot's finished ratification as the record frozen at `frozen_at` (the snapshot's epoch), applying
+/// Ade's own classification to `rsEnacted`:
+/// - nothing enacted: `Decided` with the snapshot's expired set;
+/// - one `ParameterChange` in the supported subset: `Decided`, its parameters built from `current_pparams`
+///   exactly as Ade's ratifier builds them;
+/// - anything else: `Unenactable`, with the terminal Ade's ratifier gives (the first non-`ParameterChange` in
+///   `GovActionId` order, else `ChainedEnactment` on the second of two chained changes).
+///
+/// A `Decided` import is cross-checked against the snapshot's own post-enactment parameters and root.
+pub(crate) fn import_snapshot_ratification(
+    frozen_at: EpochNo,
+    snap: SnapshotRatification,
+    current_pparams: &ProtocolParameters,
+    current_root: Option<&GovActionId>,
+) -> Result<RatificationRecord, RatificationImportRefusal> {
+    let outcome = match snap.enacted.as_slice() {
+        [] => RatificationOutcome::Decided(RatificationDecision { enacted: None, expired: snap.expired.clone() }),
+        [one] => match super::build_parameter_change_enactment(one, current_pparams) {
+            Ok(e) => RatificationOutcome::Decided(RatificationDecision { enacted: Some(e), expired: snap.expired.clone() }),
+            Err(t) => RatificationOutcome::Unenactable(
+                UnenactableReason::from_terminal(t).map_err(|_| RatificationImportRefusal::EnactedParametersMismatch)?,
+            ),
+        },
+        many => {
+            let mut sorted: Vec<&GovActionState> = many.iter().collect();
+            sorted.sort_by(|a, b| a.action_id.cmp(&b.action_id));
+            let non_pc = sorted
+                .iter()
+                .find(|p| !matches!(p.gov_action, ade_types::conway::governance::GovAction::ParameterChange { .. }));
+            let (action_id, kind) = match non_pc {
+                Some(p) => (p.action_id.clone(), UnsupportedActionKind::NotParameterChange),
+                None => (many[1].action_id.clone(), UnsupportedActionKind::ChainedEnactment),
+            };
+            RatificationOutcome::Unenactable(UnenactableReason::UnsupportedRatifiedAction {
+                action_id,
+                kind,
+                unsupported_keys: CanonicalFieldSet::default(),
+            })
+        }
+    };
+    if let RatificationOutcome::Decided(d) = &outcome {
+        if snap.delayed {
+            return Err(RatificationImportRefusal::DelayedWithoutUnenactableAction);
+        }
+        let (built, root) = match &d.enacted {
+            Some(e) => (&*e.pparams, Some(&e.action_id)),
+            None => (current_pparams, current_root),
+        };
+        if *built != snap.enacted_pparams {
+            return Err(RatificationImportRefusal::EnactedParametersMismatch);
+        }
+        if root != snap.enacted_pparam_root.as_ref() {
+            return Err(RatificationImportRefusal::EnactedRootMismatch {
+                expected: root.cloned(),
+                snapshot: snap.enacted_pparam_root.clone(),
+            });
+        }
+    }
+    Ok(RatificationRecord {
+        frozen_at,
+        source: RatificationSource::ImportedFromSnapshot,
+        frozen_proposals: snap.proposals,
+        drep_distribution: snap.drep_distribution,
+        pool_distribution: snap.pool_distribution,
+        outcome,
+    })
+}
+
+/// Entry-by-entry comparison of one evidence distribution against a reference (CE-LV15b0-9).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DistributionDifferential {
+    /// Keys in both with the same value.
+    pub matching: usize,
+    /// Keys in both with different values.
+    pub differing: usize,
+    /// Keys only in this record.
+    pub only_self: usize,
+    /// Keys only in the reference.
+    pub only_reference: usize,
+}
+
+impl DistributionDifferential {
+    fn of<K: Ord, V: PartialEq>(a: &BTreeMap<K, V>, b: &BTreeMap<K, V>) -> Self {
+        let mut d = Self::default();
+        for (k, v) in a {
+            match b.get(k) {
+                Some(w) if w == v => d.matching += 1,
+                Some(_) => d.differing += 1,
+                None => d.only_self += 1,
+            }
+        }
+        d.only_reference = b.keys().filter(|k| !a.contains_key(k)).count();
+        d
+    }
+
+    /// Every entry of both sides matches.
+    pub fn is_exact(&self) -> bool {
+        self.differing == 0 && self.only_self == 0 && self.only_reference == 0
+    }
+}
+
+/// A record compared with a reference record for the same epoch: the CE-LV15b0-9 differential between Ade's
+/// native freeze and the snapshot's own finished ratification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordDifferential {
+    pub same_epoch: bool,
+    pub same_outcome: bool,
+    pub same_proposals: bool,
+    pub drep: DistributionDifferential,
+    pub pool: DistributionDifferential,
+}
+
+impl RecordDifferential {
+    pub fn is_exact(&self) -> bool {
+        self.same_epoch && self.same_outcome && self.same_proposals && self.drep.is_exact() && self.pool.is_exact()
+    }
+}
+
+impl RatificationRecord {
+    /// Compare this record with `reference` entry by entry. The CE-9 comparator: read-only, and the only reader
+    /// of the evidence outside the codec and the fingerprint.
+    pub fn differential(&self, reference: &RatificationRecord) -> RecordDifferential {
+        RecordDifferential {
+            same_epoch: self.frozen_at == reference.frozen_at,
+            same_outcome: self.outcome == reference.outcome,
+            same_proposals: self.frozen_proposals == reference.frozen_proposals,
+            drep: DistributionDifferential::of(&self.drep_distribution, &reference.drep_distribution),
+            pool: DistributionDifferential::of(&self.pool_distribution, &reference.pool_distribution),
+        }
+    }
+
+    /// Fixture only: a record frozen at `frozen_at` that decided nothing (no enactment, nothing expired), with
+    /// empty evidence. For tests outside this crate that need a governance state able to cross one boundary.
+    /// `ci/ci_check_frozen_ratification_authority.sh` fails if production code calls it.
+    pub fn fixture_decided_nothing(frozen_at: EpochNo) -> Self {
+        Self {
+            frozen_at,
+            source: RatificationSource::Frozen,
+            frozen_proposals: std::collections::BTreeSet::new(),
+            drep_distribution: BTreeMap::new(),
+            pool_distribution: BTreeMap::new(),
+            outcome: RatificationOutcome::Decided(RatificationDecision {
+                enacted: None,
+                expired: std::collections::BTreeSet::new(),
+            }),
+        }
+    }
+}
+
+/// Test fixtures only: give `state` the record a boundary entering its epoch would have frozen over it, so a
+/// synthetic state can cross a Conway boundary. Its proposals and votes are treated as present at the freeze.
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+pub(crate) fn freeze_as_entered_for_test(state: &mut LedgerState, base: &BoundaryBaseStake) {
+    let record = {
+        let input = FrozenRatificationInput::at_boundary(state, base)
+            .expect("authoritative fixture")
+            .expect("fixture tracks governance");
+        ratify_frozen(&input).expect("fixture freezes")
+    };
+    if let crate::state::GovStateProjection::Authoritative(Some(g)) = &mut state.gov_state {
+        g.ratification = crate::state::RatificationState::Recorded(record);
     }
 }
 
@@ -355,6 +625,7 @@ mod tests {
     }
     fn gov(proposals: Vec<GovActionState>) -> ConwayGovState {
         ConwayGovState {
+            ratification: crate::state::RatificationState::Unversioned,
             prev_pparam_action: PreviousPParamAction::Enacted(gaid(0x60)),
             proposals,
             committee: [(key(0xC1), 1400u64), (key(0xC2), 1400), (key(0xC3), 1400)].into_iter().collect(),
@@ -606,6 +877,82 @@ mod tests {
         assert_eq!(
             apply_ratification_record(&record, EpochNo(E + 1), &CurrentGovernanceState::pre_boundary(&current), |_| true),
             Err(GovernanceTerminal::RatificationRecordProposalMissing { action_id: winner.action_id }),
+        );
+    }
+
+    fn snap(enacted: Vec<GovActionState>, enacted_pparams: ProtocolParameters, root: Option<GovActionId>) -> SnapshotRatification {
+        SnapshotRatification {
+            proposals: std::collections::BTreeSet::new(),
+            drep_distribution: BTreeMap::new(),
+            pool_distribution: BTreeMap::new(),
+            enacted,
+            expired: [gaid(0x20)].into_iter().collect(),
+            delayed: false,
+            enacted_pparams,
+            enacted_pparam_root: root,
+        }
+    }
+
+    /// CE-LV15b0-8 (import): a supported enacted `ParameterChange` imports as `Decided`, its parameters built by
+    /// Ade's own builder and cross-checked against `ensCurPParams` and the root.
+    #[test]
+    fn ce_lv15b0_8_import_supported_enactment_is_decided_and_cross_checked() {
+        let winner = prop(0x69, Some(gaid(0x60)), yes_2of3(), E + 3, 100, 1);
+        let built = super::super::build_parameter_change_enactment(&winner, &pp()).unwrap();
+        let r = import_snapshot_ratification(
+            EpochNo(E),
+            snap(vec![winner.clone()], (*built.pparams).clone(), Some(winner.action_id.clone())),
+            &pp(),
+            Some(&gaid(0x60)),
+        )
+        .unwrap();
+        assert_eq!(r.source(), RatificationSource::ImportedFromSnapshot);
+        match r.outcome() {
+            RatificationOutcome::Decided(d) => {
+                assert_eq!(d.enacted.as_ref().map(|e| &e.action_id), Some(&winner.action_id));
+                assert_eq!(d.expired.iter().collect::<Vec<_>>(), vec![&gaid(0x20)]);
+            }
+            other => panic!("expected Decided, got {other:?}"),
+        }
+        // The snapshot's parameters disagree with what Ade builds: refused.
+        assert_eq!(
+            import_snapshot_ratification(
+                EpochNo(E),
+                snap(vec![winner.clone()], pp(), Some(winner.action_id.clone())),
+                &pp(),
+                Some(&gaid(0x60)),
+            ),
+            Err(RatificationImportRefusal::EnactedParametersMismatch)
+        );
+    }
+
+    /// CE-LV15b0-8 (import): an enacted action Ade cannot enact imports as `Unenactable` with the terminal Ade's
+    /// ratifier gives; nothing is cross-checked, because it halts at the seed boundary.
+    #[test]
+    fn ce_lv15b0_8_import_unsupported_enactments_are_unenactable() {
+        let withdrawal = GovActionState {
+            gov_action: GovAction::TreasuryWithdrawals { withdrawals: vec![(reward_addr(1), Coin(5))], policy_hash: None },
+            ..prop(0x80, None, Vec::new(), E + 3, 100, 1)
+        };
+        let r = import_snapshot_ratification(EpochNo(E), snap(vec![withdrawal.clone()], pp(), None), &pp(), None).unwrap();
+        assert!(matches!(
+            r.outcome(),
+            RatificationOutcome::Unenactable(UnenactableReason::UnsupportedRatifiedAction {
+                kind: UnsupportedActionKind::NotParameterChange,
+                ..
+            })
+        ));
+        let parent = prop(0x69, Some(gaid(0x60)), Vec::new(), E + 3, 100, 1);
+        let child = prop(0x6A, Some(parent.action_id.clone()), Vec::new(), E + 3, 100, 1);
+        let r = import_snapshot_ratification(EpochNo(E), snap(vec![parent, child.clone()], pp(), None), &pp(), None)
+            .unwrap();
+        assert_eq!(
+            r.outcome(),
+            &RatificationOutcome::Unenactable(UnenactableReason::UnsupportedRatifiedAction {
+                action_id: child.action_id,
+                kind: UnsupportedActionKind::ChainedEnactment,
+                unsupported_keys: CanonicalFieldSet::default(),
+            })
         );
     }
 

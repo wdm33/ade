@@ -178,7 +178,17 @@ impl LoadedSnapshot {
             .map(|gp| gp.drep_voting_thresholds.clone())
             .unwrap_or_default();
 
+        // The snapshot epoch's finished ratification (govState[6]), through the same import as a bootstrap. A
+        // snapshot it cannot be imported from stays `Unversioned`, so a Conway boundary over it halts visibly.
+        let ratification = conway_gov_state_bytes(&self.raw_cbor)
+            .ok()
+            .and_then(|gs| {
+                ade_ledger::ledgerdb_state::import_ratification_from_conway_gov_state(gs, self.header.epoch, 1).ok()
+            })
+            .map_or(ade_ledger::state::RatificationState::Unversioned, ade_ledger::state::RatificationState::Recorded);
+
         Some(ade_ledger::state::ConwayGovState {
+            ratification,
             proposals,
             committee: comm_state.members,
             committee_quorum: (quorum_num, quorum_den),
@@ -1755,6 +1765,22 @@ pub struct AlonzoPlutusParams {
 ///   - PP[19] = `maxTxExUnits` = `[mem, steps]` (2-array of uints)
 ///   - PP[22] = `collateralPercent` = uint
 ///
+/// The bytes of the Conway `GovState` (`UTxOState[3]`).
+fn conway_gov_state_bytes(state_cbor: &[u8]) -> Result<&[u8], HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, es)?; // AccountState
+    let (ls_body, _) = read_array_header(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, ls_body)?; // CertState
+    let (utxo_body, _) = read_array_header(state_cbor, off)?;
+    let mut off = utxo_body;
+    for _ in 0..3 {
+        off = skip_cbor(state_cbor, off)?;
+    }
+    let end = skip_cbor(state_cbor, off)?;
+    Ok(&state_cbor[off..end])
+}
+
 /// Pre-Alonzo PP arrays are shorter than 20 entries; we return `None` for
 /// fields that don't exist so the caller keeps its defaults.
 pub fn parse_alonzo_plutus_params(

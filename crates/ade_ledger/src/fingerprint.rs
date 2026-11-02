@@ -589,7 +589,8 @@ fn fingerprint_governance(gov: Option<&ConwayGovState>) -> Hash32 {
             let dormant_bound = matches!(g.num_dormant, DormantEpochs::Bound(_));
             let prev_known =
                 !matches!(g.prev_pparam_action, crate::state::PreviousPParamAction::Unversioned);
-            let n_fields: u64 = 9 + (dormant_bound as u64) + (prev_known as u64);
+            let recorded = matches!(g.ratification, crate::state::RatificationState::Recorded(_));
+            let n_fields: u64 = 9 + (dormant_bound as u64) + (prev_known as u64) + (recorded as u64);
             write_array_canonical(&mut buf, n_fields);
 
             // 1. proposals
@@ -665,6 +666,11 @@ fn fingerprint_governance(gov: Option<&ConwayGovState>) -> Hash32 {
                     write_array_canonical(&mut buf, 1);
                     write_gov_action_id(&mut buf, id);
                 }
+            }
+            // 12. ratification (V4 ONLY): the record's canonical encoding, evidence distributions included, so a
+            // change to any part of it is visible. Unversioned emits nothing (V1-V3 byte-identical).
+            if let crate::state::RatificationState::Recorded(r) = &g.ratification {
+                crate::snapshot::gov_state::write_ratification_record(&mut buf, r);
             }
         }
     }
@@ -1092,6 +1098,7 @@ mod tests {
     fn governance_fingerprint_binds_num_dormant_no_collision() {
         use crate::state::{ConwayGovState, DormantEpochs};
         let mk = |d: DormantEpochs| ConwayGovState {
+            ratification: crate::state::RatificationState::Unversioned,
             prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
@@ -1169,6 +1176,7 @@ mod tests {
         use ade_types::conway::governance::GovActionId;
         use ade_types::Hash32;
         let mk = |p: PreviousPParamAction| ConwayGovState {
+            ratification: crate::state::RatificationState::Unversioned,
             prev_pparam_action: p,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
@@ -1557,6 +1565,7 @@ mod tests {
         let s_absent = LedgerState::new(CardanoEra::Conway);
         let mut s_present = LedgerState::new(CardanoEra::Conway);
         s_present.gov_state = crate::state::GovStateProjection::Authoritative(Some(ConwayGovState {
+            ratification: crate::state::RatificationState::Unversioned,
             prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),
@@ -1592,6 +1601,7 @@ mod tests {
         let mk = |action: GovAction| {
             let mut s = LedgerState::new(CardanoEra::Conway);
             s.gov_state = crate::state::GovStateProjection::Authoritative(Some(ConwayGovState {
+                ratification: crate::state::RatificationState::Unversioned,
                 prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
                 proposals: vec![GovActionState {
                     action_id: GovActionId { tx_hash: Hash32([0x07; 32]), index: 0 },
@@ -1699,6 +1709,7 @@ mod tests {
             let mut drep_expiry = BTreeMap::new();
             drep_expiry.insert(cred, 600u64);
             s.gov_state = crate::state::GovStateProjection::Authoritative(Some(ConwayGovState {
+                ratification: crate::state::RatificationState::Unversioned,
                 prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
                 proposals: Vec::new(),
                 committee: BTreeMap::new(),

@@ -619,6 +619,10 @@ pub enum GovernanceTerminal {
     /// The ratification record consumed at the boundary into `boundary` was frozen at an epoch other than
     /// `boundary − 1` (DC-EPOCH-47). A record is consumed exactly once, at the boundary that ends its epoch.
     RatificationRecordEpochMismatch { frozen_at: ade_types::EpochNo, boundary: ade_types::EpochNo },
+    /// A Conway boundary into `boundary` found a governance state that predates the ratification record
+    /// (`RatificationState::Unversioned`). The record cannot be rebuilt from end-of-epoch state, so the boundary
+    /// halts rather than ratify over the wrong snapshot moment (DC-EPOCH-47).
+    RatificationRecordAbsent { boundary: ade_types::EpochNo },
     /// A ratification decision names a proposal the current set does not hold. Proposals leave the set only at a
     /// boundary, so this is unreachable on a faithful state.
     RatificationRecordProposalMissing { action_id: GovActionId },
@@ -675,6 +679,63 @@ pub struct EnactedParameterChange {
 pub struct RatificationDecision {
     pub enacted: Option<EnactedParameterChange>,
     pub expired: std::collections::BTreeSet<GovActionId>,
+}
+
+/// Build the enactment of one ratified `ParameterChange` over `current_pparams`, or the terminal that makes it
+/// unenactable in Ade's supported subset (memory-only exec-units, `minPoolCost`). Shared by Ade's own
+/// ratification and the bootstrap import of a snapshot's `rsEnacted`, so both classify an action identically.
+pub(crate) fn build_parameter_change_enactment(
+    winner: &GovActionState,
+    current_pparams: &crate::pparams::ProtocolParameters,
+) -> Result<EnactedParameterChange, GovernanceTerminal> {
+    let unsupported = |kind| GovernanceTerminal::UnsupportedRatifiedAction {
+        action_id: winner.action_id.clone(),
+        kind,
+        unsupported_keys: CanonicalFieldSet::default(),
+    };
+    let (prev_action, update) = match &winner.gov_action {
+        GovAction::ParameterChange { prev_action, update, .. } => (prev_action, update),
+        _ => return Err(unsupported(UnsupportedActionKind::NotParameterChange)),
+    };
+    // Bound the attacker-influenced bytes BEFORE the recursive-descent decoder (T-RESOURCE-01).
+    if !enactable_update_within_bounds(update) {
+        return Err(unsupported(UnsupportedActionKind::OversizedUpdate));
+    }
+    let decoded =
+        decode_enactable_param_update(update).map_err(|_| unsupported(UnsupportedActionKind::MalformedUpdate))?;
+    if !decoded.unsupported_fields.0.is_empty() {
+        // CRE-S7: carry WHICH keys, not just that some existed.
+        return Err(GovernanceTerminal::UnsupportedRatifiedAction {
+            action_id: winner.action_id.clone(),
+            kind: UnsupportedActionKind::UnsupportedPParamField,
+            unsupported_keys: decoded.unsupported_fields.clone(),
+        });
+    }
+    if decoded.max_tx_ex_units.is_none() && decoded.max_block_ex_units.is_none() {
+        return Err(unsupported(UnsupportedActionKind::NoEnactableField));
+    }
+    // MEMORY-ONLY: every supplied `steps` must equal the current bound `steps`.
+    if let Some(tx) = decoded.max_tx_ex_units {
+        if tx.steps != current_pparams.max_tx_ex_units_cpu {
+            return Err(unsupported(UnsupportedActionKind::ChangedSteps));
+        }
+    }
+    if let Some(blk) = decoded.max_block_ex_units {
+        let cur_block_steps = match current_pparams.max_block_ex_units {
+            crate::pparams::MaxBlockExUnits::Bound { steps, .. } => steps,
+            crate::pparams::MaxBlockExUnits::Unversioned => {
+                return Err(GovernanceTerminal::UnversionedStateOnEnactPath { action_id: winner.action_id.clone() })
+            }
+        };
+        if blk.steps != cur_block_steps {
+            return Err(unsupported(UnsupportedActionKind::ChangedSteps));
+        }
+    }
+    Ok(EnactedParameterChange {
+        action_id: winner.action_id.clone(),
+        superseded_root: prev_action.clone(),
+        pparams: Box::new(build_enacted_pparams(current_pparams, &decoded)),
+    })
 }
 
 /// DECIDE: ratify `input.proposals` as of `ratify_epoch` (Cardano's `reCurrentEpoch`). Pure; reads votes, stake,
@@ -773,58 +834,7 @@ pub(crate) fn decide_ratification(
     // supported memory-only exec-units update (else a structured terminal).
     let enacted: Option<EnactedParameterChange> = match candidates.as_slice() {
         [] => None,
-        [winner] => {
-            let (prev_action, update) = match &winner.gov_action {
-                GovAction::ParameterChange { prev_action, update, .. } => (prev_action, update),
-                _ => unreachable!("candidates holds only ParameterChanges (pushed in the ParameterChange arm)"),
-            };
-            let unsupported = |kind| GovernanceTerminal::UnsupportedRatifiedAction {
-                action_id: winner.action_id.clone(),
-                kind,
-                unsupported_keys: CanonicalFieldSet::default(),
-            };
-            // Bound the attacker-influenced bytes BEFORE the recursive-descent decoder (T-RESOURCE-01).
-            if !enactable_update_within_bounds(update) {
-                return Err(unsupported(UnsupportedActionKind::OversizedUpdate));
-            }
-            let decoded = decode_enactable_param_update(update)
-                .map_err(|_| unsupported(UnsupportedActionKind::MalformedUpdate))?;
-            if !decoded.unsupported_fields.0.is_empty() {
-                // CRE-S7: carry WHICH keys, not just that some existed.
-                return Err(GovernanceTerminal::UnsupportedRatifiedAction {
-                    action_id: winner.action_id.clone(),
-                    kind: UnsupportedActionKind::UnsupportedPParamField,
-                    unsupported_keys: decoded.unsupported_fields.clone(),
-                });
-            }
-            if decoded.max_tx_ex_units.is_none() && decoded.max_block_ex_units.is_none() {
-                return Err(unsupported(UnsupportedActionKind::NoEnactableField));
-            }
-            // MEMORY-ONLY: every supplied `steps` must equal the current bound `steps`.
-            if let Some(tx) = decoded.max_tx_ex_units {
-                if tx.steps != input.current_pparams.max_tx_ex_units_cpu {
-                    return Err(unsupported(UnsupportedActionKind::ChangedSteps));
-                }
-            }
-            if let Some(blk) = decoded.max_block_ex_units {
-                let cur_block_steps = match input.current_pparams.max_block_ex_units {
-                    crate::pparams::MaxBlockExUnits::Bound { steps, .. } => steps,
-                    crate::pparams::MaxBlockExUnits::Unversioned => {
-                        return Err(GovernanceTerminal::UnversionedStateOnEnactPath {
-                            action_id: winner.action_id.clone(),
-                        }) // guarded above; defensive.
-                    }
-                };
-                if blk.steps != cur_block_steps {
-                    return Err(unsupported(UnsupportedActionKind::ChangedSteps));
-                }
-            }
-            Some(EnactedParameterChange {
-                action_id: winner.action_id.clone(),
-                superseded_root: prev_action.clone(),
-                pparams: Box::new(build_enacted_pparams(input.current_pparams, &decoded)),
-            })
-        }
+        [winner] => Some(build_parameter_change_enactment(winner, input.current_pparams)?),
         _ => {
             // More than one ratifiable candidate competes for the single enactment slot — cardano-ledger's pick is
             // submission-order dependent, which Ade cannot reconstruct ⇒ fail-closed. Report the canonical-first.
@@ -889,7 +899,7 @@ fn close_over_descendants(
             if removed.contains(&p.action_id) {
                 continue;
             }
-            if gov_action_parent(&p.gov_action).map_or(false, |pa| removed.contains(pa)) {
+            if gov_action_parent(&p.gov_action).is_some_and(|pa| removed.contains(pa)) {
                 removed.insert(p.action_id.clone());
                 added = true;
             }
@@ -2626,6 +2636,7 @@ mod committee_fidelity_tests {
                 apply_committee_enactment(&base_committee(), (2, 3), &effects);
             let mut s = LedgerState::new(CardanoEra::Conway);
             s.gov_state = crate::state::GovStateProjection::Authoritative(Some(ConwayGovState {
+                ratification: crate::state::RatificationState::Unversioned,
                 prev_pparam_action: crate::state::PreviousPParamAction::Unversioned,
                 proposals: Vec::new(),
                 committee,

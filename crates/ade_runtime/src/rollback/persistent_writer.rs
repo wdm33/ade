@@ -122,6 +122,7 @@ mod tests {
                 Coin(2_000_000),
             );
         l.gov_state = ade_ledger::state::GovStateProjection::Authoritative(Some(ConwayGovState {
+            ratification: ade_ledger::state::RatificationState::Unversioned,
             prev_pparam_action: ade_ledger::state::PreviousPParamAction::Unversioned,
             proposals: Vec::new(),
             committee: BTreeMap::new(),

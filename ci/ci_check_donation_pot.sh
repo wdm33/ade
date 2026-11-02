@@ -133,7 +133,9 @@ grep -qE 'donation_pot' <<<"$GOV_PROD" && fail "(d) governance.rs (ratification/
 grep -qE 'let donation_pot = Coin\(nn_read_u64\(d, o, "UTxOState\.donation"\)\?\)' <<<"$DECODE_PROD" \
     || fail "(e) the seed decoder does not read UTxOState[5]"
 grep -qE 'has no donation pot' <<<"$DECODE_PROD" || fail "(e) a UTxOState without the pot is not refused"
-grep -qE 'commitment-v13' <<<"$DECODE_PROD" || fail "(e) the seed commitment tag is not v13"
+# v13 introduced the pot binding; a later tag (v14, LV-15b-0) keeps it, which the next check asserts.
+CTAG="$(grep -oE 'commitment-v[0-9]+' <<<"$DECODE_PROD" | head -1 | grep -oE '[0-9]+$' || true)"
+(( ${CTAG:-0} >= 13 )) || fail "(e) the seed commitment tag is v${CTAG:-?}, expected >= v13"
 grep -qE 'extend_from_slice\(&s\.donation_pot\.0\.to_be_bytes\(\)\)' <<<"$DECODE_PROD" \
     || fail "(e) the seed commitment does not bind the pot"
 grep -qE 'donation_pot: s1a\.donation_pot' <<<"$ASSEMBLY_PROD" || fail "(e) Mithril assembly does not carry the pot"

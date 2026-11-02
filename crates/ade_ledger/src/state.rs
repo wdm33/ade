@@ -242,6 +242,19 @@ pub struct ConwayGovState {
     /// lineage (see [`PreviousPParamAction`]). AUTHORITATIVE (CRE S4.3b, INERT): no default — `Unversioned`
     /// for states predating the field, `NoPreviousAction`/`Enacted` only from a decoded source fact.
     pub prev_pparam_action: PreviousPParamAction,
+    /// The ratification frozen at the start of this epoch (LV-15b-0, DC-EPOCH-47), consumed at the boundary that
+    /// ends it. No default: `Unversioned` only for states predating the field, which a Conway boundary refuses.
+    pub ratification: RatificationState,
+}
+
+/// The frozen ratification under a VERSIONED lineage (V4 of the governance encoding). `Unversioned` = a state
+/// predating the record; it is never synthesized from end-of-epoch state, and a Conway boundary refuses it
+/// (`GovernanceTerminal::RatificationRecordAbsent`). `Recorded` = frozen at a boundary Ade crossed, or imported
+/// from a snapshot's finished ratification; the record names which.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RatificationState {
+    Unversioned,
+    Recorded(crate::governance::frozen::RatificationRecord),
 }
 
 /// The enacted previous-`ParameterChange` action root (`prevGovActionIds.pgaPParamUpdate`) as VERSIONED

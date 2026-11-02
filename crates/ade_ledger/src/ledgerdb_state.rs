@@ -862,6 +862,7 @@ mod tip_tests {
                 gov_action_deposit: Coin(100_000_000_000),
                 drep_activity: 20,
             },
+            ratification: crate::governance::frozen::RatificationRecord::fixture_decided_nothing(EpochNo(507)),
         };
         let empty = ImportedGovState {
             proposals: Vec::new(),
@@ -1642,6 +1643,14 @@ pub enum NativeNonUtxoError {
     /// (e.g. a vote delegation to an unregistered DRep is rejected, and none dangles); PV9 bootstrap-phase
     /// semantics are not modelled, so such a state is refused rather than read under the wrong rules.
     UnsupportedProtocolVersion { major: u32 },
+    /// A vote delegation from an unregistered account, or to an unregistered credential DRep. Cardano makes both
+    /// unrepresentable from PV10, so such a snapshot is refused rather than cleaned up (LV-15b-0).
+    DanglingVoteDelegation {
+        credential: StakeCredential,
+        kind: crate::governance::DanglingVoteDelegationKind,
+    },
+    /// The snapshot's finished ratification (`govState[6]`) disagrees with Ade's reading of it (LV-15b-0).
+    RatificationImport(crate::governance::frozen::RatificationImportRefusal),
 }
 
 /// DIAGNOSTIC ONLY — never a bootstrap verdict. The distribution of pool reward-account
@@ -1782,6 +1791,9 @@ pub struct NativeSnapshotNonUtxoState {
     /// boundary does not fail-close on `MissingDRepActivityParam`. Bound into the v12 commitment (a tampered
     /// deposit param flips it) and into the assembled-ledger fingerprint.
     pub conway_deposit_params: crate::pparams::ConwayOnlyDepositParams,
+    /// The snapshot epoch's finished ratification (`govState[6]`), imported as the record the boundary that
+    /// ends the snapshot epoch applies (LV-15b-0). Bound into the v14 commitment.
+    pub ratification: crate::governance::frozen::RatificationRecord,
 }
 
 /// Decode a cardano `SnapShot = array(2)[ssStake: map(StakeCredential -> [Coin, PoolId]),
@@ -2077,6 +2089,7 @@ pub fn decode_native_nonutxo_state(
         enacted_pparam_update,
         conway_deposit_params,
         donation_pot,
+        snapshot_ratification,
     ) = read_conway_pparams_from_utxo_state(d, o, network_id)?;
     // Thread the CertState bootstrap governance import (CRE S1 part 2): the DState-UMap DRep vote
     // delegations (2a) + the VState DRep-expiry and committee-hot-key maps (2b). They live ONLY in
@@ -2086,6 +2099,32 @@ pub fn decode_native_nonutxo_state(
     imported_gov.drep_expiry = gov_import.drep_expiry;
     imported_gov.committee_hot_keys = gov_import.committee_hot_keys;
     imported_gov.num_dormant_epochs = gov_import.num_dormant_epochs;
+    // LV-15b-0 (§4.2, §4.5): from PV10 a vote delegation always names a registered account and, for a credential
+    // DRep, a registered DRep. A snapshot that violates this is refused, never cleaned up on import.
+    for (credential, drep) in &imported_gov.vote_delegations {
+        if !delegation.registrations.contains_key(credential) {
+            return Err(NativeNonUtxoError::DanglingVoteDelegation {
+                credential: credential.clone(),
+                kind: crate::governance::DanglingVoteDelegationKind::UnregisteredAccount,
+            });
+        }
+        if let Some(target) = crate::gov_cert::drep_credential(drep) {
+            if !imported_gov.drep_expiry.contains_key(&target) {
+                return Err(NativeNonUtxoError::DanglingVoteDelegation {
+                    credential: credential.clone(),
+                    kind: crate::governance::DanglingVoteDelegationKind::UnregisteredDRep,
+                });
+            }
+        }
+    }
+    // LV-15b-0 (§4.5): the snapshot epoch's finished ratification becomes the record its boundary applies.
+    let ratification = crate::governance::frozen::import_snapshot_ratification(
+        EpochNo(epoch),
+        snapshot_ratification,
+        &protocol_params,
+        enacted_pparam_update.as_ref(),
+    )
+    .map_err(NativeNonUtxoError::RatificationImport)?;
     // EpochState.snapshots = SnapShots = array(4)[ssStakeMark, ssStakeSet, ssStakeGo, ssFee] (this ledger
     // version caches NO mark PoolDistr). CE-3d: decode the FULL mark/set/go stake snapshots (the reward +
     // leadership stake authority the EpochAccumulator seeds) — NOT just the ECA-5 mark PoolDistr, and
@@ -2203,6 +2242,7 @@ pub fn decode_native_nonutxo_state(
         prev_max_block_ex_units_mem,
         enacted_pparam_update,
         conway_deposit_params,
+        ratification,
     };
     let commitment = commit_native_nonutxo_state(&state);
     Ok((state, commitment))
@@ -2282,6 +2322,7 @@ fn read_conway_pparams_from_utxo_state(
     Option<GovActionId>,
     crate::pparams::ConwayOnlyDepositParams,
     Coin,
+    crate::governance::frozen::SnapshotRatification,
 )> {
     // UTxOState = array(6)[utxo, deposited, fees, govState, incrStake, donation]; descend to [3] = govState.
     if peek_major(d, *o).map_err(NativeNonUtxoError::from)? != 4 {
@@ -2325,8 +2366,10 @@ fn read_conway_pparams_from_utxo_state(
     // while `cur` holds the NEW, proving the flip lands exactly at THIS boundary (CRE enactment census).
     let (prev_pp, _, _, _, prev_max_block_ex_units_mem, _) = read_conway_pparams(d, o, network_id)?;
     let prev_max_tx_ex_units_mem = prev_pp.max_tx_ex_units_mem;
-    // skip the remaining govState fields (futurePParams [5], drepPulser [6]).
-    for _ in (CONWAY_GOV_STATE_CURPPARAMS_INDEX + 2)..(gn as usize) {
+    skip_item(d, o)?; // [5] futurePParams
+    // [6] drepPulser: the finished ratification of the snapshot epoch (LV-15b-0), imported as its record.
+    let ratification = nn_read_drep_pulser(d, o, network_id)?;
+    for _ in (CONWAY_GOV_STATE_CURPPARAMS_INDEX + 4)..(gn as usize) {
         skip_item(d, o)?;
     }
     // [4] incrStake is not this decoder's authority; [5] donation IS (DC-EPOCH-45): the certified
@@ -2369,6 +2412,7 @@ fn read_conway_pparams_from_utxo_state(
         enacted_pparam_update,
         conway_deposit_params,
         donation_pot,
+        ratification,
     ))
 }
 
@@ -2668,7 +2712,8 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
     // v12: additionally binds the Conway-only deposit params (govActionDeposit/dRepDeposit/dRepActivity),
     // decoded from the certified curPParams into bootstrap authority — a tampered deposit param flips it.
     // v13 (LV-6): additionally binds the certified treasury-donation pot (below, after the fee pot).
-    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v13");
+    // v14 (LV-15b-0): additionally binds the imported ratification record (at the end).
+    v.extend_from_slice(b"ade-native-nonutxo-state-commitment-v14");
     v.push(s.era.as_u8());
     // The manifest-derived network id (a network identity perturbation flips the commitment).
     v.push(s.network_id);
@@ -2878,6 +2923,11 @@ fn commit_native_nonutxo_state(s: &NativeSnapshotNonUtxoState) -> Hash32 {
         }
         RewardNibbleObservation::Mixed => v.push(2),
     }
+    // v14: the imported ratification record, by its canonical (length-prefixed) encoding.
+    let mut rec = Vec::new();
+    crate::snapshot::gov_state::write_ratification_record(&mut rec, &s.ratification);
+    v.extend_from_slice(&(rec.len() as u64).to_be_bytes());
+    v.extend_from_slice(&rec);
     blake2b_256(&v)
 }
 
@@ -3127,6 +3177,141 @@ fn nn_read_proposals(d: &[u8], o: &mut usize) -> Rn<(Vec<GovActionState>, Option
         }
     }
     Ok((out, enacted_pparam_update))
+}
+
+/// Import the finished ratification from a Conway `govState` (`array(7)`) alone, as the record frozen at
+/// `snapshot_epoch`. The same decoder and cross-checks as [`decode_native_nonutxo_state`], for callers that hold
+/// only the governance state (the corpus harness). `network_id` only labels the decoded parameters.
+pub fn import_ratification_from_conway_gov_state(
+    gov_state: &[u8],
+    snapshot_epoch: u64,
+    network_id: u8,
+) -> Result<crate::governance::frozen::RatificationRecord, NativeNonUtxoError> {
+    let o = &mut 0usize;
+    let gn = nn_array_len(gov_state, o, "utxosGovState")?;
+    if gn != CONWAY_GOV_STATE_FIELDS {
+        return Err(NativeNonUtxoError::ProtocolParamsMissing(format!(
+            "ConwayGovState arity {gn} != {CONWAY_GOV_STATE_FIELDS}"
+        )));
+    }
+    let (_, root) = nn_read_proposals(gov_state, o)?;
+    skip_item(gov_state, o)?; // committee
+    skip_item(gov_state, o)?; // constitution
+    let (pp, ..) = read_conway_pparams(gov_state, o, network_id)?;
+    skip_item(gov_state, o)?; // prevPParams
+    skip_item(gov_state, o)?; // futurePParams
+    let snap = nn_read_drep_pulser(gov_state, o, network_id)?;
+    crate::governance::frozen::import_snapshot_ratification(EpochNo(snapshot_epoch), snap, &pp, root.as_ref())
+        .map_err(NativeNonUtxoError::RatificationImport)
+}
+
+/// `govState[6]`, the DRep pulser. cardano-ledger serializes it ONLY as `DRComplete` (`Rec DRComplete !> To snap
+/// !> To ratstate`; a still-pulsing state is finished first), so it is always
+/// `array(2)[PulsingSnapshot, RatifyState]`:
+///
+/// ```text
+/// PulsingSnapshot = array(4)[psProposals, psDRepDistr {DRep => coin}, psDRepState, psPoolDistr {pool28 => coin}]
+/// RatifyState     = array(4)[EnactState, rsEnacted [GovActionState], rsExpired set(GovActionId), rsDelayed bool]
+/// EnactState      = array(7)[committee, constitution, curPParams, prevPParams, treasury, withdrawals,
+///                            prevGovActionIds = array(4)[StrictMaybe GovActionId; 4]]
+/// ```
+fn nn_read_drep_pulser(
+    d: &[u8],
+    o: &mut usize,
+    network_id: u8,
+) -> Rn<crate::governance::frozen::SnapshotRatification> {
+    let malformed = |w: &str| NativeNonUtxoError::MalformedGovernanceState(w.to_string());
+    nn_expect_array(d, o, 2, "drepPulser")?;
+    nn_expect_array(d, o, 4, "PulsingSnapshot")?;
+    // psProposals: the proposals the pulser saw (evidence; govState[0] stays the authority for the current set).
+    let mut proposals = std::collections::BTreeSet::new();
+    match read_array_header(d, o)? {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                proposals.insert(nn_read_gov_action_state(d, o)?.action_id);
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !ade_codec::cbor::is_break(d, *o)? {
+                proposals.insert(nn_read_gov_action_state(d, o)?.action_id);
+            }
+            *o += 1;
+        }
+    }
+    let mut drep_distribution: BTreeMap<DRep, Coin> = BTreeMap::new();
+    nn_map_each(d, o, "psDRepDistr", |o| {
+        let drep = read_native_drep(d, o).map_err(|e| nn_malformed(format!("psDRepDistr key: {e:?}")))?;
+        let c = Coin(nn_read_u64(d, o, "psDRepDistr value")?);
+        if drep_distribution.insert(drep, c).is_some() {
+            return Err(malformed("psDRepDistr: duplicate key"));
+        }
+        Ok(())
+    })?;
+    skip_item(d, o)?; // psDRepState
+    let mut pool_distribution: BTreeMap<PoolId, Coin> = BTreeMap::new();
+    nn_map_each(d, o, "psPoolDistr", |o| {
+        let pool = PoolId(nn_hash28(nn_read_fixed_bytes(d, o, 28, "psPoolDistr key")?));
+        let c = Coin(nn_read_u64(d, o, "psPoolDistr value")?);
+        if pool_distribution.insert(pool, c).is_some() {
+            return Err(malformed("psPoolDistr: duplicate key"));
+        }
+        Ok(())
+    })?;
+    nn_expect_array(d, o, 4, "RatifyState")?;
+    nn_expect_array(d, o, 7, "EnactState")?;
+    skip_item(d, o)?; // ensCommittee
+    skip_item(d, o)?; // ensConstitution
+    let (enacted_pparams, ..) = read_conway_pparams(d, o, network_id)?; // ensCurPParams
+    skip_item(d, o)?; // ensPrevPParams
+    skip_item(d, o)?; // ensTreasury
+    skip_item(d, o)?; // ensWithdrawals
+    nn_expect_array(d, o, 4, "ensPrevGovActionIds")?;
+    let enacted_pparam_root = nn_read_strict_maybe_gov_action_id(d, o, "ensPrevGovActionIds.pparamUpdate")?;
+    for _ in 1..4 {
+        skip_item(d, o)?;
+    }
+    let mut enacted = Vec::new();
+    match read_array_header(d, o)? {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                enacted.push(nn_read_gov_action_state(d, o)?);
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !ade_codec::cbor::is_break(d, *o)? {
+                enacted.push(nn_read_gov_action_state(d, o)?);
+            }
+            *o += 1;
+        }
+    }
+    if peek_major(d, *o)? == 6 {
+        let (t, _) = read_tag(d, o)?;
+        if t != 258 {
+            return Err(malformed("rsExpired: tag is not the set tag 258"));
+        }
+    }
+    let mut expired = std::collections::BTreeSet::new();
+    for _ in 0..nn_array_len(d, o, "rsExpired")? {
+        if !expired.insert(nn_read_gov_action_id(d, o)?) {
+            return Err(malformed("rsExpired: duplicate id"));
+        }
+    }
+    let delayed = match d.get(*o) {
+        Some(0xf4) => false,
+        Some(0xf5) => true,
+        _ => return Err(malformed("rsDelayed: not a bool")),
+    };
+    *o += 1;
+    Ok(crate::governance::frozen::SnapshotRatification {
+        proposals,
+        drep_distribution,
+        pool_distribution,
+        enacted,
+        expired,
+        delayed,
+        enacted_pparams,
+        enacted_pparam_root,
+    })
 }
 
 /// A cardano `StrictMaybe GovActionId`: `SNothing = array(0)`, `SJust id = array(1)[GovActionId]`. Any other
