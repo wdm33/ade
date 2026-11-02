@@ -19,16 +19,29 @@
 //! `CertState`, so it cannot mutate delegation/pool state and cannot
 //! double-apply the delegation/pool half of composite certs.
 
-use ade_types::conway::cert::ConwayCert;
+use ade_types::conway::cert::{ConwayCert, DRep};
+use ade_types::shelley::cert::StakeCredential;
 
-use crate::error::{LedgerError, ValidationEnvironmentError};
+use crate::error::{CertFailureReason, CertificateError, LedgerError, ValidationEnvironmentError};
 use crate::state::{ConwayGovState, GovCertEnv};
+
+/// The registration credential of a credential DRep; `None` for the two
+/// predefined DReps, which are never registered.
+pub(crate) fn drep_credential(drep: &DRep) -> Option<StakeCredential> {
+    match drep {
+        DRep::KeyHash(h) => Some(StakeCredential::KeyHash(h.clone())),
+        DRep::ScriptHash(h) => Some(StakeCredential::ScriptHash(h.clone())),
+        DRep::AlwaysAbstain | DRep::AlwaysNoConfidence => None,
+    }
+}
 
 /// Apply one Conway governance certificate to [`ConwayGovState`].
 ///
-/// - **Vote delegation** (tags 9/10/12/13): `vote_delegations[cred] = drep`. The
-///   stake/pool/registration half of composites (10/12/13) is B4-owned and is
-///   **not** applied here.
+/// - **Vote delegation** (tags 9/10/12/13): `vote_delegations[cred] = drep`. A
+///   credential DRep must be registered (`drep_expiry`), else
+///   [`CertFailureReason::DRepNotRegistered`] (Conway DELEG
+///   `DelegateeDRepNotRegisteredDELEG`, PV ≥ 10). The stake/pool/registration
+///   half of composites (10/12/13) is B4-owned and is **not** applied here.
 /// - **Committee hot-key auth** (tag 14): `committee_hot_keys[hot] = cold`.
 /// - **Committee cold resignation** (tag 15): remove every `committee_hot_keys`
 ///   entry authorizing `cold` (clears that member's hot authorization).
@@ -36,17 +49,23 @@ use crate::state::{ConwayGovState, GovCertEnv};
 ///   env.current_epoch + env.drep_activity`. Requires `env`; absent env is a
 ///   structured fail-fast ([`ValidationEnvironmentError::MissingDRepActivityParam`]),
 ///   never a defaulted expiry.
-/// - **DRep unregistration** (tag 17): remove `drep_expiry[cred]`.
-/// - **CertState-only certs** (0/2/3/4/7/8/11) and **removed tags** (5/6): no
-///   governance mutation — `gov_state` is returned unchanged (B4 owns or rejects
-///   these).
+/// - **DRep unregistration** (tag 17): remove `drep_expiry[cred]` and the vote
+///   delegation of every credential delegated to that DRep (Conway GOVCERT
+///   `clearDRepDelegations`), so a later re-registration starts with none.
+/// - **Account unregistration** (tags 1/8): remove the
+///   credential's vote delegation. Conway removes the whole account, DRep
+///   delegation included; B4 removes the rest.
+/// - **Other CertState-only certs** and **removed tags** (5/6): no governance
+///   mutation — `gov_state` is returned unchanged (B4 owns or rejects these).
 ///
 /// `env` is `None` when the state lacks `drep_activity`; only tags 16/18 consult
-/// it, so env-free certs accumulate regardless.
+/// it, so env-free certs accumulate regardless. `cert_index` locates a rejected
+/// certificate in its transaction.
 pub fn apply_conway_gov_cert(
     gov_state: &ConwayGovState,
     cert: &ConwayCert,
     env: Option<&GovCertEnv>,
+    cert_index: u16,
 ) -> Result<ConwayGovState, LedgerError> {
     let mut gov = gov_state.clone();
 
@@ -58,6 +77,14 @@ pub fn apply_conway_gov_cert(
         | ConwayCert::StakeVoteDelegation { credential, drep, .. }
         | ConwayCert::VoteRegistrationDelegation { credential, drep, .. }
         | ConwayCert::StakeVoteRegistrationDelegation { credential, drep, .. } => {
+            if let Some(target) = drep_credential(drep) {
+                if !gov.drep_expiry.contains_key(&target) {
+                    return Err(LedgerError::InvalidCertificate(CertificateError {
+                        cert_index,
+                        reason: CertFailureReason::DRepNotRegistered,
+                    }));
+                }
+            }
             gov.vote_delegations.insert(credential.clone(), drep.clone());
         }
 
@@ -94,19 +121,25 @@ pub fn apply_conway_gov_cert(
             gov.drep_expiry.insert(drep_credential.clone(), expiry);
         }
 
-        // --- DRep unregistration: remove expiry (env-free) ---
-        ConwayCert::DRepUnregistration { drep_credential, .. } => {
-            gov.drep_expiry.remove(drep_credential);
+        // --- DRep unregistration: remove expiry and clear its delegators (env-free) ---
+        ConwayCert::DRepUnregistration { drep_credential: cred, .. } => {
+            gov.drep_expiry.remove(cred);
+            gov.vote_delegations
+                .retain(|_, drep| drep_credential(drep).as_ref() != Some(cred));
+        }
+
+        // --- account unregistration: the account's vote delegation goes with it ---
+        ConwayCert::AccountUnregistration { credential }
+        | ConwayCert::AccountUnregistrationDeposit { credential, .. } => {
+            gov.vote_delegations.remove(credential);
         }
 
         // --- no governance effect: B4-owned CertState certs + removed tags ---
         ConwayCert::AccountRegistration { .. }
-        | ConwayCert::AccountUnregistration { .. }
         | ConwayCert::StakeDelegation { .. }
         | ConwayCert::PoolRegistration(_)
         | ConwayCert::PoolRetirement { .. }
         | ConwayCert::AccountRegistrationDeposit { .. }
-        | ConwayCert::AccountUnregistrationDeposit { .. }
         | ConwayCert::StakeRegistrationDelegation { .. }
         | ConwayCert::RemovedInConway { .. } => {}
     }
@@ -119,8 +152,7 @@ pub fn apply_conway_gov_cert(
 mod tests {
     use super::*;
     use crate::delegation::{apply_conway_cert, CertState, ConwayCertEnv};
-    use ade_types::conway::cert::{ConwayCert, DRep};
-    use ade_types::shelley::cert::{PoolRegistrationCert, StakeCredential};
+    use ade_types::shelley::cert::PoolRegistrationCert;
     use ade_types::tx::{Coin, PoolId};
     use ade_types::{EpochNo, Hash28, Hash32};
     use std::collections::BTreeMap;
@@ -155,6 +187,23 @@ mod tests {
             drep_activity: 20,
         }
     }
+    /// An empty gov-state with the key-hash DRep `b` registered.
+    fn gov_with_drep(b: u8) -> ConwayGovState {
+        let mut g = empty_gov();
+        g.drep_expiry.insert(cred(b), 600);
+        g
+    }
+    /// Apply both halves of one certificate, in block-path order.
+    fn apply_both(
+        cs: &CertState,
+        g: &ConwayGovState,
+        cert: &ConwayCert,
+    ) -> Result<(CertState, ConwayGovState), LedgerError> {
+        let cenv = ConwayCertEnv { key_deposit: Coin(2_000_000), cert_index: 0 };
+        let cs = apply_conway_cert(cs, cert, &cenv)?.state;
+        let g = apply_conway_gov_cert(g, cert, Some(&env()), 0)?;
+        Ok((cs, g))
+    }
     fn preg(b: u8) -> PoolRegistrationCert {
         PoolRegistrationCert {
             pool_id: pool(b),
@@ -175,6 +224,7 @@ mod tests {
         let g = empty_gov();
         let e = env();
         let drep = DRep::KeyHash(h(0xDD));
+        let g_dd = gov_with_drep(0xDD);
 
         // -- vote delegation (9/10/12/13): vote_delegations[cred] = drep --
         for cert in [
@@ -183,9 +233,9 @@ mod tests {
             ConwayCert::VoteRegistrationDelegation { credential: cred(1), drep: drep.clone(), deposit: Coin(2_000_000) },
             ConwayCert::StakeVoteRegistrationDelegation { credential: cred(1), pool_id: pool(9), drep: drep.clone(), deposit: Coin(2_000_000) },
         ] {
-            let out = apply_conway_gov_cert(&g, &cert, Some(&e)).unwrap();
+            let out = apply_conway_gov_cert(&g_dd, &cert, Some(&e), 0).unwrap();
             assert_eq!(out.vote_delegations.get(&cred(1)), Some(&drep), "{cert:?}");
-            assert!(out.committee_hot_keys.is_empty() && out.drep_expiry.is_empty(), "{cert:?}");
+            assert!(out.committee_hot_keys.is_empty() && out.drep_expiry == g_dd.drep_expiry, "{cert:?}");
         }
 
         // -- committee hot-key auth (14): committee_hot_keys[hot] = cold --
@@ -193,6 +243,7 @@ mod tests {
             &g,
             &ConwayCert::AuthCommitteeHot { cold_credential: cred(0xC0), hot_credential: cred(0x40) },
             Some(&e),
+            0,
         ).unwrap();
         assert_eq!(out.committee_hot_keys.get(&cred(0x40)), Some(&cred(0xC0)));
         assert!(out.vote_delegations.is_empty() && out.drep_expiry.is_empty());
@@ -205,6 +256,7 @@ mod tests {
             &g_auth,
             &ConwayCert::ResignCommitteeCold { cold_credential: cred(0xC0) },
             Some(&e),
+            0,
         ).unwrap();
         assert_eq!(out.committee_hot_keys.get(&cred(0x40)), None, "0xC0 authorization removed");
         assert_eq!(out.committee_hot_keys.get(&cred(0x41)), Some(&cred(0xC1)), "0xC1 untouched");
@@ -214,7 +266,7 @@ mod tests {
             ConwayCert::DRepRegistration { drep_credential: cred(0xAA), deposit: Coin(500_000_000) },
             ConwayCert::DRepUpdate { drep_credential: cred(0xAA) },
         ] {
-            let out = apply_conway_gov_cert(&g, &cert, Some(&e)).unwrap();
+            let out = apply_conway_gov_cert(&g, &cert, Some(&e), 0).unwrap();
             assert_eq!(out.drep_expiry.get(&cred(0xAA)), Some(&(576 + 20)), "{cert:?}");
         }
 
@@ -225,10 +277,12 @@ mod tests {
             &g_drep,
             &ConwayCert::DRepUnregistration { drep_credential: cred(0xAA), refund: Coin(500_000_000) },
             Some(&e),
+            0,
         ).unwrap();
         assert_eq!(out.drep_expiry.get(&cred(0xAA)), None);
 
-        // -- CertState-only (0/2/3/4/7/8/11) + removed (5/6): gov unchanged --
+        // -- CertState-only + removed (5/6), and account unregistration of a
+        //    credential with no vote delegation: gov unchanged --
         for cert in [
             ConwayCert::AccountRegistration { credential: cred(1) },
             ConwayCert::AccountUnregistration { credential: cred(1) },
@@ -241,7 +295,7 @@ mod tests {
             ConwayCert::RemovedInConway { tag: 5 },
             ConwayCert::RemovedInConway { tag: 6 },
         ] {
-            let out = apply_conway_gov_cert(&g, &cert, Some(&e)).unwrap();
+            let out = apply_conway_gov_cert(&g, &cert, Some(&e), 0).unwrap();
             assert_eq!(out, g, "CertState-only/removed must not touch gov: {cert:?}");
         }
     }
@@ -279,8 +333,8 @@ mod tests {
         assert_eq!(b4.state.delegation.delegations.get(&cred(1)), Some(&pool(9)), "B4 applied pool half");
 
         // B5 half: gov.vote_delegations set; CertState is structurally inaccessible.
-        let g = empty_gov();
-        let b5 = apply_conway_gov_cert(&g, &cert, Some(&env())).unwrap();
+        let g = gov_with_drep(0xDD);
+        let b5 = apply_conway_gov_cert(&g, &cert, Some(&env()), 0).unwrap();
         assert_eq!(b5.vote_delegations.get(&cred(1)), Some(&drep), "B5 applied drep half exactly once");
         // B5 output is a ConwayGovState only — no delegation/pool fields exist to double-apply.
     }
@@ -293,6 +347,7 @@ mod tests {
             &g,
             &ConwayCert::DRepRegistration { drep_credential: cred(0xAA), deposit: Coin(500_000_000) },
             Some(&e),
+            0,
         ).unwrap();
         assert_eq!(out.drep_expiry.get(&cred(0xAA)), Some(&107));
     }
@@ -306,6 +361,7 @@ mod tests {
             &g,
             &ConwayCert::VoteDelegation { credential: cred(1), drep: drep.clone() },
             None,
+            0,
         ).unwrap();
         assert_eq!(out.vote_delegations.get(&cred(1)), Some(&drep));
 
@@ -314,6 +370,7 @@ mod tests {
             &g,
             &ConwayCert::AuthCommitteeHot { cold_credential: cred(0xC0), hot_credential: cred(0x40) },
             None,
+            0,
         ).unwrap();
         assert_eq!(out.committee_hot_keys.get(&cred(0x40)), Some(&cred(0xC0)));
     }
@@ -327,7 +384,7 @@ mod tests {
             ConwayCert::DRepRegistration { drep_credential: cred(0xAA), deposit: Coin(500_000_000) },
             ConwayCert::DRepUpdate { drep_credential: cred(0xAA) },
         ] {
-            let err = apply_conway_gov_cert(&g, &cert, None).unwrap_err();
+            let err = apply_conway_gov_cert(&g, &cert, None, 0).unwrap_err();
             assert!(matches!(
                 err,
                 LedgerError::ValidationEnvironment(
@@ -347,7 +404,7 @@ mod tests {
             ConwayCert::DRepRegistration { drep_credential: cred(0xAA), deposit: Coin(500_000_000) },
             ConwayCert::DRepUpdate { drep_credential: cred(0xAA) },
         ] {
-            let err = apply_conway_gov_cert(&g, &cert, Some(&e)).unwrap_err();
+            let err = apply_conway_gov_cert(&g, &cert, Some(&e), 0).unwrap_err();
             assert!(matches!(
                 err,
                 LedgerError::ValidationEnvironment(
@@ -359,10 +416,141 @@ mod tests {
 
     #[test]
     fn gov_apply_is_deterministic() {
-        let g = empty_gov();
+        let g = gov_with_drep(0xDD);
         let cert = ConwayCert::VoteDelegation { credential: cred(1), drep: DRep::KeyHash(h(0xDD)) };
-        let r1 = apply_conway_gov_cert(&g, &cert, Some(&env())).unwrap();
-        let r2 = apply_conway_gov_cert(&g, &cert, Some(&env())).unwrap();
+        let r1 = apply_conway_gov_cert(&g, &cert, Some(&env()), 0).unwrap();
+        let r2 = apply_conway_gov_cert(&g, &cert, Some(&env()), 0).unwrap();
         assert_eq!(r1, r2);
+    }
+
+    /// CE-LV15b0-3a: account unregistration removes the whole account (Conway
+    /// `unregisterConwayAccount`): registration, pool delegation, reward balance
+    /// and vote delegation. Re-registering does not bring the vote delegation
+    /// back; only a new vote-delegation certificate does.
+    #[test]
+    fn ce_lv15b0_3a_account_unregistration_removes_vote_delegation_and_reregistration_starts_empty() {
+        for unreg in [
+            ConwayCert::AccountUnregistration { credential: cred(1) },
+            ConwayCert::AccountUnregistrationDeposit { credential: cred(1), refund: Coin(2_000_000) },
+        ] {
+            let mut cs = CertState::new();
+            cs.delegation.registrations.insert(cred(1), Coin(2_000_000));
+            cs.delegation.delegations.insert(cred(1), pool(9));
+            cs.delegation.rewards.insert(cred(1), Coin(0));
+            let mut g = gov_with_drep(0xDD);
+            g.vote_delegations.insert(cred(1), DRep::KeyHash(h(0xDD)));
+            g.vote_delegations.insert(cred(2), DRep::KeyHash(h(0xDD)));
+
+            let (cs, g) = apply_both(&cs, &g, &unreg).unwrap();
+            assert!(!cs.delegation.registrations.contains_key(&cred(1)), "{unreg:?}");
+            assert!(!cs.delegation.delegations.contains_key(&cred(1)), "{unreg:?}");
+            assert!(!cs.delegation.rewards.contains_key(&cred(1)), "{unreg:?}");
+            assert_eq!(g.vote_delegations.get(&cred(1)), None, "vote delegation removed: {unreg:?}");
+            assert_eq!(g.vote_delegations.get(&cred(2)), Some(&DRep::KeyHash(h(0xDD))), "others kept");
+
+            let rereg = ConwayCert::AccountRegistrationDeposit { credential: cred(1), deposit: Coin(2_000_000) };
+            let (cs, g) = apply_both(&cs, &g, &rereg).unwrap();
+            assert!(cs.delegation.registrations.contains_key(&cred(1)));
+            assert_eq!(g.vote_delegations.get(&cred(1)), None, "re-registration carries no vote delegation");
+
+            let deleg = ConwayCert::VoteDelegation { credential: cred(1), drep: DRep::KeyHash(h(0xDD)) };
+            let (_, g) = apply_both(&cs, &g, &deleg).unwrap();
+            assert_eq!(g.vote_delegations.get(&cred(1)), Some(&DRep::KeyHash(h(0xDD))));
+        }
+    }
+
+    /// CE-LV15b0-3a: DRep unregistration clears every delegation to it (Conway
+    /// `clearDRepDelegations`). Re-registering the same credential does not bring
+    /// the old delegators back.
+    #[test]
+    fn ce_lv15b0_3a_drep_reregistration_does_not_regain_old_delegators() {
+        let mut g = gov_with_drep(0xDD);
+        g.drep_expiry.insert(StakeCredential::ScriptHash(h(0xDD)), 600);
+        g.drep_expiry.insert(cred(0xEE), 600);
+        g.vote_delegations.insert(cred(1), DRep::KeyHash(h(0xDD)));
+        g.vote_delegations.insert(cred(2), DRep::KeyHash(h(0xDD)));
+        // Same hash bytes, script DRep: a different DRep, untouched.
+        g.vote_delegations.insert(cred(3), DRep::ScriptHash(h(0xDD)));
+        g.vote_delegations.insert(cred(4), DRep::KeyHash(h(0xEE)));
+        g.vote_delegations.insert(cred(5), DRep::AlwaysAbstain);
+
+        let g = apply_conway_gov_cert(
+            &g,
+            &ConwayCert::DRepUnregistration { drep_credential: cred(0xDD), refund: Coin(500_000_000) },
+            Some(&env()),
+            0,
+        ).unwrap();
+        assert_eq!(g.drep_expiry.get(&cred(0xDD)), None);
+        assert_eq!(g.vote_delegations.get(&cred(1)), None);
+        assert_eq!(g.vote_delegations.get(&cred(2)), None);
+        assert_eq!(g.vote_delegations.get(&cred(3)), Some(&DRep::ScriptHash(h(0xDD))));
+        assert_eq!(g.vote_delegations.get(&cred(4)), Some(&DRep::KeyHash(h(0xEE))));
+        assert_eq!(g.vote_delegations.get(&cred(5)), Some(&DRep::AlwaysAbstain));
+
+        let g = apply_conway_gov_cert(
+            &g,
+            &ConwayCert::DRepRegistration { drep_credential: cred(0xDD), deposit: Coin(500_000_000) },
+            Some(&env()),
+            0,
+        ).unwrap();
+        assert!(g.drep_expiry.contains_key(&cred(0xDD)));
+        assert!(
+            g.vote_delegations.values().all(|d| *d != DRep::KeyHash(h(0xDD))),
+            "no old delegator returns on re-registration",
+        );
+    }
+
+    /// CE-LV15b0-3b: a vote delegation naming an unregistered credential DRep is
+    /// rejected (Conway DELEG `DelegateeDRepNotRegisteredDELEG`, PV ≥ 10), for
+    /// every vote-delegating certificate and both credential kinds. The two
+    /// predefined DReps need no registration.
+    #[test]
+    fn ce_lv15b0_3b_vote_delegation_to_unregistered_drep_is_rejected() {
+        let g = gov_with_drep(0xDD);
+        for drep in [DRep::KeyHash(h(0xEE)), DRep::ScriptHash(h(0xDD))] {
+            for (idx, cert) in [
+                ConwayCert::VoteDelegation { credential: cred(1), drep: drep.clone() },
+                ConwayCert::StakeVoteDelegation { credential: cred(1), pool_id: pool(9), drep: drep.clone() },
+                ConwayCert::VoteRegistrationDelegation { credential: cred(1), drep: drep.clone(), deposit: Coin(2_000_000) },
+                ConwayCert::StakeVoteRegistrationDelegation { credential: cred(1), pool_id: pool(9), drep: drep.clone(), deposit: Coin(2_000_000) },
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let err = apply_conway_gov_cert(&g, &cert, Some(&env()), idx as u16).unwrap_err();
+                assert_eq!(
+                    err,
+                    LedgerError::InvalidCertificate(CertificateError {
+                        cert_index: idx as u16,
+                        reason: CertFailureReason::DRepNotRegistered,
+                    }),
+                    "{cert:?}",
+                );
+            }
+        }
+        for drep in [DRep::AlwaysAbstain, DRep::AlwaysNoConfidence] {
+            let cert = ConwayCert::VoteDelegation { credential: cred(1), drep: drep.clone() };
+            let out = apply_conway_gov_cert(&empty_gov(), &cert, Some(&env()), 0).unwrap();
+            assert_eq!(out.vote_delegations.get(&cred(1)), Some(&drep));
+        }
+    }
+
+    /// CE-LV15b0-3b: registration and delegation in one transaction are applied in
+    /// certificate order, so registering first is accepted and the reverse order
+    /// is rejected.
+    #[test]
+    fn ce_lv15b0_3b_drep_registration_then_delegation_is_ordered() {
+        let reg = ConwayCert::DRepRegistration { drep_credential: cred(0xDD), deposit: Coin(500_000_000) };
+        let deleg = ConwayCert::VoteDelegation { credential: cred(1), drep: DRep::KeyHash(h(0xDD)) };
+
+        let g = apply_conway_gov_cert(&empty_gov(), &reg, Some(&env()), 0).unwrap();
+        let g = apply_conway_gov_cert(&g, &deleg, Some(&env()), 1).unwrap();
+        assert_eq!(g.vote_delegations.get(&cred(1)), Some(&DRep::KeyHash(h(0xDD))));
+
+        let err = apply_conway_gov_cert(&empty_gov(), &deleg, Some(&env()), 0).unwrap_err();
+        assert!(matches!(
+            err,
+            LedgerError::InvalidCertificate(CertificateError { reason: CertFailureReason::DRepNotRegistered, .. })
+        ));
     }
 }

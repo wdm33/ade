@@ -1638,6 +1638,10 @@ pub enum NativeNonUtxoError {
     UnsupportedGovernanceState(String),
     /// A governance proposal / committee is structurally malformed where the gov-state must carry it.
     MalformedGovernanceState(String),
+    /// The snapshot's `curPParams` protocol major version is below 10. Ade's Conway rules are the PV ≥ 10 rules
+    /// (e.g. a vote delegation to an unregistered DRep is rejected, and none dangles); PV9 bootstrap-phase
+    /// semantics are not modelled, so such a state is refused rather than read under the wrong rules.
+    UnsupportedProtocolVersion { major: u32 },
 }
 
 /// DIAGNOSTIC ONLY — never a bootstrap verdict. The distribution of pool reward-account
@@ -1678,6 +1682,10 @@ impl From<ade_codec::CodecError> for NativeNonUtxoError {
 }
 
 type Rn<T> = Result<T, NativeNonUtxoError>;
+
+/// The lowest Conway protocol major version Ade bootstraps from (see
+/// [`NativeNonUtxoError::UnsupportedProtocolVersion`]).
+const MIN_CONWAY_PROTOCOL_MAJOR: u32 = 10;
 
 fn nn_malformed(detail: impl Into<String>) -> NativeNonUtxoError {
     NativeNonUtxoError::MalformedCbor(detail.into())
@@ -2310,6 +2318,9 @@ fn read_conway_pparams_from_utxo_state(
         max_block_ex_units_mem,
         conway_deposit_params,
     ) = read_conway_pparams(d, o, network_id)?; // [3] curPParams
+    if pp.protocol_major < MIN_CONWAY_PROTOCOL_MAJOR {
+        return Err(NativeNonUtxoError::UnsupportedProtocolVersion { major: pp.protocol_major });
+    }
     // [4] prevPParams — the PREVIOUS-epoch params. At an enactment boundary `prev` still holds the OLD value
     // while `cur` holds the NEW, proving the flip lands exactly at THIS boundary (CRE enactment census).
     let (prev_pp, _, _, _, prev_max_block_ex_units_mem, _) = read_conway_pparams(d, o, network_id)?;

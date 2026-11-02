@@ -1838,7 +1838,7 @@ fn accumulate_tx_certs(
             // DRep) into ConwayGovState when governance is tracked. A gov apply
             // error propagates and halts the block transition.
             if let Some(g) = gov.as_ref() {
-                gov = Some(crate::gov_cert::apply_conway_gov_cert(g, cert, gov_env)?);
+                gov = Some(crate::gov_cert::apply_conway_gov_cert(g, cert, gov_env, idx as u16)?);
             }
         }
     } else {

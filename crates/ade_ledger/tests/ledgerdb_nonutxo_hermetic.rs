@@ -110,6 +110,11 @@ fn conway_pparams() -> Vec<u8> {
 /// As [`conway_pparams`] but with a caller-chosen `minFeeA` (so the commitment-binding test can
 /// perturb the protocol params cleanly, without hand-computed byte offsets).
 fn conway_pparams_with_min_fee_a(min_fee_a: u64) -> Vec<u8> {
+    conway_pparams_with(min_fee_a, 11)
+}
+
+/// As [`conway_pparams`] with a caller-chosen `minFeeA` and protocol major version.
+fn conway_pparams_with(min_fee_a: u64, protocol_major: u64) -> Vec<u8> {
     concat(&[
         arr(31),
         uint(min_fee_a),  // 0 minFeeA
@@ -124,7 +129,7 @@ fn conway_pparams_with_min_fee_a(min_fee_a: u64) -> Vec<u8> {
         rational(3, 10),  // 9 a0
         rational(3, 1000),// 10 rho
         rational(1, 5),   // 11 tau
-        concat(&[arr(2), uint(11), uint(0)]), // 12 protVer [major, minor]
+        concat(&[arr(2), uint(protocol_major), uint(0)]), // 12 protVer [major, minor]
         uint(170_000_000),// 13 minPoolCost
         uint(4_310),      // 14 coinsPerUTxOByte
         concat(&[map(0)]),// 15 costModels (empty map; raw-preserved)
@@ -654,6 +659,20 @@ fn malformed_drep_activity_type_is_terminal() {
         decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC),
         Err(NativeNonUtxoError::MalformedCbor(_))
     ));
+}
+
+/// LV-15b-0: Ade's Conway rules are the PV ≥ 10 rules, so a PV9 (bootstrap-phase) state is refused, typed,
+/// while PV10 is accepted.
+#[test]
+fn protocol_major_below_10_is_refused() {
+    let mut k = Knobs::default();
+    k.pparams_override = Some(conway_pparams_with(44, 9));
+    assert_eq!(
+        decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC).err(),
+        Some(NativeNonUtxoError::UnsupportedProtocolVersion { major: 9 })
+    );
+    k.pparams_override = Some(conway_pparams_with(44, 10));
+    assert!(decode_native_nonutxo_state(&build_state(&k), point(), 296, TESTNET_MAGIC).is_ok());
 }
 
 #[test]

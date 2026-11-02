@@ -477,6 +477,8 @@ pub enum CertFailureReason {
     PoolAlreadyRegistered,
     PoolNotRegistered,
     InvalidPoolParams,
+    /// A vote delegation names a credential DRep that is not registered.
+    DRepNotRegistered,
 }
 
 // ---------------------------------------------------------------------------

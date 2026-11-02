@@ -74,15 +74,17 @@ fn accumulate_gov(base: &ConwayGovState, certs: &[ConwayCert], env: Option<&GovC
 {
     let mut gov = base.clone();
     for cert in certs {
-        gov = apply_conway_gov_cert(&gov, cert, env)?;
+        gov = apply_conway_gov_cert(&gov, cert, env, 0)?;
     }
     Ok(gov)
 }
 
-/// A real-shaped governance-cert sequence: delegate vote to a DRep, authorize a
-/// committee hot key, register a DRep.
+/// A real-shaped governance-cert sequence: register a DRep and delegate vote to
+/// it (a delegation to an unregistered DRep is rejected), authorize a committee
+/// hot key, register another DRep.
 fn positive_sequence() -> Vec<ConwayCert> {
     vec![
+        ConwayCert::DRepRegistration { drep_credential: cred(0xDD), deposit: Coin(500_000_000) },
         ConwayCert::VoteDelegation { credential: cred(1), drep: DRep::KeyHash(h(0xDD)) },
         ConwayCert::AuthCommitteeHot { cold_credential: cred(0xC0), hot_credential: cred(0x40) },
         ConwayCert::DRepRegistration { drep_credential: cred(0xAA), deposit: Coin(500_000_000) },

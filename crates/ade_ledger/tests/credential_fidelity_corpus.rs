@@ -74,11 +74,13 @@ fn keyhash_scripthash_same_bytes_are_distinct_govstate() {
         &g,
         &ConwayCert::VoteDelegation { credential: key(7), drep: DRep::AlwaysAbstain },
         Some(&env()),
+        0,
     ).unwrap();
     let g = apply_conway_gov_cert(
         &g,
         &ConwayCert::VoteDelegation { credential: script(7), drep: DRep::AlwaysNoConfidence },
         Some(&env()),
+        0,
     ).unwrap();
     assert_eq!(g.vote_delegations.len(), 2, "key vs script same bytes are distinct gov keys");
     assert_eq!(g.vote_delegations.get(&key(7)), Some(&DRep::AlwaysAbstain));
@@ -179,6 +181,7 @@ fn discriminant_changes_fingerprint_corpus() {
 #[test]
 fn credential_accumulation_replays_byte_identical() {
     let seq = [
+        ConwayCert::DRepRegistration { drep_credential: key(0xDD), deposit: Coin(500_000_000) },
         ConwayCert::VoteDelegation { credential: key(7), drep: DRep::KeyHash(Hash28([0xDD; 28])) },
         ConwayCert::VoteDelegation { credential: script(7), drep: DRep::AlwaysAbstain },
         ConwayCert::DRepRegistration { drep_credential: script(0xAA), deposit: Coin(500_000_000) },
@@ -187,7 +190,7 @@ fn credential_accumulation_replays_byte_identical() {
     let run = || {
         let mut g = base_gov();
         for c in &seq {
-            g = apply_conway_gov_cert(&g, c, Some(&env())).unwrap();
+            g = apply_conway_gov_cert(&g, c, Some(&env()), 0).unwrap();
         }
         g
     };

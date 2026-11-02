@@ -3623,6 +3623,7 @@ mod tests {
             &gov,
             &ConwayCert::DRepRegistration { drep_credential: drep.clone(), deposit: Coin(500_000_000) },
             Some(&env),
+            0,
         )
         .expect("DRep registration no longer fails closed on MissingDRepActivityParam");
         assert_eq!(after_cert.drep_expiry.get(&drep), Some(&(500 + DREP_ACTIVITY)));

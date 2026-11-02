@@ -403,6 +403,8 @@ pub enum GovernanceCertEffect {
     DRepRegistration,
     DRepUnregistration,
     DRepUpdate,
+    /// Account unregistration removes the account's vote delegation with it.
+    AccountVoteDelegationRemoval,
 }
 
 /// A governance effect tagged with the state owner that applies it (PHASE4-B5).
@@ -435,13 +437,16 @@ pub fn conway_cert_action(cert: &ConwayCert) -> ConwayCertAction {
     match cert {
         // Delegation/pool — B4-owned CertState.
         ConwayCert::AccountRegistration { .. }
-        | ConwayCert::AccountUnregistration { .. }
         | ConwayCert::StakeDelegation { .. }
         | ConwayCert::PoolRegistration(_)
         | ConwayCert::PoolRetirement { .. }
         | ConwayCert::AccountRegistrationDeposit { .. }
-        | ConwayCert::AccountUnregistrationDeposit { .. }
         | ConwayCert::StakeRegistrationDelegation { .. } => ConwayCertAction::MutateCertState,
+
+        // Account removal — CertState, plus the account's vote delegation in ConwayGovState.
+        ConwayCert::AccountUnregistration { .. } | ConwayCert::AccountUnregistrationDeposit { .. } => {
+            ConwayCertAction::CertStateAndGovernance(AccountVoteDelegationRemoval)
+        }
 
         // Governance-only — owner-tagged to ConwayGovState.
         ConwayCert::VoteDelegation { .. } => ConwayCertAction::Governance(VoteDelegation),
@@ -530,12 +535,11 @@ pub fn apply_conway_cert(
         ConwayCert::AccountRegistrationDeposit { credential, deposit } => {
             plain(apply_stake_registration(state, credential, *deposit, idx)?)
         }
-        ConwayCert::AccountUnregistration { credential } => {
-            plain(apply_stake_deregistration(state, credential, idx)?)
-        }
-        ConwayCert::AccountUnregistrationDeposit { credential, .. } => {
-            plain(apply_stake_deregistration(state, credential, idx)?)
-        }
+        ConwayCert::AccountUnregistration { credential }
+        | ConwayCert::AccountUnregistrationDeposit { credential, .. } => tagged(
+            apply_stake_deregistration(state, credential, idx)?,
+            AccountVoteDelegationRemoval,
+        ),
         ConwayCert::StakeDelegation { credential, pool_id } => {
             plain(apply_stake_delegation(state, credential, pool_id, idx)?)
         }
@@ -1172,14 +1176,14 @@ mod conway_apply {
         use GovernanceCertEffect as G;
         vec![
             (ConwayCert::AccountRegistration { credential: cred(1) }, MutateCertState),
-            (ConwayCert::AccountUnregistration { credential: cred(1) }, MutateCertState),
+            (ConwayCert::AccountUnregistration { credential: cred(1) }, CertStateAndGovernance(G::AccountVoteDelegationRemoval)),
             (ConwayCert::StakeDelegation { credential: cred(1), pool_id: pool(9) }, MutateCertState),
             (ConwayCert::PoolRegistration(preg(9)), MutateCertState),
             (ConwayCert::PoolRetirement { pool_id: pool(9), epoch: EpochNo(500) }, MutateCertState),
             (ConwayCert::RemovedInConway { tag: 5 }, NotValidInEra),
             (ConwayCert::RemovedInConway { tag: 6 }, NotValidInEra),
             (ConwayCert::AccountRegistrationDeposit { credential: cred(1), deposit: Coin(2_000_000) }, MutateCertState),
-            (ConwayCert::AccountUnregistrationDeposit { credential: cred(1), refund: Coin(2_000_000) }, MutateCertState),
+            (ConwayCert::AccountUnregistrationDeposit { credential: cred(1), refund: Coin(2_000_000) }, CertStateAndGovernance(G::AccountVoteDelegationRemoval)),
             (ConwayCert::VoteDelegation { credential: cred(1), drep: DRep::AlwaysAbstain }, Governance(G::VoteDelegation)),
             (ConwayCert::StakeVoteDelegation { credential: cred(1), pool_id: pool(9), drep: DRep::AlwaysAbstain }, CertStateAndGovernance(G::StakeVoteDelegation)),
             (ConwayCert::StakeRegistrationDelegation { credential: cred(1), pool_id: pool(9), deposit: Coin(2_000_000) }, MutateCertState),
