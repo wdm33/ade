@@ -88,10 +88,11 @@ exists, it stops following that peer with a structured outcome and leaves its du
 - **(d) One `FindIntersect` per connection.** No refinement round. §3.1 shows that one round decides
   whether a usable common point exists.
 - **(e) A found point must be one Ade offered.** `IntersectFound` naming any other point is
-  `IntersectionPointNotOffered`: the session fails closed, emits no event, and does not reconnect.
+  `IntersectionPointNotOffered`: the session fails closed and does not reconnect. It emits nothing
+  beyond the `TipUpdate` that DC-PUMP-02 requires for every reply carrying a tip.
 - **(f) No common point is a structured outcome, not a rewind.** `IntersectNotFound` ends the session
   with `NoCommonIntersection`, carrying the bound that limited the offer (`SecurityParam`,
-  `RetainedHistory` or `UnretainedTip`) and the deepest point offered. No `RequestNext` is sent, there is
+  `RetainedHistory` or `NoStoredAncestry`) and the deepest point offered. No `RequestNext` is sent, there is
   no reconnect (the same offer would get the same answer), and nothing durable changes. It is never
   turned into a rollback to genesis.
 - **(g) The intersection is not rollback authority.** The `RollBackward(point)` that follows a found
@@ -147,6 +148,12 @@ Let `D` be the deepest candidate, at depth `l`.
 The reply classification is BLUE and the pump calls it. The pump does not decide on its own what a
 reply means.
 
+Two other callers send a single point, and keep doing so: the admission-mode judge path (the operator's
+source tip) and the fork-switch body prefetch (the fork anchor). Each is offered as a single point with no
+stored ancestry (`NoStoredAncestry`), so its replies are read by the same classifier. Before this slice
+their `IntersectNotFound` also ended in the refused `RollBackward(Origin)`; now it ends one message
+earlier, with `NoCommonIntersection`.
+
 ---
 
 ## 5. What a pending rollback leaves behind, and why recovery stays consistent
@@ -188,13 +195,14 @@ point.
   - On `IntersectFound(915)` it sends `RequestNext`; the peer's `RollBackward(915)` becomes a
     `RollBackward` event.
   - On `IntersectNotFound` it returns `NoCommonIntersection` and sends no `RequestNext`.
-  - On an unoffered `IntersectFound` it returns `IntersectionPointNotOffered` and emits no event.
+  - On an unoffered `IntersectFound` it returns `IntersectionPointNotOffered` and emits nothing beyond
+    DC-PUMP-02's `TipUpdate`.
   - Neither outcome reconnects (`should_reconnect_after`).
 - **CE-LV16-6 Ancestry read.**
   - Over a stored chain, the reader returns the validated ancestry to depth k, or to the oldest stored
     block.
   - A block whose recomputed hash differs from the hash it was found by is refused.
-  - A tip that is not stored (the recovered anchor) is offered alone, as `UnretainedTip`.
+  - A tip that is not stored (the recovered anchor) is offered alone, as `NoStoredAncestry`.
 - **CE-LV16-7 Killed-store shape, hermetic.**
   - The setup is a durable chain ending `…, 915, 917` and a peer whose chain contains `915` but not
     `917`.
@@ -205,12 +213,23 @@ point.
 - **CE-LV16-8 Killed store, live** (release; on disposable checksummed copies, never the master):
   - **Recovery:** the fixed binary logs the intersection at `138046915/d9fe3452` and
     `rollback-followed: to_slot=138046915`, then follows forward.
-  - **Matches the run before the kill:** the accumulator's state at cursor `138046915` equals the value
-    the uninterrupted run logged there before the kill (`acc_fp … -> 21a11caa`). Its canonical encodings
-    (record, governance, delegation, reward balances, fingerprint) are byte-compared.
-  - **Two recoveries agree:** a second copy recovered independently gives byte-identical canonical
-    encodings at a shared canonical chain point after the rollback.
+  - **Matches the run before the kill, at the same chain points:**
+    - The accumulator fingerprint is equal wherever both the recovered run and the uninterrupted run
+      logged one. These points are the refold's per-epoch pass ends, which are the last block before
+      each boundary, and any per-block cursor both runs logged.
+    - Two whole stores are compared byte for byte with `lv16_recovered_store_equivalence` wherever they
+      stand at the same cursor.
+    - The frozen 323 record is fixed for the whole epoch, so its canonical encoding is byte-compared
+      with the uninterrupted 323 capture whatever the cursor.
+  - **Two recoveries agree:** a second copy recovered independently passes the same comparisons, at the
+    chain points both runs share after the rollback.
   - **Master untouched:** the master's checksums are unchanged afterwards.
+
+  Already observed on the master, before any recovery: the S5 pre-clear had rewound the accumulator to
+  its settled point, cursor 137,894,414 (the first block of epoch 323). That state is byte-identical, all
+  10,149,025 bytes, to the uninterrupted run's capture at the same cursor. The rewind inside the crash
+  window restored exact state. Its anchor is absent, so recovery still refolds from the bootstrap (RF-1);
+  that costs time, not correctness, and is not changed here.
 - **CE-LV16-9 Gate.**
   - The new gate `ci/ci_check_durable_intersection.sh` passes.
   - These existing gates stay green: store semantics lock and gate, rollback target canonical binding,
