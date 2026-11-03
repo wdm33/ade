@@ -1393,6 +1393,9 @@ pub fn apply_epoch_boundary_with_registrations(
             }
         }
     };
+    // The pools with at least one delegator at SNAP, read here before POOLREAP clears the reaped pools'
+    // delegators: the frozen SPO distribution's membership (cardano `calculatePoolDistr`, `numDelegators > 0`).
+    let delegated_at_snap: std::collections::BTreeSet<ade_types::tx::PoolId> = delegation.delegations.values().cloned().collect();
     let rotated = crate::epoch::rotate_snapshots(
         snaps,
         new_mark,
@@ -1611,7 +1614,7 @@ pub fn apply_epoch_boundary_with_registrations(
         let base = boundary_base_stake.ok_or(crate::governance::GovernanceTerminal::BoundaryBaseStakeRequired {
             boundary_point: state.epoch_state.slot,
         })?;
-        let record = match crate::governance::frozen::FrozenRatificationInput::at_boundary(&new_state, base)? {
+        let record = match crate::governance::frozen::FrozenRatificationInput::at_boundary(&new_state, base, &delegated_at_snap)? {
             Some(input) => Some(crate::governance::frozen::ratify_frozen(&input)?),
             None => None,
         };

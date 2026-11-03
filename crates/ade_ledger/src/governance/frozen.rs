@@ -20,7 +20,7 @@
 //!
 //! The consuming boundary sees a fourth, [`CurrentGovernanceState`], which converts into none of them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ade_types::conway::cert::DRep;
 use ade_types::conway::governance::{GovActionId, GovActionState};
@@ -39,10 +39,11 @@ use crate::epoch_accumulator::BoundaryBaseStake;
 use crate::pparams::ProtocolParameters;
 use crate::state::{ConwayGovState, LedgerState};
 
-/// The mark built at the freezing boundary (SNAP), before the boundary's credits. Read only by the SPO
-/// distribution.
+/// The mark built at the freezing boundary (SNAP), before the boundary's credits, and the pools that had at least
+/// one delegator at SNAP (before POOLREAP clears the reaped pools' delegators). Read only by the SPO distribution.
 pub struct FrozenPoolStake<'a> {
     mark: &'a StakeSnapshot,
+    delegated_at_snap: &'a BTreeSet<PoolId>,
 }
 
 /// Account state after every credit of the freezing boundary (rewards, refunds), with the boundary's per-credential
@@ -73,6 +74,7 @@ impl<'a> FrozenRatificationInput<'a> {
     pub fn at_boundary(
         next: &'a LedgerState,
         base: &'a BoundaryBaseStake,
+        delegated_at_snap: &'a BTreeSet<PoolId>,
     ) -> Result<Option<Self>, GovernanceTerminal> {
         let point = next.epoch_state.slot;
         let snaps = next
@@ -85,7 +87,7 @@ impl<'a> FrozenRatificationInput<'a> {
             return Ok(None);
         };
         Ok(Some(Self {
-            pool: FrozenPoolStake { mark: &snaps.mark.0 },
+            pool: FrozenPoolStake { mark: &snaps.mark.0, delegated_at_snap },
             accounts: PostBoundaryAccounts {
                 utxo_stake: &base.canonical_credential_stake,
                 delegation: &cert.delegation,
@@ -281,16 +283,17 @@ pub fn derive_frozen_drep_distribution(
     Ok(out)
 }
 
-/// The frozen SPO distribution: the mark built at the freezing boundary, plus the proposal deposits of accounts
-/// delegated (after the boundary) to a pool present in that mark. Every pool registered at SNAP appears, at zero if
-/// it has no stake.
+/// The frozen SPO distribution: cardano's `calculatePoolDistr` over the mark built at the freezing boundary (a pool
+/// is present iff it had at least one delegator at SNAP, at zero when every delegator has zero stake), plus the
+/// proposal deposits of accounts delegated (after the boundary) to a pool already present. A registered pool with no
+/// delegator is absent.
 pub fn derive_frozen_pool_distribution(
     pool: &FrozenPoolStake<'_>,
     accounts: &PostBoundaryAccounts<'_>,
     gov: &FrozenGovernanceView<'_>,
 ) -> Result<BTreeMap<PoolId, Coin>, GovernanceTerminal> {
     let mut out: BTreeMap<PoolId, Coin> = pool.mark.pool_stakes.clone();
-    for p in pool.mark.pool_params.keys() {
+    for p in pool.delegated_at_snap {
         out.entry(p.clone()).or_insert(Coin(0));
     }
     for (cred, deposit) in deposits_by_return_credential(&gov.gov.proposals)? {
@@ -556,8 +559,12 @@ impl RatificationRecord {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 pub(crate) fn freeze_as_entered_for_test(state: &mut LedgerState, base: &BoundaryBaseStake) {
+    let delegated: BTreeSet<PoolId> = match &state.cert_state {
+        crate::state::CertStateProjection::Authoritative(c) => c.delegation.delegations.values().cloned().collect(),
+        _ => BTreeSet::new(),
+    };
     let record = {
-        let input = FrozenRatificationInput::at_boundary(state, base)
+        let input = FrozenRatificationInput::at_boundary(state, base, &delegated)
             .expect("authoritative fixture")
             .expect("fixture tracks governance");
         ratify_frozen(&input).expect("fixture freezes")
@@ -645,6 +652,7 @@ mod tests {
 
     struct Fixture {
         mark: StakeSnapshot,
+        delegated_at_snap: BTreeSet<PoolId>,
         utxo: BTreeMap<StakeCredential, Coin>,
         deleg: DelegationState,
         gov: ConwayGovState,
@@ -654,6 +662,7 @@ mod tests {
         fn new(gov: ConwayGovState) -> Self {
             Self {
                 mark: StakeSnapshot { delegations: BTreeMap::new(), pool_stakes: BTreeMap::new(), pool_params: BTreeMap::new() },
+                delegated_at_snap: BTreeSet::new(),
                 utxo: BTreeMap::new(),
                 deleg: DelegationState::new(),
                 gov,
@@ -662,7 +671,7 @@ mod tests {
         }
         fn input(&self) -> FrozenRatificationInput<'_> {
             FrozenRatificationInput {
-                pool: FrozenPoolStake { mark: &self.mark },
+                pool: FrozenPoolStake { mark: &self.mark, delegated_at_snap: &self.delegated_at_snap },
                 accounts: PostBoundaryAccounts { utxo_stake: &self.utxo, delegation: &self.deleg },
                 gov: FrozenGovernanceView { gov: &self.gov, pparams: &self.pp, epoch: EpochNo(E) },
             }
@@ -723,9 +732,10 @@ mod tests {
         );
     }
 
-    /// CE-LV15b0-4 (distribution): the SPO distribution is the mark plus the deposits of each pool's delegators,
-    /// over every pool registered at SNAP (zero-stake ones included); a deposit whose account delegates to a pool
-    /// outside the mark adds nothing.
+    /// CE-LV15b0-4 (distribution): the SPO distribution is cardano's `calculatePoolDistr` over the mark (a pool is
+    /// present iff it had a delegator at SNAP, at zero when all its delegators have zero stake; a registered pool
+    /// with no delegator is absent) plus the deposits of each present pool's delegators; a deposit whose account
+    /// delegates to a pool that is not present adds nothing.
     #[test]
     fn ce_lv15b0_4_pool_distribution_is_mark_plus_deposits() {
         let g = gov(vec![
@@ -736,7 +746,10 @@ mod tests {
         let mut f = Fixture::new(g);
         f.mark.pool_stakes.insert(pool(9), Coin(1_000_000));
         f.mark.pool_params.insert(pool(9), spp());
-        f.mark.pool_params.insert(pool(8), spp()); // registered, no stake
+        f.mark.pool_params.insert(pool(8), spp()); // registered; its only delegator has zero stake
+        f.mark.pool_params.insert(pool(6), spp()); // registered, no delegator
+        f.delegated_at_snap.insert(pool(9));
+        f.delegated_at_snap.insert(pool(8));
         f.deleg.delegations.insert(key(1), pool(9));
         f.deleg.delegations.insert(key(2), pool(8));
         f.deleg.delegations.insert(key(3), pool(7)); // not in the mark
@@ -744,6 +757,10 @@ mod tests {
         assert_eq!(p.get(&pool(9)), Some(&Coin(1_007_000)));
         assert_eq!(p.get(&pool(8)), Some(&Coin(3_000)));
         assert_eq!(p.get(&pool(7)), None);
+        assert_eq!(p.get(&pool(6)), None, "a registered pool with no delegator is not in the distribution");
+        f.delegated_at_snap.remove(&pool(8));
+        let p = derive_frozen_pool_distribution(&f.input().pool, &f.input().accounts, &f.input().gov).unwrap();
+        assert_eq!(p.get(&pool(8)), None, "no delegator at SNAP: absent, and its deposit adds nothing");
     }
 
     /// The record is frozen at E, decides over the frozen proposals, and lists the ones past their lifetime at E.

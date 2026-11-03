@@ -138,7 +138,13 @@
 /// end-of-epoch state, which is the defect; its vote delegations may also include entries these rules make
 /// impossible. It is refused, not repaired or migrated. Measured on preprod: at 304→305 and 321→322 the
 /// v11 boundary read the end-of-epoch mark where Cardano reads the start-of-epoch distributions.
-pub const STORE_SEMANTICS_VERSION: u32 = 12;
+///
+/// Version 13 (LV-15b-0, DC-EPOCH-47): the frozen SPO distribution has exactly the pools Cardano's
+/// `calculatePoolDistr` keeps, those with at least one delegator at SNAP (at zero when every delegator has
+/// zero stake). Version 12 listed every registered pool, so its records carry entries for registered pools
+/// with no delegator. The record is fingerprinted, so a v12 store is refused, not repaired. Measured on
+/// preprod: the record a fresh v12 bootstrap froze at 304→305 had 54 such pools beyond Cardano's 505.
+pub const STORE_SEMANTICS_VERSION: u32 = 13;
 
 /// A durable artifact that carries authoritative semantics and therefore must be version-marked.
 ///
