@@ -22,5 +22,5 @@ pub mod wire_pump;
 
 pub use wire_pump::{
     dial_for_admission, run_admission_wire_pump, AdmissionDialError, AdmissionPeerEvent,
-    AdmissionWirePumpError, AdmissionWirePumpResult,
+    AdmissionWirePumpError, AdmissionWirePumpResult, IntersectOffer,
 };

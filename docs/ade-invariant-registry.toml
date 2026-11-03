@@ -4587,10 +4587,12 @@ tests = [
     "admission::wire_pump::tests::pump_emits_tip_update_and_request_next_on_intersect_found_no_block_fetch",
     "admission::wire_pump::tests::pump_emits_tip_update_on_intersect_not_found",
     "admission::wire_pump::tests::rollforward_drives_block_fetch_then_request_next",
+    "admission::wire_pump::tests::lv16_pump_ends_on_intersect_not_found_without_request_next",
 ]
-ci_scripts = ["ci/ci_check_admission_wire_pump_closure.sh"]
+ci_scripts = ["ci/ci_check_admission_wire_pump_closure.sh", "ci/ci_check_durable_intersection.sh"]
 status = "enforced"
-strengthened_in = ["PHASE4-N-M-FOLLOW", "PHASE4-N-AN"]
+strengthened_in = ["PHASE4-N-M-FOLLOW", "PHASE4-N-AN", "PREPROD-LIVE-2-LV-16"]
+strengthening_notes = "PREPROD-LIVE-2-LV-16: a chain-sync reply that ends the session (IntersectNotFound -> NoCommonIntersection, an unoffered IntersectFound -> IntersectionPointNotOffered) still delivers its TipUpdate before the error is returned; previously a handler error dropped the events it had queued."
 
 [[rules]]
 id = "DC-ADMIT-10"
@@ -10882,3 +10884,84 @@ introduced_in = "PREPROD-LIVE-2-LV-15a"
 strengthened_in = []
 evidence = ["SLICE-LV-15a section 8.", "Census over the halted LV-12 store (326,471 blocks): 0 mismatches."]
 evidence_notes = "ENFORCED. Mutation-tested: removing the call from the block path fails lv15a_the_declared_body_size_must_equal_the_body and the gate names it. The header and body size LIMITS (maxBHSize, maxBBSize) and the block ex-units limit are parameter-dependent and NOT here (LV-15b). Store semantics NOT bumped (lock entry neutral at 11)."
+
+[[rules]]
+id = "T-REC-07"
+tier = "true"
+statement = """
+Recovery reaches a common ancestor without changing replay (SLICE LV-16). After any process termination,
+a node recovering from a valid durable state can find a common chain ancestor with a compatible peer
+whenever one exists within its supported intersection history (k blocks below its durable tip, or its
+oldest stored block when fewer are retained), without silently discarding authoritative state and without
+changing the deterministic result of replay: the state after the rollback to that ancestor and the forward
+replay that follows equals the state of an execution that never adopted the abandoned blocks, compared at
+the same canonical chain points. When no such ancestor exists, it stops following that peer with a
+structured outcome and leaves its durable state untouched; a peer's reply is never an instruction to
+rewrite the chain to genesis.
+"""
+source = "docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LV-16-durable-intersection-recovery.md"
+cross_ref = ["DC-NODE-48", "T-REC-05", "T-REC-06", "DC-NODE-29", "DC-NODE-33"]
+code_locus = "crates/ade_ledger/src/rollback/intersection.rs (candidate selection and reply classification); crates/ade_node/src/node_lifecycle.rs (durable_intersection_offer, read_intersection_ancestry, spawn_live_wire_pump_source); the rollback after the intersection is the unchanged DC-NODE-29 / S5 pre-clear / commit_rollback / RF-1 path."
+tests = ["lv16_killed_store_shape_intersects_at_the_parent", "lv16_rollback_to_the_found_parent_matches_a_run_that_never_saw_the_tip", "lv16_a_peer_sharing_no_offered_point_is_no_common_point", "lv16_pump_ends_on_intersect_not_found_without_request_next"]
+ci_scripts = ["ci/ci_check_durable_intersection.sh"]
+status = "partial"
+authority_surface = "recovery: durable chain to peer common ancestor, and replay equivalence across it"
+cluster = "PREPROD-LIVE-2-FORGE-READINESS"
+introduced_in = "PREPROD-LIVE-2-LV-16"
+strengthened_in = []
+evidence = ["SLICE-LV-16 section 0: the v13 primary killed by earlyoom inside a peer rollback window (durable tip 138046917/f8c86fec, rollback to 138046915/d9fe3452 admitted, not committed); the restart offered only that tip and stopped at RollBackward(Origin)."]
+evidence_notes = "PARTIAL. Hermetic: over real contiguous Conway blocks, a durable chain whose tip the peer lacks intersects at the parent, and the followed rollback leaves the same tip, stored blocks and ledger state as a reference that never adopted the tip. Release obligation CE-LV16-8 (the killed store on disposable copies: intersection at 138046915/d9fe3452, accumulator state at that cursor equal to the uninterrupted run's, two independent recoveries byte-identical) is pending."
+
+[[rules]]
+id = "DC-NODE-48"
+tier = "derived"
+statement = """
+Chain-sync intersection candidates and reply (SLICE LV-16). (a) Candidates come only from the durable
+chain: the ancestry is read from the tip by parent hash through stored blocks, each block decoded and its
+recomputed header hash equal to the hash it was found by, heights decreasing by exactly one and slots
+strictly decreasing; any break is a typed error and that peer is not followed. (b) The offered depths are
+Cardano's mkOffsets (ouroboros-consensus ChainSync Client): 0, the Fibonacci numbers below l, and
+l = min(k, retained), newest first; the deepest candidate at depth l is always offered. (c) The bootstrap
+anchor is offered only when it is the tip itself (a rollback to it is a no-op, DC-NODE-33). (d) One
+FindIntersect per connection, carrying the whole offer. (e) IntersectFound must name an offered point,
+else IntersectionPointNotOffered: fail closed, no reconnect, nothing emitted beyond DC-PUMP-02's
+TipUpdate. (f) IntersectNotFound is NoCommonIntersection carrying the bound (SecurityParam,
+RetainedHistory, NoStoredAncestry): no RequestNext, no reconnect, no durable change. (g) The intersection
+is not rollback authority: the RollBackward that follows is resolved by DC-NODE-29 and admitted and
+committed by the existing S5 / commit_rollback / RF-1 path, unchanged. (h) An in-process reconnect uses
+the same rule from the durable chain at dial time, with the last block delivered since the latest
+rollback put first when it is newer than the durable tip (a resume hint, still resolved by DC-NODE-29).
+"""
+source = "docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LV-16-durable-intersection-recovery.md"
+cross_ref = ["T-REC-07", "DC-NODE-29", "DC-NODE-33", "DC-NODE-14", "DC-PUMP-02", "CN-PUMP-01", "CN-WIRE-11"]
+code_locus = "crates/ade_ledger/src/rollback/intersection.rs (BLUE: intersection_offsets, select_intersection_candidates, classify_intersect_reply); crates/ade_runtime/src/admission/wire_pump.rs (GREEN IntersectOffer::points; RED session: one FindIntersect, check_intersection_reply on IntersectFound / IntersectNotFound); crates/ade_node/src/node_lifecycle.rs (RED: read_intersection_ancestry, durable_intersection_offer, spawn_live_wire_pump_source per-dial offer, should_reconnect_after)."
+tests = [
+    "rollback::intersection::tests::lv16_offsets_are_cardanos_mk_offsets",
+    "rollback::intersection::tests::lv16_selection_is_newest_first_and_always_offers_the_deepest",
+    "rollback::intersection::tests::lv16_killed_store_shape_offers_the_parent_and_finds_it",
+    "rollback::intersection::tests::lv16_ancestry_faults_are_typed",
+    "rollback::intersection::tests::lv16_reply_must_name_an_offered_point",
+    "rollback::intersection::tests::lv16_not_found_is_no_common_point_with_the_bound",
+    "rollback::intersection::tests::lv16_a_point_without_stored_ancestry_is_offered_alone",
+    "rollback::intersection::tests::lv16_delivered_head_goes_first_only_when_newer",
+    "admission::wire_pump::tests::lv16_pump_offers_every_candidate_and_follows_the_found_parent",
+    "admission::wire_pump::tests::lv16_pump_ends_on_intersect_not_found_without_request_next",
+    "admission::wire_pump::tests::lv16_pump_refuses_an_unoffered_found_point",
+    "node_lifecycle::tests::lv16_no_reconnect_after_an_intersection_outcome",
+    "lv16_corpus_blocks_are_a_linked_chain",
+    "lv16_offer_is_read_from_the_validated_durable_ancestry",
+    "lv16_a_block_whose_hash_is_not_its_lookup_hash_is_refused",
+    "lv16_a_tip_that_is_not_stored_is_offered_alone",
+    "lv16_killed_store_shape_intersects_at_the_parent",
+    "lv16_a_deeper_fork_intersects_at_the_newest_offered_common_point",
+    "lv16_a_peer_sharing_no_offered_point_is_no_common_point",
+    "lv16_rollback_to_the_found_parent_matches_a_run_that_never_saw_the_tip",
+]
+ci_scripts = ["ci/ci_check_durable_intersection.sh"]
+status = "enforced"
+authority_surface = "chain-sync intersection: which points are offered on (re)connect and what the reply means"
+cluster = "PREPROD-LIVE-2-FORGE-READINESS"
+introduced_in = "PREPROD-LIVE-2-LV-16"
+strengthened_in = []
+evidence = ["SLICE-LV-16 sections 2 and 3.1: reference semantics (followerForward, mkOffsets) and the one-round coverage argument."]
+evidence_notes = "ENFORCED (hermetic). Store semantics neutral (no persisted field changes; version stays 13)."

@@ -23,6 +23,7 @@
 pub mod admission;
 pub mod commit;
 pub mod error;
+pub mod intersection;
 pub mod materialize;
 pub mod traits;
 

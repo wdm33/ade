@@ -66,7 +66,7 @@ use ade_runtime::bootstrap::{
 use ade_runtime::recovered_anchor::load_recovered_anchor_point;
 use ade_runtime::admission::{
     dial_for_admission, run_admission_wire_pump, AdmissionPeerEvent, AdmissionWirePumpError,
-    AdmissionWirePumpResult,
+    AdmissionWirePumpResult, IntersectOffer,
 };
 use ade_runtime::chaindb::{
     ChainDb, ChainTip, PersistentChainDb, PersistentChainDbOptions, SnapshotStore,
@@ -106,7 +106,6 @@ use ade_core::consensus::fork_choice::{select_best_chain, ForkChoiceError};
 use ade_ledger::block_validity::{decode_block, DecodedBlock};
 use ade_runtime::receive::ChainDbWriter;
 
-use ade_network::codec::chain_sync::Point as WirePoint;
 
 use crate::candidate_aggregator::{assemble_candidate_set, build_candidate_fragment};
 use crate::fair_merge::{fair_merge, PER_PEER_LANE_CAP};
@@ -867,7 +866,12 @@ async fn run_node_lifecycle_inner(
             // from --network-magic or the committed --network profile.
             let mut source = if !cli.peer_addrs.is_empty() {
                 let network_magic = resolve_network_magic(cli)?;
-                spawn_live_wire_pump_source(&cli.peer_addrs, network_magic, state.tip.as_ref())
+                spawn_live_wire_pump_source(
+                    &cli.peer_addrs,
+                    network_magic,
+                    state.tip.as_ref(),
+                    chaindb.clone(),
+                )
             } else {
                 NodeBlockSource::in_memory(Vec::new())
             };
@@ -1069,7 +1073,12 @@ async fn run_node_lifecycle_inner(
             // are logged-and-dropped (admission honest-scope C3), never fatal.
             let mut source = if live_feed_wired {
                 let network_magic = resolve_network_magic(cli)?;
-                spawn_live_wire_pump_source(&cli.peer_addrs, network_magic, state.tip.as_ref())
+                spawn_live_wire_pump_source(
+                    &cli.peer_addrs,
+                    network_magic,
+                    state.tip.as_ref(),
+                    chaindb.clone(),
+                )
             } else {
                 NodeBlockSource::in_memory(Vec::new())
             };
@@ -1349,13 +1358,119 @@ const LIVE_WIRE_PUMP_CHANNEL_CAP: usize = 64;
 /// authority (CE-AK-2): a bare-anchor recovery now passes `Some(anchor)` here,
 /// so the pump FindIntersects at the anchor, not Origin. The wire pump's
 /// dial / transmit / receive behavior is otherwise UNCHANGED.
-fn wire_pump_start_point(recovered_tip: Option<&ChainTip>) -> ade_network::codec::chain_sync::Point {
-    match recovered_tip {
-        Some(t) => ade_network::codec::chain_sync::Point::Block {
-            slot: t.slot,
-            hash: t.hash.clone(),
-        },
-        None => ade_network::codec::chain_sync::Point::Origin,
+/// SLICE LV-16 (DC-NODE-48 (a)): why the durable ancestry could not be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntersectionAncestryReadError {
+    Store(String),
+    Undecodable { slot: u64 },
+    /// The recomputed header hash differs from the hash the block was found by.
+    HashMismatch { slot: u64 },
+    /// The decoded slot differs from the slot the block is stored at.
+    SlotMismatch { stored: u64, decoded: u64 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntersectionOfferError {
+    Read(IntersectionAncestryReadError),
+    Ancestry(ade_ledger::rollback::intersection::IntersectionAncestryError),
+}
+
+/// SLICE LV-16 (DC-NODE-48 (a)): read the durable ancestry from `tip`, newest first, through
+/// stored blocks only, at most `k + 1` blocks. Each block is decoded and its recomputed header
+/// hash must equal the hash it was looked up by, so the store's hash index is not trusted on
+/// its own. `Ok(None)`: the tip is not a stored block (the recovered bootstrap anchor).
+pub fn read_intersection_ancestry<L, D>(
+    tip: &ChainTip,
+    k: u64,
+    lookup: L,
+    decode: D,
+) -> Result<
+    Option<(
+        Vec<ade_ledger::rollback::intersection::AncestorHeader>,
+        ade_ledger::rollback::intersection::AncestryEnd,
+    )>,
+    IntersectionAncestryReadError,
+>
+where
+    L: Fn(&Hash32) -> Result<Option<ade_runtime::chaindb::StoredBlock>, String>,
+    D: Fn(&[u8]) -> Option<ade_ledger::rollback::intersection::AncestorHeader>,
+{
+    use ade_ledger::rollback::intersection::AncestryEnd;
+    let mut out = Vec::new();
+    let mut next = tip.hash.clone();
+    loop {
+        let Some(stored) = lookup(&next).map_err(IntersectionAncestryReadError::Store)? else {
+            if out.is_empty() {
+                return Ok(None);
+            }
+            return Ok(Some((out, AncestryEnd::ParentNotStored)));
+        };
+        let header = decode(&stored.bytes)
+            .ok_or(IntersectionAncestryReadError::Undecodable { slot: stored.slot.0 })?;
+        if header.hash != next {
+            return Err(IntersectionAncestryReadError::HashMismatch { slot: stored.slot.0 });
+        }
+        if header.slot != stored.slot {
+            return Err(IntersectionAncestryReadError::SlotMismatch {
+                stored: stored.slot.0,
+                decoded: header.slot.0,
+            });
+        }
+        let prev = header.prev.clone();
+        out.push(header);
+        if out.len() as u64 == k.saturating_add(1) {
+            return Ok(Some((out, AncestryEnd::SecurityParamReached)));
+        }
+        match prev {
+            ade_types::shelley::block::PrevHash::Block(h) => next = h,
+            ade_types::shelley::block::PrevHash::Genesis => {
+                return Ok(Some((out, AncestryEnd::ParentNotStored)))
+            }
+        }
+    }
+}
+
+fn decode_ancestor_header(bytes: &[u8]) -> Option<ade_ledger::rollback::intersection::AncestorHeader> {
+    let d = decode_block(bytes).ok()?;
+    Some(ade_ledger::rollback::intersection::AncestorHeader {
+        slot: d.header_input.slot,
+        block_no: d.header_input.block_no,
+        hash: d.block_hash,
+        prev: d.prev_hash,
+    })
+}
+
+/// SLICE LV-16 (DC-NODE-48): the `FindIntersect` offer for `tip`, chosen by the BLUE
+/// intersection authority from the validated durable ancestry. No tip: Origin. A tip that is
+/// not a stored block (the recovered anchor): that point alone (DC-NODE-48 (c)).
+pub fn durable_intersection_offer(
+    chaindb: &dyn ChainDb,
+    tip: Option<&ChainTip>,
+    k: u64,
+) -> Result<IntersectOffer, IntersectionOfferError> {
+    use ade_ledger::rollback::intersection::{
+        select_intersection_candidates, ChainPoint, IntersectionCandidates,
+    };
+    let Some(tip) = tip else {
+        return Ok(IntersectOffer::Origin);
+    };
+    let ancestry = read_intersection_ancestry(
+        tip,
+        k,
+        |h| chaindb.get_block_by_hash(h).map_err(|e| format!("{e:?}")),
+        decode_ancestor_header,
+    )
+    .map_err(IntersectionOfferError::Read)?;
+    match ancestry {
+        None => Ok(IntersectOffer::Candidates(IntersectionCandidates::without_ancestry(
+            ChainPoint {
+                slot: tip.slot,
+                hash: tip.hash.clone(),
+            },
+        ))),
+        Some((ancestry, end)) => select_intersection_candidates(&ancestry, end, k)
+            .map(IntersectOffer::Candidates)
+            .map_err(IntersectionOfferError::Ancestry),
     }
 }
 
@@ -1393,7 +1508,10 @@ fn should_reconnect_after(outcome: &AdmissionWirePumpResult) -> bool {
             | AdmissionWirePumpError::UnexpectedProtocolMessage { .. }
             | AdmissionWirePumpError::UnsupportedRollbackPoint
             | AdmissionWirePumpError::KeepAlive(_)
-            | AdmissionWirePumpError::DeferredFrameOverflow => false,
+            | AdmissionWirePumpError::DeferredFrameOverflow
+            // SLICE LV-16 (DC-NODE-48 (e)/(f)): the same offer would get the same answer.
+            | AdmissionWirePumpError::IntersectionPointNotOffered
+            | AdmissionWirePumpError::NoCommonIntersection { .. } => false,
         },
         AdmissionWirePumpResult::EventsChannelDropped => false,
     }
@@ -1403,9 +1521,12 @@ fn spawn_live_wire_pump_source(
     peer_addrs: &[String],
     network_magic: u32,
     recovered_tip: Option<&ChainTip>,
+    chaindb: Arc<dyn ChainDb>,
 ) -> NodeBlockSource {
     let our_versions = build_n2n_version_table(network_magic);
-    let start_point = wire_pump_start_point(recovered_tip);
+    // SLICE LV-16: k for the intersection offer is the recovery bound, from its single source.
+    let k = RecoveryAdmissionPolicy::cardano().security_param.0;
+    let recovered_tip: Option<ChainTip> = recovered_tip.cloned();
     // PHASE4-N-AO S8 (DC-PUMP-04): the merged feed the `WirePump` consumer reads is
     // UNCHANGED in shape (one peer-attributed event sequence). Below it, each peer
     // now gets its OWN bounded lane drained by a fair round-robin merge — a hot peer
@@ -1428,7 +1549,8 @@ fn spawn_live_wire_pump_source(
         let (lane_tx, lane_rx) = mpsc::channel::<AdmissionPeerEvent>(PER_PEER_LANE_CAP);
         lanes.push(Some(lane_rx));
         let pump_versions = our_versions.clone();
-        let start = start_point.clone();
+        let recovered_tip = recovered_tip.clone();
+        let chaindb = chaindb.clone();
         let label = raw_addr.clone();
         // LIVE-WIRE-LIVENESS S2: per-peer SUPERVISOR (was a one-shot dial+pump).
         // A transport-level loss of an ESTABLISHED session is recovered instead
@@ -1437,7 +1559,6 @@ fn spawn_live_wire_pump_source(
         // decision stays in the consumer with its existing typed halt
         // (INV-WL-6).
         tokio::spawn(async move {
-            let mut start = start;
             let mut established = false;
             let mut attempt: usize = 0;
             // Most recent block delivered downstream; decoded ONLY on reconnect
@@ -1468,6 +1589,34 @@ fn spawn_live_wire_pump_source(
                             continue;
                         }
                     };
+                // SLICE LV-16 (DC-NODE-48 (a)-(c), (h)): the offer comes from the durable chain at
+                // dial time. The first dial starts from the recovered tip; a reconnect from the
+                // durable tip, with the last delivered block first when it is newer.
+                let tip = if established {
+                    chaindb.tip().ok().flatten().or_else(|| recovered_tip.clone())
+                } else {
+                    recovered_tip.clone()
+                };
+                let offer = match durable_intersection_offer(chaindb.as_ref(), tip.as_ref(), k) {
+                    Ok(offer) => offer,
+                    Err(e) => {
+                        eprintln!(
+                            "intersection: peer={label} offer unavailable ({e:?}); dropping the peer"
+                        );
+                        return;
+                    }
+                };
+                let offer = match (offer, last_block_bytes.as_ref().and_then(|b| decode_block(b).ok())) {
+                    (IntersectOffer::Candidates(c), Some(head)) => {
+                        IntersectOffer::Candidates(c.with_delivered_head(
+                            ade_ledger::rollback::intersection::ChainPoint {
+                                slot: head.header_input.slot,
+                                hash: head.block_hash,
+                            },
+                        ))
+                    }
+                    (offer, _) => offer,
+                };
                 established = true;
                 attempt = 0;
 
@@ -1480,7 +1629,7 @@ fn spawn_live_wire_pump_source(
                 let pump = tokio::spawn(run_admission_wire_pump(
                     transport,
                     label.clone(),
-                    start.clone(),
+                    offer,
                     version,
                     network_magic,
                     inner_tx,
@@ -1493,8 +1642,14 @@ fn spawn_live_wire_pump_source(
                         // ending the feed permanently even though we reconnect.
                         continue;
                     }
-                    if let AdmissionPeerEvent::Block { block_bytes, .. } = &ev {
-                        last_block_bytes = Some(block_bytes.clone());
+                    match &ev {
+                        AdmissionPeerEvent::Block { block_bytes, .. } => {
+                            last_block_bytes = Some(block_bytes.clone());
+                        }
+                        // A block delivered before a rollback may be on the abandoned branch;
+                        // it is no longer a resume hint.
+                        AdmissionPeerEvent::RollBackward { .. } => last_block_bytes = None,
+                        _ => {}
                     }
                     if lane_tx.send(ev).await.is_err() {
                         consumer_gone = true;
@@ -1518,24 +1673,16 @@ fn spawn_live_wire_pump_source(
                     );
                     return;
                 }
-                // INV-WL-7: resume from the last block actually delivered. Events
-                // already buffered in the lane are still delivered and are ORDERED
-                // BEFORE the new session's, so by the time the consumer sees the
-                // new session's rollback-to-intersection, that point is already
-                // durable and within k.
-                if let Some(bytes) = &last_block_bytes {
-                    if let Ok(decoded) = decode_block(bytes) {
-                        start = ade_network::codec::chain_sync::Point::Block {
-                            slot: decoded.header_input.slot,
-                            hash: decoded.block_hash.clone(),
-                        };
-                    }
-                }
+                // INV-WL-7: the next dial resumes from the last block actually delivered, put
+                // ahead of the durable offer (DC-NODE-48 (h)). Events already buffered in the
+                // lane are still delivered and are ORDERED BEFORE the new session's, so by the
+                // time the consumer sees the new session's rollback-to-intersection, that point
+                // is already durable and within k.
                 let backoff = reconnect_backoff_secs(attempt);
                 attempt = attempt.saturating_add(1);
                 eprintln!(
                     "ade_node --mode node: live feed to {label} lost ({outcome:?}); \
-                     reconnecting in {backoff}s from {start:?}"
+                     reconnecting in {backoff}s"
                 );
                 tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
             }
@@ -7698,10 +7845,14 @@ pub async fn prefetch_branch_bodies(
         };
     // Follow FROM the fork anchor; the peer's chain anchor->tip IS the winning
     // branch. The pump block-fetches each forwarded block and emits it.
-    let start = WirePoint::Block {
-        slot: fork_anchor.slot,
-        hash: fork_anchor.hash.clone(),
-    };
+    let start = IntersectOffer::Candidates(
+        ade_ledger::rollback::intersection::IntersectionCandidates::without_ancestry(
+            ade_ledger::rollback::intersection::ChainPoint {
+                slot: fork_anchor.slot,
+                hash: fork_anchor.hash.clone(),
+            },
+        ),
+    );
     let (ev_tx, mut ev_rx) = mpsc::channel::<AdmissionPeerEvent>(64);
     let pump = tokio::spawn(run_admission_wire_pump(
         transport,
@@ -9323,7 +9474,7 @@ mod tests {
     async fn spawn_live_wire_pump_source_with_no_usable_peer_yields_ended_feed() {
         // Empty peer set: no pump task spawned, the builder's sender is dropped
         // immediately → the feed is closed → next_block yields None.
-        let mut empty = spawn_live_wire_pump_source(&[], 1, None);
+        let mut empty = spawn_live_wire_pump_source(&[], 1, None, Arc::new(ade_runtime::chaindb::InMemoryChainDb::new()));
         assert!(
             empty.next_item().await.is_none(),
             "empty --peer must yield an ended feed (no block, no graft)"
@@ -9333,6 +9484,7 @@ mod tests {
             &["definitely-not-a-socket-addr".to_string()],
             1,
             None,
+            Arc::new(ade_runtime::chaindb::InMemoryChainDb::new()),
         );
         assert!(
             bad.next_item().await.is_none(),
@@ -9370,7 +9522,12 @@ mod tests {
     #[tokio::test]
     async fn first_dial_failure_still_ends_the_feed_no_boot_spin() {
         // Port 1 on loopback: parses fine, refuses (or is unreachable).
-        let mut src = spawn_live_wire_pump_source(&["127.0.0.1:1".to_string()], 1, None);
+        let mut src = spawn_live_wire_pump_source(
+            &["127.0.0.1:1".to_string()],
+            1,
+            None,
+            Arc::new(ade_runtime::chaindb::InMemoryChainDb::new()),
+        );
         let ended = tokio::time::timeout(std::time::Duration::from_secs(20), async {
             loop {
                 if src.next_item().await.is_none() && !src.has_work_ready() {
@@ -9438,6 +9595,30 @@ mod tests {
             assert!(
                 !should_reconnect_after(&AdmissionWirePumpResult::Error(e)),
                 "a peer protocol/grammar fault must not be retried"
+            );
+        }
+    }
+
+    /// SLICE LV-16 (DC-NODE-48 (e)/(f)): an intersection that cannot succeed is not
+    /// retried. The same durable offer would get the same answer.
+    #[test]
+    fn lv16_no_reconnect_after_an_intersection_outcome() {
+        use ade_ledger::rollback::intersection::IntersectionBound;
+        for e in [
+            AdmissionWirePumpError::IntersectionPointNotOffered,
+            AdmissionWirePumpError::NoCommonIntersection {
+                bound: IntersectionBound::SecurityParam,
+            },
+            AdmissionWirePumpError::NoCommonIntersection {
+                bound: IntersectionBound::RetainedHistory,
+            },
+            AdmissionWirePumpError::NoCommonIntersection {
+                bound: IntersectionBound::NoStoredAncestry,
+            },
+        ] {
+            assert!(
+                !should_reconnect_after(&AdmissionWirePumpResult::Error(e.clone())),
+                "{e:?} must not reconnect"
             );
         }
     }
@@ -10412,19 +10593,16 @@ mod tests {
 
         // And the wire pump's FindIntersect start point is that anchor `Block`,
         // NOT `Origin` (so the AI-S4a Origin fail-close is never reached).
-        let start = wire_pump_start_point(state.tip.as_ref());
+        // SLICE LV-16: the bare anchor is not a stored block, so it is offered alone.
+        let offer = durable_intersection_offer(&chaindb, state.tip.as_ref(), 2160)
+            .expect("offer for the bare anchor");
         assert_eq!(
-            start,
-            ade_network::codec::chain_sync::Point::Block {
+            offer.points(),
+            vec![ade_network::codec::chain_sync::Point::Block {
                 slot: SlotNo(WARM_ANCHOR_SLOT),
                 hash: WARM_ANCHOR_HASH,
-            },
+            }],
             "FindIntersect must start at the anchor Block point, not Origin"
-        );
-        assert_ne!(
-            start,
-            ade_network::codec::chain_sync::Point::Origin,
-            "a bare-anchor recovery must NOT FindIntersect from Origin"
         );
     }
 

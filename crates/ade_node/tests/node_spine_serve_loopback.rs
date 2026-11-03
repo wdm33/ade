@@ -59,7 +59,9 @@ use ade_node::node_lifecycle::{
     bind_serve_listener, prefetch_branch_bodies, run_node_serve_task, ServeStartError,
 };
 use ade_node::selector_state::ForkAnchor;
-use ade_runtime::admission::{dial_for_admission, run_admission_wire_pump, AdmissionPeerEvent};
+use ade_runtime::admission::{
+    dial_for_admission, run_admission_wire_pump, AdmissionPeerEvent, IntersectOffer,
+};
 use ade_runtime::chaindb::{ChainDb, InMemoryChainDb, StoredBlock};
 use ade_runtime::network::ChainDbServedSource;
 use ade_runtime::producer::chain_evolution::ChainEvolution;
@@ -243,7 +245,7 @@ async fn served_view_projects_durable_chain() {
     tokio::spawn(run_admission_wire_pump(
         transport,
         serve_addr.to_string(),
-        Point::Origin,
+        IntersectOffer::Origin,
         version,
         C1_MAGIC,
         ev_tx,
@@ -454,7 +456,7 @@ async fn serve_task_outlives_feed_end_and_serves_late_fetch() {
     tokio::spawn(run_admission_wire_pump(
         transport,
         serve_addr.to_string(),
-        Point::Origin,
+        IntersectOffer::Origin,
         version,
         C1_MAGIC,
         ev_tx,

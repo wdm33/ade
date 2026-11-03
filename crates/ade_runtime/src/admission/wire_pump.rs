@@ -43,6 +43,10 @@ use ade_network::codec::block_fetch::{
     BlockFetchMessage,
     Point as BfPoint, Range,
 };
+use ade_ledger::rollback::intersection::{
+    classify_intersect_reply, CandidateSource, ChainPoint, IntersectReply, IntersectionBound,
+    IntersectionCandidates, IntersectionOutcome,
+};
 use ade_network::codec::chain_sync::{
     decode_chain_sync_message, encode_chain_sync_message, ChainSyncMessage, Point, Tip,
 };
@@ -146,6 +150,112 @@ pub enum AdmissionWirePumpError {
     /// peer quiesces after its in-flight batch; exceeding the cap means
     /// unbounded buffering would be required, so we fail closed instead.
     DeferredFrameOverflow,
+    /// SLICE LV-16 (DC-NODE-48 (e)): `IntersectFound` named a point that was not
+    /// offered. Fail closed; nothing beyond DC-PUMP-02's `TipUpdate` is emitted.
+    IntersectionPointNotOffered,
+    /// SLICE LV-16 (DC-NODE-48 (f)): the peer has none of the offered points, so it
+    /// shares no block within `bound`. Terminal for this peer: no `RequestNext`, no
+    /// reconnect, no durable change, never a rollback to genesis.
+    NoCommonIntersection { bound: IntersectionBound },
+}
+
+/// SLICE LV-16: what a session offers in `FindIntersect`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntersectOffer {
+    /// No recovered tip: `FindIntersect[Origin]`.
+    Origin,
+    /// Candidates chosen by the BLUE intersection authority, newest first.
+    Candidates(IntersectionCandidates),
+}
+
+impl IntersectOffer {
+    /// GREEN: the `FindIntersect` point list, in the offer's order.
+    pub fn points(&self) -> Vec<Point> {
+        match self {
+            IntersectOffer::Origin => vec![Point::Origin],
+            IntersectOffer::Candidates(c) => c
+                .candidates()
+                .iter()
+                .map(|c| Point::Block {
+                    slot: c.point.slot,
+                    hash: c.point.hash.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
+fn short_hash(h: &ade_types::Hash32) -> String {
+    h.0[..4].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// SLICE LV-16: read an intersection reply against the offer through the BLUE
+/// classifier. `found = None` is `IntersectNotFound`.
+fn check_intersection_reply(
+    offer: &IntersectOffer,
+    found: Option<&Point>,
+    peer_addr: &str,
+) -> Result<(), AdmissionWirePumpResult> {
+    let candidates = match offer {
+        IntersectOffer::Origin => {
+            return match found {
+                Some(Point::Origin) => Ok(()),
+                Some(Point::Block { .. }) => Err(AdmissionWirePumpResult::Error(
+                    AdmissionWirePumpError::IntersectionPointNotOffered,
+                )),
+                None => Err(AdmissionWirePumpResult::Error(
+                    AdmissionWirePumpError::NoCommonIntersection {
+                        bound: IntersectionBound::NoStoredAncestry,
+                    },
+                )),
+            };
+        }
+        IntersectOffer::Candidates(c) => c,
+    };
+    let reply = match found {
+        None => IntersectReply::NotFound,
+        Some(Point::Block { slot, hash }) => IntersectReply::Found(ChainPoint {
+            slot: *slot,
+            hash: hash.clone(),
+        }),
+        Some(Point::Origin) => {
+            eprintln!("intersection: peer={peer_addr} outcome=point_not_offered found=Origin");
+            return Err(AdmissionWirePumpResult::Error(
+                AdmissionWirePumpError::IntersectionPointNotOffered,
+            ));
+        }
+    };
+    let offered = candidates.candidates().len();
+    match classify_intersect_reply(candidates, &reply) {
+        Ok(IntersectionOutcome::Found(c)) => {
+            let source = match c.source {
+                CandidateSource::Durable { depth } => format!("durable depth={depth}"),
+                CandidateSource::DeliveredHead => "delivered_head".to_string(),
+            };
+            eprintln!(
+                "intersection: peer={peer_addr} outcome=found point={}/{} {source} offered={offered}",
+                c.point.slot.0,
+                short_hash(&c.point.hash)
+            );
+            Ok(())
+        }
+        Ok(IntersectionOutcome::NoCommonPoint { bound, deepest }) => {
+            eprintln!(
+                "intersection: peer={peer_addr} outcome=no_common_point bound={bound:?} deepest={}/{} offered={offered}",
+                deepest.slot.0,
+                short_hash(&deepest.hash)
+            );
+            Err(AdmissionWirePumpResult::Error(
+                AdmissionWirePumpError::NoCommonIntersection { bound },
+            ))
+        }
+        Err(fault) => {
+            eprintln!("intersection: peer={peer_addr} outcome=point_not_offered {fault:?}");
+            Err(AdmissionWirePumpResult::Error(
+                AdmissionWirePumpError::IntersectionPointNotOffered,
+            ))
+        }
+    }
 }
 
 /// LIVE-WIRE-LIVENESS S1 (INV-WL-3). Cap on inbound peer frames held while the
@@ -168,7 +278,8 @@ const KEEP_ALIVE_CADENCE: Duration = Duration::from_secs(20);
 /// and emits typed events into `events_out`.
 ///
 /// Behaviour summary:
-///   1. Send `ChainSyncMessage::FindIntersect[start_point]`.
+///   1. Send one `ChainSyncMessage::FindIntersect` carrying the whole
+///      [`IntersectOffer`], newest first (SLICE LV-16).
 ///   2. On `IntersectFound { point, tip }`: emit `TipUpdate`;
 ///      request the tip's single block via
 ///      `BlockFetchMessage::RequestRange { from: tip.point, to: tip.point }`.
@@ -181,14 +292,14 @@ const KEEP_ALIVE_CADENCE: Duration = Duration::from_secs(20);
 ///      fetching of in-flight rolls is deferred to a future
 ///      strengthening — the C5 acceptance criterion is met by
 ///      the initial Tip-block fetch in step 2.)
-///   6. On chain-sync `RollBackward { tip, .. }` or
-///      `IntersectNotFound { tip }`: emit `TipUpdate`; send
-///      `RequestNext` (drain).
+///   6. On chain-sync `RollBackward { tip, .. }`: emit `TipUpdate`; send
+///      `RequestNext` (drain). On `IntersectNotFound { tip }`: emit
+///      `TipUpdate`, then end with `NoCommonIntersection` (SLICE LV-16).
 ///   7. On EOF / protocol error: emit `Disconnected`; return.
 pub async fn run_admission_wire_pump(
     mut transport: MuxTransportHandle,
     peer_addr: String,
-    start_point: Point,
+    offer: IntersectOffer,
     negotiated_version: u16,
     network_magic: u32,
     events_out: mpsc::Sender<AdmissionPeerEvent>,
@@ -196,9 +307,10 @@ pub async fn run_admission_wire_pump(
     let mut state = post_handshake_state(negotiated_version, network_magic);
     let mut outbox_payloads: VecDeque<ByteChunkIn> = VecDeque::new();
 
-    // Kick off chain-sync: FindIntersect[start_point].
+    // Kick off chain-sync: one FindIntersect carrying the whole offer, newest first
+    // (SLICE LV-16, DC-NODE-48 (b)/(d)).
     let initial = ChainSyncMessage::FindIntersect {
-        points: vec![start_point.clone()],
+        points: offer.points(),
     };
     outbox_payloads.push_back(ByteChunkIn::OutboundFrame {
         mini_protocol: AcceptedMiniProtocol::ChainSync,
@@ -259,6 +371,7 @@ pub async fn run_admission_wire_pump(
             if let Err(res) = dispatch_peer_frame(
                 mini_protocol,
                 payload,
+                &offer,
                 &peer_addr,
                 &events_out,
                 &mut state,
@@ -569,6 +682,7 @@ async fn emit_cooperative(
 async fn dispatch_peer_frame(
     mini_protocol: AcceptedMiniProtocol,
     payload: Vec<u8>,
+    offer: &IntersectOffer,
     peer_addr: &str,
     events_out: &mpsc::Sender<AdmissionPeerEvent>,
     session: &mut SessionState,
@@ -582,19 +696,23 @@ async fn dispatch_peer_frame(
     block_fetch_in_flight: &mut bool,
 ) -> Result<(), AdmissionWirePumpResult> {
     let mut out_events: VecDeque<AdmissionPeerEvent> = VecDeque::new();
+    // A chain-sync reply that ends the session (SLICE LV-16) still delivers the
+    // `TipUpdate` it carried (DC-PUMP-02) before the error is returned.
+    let mut handled: Result<(), AdmissionWirePumpResult> = Ok(());
     match mini_protocol {
         AcceptedMiniProtocol::ChainSync => {
             let msg = decode_chain_sync_message(&payload).map_err(|_| {
                 AdmissionWirePumpResult::Error(AdmissionWirePumpError::ChainSyncDecode)
             })?;
-            handle_chain_sync(
+            handled = handle_chain_sync(
                 msg,
+                offer,
                 peer_addr,
                 &mut out_events,
                 outbox,
                 chain_sync_in_flight,
                 block_fetch_in_flight,
-            )?;
+            );
         }
         AcceptedMiniProtocol::BlockFetch => {
             let msg = decode_block_fetch_message(&payload).map_err(|_| {
@@ -646,7 +764,7 @@ async fn dispatch_peer_frame(
         )
         .await?;
     }
-    Ok(())
+    handled
 }
 
 /// LIVE-WIRE-LIVENESS S1: emission is HOISTED out of this handler. It now
@@ -657,6 +775,7 @@ async fn dispatch_peer_frame(
 /// BEFORE any request is queued, so the on-wire order is byte-identical.
 fn handle_chain_sync(
     msg: ChainSyncMessage,
+    offer: &IntersectOffer,
     peer_addr: &str,
     out_events: &mut VecDeque<AdmissionPeerEvent>,
     outbox: &mut VecDeque<ByteChunkIn>,
@@ -664,9 +783,11 @@ fn handle_chain_sync(
     block_fetch_in_flight: &mut bool,
 ) -> Result<(), AdmissionWirePumpResult> {
     match msg {
-        ChainSyncMessage::IntersectFound { point: _, tip } => {
+        ChainSyncMessage::IntersectFound { point, tip } => {
             out_events.push_back(tip_update(peer_addr, tip.clone()));
             *chain_sync_in_flight = false;
+            // SLICE LV-16 (DC-NODE-48 (e)): the found point must be one we offered.
+            check_intersection_reply(offer, Some(&point), peer_addr)?;
             // PHASE4-N-M-FOLLOW: do NOT block-fetch the peer's
             // tip here. Chain-sync starts walking forward FROM
             // the intersect point; block-fetching the tip would
@@ -685,12 +806,10 @@ fn handle_chain_sync(
         ChainSyncMessage::IntersectNotFound { tip } => {
             out_events.push_back(tip_update(peer_addr, tip));
             *chain_sync_in_flight = false;
-            // Producer has nothing for us at the requested
-            // intersect — request the next message anyway so the
-            // protocol stays live until the upstream sends Done.
-            queue_chain_sync_request_next(outbox);
-            *chain_sync_in_flight = true;
-            Ok(())
+            // SLICE LV-16 (DC-NODE-48 (f)): the peer has none of the offered points.
+            // Its follower did not move, so a RequestNext would only be answered by a
+            // rollback to genesis. End the session with the structured outcome.
+            check_intersection_reply(offer, None, peer_addr)
         }
         ChainSyncMessage::RollForward { header, tip } => {
             out_events.push_back(tip_update(peer_addr, tip));
@@ -1172,6 +1291,7 @@ mod tests {
                 point: point.clone(),
                 tip: tip.clone(),
             },
+            &IntersectOffer::Origin,
             "peer",
             &mut evs,
             &mut outbox,
@@ -1202,6 +1322,7 @@ mod tests {
                 point: Point::Origin,
                 tip: fake_tip(105),
             },
+            &IntersectOffer::Origin,
             "peer",
             &mut evs,
             &mut outbox,
@@ -1232,6 +1353,7 @@ mod tests {
                 point: Point::Origin,
                 tip: tip.clone(),
             },
+            &IntersectOffer::Origin,
             "peer",
             &mut evs,
             &mut outbox,
@@ -1333,7 +1455,7 @@ mod tests {
             run_admission_wire_pump(
                 client_transport,
                 "127.0.0.1:0".into(),
-                Point::Origin,
+                IntersectOffer::Origin,
                 14,
                 MAINNET_NETWORK_MAGIC,
                 events_tx,
@@ -1428,7 +1550,7 @@ mod tests {
             run_admission_wire_pump(
                 client_transport,
                 "127.0.0.1:0".into(),
-                Point::Origin,
+                IntersectOffer::Origin,
                 14,
                 MAINNET_NETWORK_MAGIC,
                 events_tx,
@@ -1591,7 +1713,7 @@ mod tests {
             run_admission_wire_pump(
                 client_transport,
                 "127.0.0.1:0".into(),
-                Point::Origin,
+                IntersectOffer::Origin,
                 14,
                 MAINNET_NETWORK_MAGIC,
                 events_tx,
@@ -1760,8 +1882,11 @@ mod tests {
         assert!(matches!(err3, KeepAliveError::MalformedMessage { .. }));
     }
 
+    /// DC-PUMP-02: IntersectNotFound still yields its TipUpdate. Since SLICE LV-16 the
+    /// session then ends with NoCommonIntersection instead of draining.
     #[tokio::test]
     async fn pump_emits_tip_update_on_intersect_not_found() {
+        use ade_ledger::rollback::intersection::IntersectionCandidates;
         let (client_stream, server_stream) = loopback_pair().await;
         let client_transport = spawn_duplex(client_stream, DuplexCapacity::DEFAULT);
         let mut server_transport = spawn_duplex(server_stream, DuplexCapacity::DEFAULT);
@@ -1772,10 +1897,10 @@ mod tests {
             run_admission_wire_pump(
                 client_transport,
                 "127.0.0.1:0".into(),
-                Point::Block {
+                IntersectOffer::Candidates(IntersectionCandidates::without_ancestry(ChainPoint {
                     slot: SlotNo(100),
                     hash: Hash32([0x99; 32]),
-                },
+                })),
                 14,
                 MAINNET_NETWORK_MAGIC,
                 events_tx,
@@ -1791,42 +1916,263 @@ mod tests {
 
         let tip = fake_tip(200);
         let nf = ChainSyncMessage::IntersectNotFound { tip: tip.clone() };
-        let bytes = encode_chain_sync_message(&nf);
-        let frame = responder_frame(AcceptedMiniProtocol::CHAIN_SYNC_ID, bytes);
+        let frame = responder_frame(AcceptedMiniProtocol::CHAIN_SYNC_ID, encode_chain_sync_message(&nf));
         server_transport
             .outbound
             .send(frame)
             .await
             .expect("send IntersectNotFound");
 
-        let evt = tokio::time::timeout(
-            std::time::Duration::from_millis(2000),
-            events_rx.recv(),
-        )
-        .await
-        .expect("tip update")
-        .expect("event");
+        let evt = tokio::time::timeout(std::time::Duration::from_millis(2000), events_rx.recv())
+            .await
+            .expect("tip update")
+            .expect("event");
         match evt {
             AdmissionPeerEvent::TipUpdate { tip: got, .. } => assert_eq!(got, tip),
             other => panic!("expected TipUpdate, got {:?}", other),
         }
+        let result = pump_handle.await.expect("pump task");
+        assert_eq!(
+            result,
+            AdmissionWirePumpResult::Error(AdmissionWirePumpError::NoCommonIntersection {
+                bound: IntersectionBound::NoStoredAncestry,
+            })
+        );
+    }
 
-        drop(server_transport);
+    /// SLICE LV-16: a ten-block durable ancestry shaped like the killed store. The
+    /// tip (slot 138046917) is the block the peer replaced; its parent (slot
+    /// 138046915) is on the peer's chain.
+    fn lv16_offer() -> IntersectOffer {
+        use ade_ledger::rollback::intersection::{
+            select_intersection_candidates, AncestorHeader, AncestryEnd,
+        };
+        use ade_types::shelley::block::PrevHash;
+        let hash = |n: u64| {
+            let mut b = [0u8; 32];
+            b[..8].copy_from_slice(&n.to_be_bytes());
+            Hash32(b)
+        };
+        let ancestry: Vec<AncestorHeader> = (0..10u64)
+            .map(|d| AncestorHeader {
+                slot: SlotNo(138_046_917 - 2 * d),
+                block_no: ade_types::BlockNo(5_369_626 - d),
+                hash: hash(5_369_626 - d),
+                prev: PrevHash::Block(hash(5_369_625 - d)),
+            })
+            .collect();
+        IntersectOffer::Candidates(
+            select_intersection_candidates(&ancestry, AncestryEnd::ParentNotStored, 2160)
+                .expect("valid ancestry"),
+        )
+    }
 
+    fn lv16_point(offer: &IntersectOffer, i: usize) -> Point {
+        offer.points()[i].clone()
+    }
+
+    async fn lv16_recv_chain_sync(server: &mut MuxTransportHandle) -> Option<ChainSyncMessage> {
         loop {
-            let evt = tokio::time::timeout(
+            let bytes = tokio::time::timeout(
                 std::time::Duration::from_millis(2000),
-                events_rx.recv(),
+                server.inbound.recv(),
             )
             .await
-            .expect("disconnected")
-            .expect("event");
-            if let AdmissionPeerEvent::Disconnected { .. } = evt {
-                break;
+            .ok()??;
+            let (frame, _) = ade_network::mux::frame::decode_frame(&bytes).expect("frame decodes");
+            if frame.header.mini_protocol_id.get() == AcceptedMiniProtocol::CHAIN_SYNC_ID {
+                return Some(decode_chain_sync_message(&frame.payload).expect("decode cs"));
             }
         }
+    }
 
-        let _ = pump_handle.await;
+    async fn lv16_next_event(rx: &mut mpsc::Receiver<AdmissionPeerEvent>) -> AdmissionPeerEvent {
+        tokio::time::timeout(std::time::Duration::from_millis(2000), rx.recv())
+            .await
+            .expect("event in time")
+            .expect("event")
+    }
+
+    #[tokio::test]
+    async fn lv16_pump_offers_every_candidate_and_follows_the_found_parent() {
+        let (client_stream, server_stream) = loopback_pair().await;
+        let client_transport = spawn_duplex(client_stream, DuplexCapacity::DEFAULT);
+        let mut server = spawn_duplex(server_stream, DuplexCapacity::DEFAULT);
+        let (events_tx, mut events_rx) = mpsc::channel::<AdmissionPeerEvent>(64);
+        let offer = lv16_offer();
+        let sent_offer = offer.clone();
+        let pump = tokio::spawn(async move {
+            run_admission_wire_pump(
+                client_transport,
+                "127.0.0.1:0".into(),
+                sent_offer,
+                14,
+                MAINNET_NETWORK_MAGIC,
+                events_tx,
+            )
+            .await
+        });
+
+        match lv16_recv_chain_sync(&mut server).await {
+            Some(ChainSyncMessage::FindIntersect { points }) => {
+                assert_eq!(points, offer.points(), "one FindIntersect, every candidate, newest first");
+                assert_eq!(points.len(), 7, "depths 0,1,2,3,5,8 and the deepest, 9");
+            }
+            other => panic!("expected FindIntersect, got {other:?}"),
+        }
+        let parent = lv16_point(&offer, 1);
+        server
+            .outbound
+            .send(responder_frame(
+                AcceptedMiniProtocol::CHAIN_SYNC_ID,
+                encode_chain_sync_message(&ChainSyncMessage::IntersectFound {
+                    point: parent.clone(),
+                    tip: fake_tip(138_047_266),
+                }),
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(lv16_next_event(&mut events_rx).await, AdmissionPeerEvent::TipUpdate { .. }));
+        assert!(matches!(
+            lv16_recv_chain_sync(&mut server).await,
+            Some(ChainSyncMessage::RequestNext)
+        ));
+        // The peer's first reply after a found intersection is a rollback to it.
+        server
+            .outbound
+            .send(responder_frame(
+                AcceptedMiniProtocol::CHAIN_SYNC_ID,
+                encode_chain_sync_message(&ChainSyncMessage::RollBackward {
+                    point: parent.clone(),
+                    tip: fake_tip(138_047_266),
+                }),
+            ))
+            .await
+            .unwrap();
+        loop {
+            match lv16_next_event(&mut events_rx).await {
+                AdmissionPeerEvent::TipUpdate { .. } => continue,
+                AdmissionPeerEvent::RollBackward { point, .. } => {
+                    assert_eq!(point, parent);
+                    break;
+                }
+                other => panic!("expected RollBackward, got {other:?}"),
+            }
+        }
+        drop(server);
+        let _ = pump.await;
+    }
+
+    #[tokio::test]
+    async fn lv16_pump_ends_on_intersect_not_found_without_request_next() {
+        let (client_stream, server_stream) = loopback_pair().await;
+        let client_transport = spawn_duplex(client_stream, DuplexCapacity::DEFAULT);
+        let mut server = spawn_duplex(server_stream, DuplexCapacity::DEFAULT);
+        let (events_tx, mut events_rx) = mpsc::channel::<AdmissionPeerEvent>(16);
+        let pump = tokio::spawn(async move {
+            run_admission_wire_pump(
+                client_transport,
+                "127.0.0.1:0".into(),
+                lv16_offer(),
+                14,
+                MAINNET_NETWORK_MAGIC,
+                events_tx,
+            )
+            .await
+        });
+        assert!(matches!(
+            lv16_recv_chain_sync(&mut server).await,
+            Some(ChainSyncMessage::FindIntersect { .. })
+        ));
+        let tip = fake_tip(200);
+        server
+            .outbound
+            .send(responder_frame(
+                AcceptedMiniProtocol::CHAIN_SYNC_ID,
+                encode_chain_sync_message(&ChainSyncMessage::IntersectNotFound { tip: tip.clone() }),
+            ))
+            .await
+            .unwrap();
+        match lv16_next_event(&mut events_rx).await {
+            AdmissionPeerEvent::TipUpdate { tip: got, .. } => assert_eq!(got, tip, "DC-PUMP-02"),
+            other => panic!("expected TipUpdate, got {other:?}"),
+        }
+        let result = tokio::time::timeout(std::time::Duration::from_millis(2000), pump)
+            .await
+            .expect("pump ends")
+            .expect("pump task");
+        assert_eq!(
+            result,
+            AdmissionWirePumpResult::Error(AdmissionWirePumpError::NoCommonIntersection {
+                bound: IntersectionBound::RetainedHistory,
+            })
+        );
+        // No RequestNext was sent: the session ended at the reply.
+        while let Some(msg) = lv16_recv_chain_sync(&mut server).await {
+            assert!(
+                !matches!(msg, ChainSyncMessage::RequestNext),
+                "no RequestNext after IntersectNotFound"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn lv16_pump_refuses_an_unoffered_found_point() {
+        let (client_stream, server_stream) = loopback_pair().await;
+        let client_transport = spawn_duplex(client_stream, DuplexCapacity::DEFAULT);
+        let mut server = spawn_duplex(server_stream, DuplexCapacity::DEFAULT);
+        let (events_tx, mut events_rx) = mpsc::channel::<AdmissionPeerEvent>(16);
+        let pump = tokio::spawn(async move {
+            run_admission_wire_pump(
+                client_transport,
+                "127.0.0.1:0".into(),
+                lv16_offer(),
+                14,
+                MAINNET_NETWORK_MAGIC,
+                events_tx,
+            )
+            .await
+        });
+        assert!(lv16_recv_chain_sync(&mut server).await.is_some());
+        // Depth 4 is not one of the offsets, so this point was not offered.
+        let unoffered = Point::Block {
+            slot: SlotNo(138_046_917 - 8),
+            hash: {
+                let mut b = [0u8; 32];
+                b[..8].copy_from_slice(&(5_369_626u64 - 4).to_be_bytes());
+                Hash32(b)
+            },
+        };
+        server
+            .outbound
+            .send(responder_frame(
+                AcceptedMiniProtocol::CHAIN_SYNC_ID,
+                encode_chain_sync_message(&ChainSyncMessage::IntersectFound {
+                    point: unoffered,
+                    tip: fake_tip(200),
+                }),
+            ))
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_millis(2000), pump)
+            .await
+            .expect("pump ends")
+            .expect("pump task");
+        assert_eq!(
+            result,
+            AdmissionWirePumpResult::Error(AdmissionWirePumpError::IntersectionPointNotOffered)
+        );
+        while let Ok(Some(ev)) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), events_rx.recv()).await
+        {
+            assert!(
+                matches!(
+                    ev,
+                    AdmissionPeerEvent::TipUpdate { .. } | AdmissionPeerEvent::Disconnected { .. }
+                ),
+                "nothing beyond the TipUpdate and the session end, got {ev:?}"
+            );
+        }
     }
 
     /// PHASE4-N-M-FOLLOW: after the initial IntersectFound +
@@ -1846,7 +2192,7 @@ mod tests {
             run_admission_wire_pump(
                 client_transport,
                 "127.0.0.1:0".into(),
-                Point::Origin,
+                IntersectOffer::Origin,
                 14,
                 MAINNET_NETWORK_MAGIC,
                 events_tx,

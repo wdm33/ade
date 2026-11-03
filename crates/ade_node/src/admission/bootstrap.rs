@@ -544,10 +544,15 @@ fn spawn_wire_pumps_for_admission(
     peer_tx: tokio::sync::mpsc::Sender<AdmissionPeerEvent>,
 ) {
     let our_versions: VersionTable = build_n2n_version_table(network_magic);
-    let start_point = ade_network::codec::chain_sync::Point::Block {
-        slot: source_tip_slot,
-        hash: source_tip_hash.clone(),
-    };
+    // SLICE LV-16: the operator's source tip, offered alone (it has no stored ancestry here).
+    let start_point = ade_runtime::admission::IntersectOffer::Candidates(
+        ade_ledger::rollback::intersection::IntersectionCandidates::without_ancestry(
+            ade_ledger::rollback::intersection::ChainPoint {
+                slot: source_tip_slot,
+                hash: source_tip_hash.clone(),
+            },
+        ),
+    );
     for raw_addr in peer_addrs {
         let addr: std::net::SocketAddr = match raw_addr.parse() {
             Ok(a) => a,
