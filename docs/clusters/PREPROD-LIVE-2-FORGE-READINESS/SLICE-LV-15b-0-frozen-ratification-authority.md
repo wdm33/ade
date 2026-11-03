@@ -462,15 +462,34 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
   step-1 census:
   - **305**: a fresh v12 bootstrap of Mithril snapshot 6009 imports epoch 304's record. It then crosses
     304→305 and freezes 305 natively. Compare with `oracle-end304-node/db/ledger/130133280`.
-  - **322 → 323**: the same store follows the chain from 305 across every boundary. It is not restarted
-    from a v11 store, which §4.6 refuses. The raw epoch-322 snapshot (`db/ledger/137850288`) was not
-    retained after the census; only its census figures survive (DReps 194/194, pools 514/514). The
-    comparison file is therefore the epoch-323 snapshot, copied from the peer on 2026-11-02 to
-    `/mnt/store/cardano/.cardano-live1/lv15b0-reference/137907732/` (state sha256 `cef3cebe…b738`). The
-    store compares at 323 after crossing 321→322 and 322→323. Its 322 record is checked against the census
-    figures.
+  - **322**: the original adverse case. Its 321→322 transition has seven proposal deposits in the
+    distribution, post-boundary reward credits, stale delegations from deregistered accounts, frozen and
+    current proposals that differ, and votes around the freeze. The same store follows the chain from 305
+    across every boundary; it is not restarted from a v11 store, which §4.6 refuses. The raw epoch-322
+    snapshot (`db/ledger/137850288`) was not retained after the census; only its census figures survive
+    (DReps 194/194, pools 514/514). Those figures alone do not close this obligation. It closes only with an
+    independent reference observation of the 322 record: a ledger snapshot at that point regenerated from
+    preserved Cardano chain data by Cardano's own tooling, or another authoritative artifact. Until then
+    322 is an open, explicitly unresolved differential.
+  - **323**: later-epoch differential and continuity evidence. The comparison file is the epoch-323
+    snapshot copied from the peer on 2026-11-02 to
+    `/mnt/store/cardano/.cardano-live1/lv15b0-reference/137907732/` (state sha256 `cef3cebe…b738`). A match
+    at 323 is not evidence for the 321→322 transition.
   - **The live boundary the run reaches last**: compare with a snapshot copied from the local docker peer
     during that epoch.
+
+  | Epoch | Purpose | Status |
+  |---|---|---|
+  | 305 | Native distributions and record from the snapshot-6009 bootstrap | pending step 6 |
+  | 322 | Adverse case: deposits, post-boundary credits, stale delegations, freeze | reference missing; open |
+  | 323 | Later-epoch differential and continuity | pending step 6 |
+  | last live | Continued operation under current chain conditions | pending step 6 |
+
+  The comparison is over exact canonical semantic fields: proposal lineage, deposit refunds, the vote and
+  stake distributions, and the snapshot moments. Haskell's internal layout is never required to match.
+  Reference observations are frozen before the comparison and are never adjusted to match Ade. Equal
+  frozen records do not by themselves establish that the later ratification, enactment, refunds and
+  ledger effects are correct; that is a separate consequence comparison.
 
   A preview boundary is also checked if a store is available. This is the center of the slice: it does not
   close on timing alone.
@@ -510,10 +529,11 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
   where this slice changes them and says so.
 - **CE-LV15b0-16 Live.** The CE-9 run, a fresh v12 bootstrap of snapshot 6009 on preprod, follows from 304
   to the peer tip with no failure line. It crosses every boundary from 305 on, and CE-9 is taken at 305,
-  at 322 and at the last live boundary. The run's evidence must record:
+  322 (when its reference exists), 323 and the last live boundary. The run's evidence must record:
   - the node's own PID, not a wrapper's;
   - its exit status and termination reason if it stops;
-  - its last durable progress point;
+  - its last durable slot and checkpoint;
+  - whether eligible work remained when it stopped;
   - which of three kinds any stop was: a clean shutdown on a signal Ade received and logged, a clean halt
     the loop chose, or an unexpected disappearance.
 
@@ -601,8 +621,20 @@ The test in `epoch_accumulator.rs` is renamed and inverted:
    **CE-14:** `ci/ci_check_frozen_ratification_authority.sh` passes. `ci/ci_check_donation_pot.sh` (e)
    now accepts a seed commitment tag of v13 or later (v13 introduced the pot binding, which it still checks
    directly).
-6. **Live and native reproduction.** CE-16 and CE-9 at 305, 322 and the last live boundary, plus CE-10's
-   warm and crash restarts and CE-11's cold replay on copies of that store.
+6. **Live and native reproduction.** CE-16 and CE-9 at 305, 323 and the last live boundary, plus CE-10's
+   warm and crash restarts and CE-11's cold replay on copies of that store. The primary run is one
+   continuous history from the fresh v12 bootstrap; copies serve the recovery comparisons only and never
+   stand in for that continuity. The restart and replay comparisons are byte comparisons of the canonical
+   encodings of the governance state, delegation state, reward balances and records; structural equality
+   is not enough. CE-9 at 322 stays open until an independent reference for it exists (CE-9).
+
+   Pushed 2026-11-02 as one integration set (`a1d36385`, `29adcf95`, `277eb39f`, `2b0035d7`): step 2 does
+   not reach `main` without the store-12 barrier.
+
+   **Closure.** LV-15b-0 closes only when the native differential and replay evidence is complete, the
+   322 adverse case is resolved by equivalent independent evidence, and every remaining test limitation
+   (§10) is dispositioned against the release criteria. The 46 failing sweep scripts support a
+   no-regression claim only; they are not release-gate success.
 
 ## 8. Not in this slice
 
@@ -649,3 +681,17 @@ The `ade_testkit` corpus suite does not finish in this environment. Three tests
 `stake_dist_sum_vs_pool_stakes_sum`) are skipped, and the run still hits its time limit inside
 `epoch_oracle_comparison`. `conway_epoch_508_boundary_comparison`, which this slice's record requirement
 first broke, passes once the harness imports the snapshot's record.
+
+None of these is relabelled as passing. Each stays an outstanding assurance limitation until closure
+dispositions it against the release criteria:
+
+| Requirement | Tier | Disposition |
+|---|---|---|
+| No mixed store semantics | true | enforced (store 12 refuses older stores) |
+| One authoritative governance transition path | true | gate passes |
+| Cardano governance lifecycle equivalence | derived | implemented; differential pending |
+| Store v12 bootstrap and replay equivalence | true / derived | live evidence pending |
+| Mutation resistance | release | 15 of 15 killed |
+| Full CI health | release | 46 baseline failures remain |
+| Sustained preprod following | release | open (§9) |
+| PID and exit observability | operational | step 6 |
