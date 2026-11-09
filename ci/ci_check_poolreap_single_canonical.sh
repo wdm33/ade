@@ -22,7 +22,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RULES="$REPO_ROOT/crates/ade_ledger/src/rules.rs"
 ACC="$REPO_ROOT/crates/ade_ledger/src/epoch_accumulator.rs"
-REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
+REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }
@@ -54,8 +54,8 @@ if grep -Eq 'apply_pool_reap[[:space:]]*\(' "$ACC"; then
 fi
 
 # (E) DC-EPOCH-21 in the registry.
-grep -q 'DC-EPOCH-21' "$REG" \
-    || print_fail "(E) DC-EPOCH-21 is not declared in the invariant registry"
+python3 -I "$REPO_ROOT/ci/idse_legacy_carried.py" --ci-script ci/ci_check_poolreap_single_canonical.sh DC-EPOCH-21 >/dev/null \
+    || print_fail "DC-EPOCH-21 is not carried to an active IDSE invariant that lists this gate (docs/legacy/idd-to-idse-map.toml)"
 
 if [[ $FAILED -ne 0 ]]; then
     echo "DC-EPOCH-21 single-canonical-POOLREAP check FAILED" >&2

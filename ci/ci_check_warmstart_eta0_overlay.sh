@@ -17,7 +17,7 @@ SCI="$REPO_ROOT/crates/ade_ledger/src/seed_consensus_inputs.rs"
 MERGE="$REPO_ROOT/crates/ade_runtime/src/seed_consensus_merge.rs"
 BOOT="$REPO_ROOT/crates/ade_runtime/src/bootstrap.rs"
 CRYPTO_TOML="$REPO_ROOT/crates/ade_crypto/Cargo.toml"
-REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
+REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }
@@ -61,8 +61,8 @@ fi
 
 # (G) both rules present and enforced in the registry.
 for rule in "T-REC-04" "DC-CINPUT-03"; do
-    awk -v r="$rule" '$0 ~ ("id = \"" r "\""){f=1} f&&/status = "enforced"/{print "ok"; exit}' "$REG" | grep -q ok \
-        || print_fail "(G) $rule not present-and-enforced in the registry"
+    python3 -I "$REPO_ROOT/ci/idse_legacy_carried.py" --ci-script ci/ci_check_warmstart_eta0_overlay.sh "$rule" >/dev/null \
+        || print_fail "$rule is not carried to an active IDSE invariant that lists this gate (docs/legacy/idd-to-idse-map.toml)"
 done
 
 if [[ "$FAILED" -ne 0 ]]; then

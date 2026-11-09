@@ -70,9 +70,9 @@ grep -qE 'NotPromotionCertified' "$STORE" \
     || fail "the store is missing the 'NotPromotionCertified' rejection (the promotion-certification gate)"
 
 # (5) The rule is declared in the invariant registry.
-REG="docs/legacy/idd-invariant-registry.toml"
-grep -q 'DC-EPOCH-25' "$REG" \
-    || fail "DC-EPOCH-25 is not declared in the invariant registry ($REG)"
+REG="docs/ade-invariant-registry.toml"
+python3 -I "$REPO_ROOT/ci/idse_legacy_carried.py" --ci-script ci/ci_check_frozen_promotion_no_seed_window.sh DC-EPOCH-25 >/dev/null \
+    || fail "DC-EPOCH-25 is not carried to an active IDSE invariant that lists this gate (docs/legacy/idd-to-idse-map.toml)"
 
 if (( FAILED == 0 )); then
     echo "OK: frozen promotion (S4-L2) -- candidate leadership beyond the bridge is promoted ONLY from the promotion-certified epoch-indexed FrozenLeadershipPoolDistr; no seed-window replay / bootstrap re-materialization / fabricated commitment; the seed+2 ceiling is gone."

@@ -34,7 +34,7 @@ cd "$REPO_ROOT"
 PROJ="crates/ade_runtime/src/network/served_chain_projection.rs"
 DISP="crates/ade_runtime/src/network/serve_dispatch.rs"
 LIFE="crates/ade_node/src/node_lifecycle.rs"
-REG="docs/legacy/idd-invariant-registry.toml"
+REG="docs/ade-invariant-registry.toml"
 OLD_GATE="ci/ci_check_served_chain_stability.sh"
 
 FAILED=0
@@ -95,8 +95,8 @@ if grep -Eq 'ServedChainHandle::new\(' "$LIFE"; then
 fi
 
 # (6) DC-NODE-13 present-and-enforced.
-awk '/id = "DC-NODE-13"/{f=1} f&&/status = "enforced"/{print "ok"; exit}' "$REG" | grep -q ok \
-    || fail "DC-NODE-13 not present-and-enforced in the registry"
+python3 -I "$REPO_ROOT/ci/idse_legacy_carried.py" --ci-script ci/ci_check_served_chain_projection.sh DC-NODE-13 >/dev/null \
+    || fail "DC-NODE-13 is not carried to an active IDSE invariant that lists this gate (docs/legacy/idd-to-idse-map.toml)"
 
 # (7) the superseded G-R gate is removed.
 [[ ! -f "$OLD_GATE" ]] \

@@ -12,7 +12,7 @@ LIFE="$REPO_ROOT/crates/ade_node/src/node_lifecycle.rs"
 SYNC="$REPO_ROOT/crates/ade_node/src/node_sync.rs"
 VIEW="$REPO_ROOT/crates/ade_ledger/src/consensus_view.rs"
 FORGE_T="$REPO_ROOT/crates/ade_node/tests/forge_succeeds.rs"
-REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
+REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }
@@ -44,8 +44,8 @@ grep -Eq 'fn feed_header_validates_against_recovered_surface_not_empty_view' "$F
     || print_fail "the G-P header-validation regression pin is missing from forge_succeeds.rs"
 
 # (5) DC-CINPUT-04 present and enforced.
-awk '/id = "DC-CINPUT-04"/{f=1} f&&/status = "enforced"/{print "ok"; exit}' "$REG" | grep -q ok \
-    || print_fail "DC-CINPUT-04 not present-and-enforced in the registry"
+python3 -I "$REPO_ROOT/ci/idse_legacy_carried.py" --ci-script ci/ci_check_feed_leader_threshold_view.sh DC-CINPUT-04 >/dev/null \
+    || print_fail "DC-CINPUT-04 is not carried to an active IDSE invariant that lists this gate (docs/legacy/idd-to-idse-map.toml)"
 
 if [[ "$FAILED" -ne 0 ]]; then
     echo "ci_check_feed_leader_threshold_view: FAILED"

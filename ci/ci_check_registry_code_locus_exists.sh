@@ -1,27 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Registry coherence guard. Three load-bearing, Ade-correct invariants over
-# docs/legacy/idd-invariant-registry.toml:
+# Registry coherence guard over the IDSE registry docs/ade-invariant-registry.toml.
+# Four load-bearing checks:
 #   1. Rule IDs are unique (the registry is append-only; IDs are never reused).
-#   2. Every `cross_ref` resolves to a real rule ID. cross_ref is a DIRECTED
-#      relation (depends-on / refines / see-also); reciprocity is NOT required
-#      and is intentionally NOT checked (forcing it would invert dependencies
-#      and bloat foundational rules like T-DET-01).
-#   3. Every CODE path cited in a rule's `code_locus` exists on disk — catches
-#      stale pointers after a move/rename (e.g. PHASE4-N-Y renamed recovery.rs
-#      -> recovery/mod.rs, leaving DC-STORE-05 / T-REC-01 / T-REC-02 stale).
+#   2. Every `depends_on` resolves to a real rule ID. depends_on is a DIRECTED
+#      relation; reciprocity is NOT required and is intentionally NOT checked.
+#   3. Every path in an enforcement locus (`enforcement_compile_time`,
+#      `enforcement_runtime`, form "<path>[::<item>] — <how>") exists on disk,
+#      unless the locus is listed in `enforcement_superseded`.
+#   4. Every path in `ci_scripts` exists on disk.
 #
-# Checks 1+2 absorb the only load-bearing checks of the retired
-# ci_check_constitution_coverage.sh (a ziranity-v3 import that validated a
-# foreign schema — CL-* clusters, tier-by-prefix, bidirectional cross_refs,
-# $HOME planning-doc coverage — and never matched Ade's registry; see
-# docs/legacy/planning/registry-cross-ref-bidirectional-repair.md).
-#
-# Scope notes (deliberately narrow, to stay green + false-positive-free):
-#   - code_locus: only crates/**.rs and ci/**.sh tokens (existence unambiguous).
-#   - Tokens containing a glob '*' are skipped (docs globs, dir-wildcards).
-#   - docs/ paths are NOT hard-checked here (globs + archived on cluster close).
+# Before the IDSE migration this guard read the legacy IDD registry's
+# `cross_ref` and `code_locus` fields. That registry is frozen at
+# docs/legacy/idd-invariant-registry.toml; its code loci were carried into the
+# enforcement fields checked here (docs/planning/idse-migration-plan.md, M2).
 #
 # Repo-root-relative. python3 + tomllib (3.11+).
 
@@ -29,9 +22,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 python3 - <<'PYEOF'
-import tomllib, re, os, sys
+import tomllib, os, sys
 
-REG = "docs/legacy/idd-invariant-registry.toml"
+REG = "docs/ade-invariant-registry.toml"
 try:
     rules = tomllib.load(open(REG, "rb"))["rules"]
 except Exception as e:
@@ -44,7 +37,6 @@ def fail(msg):
     print(f"FAIL: {msg}")
     failed = True
 
-# 1. Unique rule IDs (append-only registry; IDs are never reused).
 ids = set()
 for r in rules:
     rid = r.get("id", "")
@@ -52,29 +44,30 @@ for r in rules:
         fail(f"duplicate rule id: {rid}")
     ids.add(rid)
 
-# 2. Every cross_ref resolves to a real rule ID. Directed edge; reciprocity is
-#    intentionally NOT required (see header).
 for r in rules:
-    for ref in r.get("cross_ref", []):
+    for ref in r.get("depends_on", []):
         if ref not in ids:
-            fail(f"{r.get('id','?')}: cross_ref '{ref}' does not resolve to any rule id")
+            fail(f"{r.get('id','?')}: depends_on '{ref}' does not resolve to any rule id")
 
-# 3. code_locus crates/**.rs + ci/**.sh paths exist on disk.
-TOKEN = re.compile(r"(?:crates|ci)/[\w./\-]+\.(?:rs|sh)")
-checked = 0
+loci = scripts = 0
 for r in rules:
-    for tok in TOKEN.findall(r.get("code_locus", "") or ""):
-        if "*" in tok:
-            continue
-        checked += 1
-        if not os.path.exists(tok):
-            fail(f"{r['id']}: code_locus path does not exist "
-                 f"(moved/renamed? — update code_locus or restore the path): {tok}")
+    superseded = {s.get("locus") for s in r.get("enforcement_superseded", []) if isinstance(s, dict)}
+    for key in ("enforcement_compile_time", "enforcement_runtime"):
+        for entry in r.get(key, []):
+            if entry in superseded:
+                continue
+            path = entry.partition(" — ")[0].partition("::")[0].strip()
+            loci += 1
+            if not path or not os.path.exists(path):
+                fail(f"{r['id']}: {key} path does not exist (moved/renamed? supersede the locus or restore the path): {path!r}")
+    for script in r.get("ci_scripts", []):
+        scripts += 1
+        if not os.path.isfile(script):
+            fail(f"{r['id']}: ci_scripts path does not exist: {script}")
 
 if failed:
     sys.exit(1)
 
 print(f"OK: registry coherence — {len(rules)} rules, {len(ids)} unique ids, "
-      f"all cross_refs resolve, all {checked} crates/**.rs + ci/**.sh "
-      f"code_locus paths exist")
+      f"all depends_on resolve, all {loci} enforcement-locus paths and {scripts} ci_scripts paths exist")
 PYEOF

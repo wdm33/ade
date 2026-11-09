@@ -15,7 +15,7 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ACC="$REPO_ROOT/crates/ade_ledger/src/epoch_accumulator.rs"
-REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
+REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }
@@ -67,8 +67,8 @@ grep -q 'if encode_epoch_accumulator(&acc) != bytes' "$ACC" \
     || print_fail "(D) the byte-canonical re-encode backstop is missing from decode"
 
 # (E) DC-EPOCH-19 in the registry.
-grep -q 'DC-EPOCH-19' "$REG" \
-    || print_fail "(E) DC-EPOCH-19 is not declared in the invariant registry"
+python3 -I "$REPO_ROOT/ci/idse_legacy_carried.py" --ci-script ci/ci_check_epoch_accumulator_no_utxo.sh DC-EPOCH-19 >/dev/null \
+    || print_fail "DC-EPOCH-19 is not carried to an active IDSE invariant that lists this gate (docs/legacy/idd-to-idse-map.toml)"
 
 if [[ $FAILED -ne 0 ]]; then
     echo "DC-EPOCH-19 epoch-accumulator structural check FAILED" >&2

@@ -9,7 +9,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SYNC="$REPO_ROOT/crates/ade_node/src/node_sync.rs"
 LIFE="$REPO_ROOT/crates/ade_node/src/node_lifecycle.rs"
-REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
+REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }
@@ -46,8 +46,8 @@ grep -Eq 'fn forge_successor_reads_evolved_spine_block_no_not_stale_baseline_g_q
     || print_fail "the G-Q forge-successor regression pin is missing"
 
 # (6) DC-NODE-10 present and enforced.
-awk '/id = "DC-NODE-10"/{f=1} f&&/status = "enforced"/{print "ok"; exit}' "$REG" | grep -q ok \
-    || print_fail "DC-NODE-10 not present-and-enforced in the registry"
+python3 -I "$REPO_ROOT/ci/idse_legacy_carried.py" --ci-script ci/ci_check_forge_successor_evolved_spine.sh DC-NODE-10 >/dev/null \
+    || print_fail "DC-NODE-10 is not carried to an active IDSE invariant that lists this gate (docs/legacy/idd-to-idse-map.toml)"
 
 if [[ "$FAILED" -ne 0 ]]; then
     echo "ci_check_forge_successor_evolved_spine: FAILED"

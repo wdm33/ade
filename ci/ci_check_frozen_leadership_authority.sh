@@ -68,9 +68,9 @@ if ! grep -qE "pub fn ${SYM}" crates/ade_ledger/src/consensus_view.rs; then
 fi
 
 # (4) The rule is declared in the invariant registry.
-REG="docs/legacy/idd-invariant-registry.toml"
-grep -q 'DC-EPOCH-25' "$REG" \
-    || fail "DC-EPOCH-25 is not declared in the invariant registry ($REG)"
+REG="docs/ade-invariant-registry.toml"
+python3 -I "$REPO_ROOT/ci/idse_legacy_carried.py" --ci-script ci/ci_check_frozen_leadership_authority.sh DC-EPOCH-25 >/dev/null \
+    || fail "DC-EPOCH-25 is not carried to an active IDSE invariant that lists this gate (docs/legacy/idd-to-idse-map.toml)"
 
 # (5) S4-0 (DC-EPOCH-25 BRIDGE): leadership is read ONLY by EXACT epoch index. The epoch-indexed reader must
 #     exist, and the store must define NO bare "current leadership" reader -- a method returning the leadership

@@ -20,10 +20,10 @@ set -uo pipefail
 #      live_block_production_session binary.
 #   4. The operator runbook (docs/active/cn-cons-06-operator-runbook.md)
 #      documents `ade_node --mode produce` + CN-CONS-06 / RO-LIVE-01.
-#   5. `CN-CONS-06` registry entry has either status="enforced" AND a
-#      `tests` array containing the three named cross_impl_adapter tests,
-#      OR status="partial" AND an `open_obligation` field mentioning
-#      `blocked_until_operator_stake_available`.
+#   5. The legacy entry CN-CONS-06 is carried to an active IDSE invariant
+#      (PRC-023 LiveAcceptanceReleaseGate) that lists this gate and the three
+#      named cross_impl_adapter tests, and whose claim is not `supported`
+#      without passing evidence (the live half needs operator stake).
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -32,7 +32,7 @@ REPLAY_RS="$REPO_ROOT/crates/ade_testkit/src/producer/replay.rs"
 ADAPTER_RS="$REPO_ROOT/crates/ade_testkit/src/producer/cross_impl_adapter.rs"
 CLI_RS="$REPO_ROOT/crates/ade_node/src/cli.rs"
 RUNBOOK_MD="$REPO_ROOT/docs/active/cn-cons-06-operator-runbook.md"
-REGISTRY="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
+REGISTRY="$REPO_ROOT/docs/ade-invariant-registry.toml"
 
 FAIL=0
 
@@ -144,43 +144,43 @@ fi
 #   Either: status="enforced" AND tests=[...all three adapter tests...]
 #   Or:     status="partial"  AND open_obligation mentions blocked_until_operator_stake_available
 # ---------------------------------------------------------------------------
-G5=$(python3 - "$REGISTRY" <<'PYEOF'
+G5=$(python3 -I - "$REGISTRY" "$REPO_ROOT/docs/legacy/idd-to-idse-map.toml" <<'PYEOF'
 import sys
 import tomllib
 
-with open(sys.argv[1], "rb") as f:
-    data = tomllib.load(f)
+rules = {r["id"]: r for r in tomllib.load(open(sys.argv[1], "rb"))["rules"]}
+rows = {r["id"]: r for r in tomllib.load(open(sys.argv[2], "rb"))["legacy"]}
 
-rules = data.get("rules", [])
-entry = next((r for r in rules if r.get("id") == "CN-CONS-06"), None)
-if entry is None:
-    print("MISSING: CN-CONS-06 not found in registry")
+row = rows.get("CN-CONS-06")
+if row is None or row["disposition"] != "migrated" or not row["new_ids"]:
+    print(f"MISSING: CN-CONS-06 is not migrated in the legacy map ({row})")
     sys.exit(1)
-
-status = entry.get("status", "")
-tests = entry.get("tests", [])
-open_ob = entry.get("open_obligation", "") or ""
+targets = [rules.get(n) for n in row["new_ids"]]
+if any(t is None or t.get("status") != "active" for t in targets):
+    print(f"BAD: CN-CONS-06 maps to {row['new_ids']}, missing or not active")
+    sys.exit(1)
 
 required_tests = {
     "cross_impl_adapter_forged_block_decodes_through_ade_codec",
     "cross_impl_adapter_forged_block_structurally_agrees_with_decoder",
     "cross_impl_adapter_corpus_round_trips_byte_identical",
 }
-
-enforced_ok = (status == "enforced") and required_tests.issubset(set(tests))
-partial_ok = (status == "partial") and ("blocked_until_operator_stake_available" in open_ob) and required_tests.issubset(set(tests))
-
-if enforced_ok or partial_ok:
-    print("OK")
-    sys.exit(0)
-else:
-    print(f"BAD: status={status} tests={tests} open_obligation={open_ob[:120]!r}")
-    sys.exit(1)
+script = "ci/ci_check_producer_corpus_present.sh"
+for t in targets:
+    tests = set(t.get("tests", []))
+    gated = script in t.get("ci_scripts", [])
+    claim = t.get("claim_status", "")
+    passing = any(e.get("result") == "pass" for e in t.get("evidence", []))
+    if required_tests.issubset(tests) and gated and (claim != "supported" or passing):
+        print("OK")
+        sys.exit(0)
+print(f"BAD: no target of CN-CONS-06 ({row['new_ids']}) lists the three tests and this gate with an honest claim")
+sys.exit(1)
 PYEOF
 )
 G5_RC=$?
 if [ $G5_RC -ne 0 ]; then
-    print_fail "Guard 5 (CN-CONS-06 registry shape):"
+    print_fail "Guard 5 (CN-CONS-06 carried to the IDSE registry):"
     echo "  $G5"
 fi
 

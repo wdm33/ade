@@ -12,7 +12,7 @@ PUMP="$REPO_ROOT/crates/ade_runtime/src/admission/wire_pump.rs"
 BF="$REPO_ROOT/crates/ade_network/src/codec/block_fetch.rs"
 FORGE_T="$REPO_ROOT/crates/ade_node/tests/forge_succeeds.rs"
 LOOP_T="$REPO_ROOT/crates/ade_node/tests/node_spine_serve_loopback.rs"
-REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
+REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }
@@ -57,8 +57,8 @@ grep -Eq 'decompose_blockfetch_block' "$LOOP_T" \
     && print_fail "loopback test still calls decompose_blockfetch_block -- the wire pump now delivers bare bytes; assert &fetched == &block_bytes directly"
 
 # CN-WIRE-12 present and enforced in the registry.
-awk '/id = "CN-WIRE-12"/{f=1} f&&/status = "enforced"/{print "ok"; exit}' "$REG" | grep -q ok \
-    || print_fail "CN-WIRE-12 not present-and-enforced in the registry"
+python3 -I "$REPO_ROOT/ci/idse_legacy_carried.py" --ci-script ci/ci_check_feed_tag24_unwrap.sh CN-WIRE-12 >/dev/null \
+    || print_fail "CN-WIRE-12 is not carried to an active IDSE invariant that lists this gate (docs/legacy/idd-to-idse-map.toml)"
 
 if [[ "$FAILED" -ne 0 ]]; then
     echo "ci_check_feed_tag24_unwrap: FAILED"

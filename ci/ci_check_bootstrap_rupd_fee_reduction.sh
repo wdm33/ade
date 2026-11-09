@@ -12,7 +12,7 @@ LEDGERDB="$REPO_ROOT/crates/ade_ledger/src/ledgerdb_state.rs"
 RUPD="$REPO_ROOT/crates/ade_ledger/src/bootstrap_reward_update.rs"
 ACC="$REPO_ROOT/crates/ade_ledger/src/epoch_accumulator.rs"
 FIRSTRUN="$REPO_ROOT/crates/ade_node/src/native_firstrun.rs"
-REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
+REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
 
 FAILED=0
 fail() { echo "FAIL: $1"; FAILED=1; }
@@ -71,7 +71,8 @@ if grep -rq '1157103223' "$LEDGERDB" "$RUPD" "$ACC" "$FIRSTRUN"; then
 fi
 
 # (6) DC-EPOCH-23 is in the registry.
-grep -q 'DC-EPOCH-23' "$REG" || fail "(6) DC-EPOCH-23 is not in the invariant registry"
+python3 -I "$REPO_ROOT/ci/idse_legacy_carried.py" --ci-script ci/ci_check_bootstrap_rupd_fee_reduction.sh DC-EPOCH-23 >/dev/null \
+    || fail "DC-EPOCH-23 is not carried to an active IDSE invariant that lists this gate (docs/legacy/idd-to-idse-map.toml)"
 
 [[ $FAILED -eq 0 ]] || exit 1
 echo "DC-EPOCH-23 OK: deltaF decoded (not skipped), carried + commitment-bound, seed-boundary fee-pot reduction fail-closed on underflow, schema v3, no corrective constant"

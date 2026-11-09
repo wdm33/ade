@@ -20,7 +20,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ADV="$REPO_ROOT/crates/ade_runtime/src/chaindb/epoch_accumulator_advance.rs"
 STORE="$REPO_ROOT/crates/ade_runtime/src/chaindb/epoch_accumulator_store.rs"
 NODE="$REPO_ROOT/crates/ade_node/src/node_lifecycle.rs"
-REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
+REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }
@@ -64,8 +64,8 @@ if grep -q 'advance_accumulator_to_durable_tip' "$NODE"; then
 fi
 
 # (E) DC-EPOCH-22 in the registry.
-grep -q 'DC-EPOCH-22' "$REG" \
-    || print_fail "(E) DC-EPOCH-22 is not declared in the invariant registry"
+python3 -I "$REPO_ROOT/ci/idse_legacy_carried.py" --ci-script ci/ci_check_boundary_aligned_mark_capture.sh DC-EPOCH-22 >/dev/null \
+    || print_fail "DC-EPOCH-22 is not carried to an active IDSE invariant that lists this gate (docs/legacy/idd-to-idse-map.toml)"
 
 if [[ $FAILED -ne 0 ]]; then
     echo "DC-EPOCH-22 boundary-aligned-mark-capture check FAILED" >&2

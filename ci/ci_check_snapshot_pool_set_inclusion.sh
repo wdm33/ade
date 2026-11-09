@@ -11,7 +11,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ACC="$REPO_ROOT/crates/ade_ledger/src/epoch_accumulator.rs"
 AGG="$REPO_ROOT/crates/ade_ledger/src/reduced_aggregate.rs"
-REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
+REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
 
 FAILED=0
 fail() { echo "FAIL: $1"; FAILED=1; }
@@ -48,7 +48,8 @@ grep -q 'fn build_boundary_mark_snapshot_omits_zero_stake_credential' "$ACC" \
   || fail "(5) build_boundary_mark_snapshot_omits_zero_stake_credential test is missing"
 
 # (6) DC-EPOCH-24 is in the registry.
-grep -q 'DC-EPOCH-24' "$REG" || fail "(6) DC-EPOCH-24 is not in the invariant registry"
+python3 -I "$REPO_ROOT/ci/idse_legacy_carried.py" --ci-script ci/ci_check_snapshot_pool_set_inclusion.sh DC-EPOCH-24 >/dev/null \
+    || fail "DC-EPOCH-24 is not carried to an active IDSE invariant that lists this gate (docs/legacy/idd-to-idse-map.toml)"
 
 # (7) PERSISTED-SIDE (schema-reject compatibility slice): the accumulator schema version is bumped to 4,
 #     so a pre-C v3 store -- whose mark/set/go were built under the prior numDelegators>0 rule (phantom

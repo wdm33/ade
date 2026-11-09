@@ -22,7 +22,7 @@ MAT="$REPO_ROOT/crates/ade_ledger/src/rollback/materialize.rs"
 NODE="$REPO_ROOT/crates/ade_node/src/node_lifecycle.rs"
 BOOT="$REPO_ROOT/crates/ade_runtime/src/bootstrap.rs"
 FWD="$REPO_ROOT/crates/ade_runtime/src/forward_sync/reducer.rs"
-REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
+REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }
@@ -68,8 +68,8 @@ grep -Eq 'fn rollback_materialize_does_not_bypass_vrf_on_wrong_eta0' "$MAT" \
     || print_fail "(E) the no-VRF-bypass regression test is missing"
 
 # (F) T-REC-06 enforced in the registry.
-awk '/^id = "T-REC-06"/{f=1} f&&/^status = /{print; exit}' "$REG" | grep -q 'enforced' \
-    || print_fail "(F) T-REC-06 is not enforced in the registry"
+python3 -I "$REPO_ROOT/ci/idse_legacy_carried.py" --ci-script ci/ci_check_rollback_materialize_eta0.sh T-REC-06 >/dev/null \
+    || print_fail "T-REC-06 is not carried to an active IDSE invariant that lists this gate (docs/legacy/idd-to-idse-map.toml)"
 
 if [[ "$FAILED" -ne 0 ]]; then
     echo "ci_check_rollback_materialize_eta0: FAILED"

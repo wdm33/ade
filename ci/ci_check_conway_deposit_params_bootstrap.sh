@@ -18,7 +18,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ASSEMBLY="$REPO_ROOT/crates/ade_runtime/src/mithril_native_assembly.rs"
 DECODER="$REPO_ROOT/crates/ade_ledger/src/ledgerdb_state.rs"
 ACC="$REPO_ROOT/crates/ade_ledger/src/epoch_accumulator.rs"
-REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
+REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }
@@ -71,7 +71,8 @@ grep -q 'conway_deposit_params.is_none()' "$ACC" \
     || print_fail "(4) decode_epoch_accumulator does not fail closed on a Conway accumulator with None deposit params"
 
 # (5) The invariant is in the registry.
-grep -q 'id = "DC-CINPUT-07"' "$REG" || print_fail "(5) DC-CINPUT-07 is not in the invariant registry"
+python3 -I "$REPO_ROOT/ci/idse_legacy_carried.py" --ci-script ci/ci_check_conway_deposit_params_bootstrap.sh DC-CINPUT-07 >/dev/null \
+    || print_fail "DC-CINPUT-07 is not carried to an active IDSE invariant that lists this gate (docs/legacy/idd-to-idse-map.toml)"
 
 if [[ $FAILED -eq 0 ]]; then
     echo "PASS: Conway deposit params decoded from the certified snapshot into bootstrap authority, versioned + fail-closed (DC-CINPUT-07)"
