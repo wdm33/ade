@@ -138,7 +138,7 @@ CE-AL-3-LIVE PASS = first `block_admitted` (slot > anchor) with 0 `UnexpectedRol
 > help — wrong mechanism. And because the convergence sink truncates (`ConvergenceEvidenceSink::open` =
 > `File::create`), an EOF-reattach harness **cannot** preserve a continuous transcript (and stitching is
 > forbidden) — so CE-AI-6 needs a **SUSTAINED** follow, which needs the keep-alive client. See
-> `docs/planning/phase4-n-am-wire-pump-keepalive-sustain-invariants.md`. The partition→heal procedure
+> `docs/legacy/planning/phase4-n-am-wire-pump-keepalive-sustain-invariants.md`. The partition→heal procedure
 > below is correct and stands; it can only be EXECUTED once the follow sustains.
 
 Natural reorgs at f=0.05 with 2 equal pools are rare (~1 per ~33-min epoch in a

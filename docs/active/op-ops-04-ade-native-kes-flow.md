@@ -100,7 +100,7 @@ PHASE4-N-P resolved the gap by reimplementing Sum6KES from
 scratch in `ade_crypto::kes_sum` (BLUE-owned), matching Haskell
 `cardano-base` byte-for-byte (including the `expand_seed` prefix
 bytes 0x01 / 0x02 that `cardano-crypto` Rust 1.0.8 happens to get
-wrong — see [`docs/clusters/PHASE4-N-P/S4.md`](../../docs/clusters/PHASE4-N-P/S4.md)
+wrong — see [`docs/legacy/clusters/completed/PHASE4-N-P/S4.md`](../../docs/legacy/clusters/completed/PHASE4-N-P/S4.md)
 for the discovery). Cross-impl agreement is mechanically enforced
 via the cardano-cli ground-truth corpus at
 `crates/ade_crypto/src/kes_sum/cardano_cli_corpus.rs`.

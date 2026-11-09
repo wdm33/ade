@@ -12,7 +12,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$REPO_ROOT"
 FAILED=0; fail() { echo "FAIL: $1"; FAILED=1; }
 P=crates/ade_ledger/src/pre_resolve.rs
 C=crates/ade_ledger/src/conway.rs
-D=docs/clusters/MEM-OPT-UTXO-DISK/S2b-pre-resolve.md
+D=docs/legacy/clusters/completed/MEM-OPT-UTXO-DISK/S2b-pre-resolve.md
 
 # (1) the extractor exists + returns a deterministic sorted set (BTreeSet, not HashSet).
 grep -qF 'pub fn collect_required_txins(body: &ConwayTxBody) -> BTreeSet<TxIn>' "$P" \

@@ -2,7 +2,7 @@
 // - Deterministic, no I/O.
 // - The REDUCED-VALIDATION-BOUNDARY-PLANE: a track_utxo=false follower crossing a Conway epoch boundary produces
 //   a typed reduced projection, NOT a degraded full transition and NOT a fabricated snapshot. See
-//   docs/clusters/REDUCED-VALIDATION-BOUNDARY-PLANE/INVARIANTS.md.
+//   docs/legacy/clusters/REDUCED-VALIDATION-BOUNDARY-PLANE/INVARIANTS.md.
 
 //! Typed reduced boundary projection (P1). The authoritative epoch boundary
 //! (`rules::apply_epoch_boundary_with_registrations`) is the SOLE producer of RUPD-applied rewards, pots,

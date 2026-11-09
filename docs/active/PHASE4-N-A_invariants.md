@@ -6,7 +6,7 @@
 > **Seeded by**: `docs/active/PHASE4-N-A_scope_decisions.md` (locked
 > design decisions).
 > **Authority**: registry entries in
-> `docs/ade-invariant-registry.toml` are normative; this sketch
+> `docs/legacy/idd-invariant-registry.toml` are normative; this sketch
 > frames them.
 
 ## 1. What must always be true

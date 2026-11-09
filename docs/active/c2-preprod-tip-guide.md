@@ -416,7 +416,7 @@ and `slotsPerKESPeriod=129600` keeps the opcert (KES period 0) fresh.)
 > forged its own block on the recovered tip instead of first adopting the relay's tip block,
 > so its chain **forked** and node2-relay **rejected** the served chain
 > (`UnexpectedBlockNo`). Both gaps are recorded as later invariant slices in
-> `docs/planning/c2-local-discovered-gaps.md` (Gap 1: multi-producer fork-choice; Gap 2:
+> `docs/legacy/planning/c2-local-discovered-gaps.md` (Gap 1: multi-producer fork-choice; Gap 2:
 > forge-on-followed-tip + serve continuity). **Not** worked around by weakening Ade.
 > **Recover-far-behind run EXECUTED (2026-06-06)** (anchor block 8, relays frozen at block
 > 21, k=13): it **eliminated Ade's receive-side error** — Ade caught up cleanly and forged
@@ -429,10 +429,10 @@ and `slotsPerKESPeriod=129600` keeps the opcert (KES period 0) fresh.)
 > recovered anchor is not a peer-intersectable servable block (`ChainDbServedSource` serves
 > only servable blocks) → the served chain isn't a continuous lineage the relay can intersect.
 > The next work is the **Gap 2 implementation slice — PHASE4-N-AE Slice A**, whose IDD
-> invariants gate is **done** (`docs/planning/phase4-n-ae-slice-a-invariants.md`:
+> invariants gate is **done** (`docs/legacy/planning/phase4-n-ae-slice-a-invariants.md`:
 > recover→serve servable lineage + forge-on-followed-tip admissibility gate + structured
 > `ForgeRefused::NotCaughtUp` + replay determinism); both gaps scoped in
-> `docs/planning/c2-local-discovered-gaps.md`. Pick up fresh at `/cluster-doc PHASE4-N-AE`.
+> `docs/legacy/planning/c2-local-discovered-gaps.md`. Pick up fresh at `/cluster-doc PHASE4-N-AE`.
 > Recover alone is also proven against the synced preprod node read-only. **C2-preprod-live
 > (§6) runs only after Slice A closes this local loop.**
 

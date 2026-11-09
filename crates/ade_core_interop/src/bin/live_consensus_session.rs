@@ -17,7 +17,7 @@
 // `ade_core_interop::follow` module docstring.
 //
 // Output: a transcript and a peer-tip-comparison log written to
-// docs/clusters/PHASE4-N-B/CE-N-B-6_<date>.log. The sustained run is
+// docs/legacy/clusters/completed/PHASE4-N-B/CE-N-B-6_<date>.log. The sustained run is
 // fully automated — `--connect` discovers the peer tip, waits
 // `--lag-seconds` offline so the chain advances, reconnects, intersects
 // at the now-stale tip, and follows the real roll-forward window,
@@ -117,7 +117,7 @@ impl SessionConfig {
         });
         let out = arg_value(args, "--out")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("docs/clusters/PHASE4-N-B"));
+            .unwrap_or_else(|| PathBuf::from("docs/legacy/clusters/completed/PHASE4-N-B"));
         SessionConfig {
             network,
             magic,

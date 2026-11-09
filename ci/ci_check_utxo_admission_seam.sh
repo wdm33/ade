@@ -9,7 +9,7 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$REPO_ROOT"
 FAILED=0; fail() { echo "FAIL: $1"; FAILED=1; }
-D=docs/clusters/MEM-OPT-UTXO-DISK/S2b-2c0-admission-seam.md
+D=docs/legacy/clusters/completed/MEM-OPT-UTXO-DISK/S2b-2c0-admission-seam.md
 
 test -f "$D" || { echo "FAIL: the admission seam spec is missing"; exit 1; }
 

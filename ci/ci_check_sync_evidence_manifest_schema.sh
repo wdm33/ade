@@ -4,7 +4,7 @@
 # (RO-SYNC-EVIDENCE-01, referencing the CN-OPERATOR-EVIDENCE-01 pattern).
 #
 # When a committed snapshot→tip sync-evidence manifest
-# `docs/clusters/PHASE4-N-Y/CE-Y-SYNC-LIVE_*.toml` exists, verify it conforms
+# `docs/legacy/clusters/completed/PHASE4-N-Y/CE-Y-SYNC-LIVE_*.toml` exists, verify it conforms
 # to the closed schema: every required field is present and the referenced
 # fixture file's sha256 matches `fixture_file_sha256`.
 #
@@ -18,7 +18,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-MANIFESTS=$(find docs/clusters/PHASE4-N-Y -name "CE-Y-SYNC-LIVE_*.toml" 2>/dev/null || true)
+MANIFESTS=$(find docs/legacy/clusters/completed/PHASE4-N-Y -name "CE-Y-SYNC-LIVE_*.toml" 2>/dev/null || true)
 
 if [[ -z "$MANIFESTS" ]]; then
   echo "[ci_check_sync_evidence_manifest_schema] PASS (no manifest committed; vacuous)"

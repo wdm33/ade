@@ -12,8 +12,8 @@
 //! consume signed artifacts (`VrfProof`, `KesSignature`, `OpCert` bytes)
 //! across the RED -> BLUE boundary; the secrets themselves never cross.
 //!
-//! See `docs/clusters/PHASE4-N-C/cluster.md` and
-//! `docs/clusters/PHASE4-N-C/N-C-S1.md` for the full key-boundary contract.
+//! See `docs/legacy/clusters/completed/PHASE4-N-C/cluster.md` and
+//! `docs/legacy/clusters/completed/PHASE4-N-C/N-C-S1.md` for the full key-boundary contract.
 //! Mechanically enforced by `ci/ci_check_private_key_custody.sh`.
 
 pub mod ade_kes_envelope;

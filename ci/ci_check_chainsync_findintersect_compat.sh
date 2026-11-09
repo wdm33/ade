@@ -14,7 +14,7 @@ SRV="$REPO_ROOT/crates/ade_network/src/chain_sync/server.rs"
 REQ_FIX="$REPO_ROOT/corpus/network/n2n/chain_sync/c1privnet_follower_findintersect_recv.cbor"
 REPLY_FIX="$REPO_ROOT/corpus/network/n2n/chain_sync/c1privnet_origin_intersect_recv.cbor"
 ITEST="$REPO_ROOT/crates/ade_network/tests/serve_chainsync_findintersect_cardano_node_fixture.rs"
-REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
+REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }

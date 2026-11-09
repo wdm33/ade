@@ -12,10 +12,10 @@
 #
 # Non-promotability (three independent barriers):
 #   - distinct rehearsal home (docs/evidence/, never the bounty home
-#     docs/clusters/PHASE4-N-F-G-C/);
+#     docs/legacy/clusters/completed/PHASE4-N-F-G-C/);
 #   - explicit is_rehearsal = true + not_bounty_evidence = true markers;
 #   - the bounty BA-02 gate (ci_check_ba02_evidence_manifest_schema.sh) globs
-#     only docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml, so it cannot see a
+#     only docs/legacy/clusters/completed/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml, so it cannot see a
 #     rehearsal manifest; this gate additionally forbids rehearsal markers from
 #     appearing in any .toml under the bounty home (a rehearsal manifest must
 #     never leak there).
@@ -44,7 +44,7 @@ REHEARSAL_GLOBS=("phase4-n-f-g-d-private-rehearsal-*.toml" "phase4-n-f-g-j-genes
 # rehearsal marker must never appear in ANY of them. (PHASE4-N-F-G-D S4 — the
 # pre-S4 gate scanned only the active home behind an `[[ -d ]]` guard, so after
 # G-C's archival the whole check silently skipped.)
-BOUNTY_HOMES=("docs/clusters/PHASE4-N-F-G-C" "docs/clusters/completed/PHASE4-N-F-G-C")
+BOUNTY_HOMES=("docs/legacy/clusters/completed/PHASE4-N-F-G-C" "docs/legacy/clusters/completed/PHASE4-N-F-G-C")
 
 FAIL=0
 

@@ -7,7 +7,7 @@
 //! in `activeStake` are keyed `keyHash-…` / `scriptHash-…`, and `stakePoolsSnapShot` carries per pool
 //! `accountId` (tagged), `cost`, `margin`, `pledge` and `selfDelegatedOwners`, frozen at SNAP.
 //!
-//! The real cases this closes (`docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LV-4-snapshot-fidelity.md`):
+//! The real cases this closes (`docs/legacy/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-LV-4-snapshot-fidelity.md`):
 //! a script credential's reward credited to a key credential with the same bytes (11,802 lovelace at
 //! 304→305), and a retired pool's last blocks left unpaid (42,082,928,795 lovelace at 305→306).
 

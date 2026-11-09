@@ -12,7 +12,7 @@ LIFE="$REPO_ROOT/crates/ade_node/src/node_lifecycle.rs"
 SYNC="$REPO_ROOT/crates/ade_node/src/node_sync.rs"
 VIEW="$REPO_ROOT/crates/ade_ledger/src/consensus_view.rs"
 FORGE_T="$REPO_ROOT/crates/ade_node/tests/forge_succeeds.rs"
-REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
+REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }

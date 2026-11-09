@@ -12,7 +12,7 @@ LEDGERDB="$REPO_ROOT/crates/ade_ledger/src/ledgerdb_state.rs"
 RUPD="$REPO_ROOT/crates/ade_ledger/src/bootstrap_reward_update.rs"
 ACC="$REPO_ROOT/crates/ade_ledger/src/epoch_accumulator.rs"
 FIRSTRUN="$REPO_ROOT/crates/ade_node/src/native_firstrun.rs"
-REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
+REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
 
 FAILED=0
 fail() { echo "FAIL: $1"; FAILED=1; }

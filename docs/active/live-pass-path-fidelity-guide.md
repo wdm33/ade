@@ -204,7 +204,7 @@ the gate — not a loophole to use.
 - Extraction tool: `ci/build_consensus_inputs_bundle.sh` (env-parameterizable; the
   SAME tool for every venue).
 - Import authority: `ade_runtime::consensus_inputs::import_live_consensus_inputs`.
-- Scoping: `docs/planning/operator-pass-live-leg-c1-scoping.md` (note: its §1 gap
+- Scoping: `docs/legacy/planning/operator-pass-live-leg-c1-scoping.md` (note: its §1 gap
   list is for the older `--mode produce` HEAD; the C1 dry-run runs `--mode node`, and
   the consensus-input "gap" it lists is resolved by **extraction**, not a constructor).
 - Runbooks: `docs/evidence/phase4-n-f-g-d-private-rehearsal-README.md`,

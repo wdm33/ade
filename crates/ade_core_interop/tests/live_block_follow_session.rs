@@ -7,7 +7,7 @@
 //     cargo run -p ade_core_interop --bin live_block_follow_session -- \
 //         --connect --network preprod --target <host:port>
 //
-// See docs/clusters/PHASE4-N-H/CE-N-H-6_PROCEDURE.md for the
+// See docs/legacy/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md for the
 // operator procedure. The deterministic CI gate is the offline
 // receive_pipeline_corpus_drive + receive_session_transcript_replay
 // tests in crates/ade_runtime/tests/.

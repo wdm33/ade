@@ -21,7 +21,7 @@
 //!   - producer broadcast: takes `AcceptedBlock`, not `AdmittedBlock`
 //!   - receive admission: takes `AdmittedBlock`, not `AcceptedBlock`
 //!
-//! See `docs/planning/receive-side-bridge-invariants.md` ¬P-6.
+//! See `docs/legacy/planning/receive-side-bridge-invariants.md` ¬P-6.
 
 use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::ledger_view::LedgerView;

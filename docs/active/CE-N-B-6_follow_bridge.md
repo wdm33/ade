@@ -91,7 +91,7 @@ disagreement is a hard failure.
    peer-tip-comparison log. Flags: `--network preprod|mainnet` (default
    preprod), `--max-headers N` (default 1000). The `#[ignore]` test asserts the
    binary builds and starts; the sustained run is the operator evidence pass →
-   `docs/clusters/PHASE4-N-B/CE-N-B-6_<date>.log`.
+   `docs/legacy/clusters/completed/PHASE4-N-B/CE-N-B-6_<date>.log`.
 
 ## Acceptance (this slice)
 

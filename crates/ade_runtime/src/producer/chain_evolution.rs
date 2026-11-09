@@ -22,7 +22,7 @@
 //! obtained solely from `self_accept` (CE-T-7). This file contains no
 //! `AcceptedBlock` struct-literal constructor.
 //!
-//! See `docs/clusters/PHASE4-N-T/cluster.md` §1.5 for the doctrine on
+//! See `docs/legacy/clusters/completed/PHASE4-N-T/cluster.md` §1.5 for the doctrine on
 //! where the post-state and the token come from, and §6 for the hard
 //! prohibitions.
 

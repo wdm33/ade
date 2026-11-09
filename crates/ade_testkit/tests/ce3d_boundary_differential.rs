@@ -691,7 +691,7 @@ ade_reserves={}|card_reserves={}|reserves_residual={}
 // across the mark/set/go snapshot phases. Base UTxO is already EXONERATED (B3c.0);
 // this reads the accumulator's existing `snapshots.*.delegations` (per-credential
 // Hash28 -> (PoolId, Coin)) and the cardano decode as-is. See
-// docs/clusters/CE3D-GO-STAKE-DERIVATION-LOCALIZATION/.
+// docs/legacy/clusters/CE3D-GO-STAKE-DERIVATION-LOCALIZATION/.
 // ===========================================================================
 
 use ade_ledger::epoch::StakeSnapshot;

@@ -10,7 +10,7 @@
 // This discovers the peer tip, waits offline while the chain advances,
 // reconnects, intersects at the now-stale tip, follows the real
 // roll-forward window, and asserts tip agreement at every block,
-// writing docs/clusters/PHASE4-N-B/CE-N-B-6_<date>.log. A captured run
+// writing docs/legacy/clusters/completed/PHASE4-N-B/CE-N-B-6_<date>.log. A captured run
 // against live preprod (8 Conway headers, 0 disagreements) is committed
 // at that path. The deterministic CI gate is the offline replay test
 // (`tests/follow_offline_replay.rs`); CI does not run this network test.
@@ -32,7 +32,7 @@ fn cardano_node_session_sustained_window() {
     // readiness banner) without opening a socket. The live tip-agreement
     // window is captured by running the binary with --connect (see the
     // module comment); a real preprod run is committed under
-    // docs/clusters/PHASE4-N-B/.
+    // docs/legacy/clusters/completed/PHASE4-N-B/.
     let bin = manifest_dir()
         .parent()
         .unwrap()

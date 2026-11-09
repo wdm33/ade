@@ -11,7 +11,7 @@
 //! Smoke variant runs every `cargo test`. Gate variant
 //! (`stress_kill_1000`) is `#[ignore]`'d for manual CE-N-D-1 closure.
 //!
-//! Per `docs/clusters/PHASE4-N-D/S-37.md`.
+//! Per `docs/legacy/clusters/completed/PHASE4-N-D/S-37.md`.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};

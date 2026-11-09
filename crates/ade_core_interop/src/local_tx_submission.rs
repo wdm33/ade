@@ -8,7 +8,7 @@
 // `IngressSource::N2C`.
 //
 // The actual UDS socket loop driving cardano-cli is the operator-action
-// half (see docs/clusters/PHASE4-N-E/CE-N-E-7_PROCEDURE.md). Everything
+// half (see docs/legacy/clusters/completed/PHASE4-N-E/CE-N-E-7_PROCEDURE.md). Everything
 // here is mechanically testable from synthetic LocalTxSubmissionEvents.
 
 use ade_ledger::mempool::{

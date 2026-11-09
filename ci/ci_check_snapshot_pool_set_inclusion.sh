@@ -11,7 +11,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ACC="$REPO_ROOT/crates/ade_ledger/src/epoch_accumulator.rs"
 AGG="$REPO_ROOT/crates/ade_ledger/src/reduced_aggregate.rs"
-REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
+REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
 
 FAILED=0
 fail() { echo "FAIL: $1"; FAILED=1; }

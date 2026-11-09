@@ -49,9 +49,9 @@ tooling, not gates):** `build_consensus_inputs_bundle.sh`,
 `mithril_restore_preprod_peer.sh`.
 
 ## Item 3 — archive closed cluster docs
-`docs/clusters/PHASE4-N-{Q,R-A,R-B,R-C,S-A,S-B,S-C}/` are closed but still under
-`docs/clusters/` (N-T and N-V were archived; these were missed). `git mv` each to
-`docs/clusters/completed/`. (CODEMAP/SEAMS generators sourced their colors from
+`docs/legacy/clusters/PHASE4-N-{Q,R-A,R-B,R-C,S-A,S-B,S-C}/` are closed but still under
+`docs/legacy/clusters/` (N-T and N-V were archived; these were missed). `git mv` each to
+`docs/legacy/clusters/completed/`. (CODEMAP/SEAMS generators sourced their colors from
 banners+registry because these dirs lack the standard `## §5 TCB color map`
 heading N-T/N-V use — optional: not worth back-filling.)
 

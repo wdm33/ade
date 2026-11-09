@@ -5,7 +5,7 @@
 // PHASE4-N-E S4: deterministic GREEN bridge from N-A InventoryEvents
 // into N-E mempool_ingress. Tests synthesize InventoryEvents (no
 // live socket); the live half is operator-action per
-// docs/clusters/PHASE4-N-E/CE-N-E-6_PROCEDURE.md.
+// docs/legacy/clusters/completed/PHASE4-N-E/CE-N-E-6_PROCEDURE.md.
 
 use ade_core_interop::tx_submission::{
     event_to_ingress, ingest_n2n_events, PeerAccumulator,

@@ -11,7 +11,7 @@
 //! Mirrors the PHASE4-N-F-G-D S4 rehearsal-gate test. The BA-02 evidence gate
 //! (`ci/ci_check_ba02_evidence_manifest_schema.sh`) MUST validate a committed
 //! `CE-G-C-LIVE_*.toml` manifest under ANY real G-C home — including the ARCHIVED
-//! home `docs/clusters/completed/PHASE4-N-F-G-C/`. Before the fix it `find`d only
+//! home `docs/legacy/clusters/completed/PHASE4-N-F-G-C/`. Before the fix it `find`d only
 //! the (now-archived, absent) active home behind a swallow-all guard, so a
 //! manifest under the archived home was silently un-validated. This test plants a
 //! malformed manifest under the archived home and asserts the gate fails,
@@ -54,7 +54,7 @@ impl Drop for FixtureGuard {
 #[test]
 fn ba02_gate_validates_archived_home_manifest() {
     let root = repo_root();
-    let archived = root.join("docs/clusters/completed/PHASE4-N-F-G-C");
+    let archived = root.join("docs/legacy/clusters/completed/PHASE4-N-F-G-C");
     assert!(
         archived.is_dir(),
         "precondition: the archived G-C home must exist at {}",

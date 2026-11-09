@@ -9,7 +9,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SYNC="$REPO_ROOT/crates/ade_node/src/node_sync.rs"
 LIFE="$REPO_ROOT/crates/ade_node/src/node_lifecycle.rs"
-REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
+REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }

@@ -25,7 +25,7 @@
 //      drives the chain-sync client + block-fetch client through the
 //      receive orchestrator (S4), and logs one JSONL record per
 //      admitted block with peer tip + Ade tip + agreement verdict.
-//   3. Writes the log to docs/clusters/PHASE4-N-H/CE-N-H-LIVE_<date>.log.
+//   3. Writes the log to docs/legacy/clusters/completed/PHASE4-N-H/CE-N-H-LIVE_<date>.log.
 //
 // Honest scope:
 //   - Mechanically evidenced (CI, this slice): the receive pipeline
@@ -92,7 +92,7 @@ impl SessionConfig {
         let target = arg_value(args, "--target").unwrap_or_else(|| "127.0.0.1:3001".to_string());
         let out = arg_value(args, "--out")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("docs/clusters/PHASE4-N-H/CE-N-H-LIVE.log"));
+            .unwrap_or_else(|| PathBuf::from("docs/legacy/clusters/completed/PHASE4-N-H/CE-N-H-LIVE.log"));
         Self {
             network,
             magic,

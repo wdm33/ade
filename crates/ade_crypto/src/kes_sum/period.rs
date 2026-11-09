@@ -9,7 +9,7 @@
 //! 608-byte expanded Sum6KES skey payloads (PHASE4-N-P S3).
 //!
 //! Implements the function specified in
-//! [`docs/clusters/PHASE4-N-P/period-from-zeroed-sum6-tree-shape-proof.md`](../../../docs/clusters/PHASE4-N-P/period-from-zeroed-sum6-tree-shape-proof.md)
+//! [`docs/legacy/clusters/completed/PHASE4-N-P/period-from-zeroed-sum6-tree-shape-proof.md`](../../../docs/legacy/clusters/completed/PHASE4-N-P/period-from-zeroed-sum6-tree-shape-proof.md)
 //! §3. The pseudocode there is the spec; this is the implementation.
 //!
 //! Walks levels 6 → 5 → … → 1, accumulating `2^(level-1)` at each

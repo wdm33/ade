@@ -19,7 +19,7 @@
 //!   preserves the project's true-tier key-custody boundary
 //!   (DC-CRYPTO-04 / 05 carry; T-KEY-01).
 //!
-//! See `docs/clusters/PHASE4-N-Q/cluster.md` §1 for the primary
+//! See `docs/legacy/clusters/completed/PHASE4-N-Q/cluster.md` §1 for the primary
 //! invariant and §5 for the hard prohibitions:
 //! - **N9.** No `KesSecret` / `VrfSigningKey` / `ColdSigningKey` field
 //!   on `CoordinatorState`. Mechanically grep-asserted by a new CI

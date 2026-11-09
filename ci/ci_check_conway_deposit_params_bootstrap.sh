@@ -18,7 +18,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ASSEMBLY="$REPO_ROOT/crates/ade_runtime/src/mithril_native_assembly.rs"
 DECODER="$REPO_ROOT/crates/ade_ledger/src/ledgerdb_state.rs"
 ACC="$REPO_ROOT/crates/ade_ledger/src/epoch_accumulator.rs"
-REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
+REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }

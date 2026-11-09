@@ -959,7 +959,7 @@ fn handle_block_fetch(
 /// path — cardano-node never runs client roles over a unidirectional inbound
 /// link, so it never pulls from Ade here. Adoption is the localRoot DIAL: the
 /// relay dials Ade's `--listen` serve listener (proven live 2026-06-20). See
-/// docs/clusters/PRODUCER-PARTICIPANT-FOLLOW/ADOPTION-CHANNEL-TRANSPORT-ROLE-DISCOVERY.md.)
+/// docs/legacy/clusters/PRODUCER-PARTICIPANT-FOLLOW/ADOPTION-CHANNEL-TRANSPORT-ROLE-DISCOVERY.md.)
 fn handle_keep_alive(
     payload: &[u8],
     keep_alive_state: &mut KeepAliveState,

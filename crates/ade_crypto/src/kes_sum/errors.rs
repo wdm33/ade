@@ -9,7 +9,7 @@
 //! (PHASE4-N-P S3).
 //!
 //! Per the S1 proof obligation
-//! ([`period-from-zeroed-sum6-tree-shape-proof.md`](../../../docs/clusters/PHASE4-N-P/period-from-zeroed-sum6-tree-shape-proof.md)
+//! ([`period-from-zeroed-sum6-tree-shape-proof.md`](../../../docs/legacy/clusters/completed/PHASE4-N-P/period-from-zeroed-sum6-tree-shape-proof.md)
 //! §5), every variant carries only non-secret metadata: `level:
 //! u32` and `actual: usize`. No raw key bytes; no hex; no decimal
 //! seed runs.

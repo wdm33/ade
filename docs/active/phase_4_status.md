@@ -4,7 +4,7 @@
 > and contributors. Read this before picking up Phase 4 work.
 >
 > **Authority**: planning doc, not a claim doc. Authoritative closure
-> statements live in `docs/ade-invariant-registry.toml`. This file
+> statements live in `docs/legacy/idd-invariant-registry.toml`. This file
 > summarizes their state and the slice-level progress against the
 > cluster plan.
 
@@ -147,6 +147,6 @@ can run in parallel after N-A.
 ## Authority Reminder
 
 This document is descriptive, not prescriptive. Authority for cluster
-N-D's CEs (N-D-1, N-D-2, N-D-3) belongs to `docs/ade-invariant-registry.toml`
+N-D's CEs (N-D-1, N-D-2, N-D-3) belongs to `docs/legacy/idd-invariant-registry.toml`
 once the registry entries are added; for now, evidence pointers in
 this doc are the closure record.

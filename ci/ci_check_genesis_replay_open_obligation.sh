@@ -23,7 +23,7 @@ set -uo pipefail
 #       enforcement-side gates).
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-REGISTRY="$REPO_ROOT/docs/ade-invariant-registry.toml"
+REGISTRY="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }

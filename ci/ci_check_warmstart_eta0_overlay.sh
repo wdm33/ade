@@ -17,7 +17,7 @@ SCI="$REPO_ROOT/crates/ade_ledger/src/seed_consensus_inputs.rs"
 MERGE="$REPO_ROOT/crates/ade_runtime/src/seed_consensus_merge.rs"
 BOOT="$REPO_ROOT/crates/ade_runtime/src/bootstrap.rs"
 CRYPTO_TOML="$REPO_ROOT/crates/ade_crypto/Cargo.toml"
-REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
+REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }

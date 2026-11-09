@@ -10,7 +10,7 @@
 //! Durable regression guard for non-promotability barrier (b): the rehearsal
 //! manifest gate (`ci/ci_check_rehearsal_manifest_schema.sh`) MUST catch a
 //! rehearsal marker committed under ANY real G-C bounty-evidence home — including
-//! the ARCHIVED home `docs/clusters/completed/PHASE4-N-F-G-C/`. Before S4 the gate
+//! the ARCHIVED home `docs/legacy/clusters/completed/PHASE4-N-F-G-C/`. Before S4 the gate
 //! scanned only the (non-existent) active home behind an `[[ -d ]]` guard, so the
 //! check silently skipped after G-C's archival; the absence of THIS test is what
 //! let that ship green. The test shells the real gate and asserts it fails on an
@@ -53,7 +53,7 @@ impl Drop for FixtureGuard {
 #[test]
 fn rehearsal_gate_fails_on_archived_home_leak() {
     let root = repo_root();
-    let archived = root.join("docs/clusters/completed/PHASE4-N-F-G-C");
+    let archived = root.join("docs/legacy/clusters/completed/PHASE4-N-F-G-C");
     assert!(
         archived.is_dir(),
         "precondition: the archived G-C home must exist at {}",

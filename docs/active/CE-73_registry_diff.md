@@ -1,7 +1,7 @@
 # CE-73 Registry Diff
 
 > **Status**: draft for review. Proposed change to
-> `docs/ade-invariant-registry.toml`. Apply only on approval.
+> `docs/legacy/idd-invariant-registry.toml`. Apply only on approval.
 
 ## Context
 
@@ -12,7 +12,7 @@ entry in the registry. The registry tracks `T-` / `CN-` / `DC-` rules,
 not CE labels.
 
 The rule that carries CE-73's scope is **`DC-EPOCH-02`** at
-`docs/ade-invariant-registry.toml:662-673`. Its statement is "Hard fork
+`docs/legacy/idd-invariant-registry.toml:662-673`. Its statement is "Hard fork
 transitions triggered at deterministic slot/epoch boundaries; era
 translation functions mandatory; forecast horizon extends to era
 boundary." Its `authority_surface` already mentions the byte-parity
@@ -101,7 +101,7 @@ No change to: `id`, `tier`, `statement`, `source`, `cross_ref`,
 ## Verification
 
 After applying:
-- `grep -A 12 'id = "DC-EPOCH-02"' docs/ade-invariant-registry.toml`
+- `grep -A 12 'id = "DC-EPOCH-02"' docs/legacy/idd-invariant-registry.toml`
   shows the new state.
 - `ci/ci_check_constitution_coverage.sh` passes (no CE-73 specific
   CI; the change is metadata).
@@ -124,7 +124,7 @@ After applying:
 
 ## Apply checklist
 
-- [ ] Edit `docs/ade-invariant-registry.toml:662-673` per the diff above.
+- [ ] Edit `docs/legacy/idd-invariant-registry.toml:662-673` per the diff above.
 - [ ] Update `docs/active/CE-73_reclassification.md` "Registry update"
   section to reference this diff doc instead of the fictional
   `[exit_criteria.*]` schema.

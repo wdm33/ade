@@ -4,7 +4,7 @@
 # (RO-LIVE-06 BA-02 evidence; mirrors ci_check_operator_evidence_manifest_schema.sh).
 #
 # When a committed BA-02 evidence manifest
-# `docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml` is present, verify it
+# `docs/legacy/clusters/completed/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml` is present, verify it
 # conforms to the closed schema (every required field present) AND that
 # `peer_log_file_sha256` matches the actual SHA-256 of the committed
 # operator-captured peer-log file it binds.
@@ -33,7 +33,7 @@ cd "$REPO_ROOT"
 # a scan error on an EXISTING home => fail closed (NOT swallowed). Same archived-home
 # fix as PHASE4-N-F-G-D S4 applied to the rehearsal gate; the pre-fix gate scanned
 # only the (now-archived, absent) active home behind a swallow-all guard.
-BOUNTY_HOMES=("docs/clusters/PHASE4-N-F-G-C" "docs/clusters/completed/PHASE4-N-F-G-C")
+BOUNTY_HOMES=("docs/legacy/clusters/completed/PHASE4-N-F-G-C" "docs/legacy/clusters/completed/PHASE4-N-F-G-C")
 EXISTING_HOMES=()
 for h in "${BOUNTY_HOMES[@]}"; do
   [[ -d "$h" ]] && EXISTING_HOMES+=("$h")

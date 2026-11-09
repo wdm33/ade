@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Registry coherence guard. Three load-bearing, Ade-correct invariants over
-# docs/ade-invariant-registry.toml:
+# docs/legacy/idd-invariant-registry.toml:
 #   1. Rule IDs are unique (the registry is append-only; IDs are never reused).
 #   2. Every `cross_ref` resolves to a real rule ID. cross_ref is a DIRECTED
 #      relation (depends-on / refines / see-also); reciprocity is NOT required
@@ -16,7 +16,7 @@ set -euo pipefail
 # ci_check_constitution_coverage.sh (a ziranity-v3 import that validated a
 # foreign schema — CL-* clusters, tier-by-prefix, bidirectional cross_refs,
 # $HOME planning-doc coverage — and never matched Ade's registry; see
-# docs/planning/registry-cross-ref-bidirectional-repair.md).
+# docs/legacy/planning/registry-cross-ref-bidirectional-repair.md).
 #
 # Scope notes (deliberately narrow, to stay green + false-positive-free):
 #   - code_locus: only crates/**.rs and ci/**.sh tokens (existence unambiguous).
@@ -31,7 +31,7 @@ cd "$REPO_ROOT"
 python3 - <<'PYEOF'
 import tomllib, re, os, sys
 
-REG = "docs/ade-invariant-registry.toml"
+REG = "docs/legacy/idd-invariant-registry.toml"
 try:
     rules = tomllib.load(open(REG, "rb"))["rules"]
 except Exception as e:

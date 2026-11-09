@@ -31,7 +31,7 @@
 //     bridge captures them and runs the cross-check; this is recorded
 //     as `[bridge] tx_bytes=<N>` in the log.
 //
-// Output: a transcript at `docs/clusters/PHASE4-N-E/CE-N-E-6_<date>.log`
+// Output: a transcript at `docs/legacy/clusters/completed/PHASE4-N-E/CE-N-E-6_<date>.log`
 // matching the schema documented in `CE-N-E-6_PROCEDURE.md`. The
 // sustained run is fully automated — pass `--connect` to perform the
 // live pass; the default hermetic main prints readiness and exits so
@@ -118,7 +118,7 @@ impl SessionConfig {
         });
         let out = arg_value(args, "--out")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("docs/clusters/PHASE4-N-E"));
+            .unwrap_or_else(|| PathBuf::from("docs/legacy/clusters/completed/PHASE4-N-E"));
         SessionConfig {
             network,
             magic,

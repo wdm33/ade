@@ -12,7 +12,7 @@
 //! or slot. The trait surface is Tier 1 — callers depend on it. The
 //! choice of backing store and on-disk layout is Tier 5 — deliberate
 //! divergence from cardano-node's three-DB pattern. See
-//! `docs/clusters/PHASE4-N-D/S-33.md`.
+//! `docs/legacy/clusters/completed/PHASE4-N-D/S-33.md`.
 //!
 //! The sole implementation in this slice is [`InMemoryChainDb`], used
 //! to validate the trait contract. A persistent backing store is the

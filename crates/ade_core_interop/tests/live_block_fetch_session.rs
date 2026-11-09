@@ -11,7 +11,7 @@
 // This drives the n2n_server reducers against a real cardano-node
 // peer issuing RequestRange over an Ade-forged block (or, pre-stake
 // provisioning, over a synthetic pre-captured AcceptedBlock); see
-// docs/clusters/PHASE4-N-G/CE-N-G-8_PROCEDURE.md for the operator
+// docs/legacy/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md for the operator
 // procedure. The deterministic CI gate is the offline
 // cross_impl_server_pipeline + server_paths_transcript_replay tests
 // in crates/ade_runtime/tests/.

@@ -68,7 +68,7 @@ The only change is the cluster designation in the slice headers: "Phase 2B: Ledg
 | Epoch boundary logic | `crates/ade_ledger/src/{epoch,governance,delegation,state}.rs` | Shelley–Conway epoch transitions, Conway governance ratification/enactment |
 | HFC era translations | `crates/ade_ledger/src/hfc.rs` | All 6 ledger-side era translation functions |
 | Expanded corpus | `corpus/golden/` | 1,500+ contiguous blocks for Alonzo, Babbage, Conway with oracle state hashes |
-| Registry updates | `docs/ade-invariant-registry.toml` | Final CE-78 updates, CE-79 gate statement |
+| Registry updates | `docs/legacy/idd-invariant-registry.toml` | Final CE-78 updates, CE-79 gate statement |
 | Phase 2 completion evidence | CI artifacts | All CE-58 through CE-82 passing |
 
 ---

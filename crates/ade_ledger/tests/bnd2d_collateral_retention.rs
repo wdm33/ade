@@ -1,6 +1,6 @@
 //! BND-2d (INV-BND-2d) — the block NAMES the collateral bindings the UTxO authority must retain.
 //!
-//! The positioning contract (`docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-BND-2d-...md`):
+//! The positioning contract (`docs/legacy/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-BND-2d-...md`):
 //! a collateral value is authoritative in `[create(x), B)` where `B` is the block that spends it,
 //! so the LAST instant the authority can answer is the moment it applies `B`. This half is the BLUE
 //! derivation that tells the authority WHICH bindings to keep at that instant. It introduces no

@@ -16,9 +16,9 @@
 //!
 //! S2 ships the algorithm only — no expanded-skey serde (that is S3,
 //! gated by the period-from-zeroed-tree-shape proof obligation at
-//! `docs/clusters/PHASE4-N-P/period-from-zeroed-sum6-tree-shape-proof.md`).
+//! `docs/legacy/clusters/completed/PHASE4-N-P/period-from-zeroed-sum6-tree-shape-proof.md`).
 //!
-//! See `docs/clusters/PHASE4-N-P/cluster.md` §1 for the primary
+//! See `docs/legacy/clusters/completed/PHASE4-N-P/cluster.md` §1 for the primary
 //! invariant and §5 for the N9 hard prohibition (no upstream-shim
 //! compatibility hack via unsafe / transmute / vendored pub(crate)
 //! access). cardano-crypto MUST NOT be imported in `kes_sum` outside

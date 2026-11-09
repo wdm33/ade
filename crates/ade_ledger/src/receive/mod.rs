@@ -15,7 +15,7 @@
 //! Distinct from `ade_ledger::producer::AcceptedBlock` (broadcast-
 //! eligibility token for locally forged blocks) — the two tokens are
 //! deliberately separate so cross-use is mechanically impossible
-//! (see `docs/planning/receive-side-bridge-invariants.md` §1 ¬P-6).
+//! (see `docs/legacy/planning/receive-side-bridge-invariants.md` §1 ¬P-6).
 //!
 //! Scope: Path A — admit-only. `RollBackward` returns
 //! [`ReceiveError::RollbackOutOfScope`]; full rollback authority is a

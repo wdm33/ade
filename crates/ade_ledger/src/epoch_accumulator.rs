@@ -986,7 +986,7 @@ pub struct BoundaryBaseStake {
 /// has been applied — the ONLY reward view a boundary mark may read. Constructed inside the boundary transition
 /// after `applyRUpd`, so [`build_boundary_mark_snapshot`] cannot be handed a pre-RUPD reward map. The pre-RUPD
 /// mark was the CE-3d go-stake residual (−343,260,172,883); the type makes that wrong-phase input
-/// unrepresentable (see docs/clusters/CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION/S0-DIAGNOSIS.md).
+/// unrepresentable (see docs/legacy/clusters/CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION/S0-DIAGNOSIS.md).
 pub struct PostRupdRewards<'a> {
     delegation: &'a crate::delegation::DelegationState,
 }

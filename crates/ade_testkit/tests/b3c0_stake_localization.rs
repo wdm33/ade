@@ -2,7 +2,7 @@
 //!
 //! CONCLUSION (proven clean): the base-UTxO pipeline (`reduce_txout` -> the durable `ReducedUtxoCheckpoint` ->
 //! `sum_base_credential_stake`) is BYTE-EXACT correct. The −343,260,172,883 CE-3d go-stake residual is REAL (it
-//! reproduces cleanly — see `docs/clusters/B3C-STAKE-RESIDUAL/B3c.0-adjudication-result.md`) but is NOT a
+//! reproduces cleanly — see `docs/legacy/clusters/B3C-STAKE-RESIDUAL/B3c.0-adjudication-result.md`) but is NOT a
 //! base-UTxO undercount — it is a go-stake DERIVATION discrepancy (a later evidence slice).
 //!
 //! EVIDENCE-HARNESS RULE (learned the hard way): `ReducedUtxoCheckpoint::open` is redb `Database::create`

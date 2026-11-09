@@ -28,7 +28,7 @@
 //     to send `ReplyTxs` opportunistically, the bridge captures them
 //     and the log records `[bridge] tx_bytes=<N>`.
 //
-// The output is committed at `docs/clusters/PHASE4-N-E/CE-N-E-6_<date>.log`.
+// The output is committed at `docs/legacy/clusters/completed/PHASE4-N-E/CE-N-E-6_<date>.log`.
 // The deterministic CI gate for this cluster is the synthetic-event
 // adapter test surface in `tests/tx_submission_ingress.rs` +
 // `tests/local_tx_submission_ingress.rs`; CI does not run this
@@ -51,7 +51,7 @@ fn cardano_node_tx_submission2_sustained_window() {
     // readiness banner) without opening a socket. The live tx-submission2
     // window is captured by running the binary with --connect (see the
     // module comment); a real preprod run is committed under
-    // docs/clusters/PHASE4-N-E/.
+    // docs/legacy/clusters/completed/PHASE4-N-E/.
     let bin = manifest_dir()
         .parent()
         .unwrap()

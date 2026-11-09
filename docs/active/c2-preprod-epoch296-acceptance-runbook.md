@@ -166,7 +166,7 @@ Per `phase4-n-f-g-c-operator-pass-README.md` §1–§2 (the authoritative flag s
 5. Commit the peer log + `correlate`-produced `ade-evidence.json` + the
    `CE-…-LIVE_<run>.toml` binding (sha256 of the peer log; capture command; filter; the
    decoded `issuerHash`/`blockNo`/`slot`/`hash`; `live_feed_exercised = true`) under
-   `docs/clusters/PHASE4-N-F-G-C/`; the schema gate
+   `docs/legacy/clusters/completed/PHASE4-N-F-G-C/`; the schema gate
    `ci_check_ba02_evidence_manifest_schema.sh` then verifies it. A registry review at the
    next close records RO-LIVE-01/06.
 

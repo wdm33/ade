@@ -26,7 +26,7 @@
 //      side; the bytes that earlier passed self_accept), drives the
 //      n2n_server reducers against a synthetic peer protocol, logs
 //      one JSON-Lines record per RequestRange answered.
-//   3. Writes the log to `docs/clusters/PHASE4-N-G/CE-N-G-LIVE_<date>.log`.
+//   3. Writes the log to `docs/legacy/clusters/completed/PHASE4-N-G/CE-N-G-LIVE_<date>.log`.
 //
 // Honest scope:
 //
@@ -97,7 +97,7 @@ impl SessionConfig {
         let target = arg_value(args, "--target").unwrap_or_else(|| "127.0.0.1:3001".to_string());
         let out = arg_value(args, "--out")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("docs/clusters/PHASE4-N-G/CE-N-G-LIVE.log"));
+            .unwrap_or_else(|| PathBuf::from("docs/legacy/clusters/completed/PHASE4-N-G/CE-N-G-LIVE.log"));
         Self {
             network,
             magic,

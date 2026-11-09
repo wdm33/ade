@@ -3,7 +3,7 @@
 > **⚠ ANSWERED AND CLOSED 2026-08-16 — kept as the record of the question, not as active work.**
 >
 > The contract this doc opens is answered in
-> `docs/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-BND-2d-collateral-positioning-contract.md` §1:
+> `docs/legacy/clusters/PREPROD-LIVE-2-FORGE-READINESS/SLICE-BND-2d-collateral-positioning-contract.md` §1:
 > `TxIn → Coin` is immutable over the chain, so position determines only WHETHER an authority can
 > answer, never WHAT the answer is; the co-advancer owns positioning. Of the three candidates below,
 > **resolve-at-first-sight won in its RETENTION form** — lockstep lost on the cross-database

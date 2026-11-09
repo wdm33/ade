@@ -34,7 +34,7 @@ cd "$REPO_ROOT"
 PROJ="crates/ade_runtime/src/network/served_chain_projection.rs"
 DISP="crates/ade_runtime/src/network/serve_dispatch.rs"
 LIFE="crates/ade_node/src/node_lifecycle.rs"
-REG="docs/ade-invariant-registry.toml"
+REG="docs/legacy/idd-invariant-registry.toml"
 OLD_GATE="ci/ci_check_served_chain_stability.sh"
 
 FAILED=0

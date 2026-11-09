@@ -10,7 +10,7 @@ TRANSCRIPT="$REPO_ROOT/crates/ade_runtime/tests/receive_session_transcript_repla
 TWO_PEER="$REPO_ROOT/crates/ade_runtime/tests/receive_two_peer_independence.rs"
 BINARY_SRC="$REPO_ROOT/crates/ade_core_interop/src/bin/live_block_follow_session.rs"
 BINARY_CARGO="$REPO_ROOT/crates/ade_core_interop/Cargo.toml"
-PROCEDURE="$REPO_ROOT/docs/clusters/PHASE4-N-H/CE-N-H-6_PROCEDURE.md"
+PROCEDURE="$REPO_ROOT/docs/legacy/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md"
 
 FAILED=0
 
@@ -27,8 +27,8 @@ print_fail() {
 
 # Procedure doc lives under PHASE4-N-H/ pre-close and migrates to
 # completed/PHASE4-N-H/ on cluster close. Accept either path.
-if [[ ! -f "$PROCEDURE" && ! -f "$REPO_ROOT/docs/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md" ]]; then
-    print_fail "missing CE-N-H-6_PROCEDURE.md in either docs/clusters/PHASE4-N-H/ or docs/clusters/completed/PHASE4-N-H/"
+if [[ ! -f "$PROCEDURE" && ! -f "$REPO_ROOT/docs/legacy/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md" ]]; then
+    print_fail "missing CE-N-H-6_PROCEDURE.md in either docs/legacy/clusters/completed/PHASE4-N-H/ or docs/legacy/clusters/completed/PHASE4-N-H/"
 fi
 
 if [[ -f "$CORPUS_DRIVE" ]]; then

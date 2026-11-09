@@ -11,7 +11,7 @@
 //! canonical and replay-stable.
 //!
 //! The per-era dependency table (the proof artifact) lives in
-//! `docs/clusters/MEM-OPT-UTXO-DISK/S2b-pre-resolve.md`. The live admission path
+//! `docs/legacy/clusters/completed/MEM-OPT-UTXO-DISK/S2b-pre-resolve.md`. The live admission path
 //! decodes to `ConwayTxBody` — the structural superset (spend ∪ collateral ∪
 //! reference); earlier eras are documented subsets. The danger is NOT the obvious
 //! spend inputs but script/context construction, which for Babbage/Conway pulls

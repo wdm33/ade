@@ -80,7 +80,7 @@ state, no mux buffering.
 - `T-ERR-01`: decode failures are structured and comparable (existing)
 
 (CN-WIRE-07, DC-PROTO-03, DC-PROTO-04 are new registry entries
-proposed in this slice; not yet in `docs/ade-invariant-registry.toml`.
+proposed in this slice; not yet in `docs/legacy/idd-invariant-registry.toml`.
 `/invariants` for PHASE4-N-A is responsible for proposing them.)
 
 **Acceptance criteria**:

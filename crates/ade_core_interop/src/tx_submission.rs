@@ -9,7 +9,7 @@
 //
 // This module is purely deterministic: the production RED socket loop that
 // drives a real cardano-node peer is the operator-action half (see
-// docs/clusters/PHASE4-N-E/CE-N-E-6_PROCEDURE.md). Everything here is
+// docs/legacy/clusters/completed/PHASE4-N-E/CE-N-E-6_PROCEDURE.md). Everything here is
 // mechanically testable from synthetic InventoryEvents.
 
 use ade_ledger::mempool::{

@@ -228,7 +228,7 @@ fn cre_s4_3c_enactment_differential_1095() {
 /// states). Emits the six-item report and asserts each provable claim, keeping the THREE status levels strictly
 /// separate: (A) the S4.3c supported exec-units enactment subset CLOSED; (B) the CE-3d governance refund
 /// discrepancy GONE + the remaining B3c residual quantified AND isolated from governance; (C) full Conway
-/// governance still PARTIAL. See docs/clusters/.../S5-differential-proof-and-residual-report.md.
+/// governance still PARTIAL. See docs/legacy/clusters/.../S5-differential-proof-and-residual-report.md.
 #[test]
 #[ignore = "reads local POST-1340 / POST-1341 / epoch-1095+1096 states; the CRE S5 consolidated report"]
 fn cre_s5_differential_report() {

@@ -32,7 +32,7 @@ REPLAY_RS="$REPO_ROOT/crates/ade_testkit/src/producer/replay.rs"
 ADAPTER_RS="$REPO_ROOT/crates/ade_testkit/src/producer/cross_impl_adapter.rs"
 CLI_RS="$REPO_ROOT/crates/ade_node/src/cli.rs"
 RUNBOOK_MD="$REPO_ROOT/docs/active/cn-cons-06-operator-runbook.md"
-REGISTRY="$REPO_ROOT/docs/ade-invariant-registry.toml"
+REGISTRY="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
 
 FAIL=0
 

@@ -70,7 +70,7 @@ grep -qE 'NotPromotionCertified' "$STORE" \
     || fail "the store is missing the 'NotPromotionCertified' rejection (the promotion-certification gate)"
 
 # (5) The rule is declared in the invariant registry.
-REG="docs/ade-invariant-registry.toml"
+REG="docs/legacy/idd-invariant-registry.toml"
 grep -q 'DC-EPOCH-25' "$REG" \
     || fail "DC-EPOCH-25 is not declared in the invariant registry ($REG)"
 

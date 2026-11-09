@@ -249,13 +249,13 @@ captures:
 ```bash
 # Evidence transcript:
 target/debug/ade_node --mode produce ... \
-  --evidence-log docs/clusters/PHASE4-N-Q/CE-N-Q-LIVE_$(date +%Y%m%d).jsonl
+  --evidence-log docs/legacy/clusters/completed/PHASE4-N-Q/CE-N-Q-LIVE_$(date +%Y%m%d).jsonl
 
 # Cardano-node container log (filter for accepted blocks):
 docker logs cardano-node-preprod 2>&1 \
   | grep -E "BlockAccepted|AddedToCurrentChain" \
   | grep "<ade-forged-block-hash>" \
-  > docs/clusters/PHASE4-N-Q/CE-N-Q-LIVE-PEER_$(date +%Y%m%d).log
+  > docs/legacy/clusters/completed/PHASE4-N-Q/CE-N-Q-LIVE-PEER_$(date +%Y%m%d).log
 ```
 
 Pairing rule: a row in the Ade evidence file with
@@ -305,7 +305,7 @@ by the unit test in S2.
 
 ## §7 References
 
-- Cluster: [`docs/clusters/PHASE4-N-Q/cluster.md`](../clusters/PHASE4-N-Q/cluster.md).
+- Cluster: [`docs/legacy/clusters/completed/PHASE4-N-Q/cluster.md`](../clusters/PHASE4-N-Q/cluster.md).
 - Slice docs: [`S1.md`](../clusters/PHASE4-N-Q/S1.md),
   [`S2.md`](../clusters/PHASE4-N-Q/S2.md),
   [`S3.md`](../clusters/PHASE4-N-Q/S3.md),
@@ -313,9 +313,9 @@ by the unit test in S2.
   [`S5.md`](../clusters/PHASE4-N-Q/S5.md),
   [`S6.md`](../clusters/PHASE4-N-Q/S6.md).
 - Operator procedure: [`CE-N-Q-OPERATOR_PROCEDURE.md`](../clusters/PHASE4-N-Q/CE-N-Q-OPERATOR_PROCEDURE.md).
-- Predecessor runbook: `docs/clusters/PHASE4-N-C/CE-N-C-8_PROCEDURE.md`
+- Predecessor runbook: `docs/legacy/clusters/completed/PHASE4-N-C/CE-N-C-8_PROCEDURE.md`
   (the structural cross-impl half of CN-CONS-06).
-- Predecessor runbook: `docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md`
+- Predecessor runbook: `docs/legacy/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md`
   (the server-side block-fetch half of RO-LIVE-01).
 - Doctrine: [[feedback-bounded-smoke-slices]],
   [[feedback-shell-must-not-overstate-semantic-truth]],

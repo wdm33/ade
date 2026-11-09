@@ -12,7 +12,7 @@ FAILED=0; fail() { echo "FAIL: $1"; FAILED=1; }
 OV=crates/ade_ledger/src/utxo_overlay.rs
 FP=crates/ade_ledger/src/fingerprint.rs
 RN=crates/ade_node/src/admission/runner.rs
-DOC=docs/clusters/MEM-OPT-UTXO-DISK/S2b-2cA-static-utxo.md
+DOC=docs/legacy/clusters/completed/MEM-OPT-UTXO-DISK/S2b-2cA-static-utxo.md
 
 # (1) the generation counter: a field, bumped on insert + remove, with an accessor.
 grep -qE 'generation: u64' "$OV" || fail "OverlayUtxo has no generation counter"

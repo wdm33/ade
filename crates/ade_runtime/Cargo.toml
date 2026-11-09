@@ -15,7 +15,7 @@ ade_ledger = { path = "../ade_ledger" }
 # interface bindings.
 ade_network = { path = "../ade_network" }
 # Persistent ChainDb backing store (S-34, Tier 5 choice).
-# See docs/clusters/PHASE4-N-D/S-34.md §O-34.1.
+# See docs/legacy/clusters/completed/PHASE4-N-D/S-34.md §O-34.1.
 # Pure Rust, ACID, single-file. MIT/Apache.
 redb = "2"
 serde = { version = "1", features = ["derive"] }

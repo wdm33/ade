@@ -12,7 +12,7 @@ PUMP="$REPO_ROOT/crates/ade_runtime/src/admission/wire_pump.rs"
 BF="$REPO_ROOT/crates/ade_network/src/codec/block_fetch.rs"
 FORGE_T="$REPO_ROOT/crates/ade_node/tests/forge_succeeds.rs"
 LOOP_T="$REPO_ROOT/crates/ade_node/tests/node_spine_serve_loopback.rs"
-REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
+REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }

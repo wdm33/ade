@@ -68,7 +68,7 @@ if ! grep -qE "pub fn ${SYM}" crates/ade_ledger/src/consensus_view.rs; then
 fi
 
 # (4) The rule is declared in the invariant registry.
-REG="docs/ade-invariant-registry.toml"
+REG="docs/legacy/idd-invariant-registry.toml"
 grep -q 'DC-EPOCH-25' "$REG" \
     || fail "DC-EPOCH-25 is not declared in the invariant registry ($REG)"
 

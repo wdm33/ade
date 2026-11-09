@@ -1,0 +1,3867 @@
+# Legacy IDD ID -> IDSE disposition map (Doctrine §6 rule 8).
+#
+# One record per legacy registry entry, in legacy registry order.
+# disposition: pending | migrated | merged | excluded
+#   migrated  - new_ids lists the IDSE entry (or entries) that carry it
+#   merged    - new_ids lists the IDSE entry another legacy ID migrated into
+#   excluded  - reason holds the approved settlement (not an invariant, obsolete, ...)
+# record: the Define consensus record batch anchor that approved the disposition.
+
+schema_version = 1
+legacy_count = 482
+
+[[legacy]]
+id = "T-DET-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-ENC-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-ENC-02"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-ENC-03"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-CORE-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-CORE-02"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-CORE-03"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-CORE-04"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-ERR-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-ERR-02"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-BUILD-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-BUILD-02"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-REC-01"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-REC-02"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-COLL-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-BOUND-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-BOUND-02"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-INGRESS-01"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-CI-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-KEY-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-CONS-01"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-CONS-02"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-CONSERV-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-NOSPEND-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-EPOCH-01"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-CAUSAL-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-TRANSPORT-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-RESOURCE-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-PLATFORM-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CBOR-01"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CBOR-02"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CRYPTO-01"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CRYPTO-02"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-01"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-02"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-03"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-04"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PLUTUS-01"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PLUTUS-02"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONSENSUS-01"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONSENSUS-02"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PROTO-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PROTO-02"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-STORE-01"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-STORE-02"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-STORE-03"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-INGRESS-01"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-INGRESS-02"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-REF-01"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PROTO-03"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PROTO-04"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PROTO-05"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-01"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-02"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-03"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-STORE-04"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-STORE-05"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-STORE-06"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-QUERY-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NET-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-05"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-06"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-07"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-DIFF-01"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MEM-01"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MEM-02"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MEM-03"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MEM-04"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MEM-05"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MEM-06"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MEM-07"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MEM-08"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MEM-09"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MEM-10"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CORE-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PROTO-06"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-WIRE-01"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-WIRE-02"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-WIRE-03"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-WIRE-04"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-WIRE-05"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-WIRE-06"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-WIRE-07"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-WIRE-08"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-LEDGER-01"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-LEDGER-02"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-LEDGER-03"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-LEDGER-04"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-LEDGER-05"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-LEDGER-06"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-LEDGER-07"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-LEDGER-08"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-LEDGER-09"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-LEDGER-10"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-EPOCH-01"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-EPOCH-02"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-EPOCH-03"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-EPOCH-04"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CONS-01"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CONS-02"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CONS-03"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CONS-04"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CONS-05"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PLUTUS-01"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PLUTUS-02"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PLUTUS-03"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PLUTUS-04"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PROTO-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PROTO-02"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PROTO-03"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PROTO-04"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PROTO-05"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-NET-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-NET-02"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-NET-03"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-NET-04"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-MEM-01"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-MEM-02"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-MEM-03"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-MEM-04"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-STORE-01"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-STORE-02"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-STORE-03"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-STORE-04"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-STORE-05"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-STORE-06"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CRYPTO-01"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CRYPTO-02"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CRYPTO-03"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CRYPTO-04"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-BUILD-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-BUILD-02"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-BUILD-03"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-BUILD-04"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-TEST-01"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-TEST-02"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-TEST-03"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-REL-01"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-REL-02"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-REL-03"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-OPS-01"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-OPS-02"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-OPS-03"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-META-01"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-META-02"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-META-03"
+batch = "B01-foundations"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-TEST-01"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-TEST-02"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-TEST-03"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-REL-01"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-REL-02"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-REL-03"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "OP-NET-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "OP-NET-02"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "OP-NET-03"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "OP-MEM-01"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "OP-MEM-02"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "OP-OPS-01"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "OP-OPS-02"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "OP-OPS-03"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-03"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-04"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-05"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-06"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-07"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-08"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-09"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-10"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-VAL-01"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-VAL-02"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-VAL-03"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-VAL-04"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-VAL-05"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-VAL-06"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-TXV-01"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-TXV-02"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-TXV-03"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-TXV-04"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-TXV-05"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-TXV-06"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-TXV-07"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-08"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-09"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-10"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-11"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CRYPTO-03"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CRYPTO-04"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CRYPTO-05"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CRYPTO-06"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CRYPTO-07"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CRYPTO-08"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CRYPTO-09"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CRYPTO-10"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-11"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-12"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-13"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-14"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-15"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-16"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-12"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-13"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CONS-06"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CONS-07"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "OP-OPS-04"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "OP-OPS-05"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-17"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-18"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PROTO-07"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PROTO-08"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PROTO-06"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-LIVE-01"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CONS-08"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-19"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-20"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PROTO-09"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PROTO-10"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PROTO-11"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PROTO-07"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-LIVE-02"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-21"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-22"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-STORE-07"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-STORE-07"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-STORE-08"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-STORE-09"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-STORE-10"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-STORE-11"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-STORE-12"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-STORE-08"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-NODE-01"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-01"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-02"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-03"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-04"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-SESS-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-SESS-02"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-SESS-03"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-SESS-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-SESS-02"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-SESS-03"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-SESS-04"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-SESS-05"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-SESS-04"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-SESS-05"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-SESS-06"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-LIVE-03"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-LIVE-04"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-LIVE-05"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-SEED-01"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-SEED-01"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-ANCHOR-01"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-ANCHOR-01"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-WAL-01"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-WAL-01"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-WAL-02"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-WAL-03"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-GENESIS-REPLAY-01"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-MITHRIL-IMPORT-01"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-ADMIT-01"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-ADMIT-02"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-ADMIT-01"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-ADMIT-02"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-ADMIT-03"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-ADMIT-04"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-ADMIT-05"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-ADMIT-06"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-ADMIT-07"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-ADMIT-08"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-ADMIT-09"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CONS-IN-01"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-IN-01"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-IN-02"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-VIEW-01"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PUMP-01"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PUMP-01"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PUMP-02"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-ADMIT-10"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-ADMIT-11"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-ADMIT-12"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIDENCE-02"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIDENCE-01"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PROD-01"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PROD-02"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PROD-01"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PROD-02"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-FORGE-01"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-FORGE-02"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-FORGE-01"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-SNAPSHOT-01"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-SNAPSHOT-02"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-SNAPSHOT-01"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-OPCERT-01"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-OPCERT-01"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-GENESIS-01"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-GENESIS-01"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-KES-HEADER-01"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-KES-HEADER-01"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PREIMAGE-FIXTURE-01"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-OUTBOUND-RELAY-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PEER-OUTBOUND-MAP-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-OUTBOUND-FIFO-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-OPERATOR-EVIDENCE-01"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PROD-03"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-PROD-04"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PROD-03"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-FORGE-03"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-FORGE-04"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-CLOSE-01"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-MITHRIL-01"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MITHRIL-01"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-SYNC-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-GENESIS-SRC-01"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-COMPAT-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-SYNC-EVIDENCE-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MITHRIL-02"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CINPUT-01"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CINPUT-02"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CINPUT-01"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CINPUT-02a"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-CINPUT-03"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CINPUT-02b"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "RO-LIVE-06"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-NODE-02"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-SYNC-02"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-REC-03"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-05"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-06"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-NODE-03"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LIVEMEM-01"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-SERVEMEM-01"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-REHEARSAL-FIDELITY-01"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-07"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-NODE-04"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-08"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-WIRE-09"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-09"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-WIRE-10"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-WIRE-11"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-REC-04"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CINPUT-03"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-WIRE-12"
+batch = "B02-codec-wire-crypto"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CINPUT-04"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-10"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-11"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-12"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-WAL-04"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-REC-05"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-23"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-13"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-14"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-15"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-16"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CONS-24"
+batch = "B05-consensus"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-17"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-18"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-19"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-20"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-21"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-22"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-23"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-24"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-25"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-26"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-27"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-28"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-29"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-30"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIDENCE-03"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIDENCE-04"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIDENCE-05"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-31"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-32"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-33"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PUMP-03"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PUMP-04"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PUMP-05"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PUMP-06"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PUMP-07"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PUMP-08"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PUMP-09"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-PUMP-10"
+batch = "B10-pipeline-production"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-REC-06"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-34"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-35"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-36"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-37"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-38"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-39"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-40"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-41"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-42"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-43"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-44"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-WAL-05"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CINPUT-05"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MEM-11"
+batch = "B12-resources-release"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "CN-FOLLOW-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-FOLLOW-FORGE-01"
+batch = "B08-network"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIEW-01"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIEW-02"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIEW-03"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIEW-04"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIEW-04b"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIEW-05"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIEW-06"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIEW-07"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIEW-08"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIEW-09"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIEW-10"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIEW-11"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIEW-13"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EVIEW-12"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-04"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-05"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-07"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-06"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-08"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-09"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-10"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-11"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-12"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-13"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CINPUT-06"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-14"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-15"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-16"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-17"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MITHRIL-04"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MITHRIL-05"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-VALUE-01"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-PARAMS-01"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MITHRIL-03"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MITHRIL-06"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MITHRIL-07"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-MITHRIL-08"
+batch = "B11-mithril-evidence"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-18"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-19"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-20"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-21"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-22"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-GOV-01"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-CINPUT-07"
+batch = "B06-consensus-inputs"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-23"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-24"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-25"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-26"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-27"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-28"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-29"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-30"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-31"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-32"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-33"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-34"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-35"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-36"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-37"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-38"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-45"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-46"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-47"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-39"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-40"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-41"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-42"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-43"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-44"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-45"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-46"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-EPOCH-47"
+batch = "B04-epoch"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-PHASE2-01"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-PHASE2-02"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-PHASE2-03"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-PHASE2-04"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-SCRIPT-01"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-SCRIPT-02"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-LEDGER-SCRIPT-03"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-TXV-08"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-TXV-09"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-VAL-07"
+batch = "B03-ledger"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "T-REC-07"
+batch = "B07-durability-recovery"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""
+
+[[legacy]]
+id = "DC-NODE-48"
+batch = "B09-node"
+disposition = "pending"
+new_ids = []
+reason = ""
+record = ""

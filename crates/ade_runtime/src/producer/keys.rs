@@ -68,7 +68,7 @@ pub fn load_vrf_signing_key_skey(path: &Path) -> Result<VrfSigningKey, KeyLoadEr
 /// inconsistent vk hash, leaf-all-zero — fail-closes via the closed
 /// `KeyLoadError` variants. No fallback parser; the deserializer is
 /// the structural validator (see
-/// `docs/clusters/PHASE4-N-P/period-from-zeroed-sum6-tree-shape-proof.md`
+/// `docs/legacy/clusters/completed/PHASE4-N-P/period-from-zeroed-sum6-tree-shape-proof.md`
 /// §5 for the closed `KesParseError` surface).
 pub fn load_kes_signing_key_skey(path: &Path) -> Result<KesSecret, KeyLoadError> {
     use ade_crypto::kes_sum::{KesAlgorithm as AdeKesAlgorithm, Sum6Kes};

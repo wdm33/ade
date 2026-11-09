@@ -9,7 +9,7 @@
 // arriving headers into `process_stream_input`, assert peer tip
 // equality for a sustained window) is the manual operator pass per
 // the slice doc; the manual run captures evidence at
-// `docs/clusters/PHASE4-N-B/CE-N-B-6_<date>.log`.
+// `docs/legacy/clusters/completed/PHASE4-N-B/CE-N-B-6_<date>.log`.
 
 #![deny(unsafe_code)]
 

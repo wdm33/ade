@@ -3,7 +3,7 @@
 # ci_check_operator_evidence_manifest_schema.sh — PHASE4-N-S-C gate.
 #
 # When a paired-evidence manifest file
-# `docs/clusters/PHASE4-N-S-C/CE-N-S-LIVE_*.toml` is
+# `docs/legacy/clusters/completed/PHASE4-N-S-C/CE-N-S-LIVE_*.toml` is
 # committed, verify it conforms to the closed schema:
 # every required field is present and `peer_log_file_sha256`
 # matches the actual SHA-256 of the committed peer.log
@@ -18,7 +18,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-MANIFESTS=$(find docs/clusters/PHASE4-N-S-C -name "CE-N-S-LIVE_*.toml" 2>/dev/null || true)
+MANIFESTS=$(find docs/legacy/clusters/completed/PHASE4-N-S-C -name "CE-N-S-LIVE_*.toml" 2>/dev/null || true)
 
 if [[ -z "$MANIFESTS" ]]; then
   echo "[ci_check_operator_evidence_manifest_schema] PASS (no manifest committed; vacuous)"

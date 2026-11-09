@@ -9,9 +9,9 @@
 //!
 //! `PHASE4-N-F-C-LIFECYCLE-OWNER`: this module is THE single production
 //! recovered-state lifecycle owner for PHASE4-N-F-C — see
-//! `docs/clusters/PHASE4-N-F-C/cluster.md`, the L1 slice doc
-//! `docs/clusters/PHASE4-N-F-C/C1-production-lifecycle-owner.md`, and the
-//! L2 slice doc `docs/clusters/PHASE4-N-F-C/L2-mithril-first-run-bootstrap.md`.
+//! `docs/legacy/clusters/completed/PHASE4-N-F-C/cluster.md`, the L1 slice doc
+//! `docs/legacy/clusters/completed/PHASE4-N-F-C/C1-production-lifecycle-owner.md`, and the
+//! L2 slice doc `docs/legacy/clusters/completed/PHASE4-N-F-C/L2-mithril-first-run-bootstrap.md`.
 //!
 //! Shape:
 //!   1. open a persistent `ChainDb` + `FileWalStore`,
@@ -11903,7 +11903,7 @@ mod ce4a_continuous_self_sufficiency {
     // The byte-exact strengthening of CE-4A.1: the SAME production composition, read-only extraction
     // added. It reads the CE-4A.1 production-loop accumulator (NOT the co_advance differential
     // harness) and promotes CE-3d's observational MATCH prints for rewards/pots/go into fail-loud
-    // asserts. Spec: docs/clusters/LIVE-LEDGER-EPOCH-TRANSITION/SLICE-CE-4A-2-BOUNDARY-BYTE-EXACT.md.
+    // asserts. Spec: docs/legacy/clusters/LIVE-LEDGER-EPOCH-TRANSITION/SLICE-CE-4A-2-BOUNDARY-BYTE-EXACT.md.
     // ============================================================================================
 
     /// First BLOCK of epoch 1341 (boundary 1340 -> 1341) — the POST-1341 reference + capture point
@@ -12574,7 +12574,7 @@ mod ce4a_continuous_self_sufficiency {
     // is the RESTART-ONLY proof: an uninterrupted production run vs. a GENUINE warm restart from
     // durable state after promotion, compared on the self-derived authority fingerprint. It handles
     // EpochViewPostPromotionMismatch as a FIRST-CLASS finding (hard stop, exact evidence, no patch).
-    // Spec: docs/clusters/LIVE-LEDGER-EPOCH-TRANSITION/SLICE-CE-4A-3-RESTART-ROLLBACK.md.
+    // Spec: docs/legacy/clusters/LIVE-LEDGER-EPOCH-TRANSITION/SLICE-CE-4A-3-RESTART-ROLLBACK.md.
     // ============================================================================================
 
     /// Reassemble the production authority inputs from a (warm-start-)recovered `BootstrapState` — the

@@ -22,7 +22,7 @@ MAT="$REPO_ROOT/crates/ade_ledger/src/rollback/materialize.rs"
 NODE="$REPO_ROOT/crates/ade_node/src/node_lifecycle.rs"
 BOOT="$REPO_ROOT/crates/ade_runtime/src/bootstrap.rs"
 FWD="$REPO_ROOT/crates/ade_runtime/src/forward_sync/reducer.rs"
-REG="$REPO_ROOT/docs/ade-invariant-registry.toml"
+REG="$REPO_ROOT/docs/legacy/idd-invariant-registry.toml"
 
 FAILED=0
 print_fail() { echo "FAIL: $1"; FAILED=1; }

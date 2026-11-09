@@ -16,7 +16,7 @@
 //! network, and immediately destroyed inside the `/tmp` directory
 //! of the throwaway docker session that generated them.
 //!
-//! **Per OQ4(a) / N6** ([`docs/planning/phase4-n-p-invariants.md`](../../../docs/planning/phase4-n-p-invariants.md)):
+//! **Per OQ4(a) / N6** ([`docs/legacy/planning/phase4-n-p-invariants.md`](../../../docs/legacy/planning/phase4-n-p-invariants.md)):
 //! these fixtures are committed only as hex-literal `&[u8; N]`
 //! constants — never as `.skey` envelope files. Each is preceded
 //! by the mandatory throwaway-fixture comment. The corpus is

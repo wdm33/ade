@@ -10,7 +10,7 @@
 //! It is GREEN/test authority: it MUTATES nothing and adds NO runtime dependency. It exercises the REAL
 //! `governance::check_ratification` path via the observe-only `proposal_ratification_observation` (it does
 //! not restate ratification logic), and produces a canonical, GovActionId-sorted report that is RETAINED
-//! as committed evidence (the golden at `docs/clusters/.../cpde-s4-0-ratification-census.txt`) — bound to
+//! as committed evidence (the golden at `docs/legacy/clusters/.../cpde-s4-0-ratification-census.txt`) — bound to
 //! the exact state by its GovActionIds. Regenerate with `REGEN_CPDE_S4_0_GOLDEN=1`.
 //!
 //! Target: the 1340 -> 1341 boundary. The ratification check runs as of the ENDING epoch (1340); a
@@ -33,7 +33,7 @@ const ENDING_EPOCH: u64 = 1340;
 /// The certified POST-1340 ledger-state point slot.
 const POST_1340_SLOT: u64 = 115_776_011;
 /// The retained evidence golden (committed; bound to the exact state by its GovActionIds).
-const GOLDEN_REL: &str = "docs/clusters/CONWAY-PROPOSAL-DEPOSIT-EXPIRY/cpde-s4-0-ratification-census.txt";
+const GOLDEN_REL: &str = "docs/legacy/clusters/CONWAY-PROPOSAL-DEPOSIT-EXPIRY/cpde-s4-0-ratification-census.txt";
 
 fn action_kind(a: &GovAction) -> &'static str {
     match a {
