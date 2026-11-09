@@ -4,7 +4,7 @@ set -euo pipefail
 # Enforce DC-CORE-01: BLUE authoritative code is sync-only.
 #
 # Forbidden in any .rs file under a BLUE path declared in
-# .idd-config.json `core_paths`:
+# .idse-config.json `core_paths`:
 #   - `async fn`
 #   - `.await`
 #   - `tokio` (any reference)
@@ -18,15 +18,15 @@ set -euo pipefail
 # legitimate string contains these tokens, a follow-up syn-based
 # scanner will replace this grep version.
 #
-# Reads BLUE paths from .idd-config.json `core_paths`. Each entry is
+# Reads BLUE paths from .idse-config.json `core_paths`. Each entry is
 # resolved relative to repo root; paths ending in `/` are scanned as
 # directories, file paths are scanned directly.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CONFIG="$REPO_ROOT/.idd-config.json"
+CONFIG="$REPO_ROOT/.idse-config.json"
 
 if [ ! -f "$CONFIG" ]; then
-    echo "FAIL: .idd-config.json not found at $CONFIG"
+    echo "FAIL: .idse-config.json not found at $CONFIG"
     exit 1
 fi
 
