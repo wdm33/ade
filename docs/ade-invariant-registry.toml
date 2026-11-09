@@ -19,7 +19,7 @@
 
 schema_version = 3
 project = "ADE"
-registry_count = 113
+registry_count = 130
 
 [[assumptions]]
 id = "A1"
@@ -58,6 +58,14 @@ id = "A5"
 name = "honest-peer-delivery"
 text = "after a network partition heals, the node stays connected to at least one peer that offers the chain the network is converging on, and messages from that peer are delivered and processed within a bounded time."
 approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
+redefinitions = []
+status = "active"
+
+[[assumptions]]
+id = "A6"
+name = "durable-commit-honoured"
+text = "a write that the storage layer reports as durably committed (a completed fsync or committed database transaction) survives process termination and power loss intact; writes not yet reported committed may be lost."
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
 redefinitions = []
 status = "active"
 
@@ -2998,3 +3006,445 @@ status = "active"
 deprecated_in = ""
 claim_status = "unresolved"
 legacy_ids = ["DC-EVIEW-07"]
+
+[[rules]]
+id = "REC-004"
+name = "CrashRecoveryReplayEquivalent"
+invariant = "All authoritative state is derivable by replay from the bootstrap anchor and the accepted canonical inputs. Two continuous runs from the same recovered or bootstrapped state, with the same ordered block feed, the same clock-tick schedule, the same leadership and key inputs and the same shutdown schedule, produce byte-identical durable outputs (selected tip, ledger fingerprint, write-ahead-log image, checkpoints and halt state), self-forged admissions included. After any process termination or power loss, recovery reaches exactly the last durably committed prefix, and its durable outputs are byte-identical to those of a run that stopped cleanly at that prefix; the ledger fingerprint replay reaches after log entry N equals the fingerprint the log's fold expects after entry N (#10). Recovery starts from the most recent valid snapshot at or below the durable tip and replays forward only the stored blocks after it."
+counterexample = "A node that loses power mid-admission recovers to a ledger fingerprint different from a clean run over its committed blocks, or a forged block admitted before the crash is replayed with different bytes after it."
+family = "REC"
+secondary_families = ["DET", "DUR"]
+scope = "node recovery, write-ahead-log replay"
+assumptions = ["A1", "A6"]
+depends_on = ["DET-001", "REC-002"]
+locality = "transactional"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-REC-01", "T-REC-02", "DC-STORE-01", "CN-STORE-03", "T-REC-03", "T-REC-05", "DC-WAL-03"]
+
+[[rules]]
+id = "DUR-006"
+name = "AppendOnlyWal"
+invariant = "The write-ahead log is append-only by construction: its store interface offers no operation that truncates, rewrites, replaces or deletes an entry, append is its only mutation, and recorded provenance is never altered; any later correction is a new appended entry."
+counterexample = "A recovery routine truncates the log's last entries to match the chain database, erasing the record of blocks that were admitted."
+family = "DUR"
+secondary_families = ["OBS"]
+scope = "write-ahead log"
+assumptions = []
+depends_on = []
+locality = "transactional"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-STORE-02", "CN-STORE-05", "CN-WAL-01", "DC-WAL-01"]
+
+[[rules]]
+id = "DUR-007"
+name = "AtomicCheckpoints"
+invariant = "Every snapshot and checkpoint is either fully written and valid or absent: a crash at any point during a write leaves either the previous complete version or the new complete version, never a partial one that recovery could read."
+counterexample = "A crash midway through writing a ledger snapshot leaves a truncated file under the snapshot's final name, which recovery loads."
+family = "DUR"
+secondary_families = ["REC"]
+scope = "snapshots and checkpoints"
+assumptions = ["A6"]
+depends_on = ["DET-011"]
+locality = "transactional"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-STORE-03", "CN-STORE-04"]
+
+[[rules]]
+id = "SEC-015"
+name = "StorageAfterAnchorVerification"
+invariant = "No authoritative store is initialized or written before the bootstrap source or anchor it derives from has been verified; a verification failure leaves no authoritative store behind."
+counterexample = "The node creates its chain database and writes the snapshot's UTxO into it, then discovers the Mithril certificate does not verify, and a later start resumes from that store."
+family = "SEC"
+secondary_families = ["SAF"]
+scope = "bootstrap, store initialization"
+assumptions = []
+depends_on = []
+locality = "transactional"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-STORE-01"]
+
+[[rules]]
+id = "DUR-008"
+name = "SingleLineageBinding"
+invariant = "Every write-ahead-log entry, checkpoint and recovered artifact is bound to exactly one bootstrap anchor, and recovery refuses any artifact bound to a different anchor or to none."
+counterexample = "An epoch-accumulator file copied from another node's data directory, bootstrapped from a different snapshot, is opened and folded forward alongside this node's chain database."
+family = "DUR"
+secondary_families = ["SAF"]
+scope = "durable artifacts, recovery"
+assumptions = []
+depends_on = ["SEC-015"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-STORE-02"]
+
+[[rules]]
+id = "STR-011"
+name = "SingleRollbackMaterializer"
+invariant = "Ledger and chain-dependent state at a rollback target are materialized by one authority only, from one stored snapshot and the stored blocks after it, applied through the normal block application and epoch-boundary transitions; the chain-dependent state is rebuilt with the same epoch nonce the live admission path used for each epoch replayed (the recovered seed-record nonce for the seed epoch, the evolved nonce after it, VAL-022); no parallel computation of rolled-back state exists, and VRF verification on the rollback path is never weakened."
+counterexample = "The rollback path rebuilds the chain-dependent state with the snapshot's placeholder nonce, so a block that validated during live admission fails VRF verification when replayed after a rollback."
+family = "STR"
+secondary_families = ["DET"]
+scope = "rollback materialization"
+assumptions = ["A1", "A2"]
+depends_on = ["DET-010", "VAL-022", "VAL-036"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-STORE-07", "T-REC-06"]
+
+[[rules]]
+id = "DET-014"
+name = "SnapshotCadenceDeterministic"
+invariant = "Whether a snapshot is taken at a block is a pure function of its slot, its block number, the fixed cadence parameters and the last snapshot taken, so the same chain history produces the same set of snapshot points; the cadence is not an operator setting."
+counterexample = "Snapshots are taken every ten minutes of wall-clock time, so two replays of the same chain store different snapshot sets and different store images."
+family = "DET"
+secondary_families = []
+scope = "snapshot scheduling"
+assumptions = []
+depends_on = ["STR-001"]
+locality = "local"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-STORE-07"]
+
+[[rules]]
+id = "EVO-005"
+name = "StoreSemanticsVersionGate"
+invariant = "Every durable authority artifact (the chain database with its write-ahead log, the epoch accumulator and the reduced checkpoint) carries its own marker of the semantics version of the rules that produced it, checked when it is opened, before any recovery work; a marker that is absent, older or newer than the binary's fails closed with a typed error whose only remedy is re-bootstrapping. There is no stamping tool, override or bypass; a future migration is allowed only as a sealed, evidenced transform from a marked old store to a new one."
+counterexample = "A store written by a binary whose reward rules have since changed is opened by the new binary and folded forward, mixing two sets of semantics in one history."
+family = "EVO"
+secondary_families = ["DUR"]
+scope = "durable artifacts, binary upgrades"
+assumptions = []
+depends_on = ["EVO-001"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-STORE-10", "DC-STORE-11"]
+
+[[rules]]
+id = "PRC-005"
+name = "SemanticsSurfaceLocked"
+invariant = "The code whose behaviour determines what the durable artifacts contain is listed and content-hashed in a lock file, and any change to it fails CI until the author either raises the semantics version or records the change as semantics-neutral; the lock is append-only, every entry carries a rationale, versions never decrease, every non-neutral entry strictly increases the version, and the last entry agrees with the code's version constant."
+counterexample = "A change to the reward calculation merges without a version bump, so stores written before and after it carry the same marker but different meaning."
+family = "PRC"
+secondary_families = ["EVO"]
+scope = "CI, semantics versioning"
+assumptions = []
+depends_on = ["EVO-005"]
+locality = "local"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-STORE-12"]
+
+[[rules]]
+id = "DUR-009"
+name = "WalFingerprintChain"
+invariant = "The write-ahead log's fingerprint chain is checked by folding the log from the bootstrap anchor's initial ledger fingerprint: a block-admission entry, received or self-forged, must record a prior fingerprint equal to the folded value, binds the exact admitted block bytes, and advances the folded value to its post fingerprint; a rollback entry whose target is the bootstrap anchor resets the folded value to the anchor's initial ledger fingerprint, and one whose target is an admission on the currently selected prefix sets it to that admission's post fingerprint, any other target being rejected; provenance and activation entries leave it unchanged. An entry that would break the chain is rejected and halts the node, and verifying the chain at startup is fatal on failure."
+counterexample = "A self-forged block is appended with a prior fingerprint taken from a stale tip, so the chain silently forks inside the log."
+family = "DUR"
+secondary_families = ["REC"]
+scope = "write-ahead log"
+assumptions = ["A6"]
+depends_on = ["DUR-006", "DET-002"]
+locality = "transactional"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-WAL-02", "DC-WAL-04"]
+
+[[rules]]
+id = "DUR-010"
+name = "BlockBytesBeforeWal"
+invariant = "An admitted block's original bytes are durably stored in the chain database before its write-ahead-log entry is appended, on every admission path; a storage failure halts before the append, and at recovery a log entry whose block bytes are missing halts with a typed error, while stored bytes with no log entry are dropped as an orphan."
+counterexample = "The log records a block whose bytes never reached disk, and recovery skips the missing block silently, replaying a shorter chain than the log claims."
+family = "DUR"
+secondary_families = ["REC"]
+scope = "block admission, recovery"
+assumptions = ["A6"]
+depends_on = ["DUR-009", "REC-002"]
+locality = "transactional"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-WAL-05"]
+
+[[rules]]
+id = "VAL-039"
+name = "ClosedGenesisParser"
+invariant = "The Shelley genesis file is read by one closed parser that requires the network magic, system start, slot length, slots per KES period and maximum KES evolutions with exact types, never assumes a default or network, ignores unknown keys only when they change nothing, converts the system start deterministically with no time library, and produces the same genesis anchor from the same file bytes and supplied KES anchor slot every time."
+counterexample = "A genesis file missing its network magic is parsed as preprod, or a numeric field given as the string \"1\" is accepted."
+family = "VAL"
+secondary_families = ["DET"]
+scope = "genesis parsing (shell)"
+assumptions = []
+depends_on = ["VAL-001", "STR-009"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-GENESIS-01", "DC-GENESIS-01"]
+
+[[rules]]
+id = "DUR-011"
+name = "CollateralValueRetained"
+invariant = "When a block's phase-2-invalid transaction spends a collateral input, the UTxO authority durably records that input's coin value in the same durable transaction that applies the block's changes to the live table and advances the checkpoint cursor, so the accumulator can resolve it at any later cursor position; retention covers exactly the bindings destroyed since bootstrap, is cleared with the live table when the store resets, and lies outside the checkpoint commitment; an input that neither the block nor the authority holds resolves to nothing, and the accumulator refuses, naming the input."
+counterexample = "The checkpoint deletes a spent collateral input before the accumulator, one block behind, resolves it, and the accumulator counts its value as zero."
+family = "DUR"
+secondary_families = ["CON"]
+scope = "reduced UTxO checkpoint, collateral resolution"
+assumptions = ["A6"]
+depends_on = ["CON-003", "DET-013"]
+locality = "transactional"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-LEDGER-PHASE2-04"]
+
+[[rules]]
+id = "REC-005"
+name = "RecoveryFindsCommonAncestor"
+invariant = "After any process termination, a node recovering from valid durable state finds a common ancestor with a compatible peer, given that peer's responses to its intersection requests, whenever one exists within its supported intersection history (k blocks below its durable tip, or its oldest stored block if fewer are kept), without discarding authoritative state silently and without changing replay: the ledger state, chain-dependent state and selected chain after rolling back to that ancestor and replaying forward equal those of a run that never adopted the abandoned blocks, compared at the same canonical chain points, the write-ahead log's audit history of the abandoned admissions and the rollback being excluded from the comparison. When no such ancestor exists, it stops following that peer with a structured outcome and leaves its durable state untouched; a peer's reply never instructs it to rewrite the chain back to genesis."
+counterexample = "A restarted node offers the peer only its tip, gets no intersection, and resets its chain to genesis."
+family = "REC"
+secondary_families = ["LIV"]
+scope = "recovery, chain-sync intersection"
+assumptions = ["A1", "A4"]
+depends_on = ["REC-004", "SAF-007"]
+locality = "distributed"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-REC-07"]
+
+[[rules]]
+id = "VAL-040"
+name = "RecoveryRevalidatesStoredBlocks"
+invariant = "After an unclean shutdown, every stored block that recovery applies passes through the same header and body validation authorities as live admission; no stored verdict or validity flag stands in for validation."
+counterexample = "Recovery replays stored blocks by trusting the verdict tag recorded in each log entry, so a block corrupted on disk after admission is applied unvalidated."
+family = "VAL"
+secondary_families = ["REC"]
+scope = "recovery after unclean shutdown"
+assumptions = []
+depends_on = ["VAL-009", "STR-004"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-STORE-06", "CN-STORE-06"]
+
+[[rules]]
+id = "DET-015"
+name = "SnapshotHeaderChecks"
+invariant = "A snapshot's version tag is read and checked before any of its payload is decoded, and its fingerprint is blake2b-256 of the decoded state's canonical encoding, recomputed after decoding and compared with the stored one."
+counterexample = "The decoder parses the ledger payload under the current layout first and only then looks at the version tag, so an older snapshot's bytes are misread before the version mismatch is noticed."
+family = "DET"
+secondary_families = ["VAL"]
+scope = "state snapshots"
+assumptions = []
+depends_on = ["DET-011"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-STORE-09"]
+
+[[rules]]
+id = "VAL-041"
+name = "WarmStartNonceFromSeedRecord"
+invariant = "At warm start, the epoch nonce in the recovered chain-dependent state for the seed epoch is the nonce held in the recovered seed record, applied by the one bootstrap authority before any forging or self-acceptance; a snapshot placeholder nonce or a genesis-derived nonce never reaches VRF verification or forging."
+counterexample = "A warm-started node forges with the zero nonce its ledger snapshot carried, so peers reject every block it produces."
+family = "VAL"
+secondary_families = []
+scope = "warm start, chain-dependent state"
+assumptions = ["A2"]
+depends_on = ["DUR-004", "STR-010", "VAL-022"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-REC-04"]

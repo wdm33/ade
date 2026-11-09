@@ -109,18 +109,18 @@ record = "docs/planning/foundations.define.consensus.md#batch-1"
 [[legacy]]
 id = "T-REC-01"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["REC-004"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-REC-02"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["REC-004"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-COLL-01"
@@ -357,26 +357,26 @@ record = ""
 [[legacy]]
 id = "DC-STORE-01"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["REC-004"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-STORE-02"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DUR-006"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-STORE-03"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DUR-007"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-INGRESS-01"
@@ -453,26 +453,26 @@ record = "docs/planning/epoch.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-STORE-04"
 batch = "B07-durability-recovery"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = ""
-record = ""
+reason = "B07 S6: a description of the Haskell node's storage layout, not a property; k-deep immutability is A4 and SAF-007"
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-STORE-05"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "migrated"
+new_ids = ["REC-004", "DET-010"]
+reason = "B07 S1: recovery procedure drafted into REC-004; equivalence carried by DET-010"
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-STORE-06"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-040"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-QUERY-01"
@@ -973,50 +973,50 @@ record = ""
 [[legacy]]
 id = "CN-STORE-01"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-015"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-STORE-02"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DUR-008"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-STORE-03"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["REC-004"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-STORE-04"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DUR-007"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-STORE-05"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DUR-006"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-STORE-06"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-040"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CRYPTO-01"
@@ -1781,66 +1781,66 @@ record = "docs/planning/consensus.define.consensus.md#batch-1"
 [[legacy]]
 id = "CN-STORE-07"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-011"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-STORE-07"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-014"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-STORE-08"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-011", "DET-007"]
+reason = "B07 S3"
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-STORE-09"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-015"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-STORE-10"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["EVO-005"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-STORE-11"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["EVO-005"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-STORE-12"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-005"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-STORE-08"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-007", "VAL-001"]
+reason = "B07 S4"
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-NODE-01"
@@ -2029,42 +2029,42 @@ record = ""
 [[legacy]]
 id = "CN-WAL-01"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DUR-006"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-WAL-01"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DUR-006"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-WAL-02"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DUR-009"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-WAL-03"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["REC-004"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "RO-GENESIS-REPLAY-01"
 batch = "B07-durability-recovery"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = ""
-record = ""
+reason = "B07 S7: Ade executes only Conway and never replays historical eras (A2)"
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "RO-MITHRIL-IMPORT-01"
@@ -2316,27 +2316,27 @@ record = ""
 
 [[legacy]]
 id = "CN-SNAPSHOT-01"
-batch = "B07-durability-recovery"
+batch = "B08-network"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B07 S8"
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-SNAPSHOT-02"
-batch = "B07-durability-recovery"
+batch = "B08-network"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B07 S8"
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-SNAPSHOT-01"
-batch = "B07-durability-recovery"
+batch = "B08-network"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B07 S8"
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-OPCERT-01"
@@ -2357,18 +2357,18 @@ record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 [[legacy]]
 id = "CN-GENESIS-01"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-039"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-GENESIS-01"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-039"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-KES-HEADER-01"
@@ -2501,10 +2501,10 @@ record = ""
 [[legacy]]
 id = "DC-GENESIS-SRC-01"
 batch = "B07-durability-recovery"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = ""
-record = ""
+reason = "B07 S10: contradicts A2 as approved (entry only at a certified non-Origin Conway tip); a genesis start needs an A2 redefinition decided by the human"
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-COMPAT-01"
@@ -2605,10 +2605,10 @@ record = ""
 [[legacy]]
 id = "T-REC-03"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["REC-004"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-05"
@@ -2717,10 +2717,10 @@ record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 [[legacy]]
 id = "T-REC-04"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-041"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CINPUT-03"
@@ -2773,18 +2773,18 @@ record = ""
 [[legacy]]
 id = "DC-WAL-04"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DUR-009"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-REC-05"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["REC-004"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-23"
@@ -3061,10 +3061,10 @@ record = ""
 [[legacy]]
 id = "T-REC-06"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-011"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-34"
@@ -3157,10 +3157,10 @@ record = ""
 [[legacy]]
 id = "DC-WAL-05"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DUR-010"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CINPUT-05"
@@ -3797,10 +3797,10 @@ record = "docs/planning/ledger.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-LEDGER-PHASE2-04"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DUR-011"]
 reason = "deferred by B03 S14"
-record = "docs/planning/ledger.define.consensus.md#batch-1"
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-SCRIPT-01"
@@ -3853,10 +3853,10 @@ record = "docs/planning/ledger.define.consensus.md#batch-1"
 [[legacy]]
 id = "T-REC-07"
 batch = "B07-durability-recovery"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["REC-005"]
 reason = ""
-record = ""
+record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-48"
