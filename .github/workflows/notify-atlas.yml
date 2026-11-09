@@ -1,6 +1,7 @@
 name: Notify Ade Atlas
 
-# Fires repository_dispatch at wdm33/ade-atlas when the grounding docs / registry
+# Fires repository_dispatch at wdm33/ade-atlas when the grounding docs or the IDSE
+# sources (registry, legacy map, evidence, consensus records, clusters, config)
 # change, so the dashboard rebuilds instantly instead of waiting for its cron.
 #
 # Requires a fine-grained PAT with Contents:write on wdm33/ade-atlas, stored as
@@ -16,6 +17,11 @@ on:
       - "docs/ade-HEAD_DELTAS.md"
       - "docs/ade-TRACEABILITY.md"
       - "docs/ade-invariant-registry.toml"
+      - "docs/legacy/idd-to-idse-map.toml"
+      - "docs/evidence/idse-*.json"
+      - "docs/planning/*.consensus.md"
+      - "docs/clusters/**"
+      - ".idse-config.json"
   workflow_dispatch:
 
 permissions:
