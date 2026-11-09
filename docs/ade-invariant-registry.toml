@@ -19,7 +19,7 @@
 
 schema_version = 3
 project = "ADE"
-registry_count = 101
+registry_count = 113
 
 [[assumptions]]
 id = "A1"
@@ -2686,3 +2686,315 @@ status = "active"
 deprecated_in = ""
 claim_status = "unresolved"
 legacy_ids = ["CN-CONS-02"]
+
+[[rules]]
+id = "VAL-034"
+name = "ClosedConsensusInputImport"
+invariant = "An externally supplied consensus-input bundle enters Ade through one importer, which produces a closed canonical record holding every required field (network magic, genesis hash, era, epoch and its slot window, active-slot coefficient, epoch nonce, the pool distribution with each pool's VRF key hash, the protocol-parameter hash and the bundle's source provenance) and a fingerprint that is blake2b-256 over the record's canonical CBOR encoding, fields in their declared order; a missing or malformed field is a typed import error, never given a default, and the raw bundle never reaches the core."
+counterexample = "A bundle with no epoch nonce imports with a zero nonce, or two imports of the same bundle produce different fingerprints."
+family = "VAL"
+secondary_families = ["DET"]
+scope = "consensus-input import (shell), canonical record"
+assumptions = ["A2"]
+depends_on = ["STR-002", "VAL-001"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus-inputs.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-CONS-IN-01", "DC-CONS-IN-01", "DC-CONS-IN-02"]
+
+[[rules]]
+id = "VAL-035"
+name = "ImportedViewEpochGuard"
+invariant = "A ledger view built from imported consensus inputs answers only for its own epoch: a query for any other epoch returns no answer, and a block whose slot lies outside the record's epoch window halts admission instead of being judged with that view."
+counterexample = "A header in the next epoch is validated against the imported view of the previous epoch because the view answered every query with its one stake distribution."
+family = "VAL"
+secondary_families = ["SAF"]
+scope = "imported ledger view, admission"
+assumptions = []
+depends_on = ["VAL-034", "VAL-033"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus-inputs.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-VIEW-01"]
+
+[[rules]]
+id = "SEC-014"
+name = "ConsensusInputsFromVerifiedBootstrapOnly"
+invariant = "The persisted seed-epoch consensus-input record is written only by the verified-bootstrap paths (genesis, Mithril and the admission pre-seed), through one persistence authority; the forge and feed paths never build or write it, never construct a value of its type, and never take a consensus view from an operator-supplied bundle. Leader checks in every epoch read only the sealed leadership object for exactly that epoch (VAL-024); the bootstrap epoch's object is sealed from the certified seed record's pool distribution, the next epoch's from the certified snapshot's imported mark, and every later epoch's from canonical chain state at a boundary the node crossed (VAL-023)."
+counterexample = "The forge path reads an operator's --consensus-inputs-path bundle, converts it into the seed-record type, and forges with it, so a stake distribution no verified bootstrap produced decides leadership."
+family = "SEC"
+secondary_families = ["STR"]
+scope = "seed-epoch record writers; forge and feed consensus views"
+assumptions = []
+depends_on = ["VAL-034", "VAL-023", "VAL-024"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus-inputs.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-CINPUT-02", "CN-CINPUT-03"]
+
+[[rules]]
+id = "DUR-004"
+name = "SeedInputsRecoveryVerified"
+invariant = "Importing the seed-epoch consensus inputs is recorded as a write-ahead-log fact appended after the record is stored, and the append is the commit point; warm start restores the record only if exactly one such fact exists for the store's anchor and the stored bytes hash to the recorded hash, decode, bind to that anchor and epoch, and re-encode byte-identically; anything else halts startup with a typed error, with no fallback to a bundle."
+counterexample = "After a crash between storing the record and appending its fact, warm start restores the record anyway; or a record whose hash differs from the recorded one is used because it decodes."
+family = "DUR"
+secondary_families = ["REC"]
+scope = "seed-epoch record persistence and warm start"
+assumptions = ["A1"]
+depends_on = ["SEC-014", "REC-002"]
+locality = "transactional"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus-inputs.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CINPUT-01"]
+
+[[rules]]
+id = "VAL-036"
+name = "VrfInputFromEpochNonce"
+invariant = "The Praos VRF input for a slot is blake2b-256 of the slot as 8 big-endian bytes followed by the epoch nonce of that slot's epoch, as the reference mkInputVRF defines it, for leader checks and for forged headers alike, using the IETF draft-03 VRF with 80-byte proofs."
+counterexample = "The producer builds its VRF input with a nonce derived from genesis instead of the slot's epoch nonce, so every header it forges fails VRF verification at its peers."
+family = "VAL"
+secondary_families = []
+scope = "leader checks, header VRF"
+assumptions = ["A2"]
+depends_on = ["VAL-022", "SEC-004"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus-inputs.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CINPUT-03"]
+
+[[rules]]
+id = "DUR-005"
+name = "NetworkGeometryAndProfileDurable"
+invariant = "A recovered store replays with the epoch geometry (first slot of the seed epoch and epoch length) and the consensus profile (genesis hash and protocol-parameter hash, exactly as imported) that were persisted when the store was created, never re-derived from configuration, genesis files or command-line values a restart supplies; restart-supplied values are only a consistency check that fails closed on disagreement. A record in an older format without them is refused with a distinct unsupported-format error that names re-import as the remedy, kept separate from corruption errors, and is never upgraded silently."
+counterexample = "A preview store restarted with a preprod genesis file replays with preprod's 432,000-slot epochs; or the protocol-parameter hash is recomputed from re-serialized parameters and differs from the imported one."
+family = "DUR"
+secondary_families = ["REC"]
+scope = "seed-epoch record, warm start, era schedule rebuild"
+assumptions = ["A2"]
+depends_on = ["DUR-004", "STR-009"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus-inputs.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CINPUT-05", "DC-CINPUT-06"]
+
+[[rules]]
+id = "SAF-008"
+name = "TransientViewStorageNonAuthoritative"
+invariant = "Transient epoch-view storage is never authority: it never survives as a source for following, forging, recovery or activation, nothing in it reaches a core output except through the deterministic derivation it feeds, and a crash at any point leaves the durable chain, write-ahead log and checkpoint unchanged and the next replay identical. Startup purges it before normal operation: it deletes only entries inside the transient store's own directory whose names have the deterministic window-key form, makes the deletion durable by syncing the parent directory, continues only when the directory is empty, and halts on an entry it does not recognize or cannot delete."
+counterexample = "After a crash mid-materialization, the next startup finds the half-built transient store and uses it to answer a stake query."
+family = "SAF"
+secondary_families = ["REC"]
+scope = "transient epoch-view storage"
+assumptions = ["A1"]
+depends_on = ["REC-002"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus-inputs.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-EVIEW-01"]
+
+[[rules]]
+id = "VAL-037"
+name = "StakeReferenceClassification"
+invariant = "Each output's stake reference is classified by one function from its address bytes and the era bound to the block being processed, never from configuration, the clock or a caller's flag, into a closed result: a base stake credential, valid only after the address's full 57-byte form is validated; a valid address that contributes no stake (a pointer address from Conway on, decoded exactly as the reference ledger decodes it for that era; an enterprise or Byron address); or a rejection (a malformed address, or a reward address used as an output address). Rejection is never folded into contributing no stake."
+counterexample = "A Conway output to a pointer address is credited to the credential the pointer once referred to, or a 56-byte base address is read at fixed offsets and credits a garbage credential."
+family = "VAL"
+secondary_families = []
+scope = "stake attribution of outputs"
+assumptions = ["A2"]
+depends_on = ["VAL-001", "STR-005"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus-inputs.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-EVIEW-02", "DC-EVIEW-03"]
+
+[[rules]]
+id = "DET-013"
+name = "ReducedCheckpointMirrorsLedger"
+invariant = "The reduced UTxO checkpoint is a projection of the ledger's own UTxO application: each block's delta removes exactly the inputs and adds exactly the outputs the ledger's application would, under the same keys, each reduced to its coin and stake reference; its certificate, delegation and governance state advance in block order through the ledger's own certificate processing, starting from the bootstrap certificate state; any step failure aborts the window without producing a result, and a partially applied window leaves the checkpoint marked incomplete, never producing a stake snapshot from partial data; the checkpoint can be rebuilt from the blocks by replay."
+counterexample = "The checkpoint's delta is computed by a separate parser that misses collateral returns, so the reduced stake drifts from the ledger's; or a crash mid-window leaves a checkpoint that is read as complete."
+family = "DET"
+secondary_families = ["REC"]
+scope = "reduced UTxO checkpoint"
+assumptions = ["A1"]
+depends_on = ["VAL-037", "REC-002", "VAL-016"]
+locality = "transactional"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus-inputs.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-EVIEW-04", "DC-EVIEW-04b", "DC-EVIEW-10"]
+
+[[rules]]
+id = "VAL-038"
+name = "PoolLifecycleMatchesReference"
+invariant = "The pool lifecycle matches the reference ledger: a first registration takes effect immediately; a re-registration of a registered pool is staged as a future registration, leaving the active parameters and VRF key unchanged until it is adopted at the next boundary, and cancels any pending retirement; at every boundary crossed, including each boundary inside a replayed range, the stake snapshot is taken first (VAL-028), then pool reaping adopts staged registrations (dropping any whose pool is no longer active), reaps exactly the pools retiring at that epoch, and removes delegations to the reaped pools while keeping those credentials' registrations and reward accounts."
+counterexample = "A pool's re-registration with a new VRF key takes effect mid-epoch, or a credential delegated to a reaped pool stays delegated and silently reattaches when the pool ID registers again."
+family = "VAL"
+secondary_families = []
+scope = "pool registration, retirement and reaping"
+assumptions = ["A2"]
+depends_on = ["VAL-011", "VAL-020", "VAL-028"]
+locality = "transactional"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus-inputs.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-EVIEW-13"]
+
+[[rules]]
+id = "STR-010"
+name = "SeedRecordClosedSchema"
+invariant = "The persisted seed-epoch consensus-input record is one closed type holding the seed epoch, the active-slot coefficient, the total active stake, each pool's active stake and VRF key hash in canonical key order, the epoch nonce, the epoch geometry and the consensus profile; its decoder accepts only the current format version and only the canonical encoding, so re-encoding a decoded record gives exactly its input bytes, and anything else is rejected."
+counterexample = "A record with its pools in non-canonical order decodes and is silently re-sorted, so its stored hash no longer matches its bytes; or a record of an older version is decoded under the new layout."
+family = "STR"
+secondary_families = ["VAL"]
+scope = "seed-epoch consensus-input record"
+assumptions = []
+depends_on = ["VAL-001", "DET-003", "DET-007"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus-inputs.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-CINPUT-01"]
+
+[[rules]]
+id = "SAF-009"
+name = "CandidateViewHashVerified"
+invariant = "Before an epoch view or sealed leadership object is activated or read, its canonical hash is recomputed over every binding (network, era, epoch, source point, checkpoint commitment, nonce, snapshot phase and profile commitment) and over its whole stake and VRF payload, and must equal its stored hash; its bindings cannot change once bound. The profile commitment it binds is blake2b-256 over a domain tag, the genesis hash, the protocol-parameter hash and the active-slot coefficient, all three taken from the durable consensus profile (#6)."
+counterexample = "A sealed object corrupted on disk keeps its stored identity fields, is matched by identity alone, and its altered stake map decides leadership."
+family = "SAF"
+secondary_families = ["DUR"]
+scope = "epoch views and sealed leadership objects"
+assumptions = []
+depends_on = ["SAF-004", "SAF-005", "VAL-024", "DUR-005"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus-inputs.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-EVIEW-07"]

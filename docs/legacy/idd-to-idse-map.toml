@@ -2165,34 +2165,34 @@ record = ""
 [[legacy]]
 id = "CN-CONS-IN-01"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-034"]
 reason = "deferred by B05"
-record = "docs/planning/consensus.define.consensus.md#batch-1"
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-IN-01"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-034"]
 reason = "deferred by B05"
-record = "docs/planning/consensus.define.consensus.md#batch-1"
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-IN-02"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-034"]
 reason = "deferred by B05"
-record = "docs/planning/consensus.define.consensus.md#batch-1"
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-VIEW-01"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-035"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-PUMP-01"
@@ -2533,50 +2533,50 @@ record = ""
 [[legacy]]
 id = "CN-CINPUT-01"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-010"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CINPUT-02"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-014"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CINPUT-01"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DUR-004"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CINPUT-02a"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["VAL-023"]
+reason = "B06 S2"
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CINPUT-03"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-014"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CINPUT-02b"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["VAL-024"]
+reason = "B06 S2"
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "RO-LIVE-06"
@@ -2725,10 +2725,10 @@ record = ""
 [[legacy]]
 id = "DC-CINPUT-03"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-036"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-WIRE-12"
@@ -2741,10 +2741,10 @@ record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-CINPUT-04"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["STR-007", "VAL-024"]
+reason = "B06 S2"
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-10"
@@ -3165,10 +3165,10 @@ record = ""
 [[legacy]]
 id = "DC-CINPUT-05"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DUR-005"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MEM-11"
@@ -3197,114 +3197,114 @@ record = ""
 [[legacy]]
 id = "DC-EVIEW-01"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-008"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIEW-02"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-037"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIEW-03"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-037"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIEW-04"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-013"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIEW-04b"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-013"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIEW-05"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["VAL-020", "VAL-023"]
+reason = "B06 S3 (pool-sum denominator excluded as superseded by VAL-024)"
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIEW-06"
 batch = "B06-consensus-inputs"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = ""
-record = ""
+reason = "B06 S6: superseded; observe-only and never wired; replaced by sealed leadership objects and rewind coherence (VAL-023, SAF-006)"
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIEW-07"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-009"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIEW-08"
 batch = "B06-consensus-inputs"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = ""
-record = ""
+reason = "B06 S7: superseded within the legacy record by sealed leadership objects (DC-EPOCH-25; VAL-023, VAL-024)"
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIEW-09"
-batch = "B06-consensus-inputs"
+batch = "B11-mithril-evidence"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B06 S8"
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIEW-10"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-013"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIEW-11"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["ORD-004", "SAF-005"]
+reason = "B06 S5"
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIEW-13"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-038"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIEW-12"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["VAL-023", "VAL-024"]
+reason = "B06 S3 (pool-sum denominator excluded as superseded by VAL-024)"
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EPOCH-04"
@@ -3389,10 +3389,10 @@ record = "docs/planning/epoch.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-CINPUT-06"
 batch = "B06-consensus-inputs"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DUR-005"]
 reason = ""
-record = ""
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EPOCH-14"
@@ -3540,11 +3540,11 @@ record = "docs/planning/epoch.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CINPUT-07"
-batch = "B06-consensus-inputs"
+batch = "B11-mithril-evidence"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B06 S8"
+record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EPOCH-23"
