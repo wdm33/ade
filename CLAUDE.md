@@ -70,10 +70,11 @@ dumps for the test corpus). Do NOT use it as a live-pass target.
 ### IDSE attribution exception (load-bearing; Ade only)
 
 This repo is competing for a vibe-coded-node bounty that requires
-≥90% of commits to carry a model attribution trailer. Current ratio
-is 102/156 (65%); every future commit must carry the trailer or the
-ratio falls further out of reach (each miss costs ~9 trailered
-commits to recover).
+≥90% of commits to carry a model attribution trailer. The ratio was
+1313/1370 non-merge commits (95.8%) on 2026-11-09; the atlas Bounty
+page shows it live. Every future commit must carry the trailer, since
+each miss lowers the ratio, and a ratio under 90% costs about nine
+trailered commits per miss to recover.
 
 The human granted Ade, and only Ade, an exception to IDSE
 Constitution rule 19 (Doctrine §25) for commit messages, on
