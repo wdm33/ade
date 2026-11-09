@@ -21,6 +21,20 @@ Ade is a Cardano block-producing node written in Rust. The workspace is organize
 - `ade_runtime` — I/O, networking, storage, signing (imperative shell)
 - `ade_node` — Binary entry point
 
+## IDSE
+
+Ade follows IDSE v3.0 under the `strict` profile (`.idse-config.json`, namespace `ADE`), and has since 2026-11-08.
+
+- Registry: `docs/ade-invariant-registry.toml`
+- Migration plan and status: `docs/planning/idse-migration-plan.md`. No new Ade cluster opens until every legacy ID has a disposition.
+- Legacy IDD record (frozen): `docs/legacy/`. A legacy ID such as `T-DET-01` or `DC-NODE-48` is followed forward through `docs/legacy/idd-to-idse-map.toml`. IDSE documents never cite legacy IDs.
+- Design documents for Define (they inform, never bind):
+  - the frozen legacy registry's `statement`, `source` and `attack_rationale` fields
+  - the phase plans and closing reports in `docs/completed/phase_*`
+  - the runbooks and contracts in `docs/active/`
+  - the reference hash surface in `corpus/reference/ledger_state_hashes/hash_surface.md`
+- Reference oracle: the Haskell cardano-node 11.0.1. Ade is Conway-active only. It enters at a certified non-Origin Conway tip and never replays or executes historical eras. Historical era facts are kept only where current semantics depend on them, such as slot-time geometry and hard-fork lineage.
+
 ## Live-pass target
 
 For any work that needs to talk to a real cardano-node peer over
@@ -45,10 +59,10 @@ dumps for the test corpus). Do NOT use it as a live-pass target.
 ## Git Commit Guidelines
 
 - Commits MUST include `Co-Authored-By: Claude <model+context> <noreply@anthropic.com>` trailers
-- Use conventional commit format
+- Use the IDSE commit formats (`~/.claude/methodology/idse.md` §10): `Define: …`, `CNNN: cluster document — …`, `CNNN-SNN: …`, `CNNN-SNN evidence: …`, `CNNN close: …`. Commits outside a slice (tooling, docs) use conventional commit format
 - Focus on technical changes and business impact
 
-### Project override of global IDD rules (load-bearing)
+### IDSE attribution exception (load-bearing; Ade only)
 
 This repo is competing for a vibe-coded-node bounty that requires
 ≥90% of commits to carry a model attribution trailer. Current ratio
@@ -56,15 +70,21 @@ is 102/156 (65%); every future commit must carry the trailer or the
 ratio falls further out of reach (each miss costs ~9 trailered
 commits to recover).
 
-The following global IDD hard rules are **overridden in this repo**:
+The human granted Ade, and only Ade, an exception to IDSE
+Constitution rule 19 (Doctrine §25) for commit messages, on
+2026-11-08. No other IDSE project carries this exception. The
+following rules are **overridden in this repo, for commit messages
+only**:
 
-- `~/.claude/CLAUDE.md` — "No AI attribution in commits"
-- `~/.claude/commands/commit-slice.md` — "No `Co-Authored-By:` trailer"
-- `~/.claude/commands/cluster-close.md` — same
-- `~/.claude/skills/idd-commit/SKILL.md` — same
+- `~/.claude/CLAUDE.md` rule 19 — "No AI attribution in commits"
+- Doctrine §25 and `~/.claude/methodology/idse.md` §10 — "No attribution lines"
+- `~/.claude/commands/commit-slice.md`, `~/.claude/commands/close.md`
+  and `~/.claude/skills/idse-commit/SKILL.md` — the same rule as applied there
+- Doctrine §25 "Attribution enforcement lives outside the repository",
+  for the `ci/git-hooks/commit-msg` hook below only
 
 When drafting commits in this repo (whether via `/commit-slice`,
-`idd-commit`, `/cluster-close`, or freehand), append the trailer.
+`/close`, `idse-commit`, or freehand), append the trailer.
 The override applies to **commit messages only** — source comments,
 PR descriptions, releases, and issue comments still follow the
 global no-AI-attribution rule.

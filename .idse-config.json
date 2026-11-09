@@ -1,0 +1,43 @@
+{
+  "profile": "strict",
+  "project": "ADE",
+
+  "core_paths": [
+    "crates/ade_ledger/",
+    "crates/ade_codec/",
+    "crates/ade_types/",
+    "crates/ade_crypto/",
+    "crates/ade_plutus/",
+    "crates/ade_core/",
+    "crates/ade_network/src/mux/frame.rs",
+    "crates/ade_network/src/codec/",
+    "crates/ade_network/src/handshake/",
+    "crates/ade_network/src/chain_sync/",
+    "crates/ade_network/src/block_fetch/",
+    "crates/ade_network/src/tx_submission/",
+    "crates/ade_network/src/keep_alive/",
+    "crates/ade_network/src/peer_sharing/",
+    "crates/ade_network/src/n2c/"
+  ],
+  "test_cmd": "cargo test --workspace",
+  "replay_cmd": "cargo test -p ade_testkit",
+  "replay_on_stop": false,
+
+  "invariant_registry": "docs/ade-invariant-registry.toml",
+  "planning_dir": "docs/planning",
+  "clusters_dir": "docs/clusters",
+  "clusters_archive_dir": "docs/clusters/completed",
+  "grounding_docs_dir": "docs",
+  "normative_docs": [],
+  "ci_dirs": ["ci"],
+  "canonical_type_registry": null,
+  "head_deltas_baseline": "1e4896eb",
+  "templates_dir": null,
+
+  "consensus_rounds": 5,
+  "commit_confirmation": "cluster",
+  "upstream_ci": null,
+
+  "model_dir": "formal/tla",
+  "tlc_jar": "~/tla-tools/tla2tools.jar"
+}

@@ -1,0 +1,22 @@
+# Invariant registry — Ade
+#
+# The canonical, append-only list of defined invariants (Doctrine §4).
+# An entry is appended only when the human approves its line in a Define batch
+# (Doctrine §32); its ID is assigned at that moment (Doctrine §7).
+#
+# What agents may append, and how: ~/.claude/methodology/idse.md §3 step 4.
+# Every other field changes only by redefinition
+# (Doctrine §5): agent draft, consensus, human approval, recorded in
+# `redefinitions` with the text it replaced (idse.md §1.4).
+# Assumptions are recorded once, below, and entries cite them by ID.
+#
+# Families, ID and name patterns: Doctrine §6–§7.
+# Checked by: python3 -I ~/.claude/methodology/tools/idse-id-lint.py
+#
+# Legacy IDD entries are frozen in docs/legacy/idd-invariant-registry.toml.
+# Each entry migrated from one carries `legacy_ids`; every legacy ID's
+# disposition is in docs/legacy/idd-to-idse-map.toml.
+
+schema_version = 3
+project = "ADE"
+registry_count = 0
