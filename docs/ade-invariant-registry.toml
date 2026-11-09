@@ -19,7 +19,7 @@
 
 schema_version = 3
 project = "ADE"
-registry_count = 188
+registry_count = 215
 
 [[assumptions]]
 id = "A1"
@@ -4232,7 +4232,7 @@ legacy_ids = ["DC-NODE-10"]
 [[rules]]
 id = "SAF-013"
 name = "ForgeAdmissibilityGatesOnly"
-invariant = "Every forge is admissible only when the durable servable tip equals the followed peer tip in hash and block number, except under #13's fenced extension in a single-producer venue; the recovered anchor is never a forge base. The followed-peer-tip signal holds two pieces of evidence separately: the peer's advertised tip, and the tip it served that Ade durably admitted, written only after a successful admission from that admission's own validated tip and cleared by any rollback. The combined view prefers the served tip only when strictly higher, a tie with differing hashes falling to the advertisement; possession questions (the forge gate and the fork-switch fence) read the combined view, and convergence evidence reads the advertisement. The signal can only prevent a forge (a refusal for not being caught up is a typed refusal with no state change), never selects, replaces or reorders chains, and never changes durable state."
+invariant = "Every forge is admissible only when the durable servable tip equals the followed peer tip in hash and block number, except under VAL-053's fenced extension in a single-producer venue and under SAF-022's participant extension in a participant venue; the recovered anchor is never a forge base. The followed-peer-tip signal holds two pieces of evidence separately: the peer's advertised tip, and the tip it served that Ade durably admitted, written only after a successful admission from that admission's own validated tip and cleared by any rollback. The combined view prefers the served tip only when strictly higher, a tie with differing hashes falling to the advertisement; possession questions (the forge gate and the fork-switch fence) read the combined view, and convergence evidence reads the advertisement. The signal can only prevent a forge (a refusal for not being caught up is a typed refusal with no state change), never selects, replaces or reorders chains, and never changes durable state."
 counterexample = "A stale advertised peer tip is fed into chain selection and makes the node prefer a shorter chain, or a refused forge still advances the slot cursor."
 family = "SAF"
 secondary_families = []
@@ -4247,7 +4247,7 @@ enforcement_superseded = []
 tests = []
 ci_scripts = []
 approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/node.define.consensus.md#batch-1" }
-redefinitions = []
+redefinitions = [{ date = "2026-11-09", by = "wdm33", nature = "weaken", record = "docs/planning/pipeline-production.define.consensus.md#batch-1", evidence_before = 0, previous = { invariant = "Every forge is admissible only when the durable servable tip equals the followed peer tip in hash and block number, except under #13's fenced extension in a single-producer venue; the recovered anchor is never a forge base. The followed-peer-tip signal holds two pieces of evidence separately: the peer's advertised tip, and the tip it served that Ade durably admitted, written only after a successful admission from that admission's own validated tip and cleared by any rollback. The combined view prefers the served tip only when strictly higher, a tie with differing hashes falling to the advertisement; possession questions (the forge gate and the fork-switch fence) read the combined view, and convergence evidence reads the advertisement. The signal can only prevent a forge (a refusal for not being caught up is a typed refusal with no state change), never selects, replaces or reorders chains, and never changes durable state." } }]
 introduced_in = ""
 strengthened_in = []
 status = "active"
@@ -4956,3 +4956,705 @@ status = "active"
 deprecated_in = ""
 claim_status = "unresolved"
 legacy_ids = ["DC-NODE-02"]
+
+[[rules]]
+id = "DET-020"
+name = "ForgePureOverProducerTick"
+invariant = "Building a block is a pure function of one canonical producer tick (the slot, the forge base's ledger and chain-dependent state, the transaction snapshot, the protocol parameters and version, and the already-produced VRF proof, KES signature and operational certificate): it reads no clock, randomness, file, unordered collection or ambient state. Replaying the same tick stream over the same starting state yields byte-identical forged blocks; replay uses the recorded signed artifacts, never calls a signing function, and no replay corpus holds private key material."
+counterexample = "The block builder stamps a field from the system clock, or iterates a hash map to order the transactions, so two replays of the same tick produce different block bytes."
+family = "DET"
+secondary_families = ["STR"]
+scope = "forge engine (ade_ledger::producer)"
+assumptions = ["A1"]
+depends_on = ["DET-001", "SEC-001"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CONS-13", "DC-CONS-14"]
+
+[[rules]]
+id = "VAL-056"
+name = "ForgeOnlyWhenLeader"
+invariant = "A block is forged for a slot only if the leader check passes for that slot, evaluated by the same leader-check functions header validation uses (VRF input by VAL-036, the leader value from the VRF output, the threshold from the slot's epoch's sealed stake distribution by VAL-024), with no producer-side variant of any of them; for the same canonical inputs the leader verdict is byte-identical across runs, and for the Conway era exactly one Praos VRF construction exists, with no fallback that builds or accepts the TPraos input."
+counterexample = "The producer computes its own leader threshold with a rounding the validator does not use and forges a block for a slot where the validator finds it ineligible; or verification accepts a proof over either the Praos or the TPraos input."
+family = "VAL"
+secondary_families = ["DET"]
+scope = "leader check on the forge path"
+assumptions = ["A2"]
+depends_on = ["VAL-036", "VAL-024", "SEC-003"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CONS-15", "DC-FORGE-01", "CN-FORGE-04"]
+
+[[rules]]
+id = "SEC-026"
+name = "LeaderVerdictCarriesNoKeys"
+invariant = "Leader eligibility crosses the shell/core boundary in one direction: shell code produces the VRF proof with the operator's VRF signing key, and the core verifies that proof and decides eligibility from canonical inputs only (slot, epoch nonce, VRF verification key, proof, and a leader-schedule answer giving the pool's stake share and threshold, which the caller derives through the leader-schedule authority of VAL-024 and passes in); the core evaluator depends on no ledger view, era schedule, chain-dependent state, clock, storage or shell crate and never receives a signing key, and its closed two-variant verdict carries forge-capable material only when eligible, an ineligible verdict carrying no more than a bounded fingerprint of the VRF output."
+counterexample = "The core leader evaluator takes the VRF signing key so it can compute the proof itself, or an ineligible verdict carries the full VRF proof and output, which a caller then uses to forge."
+family = "SEC"
+secondary_families = ["STR"]
+scope = "leader check boundary"
+assumptions = []
+depends_on = ["SEC-001", "VAL-024", "VAL-056"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-FORGE-02"]
+
+[[rules]]
+id = "SEC-027"
+name = "ForgeKesWindowFromBoundGenesis"
+invariant = "The KES evolution a forge signs at is computed by one checked function of the slot, the KES anchor slot and slots per KES period of the bound genesis (never the clock, a file read at forge time or a default) and the operational certificate's start period: the slot's absolute KES period minus the start period. A slot before the certificate's first covered slot, after its last, or whose arithmetic overflows is a typed refusal before any signing, naming the slot bound; and a forge result that arrives after a newer slot tick, or after its slot has passed, is discarded as a missed slot, never signed, served or admitted late."
+counterexample = "The forge computes the evolution as the slot's absolute KES period, so on a chain whose certificate starts at period 885 it signs at evolution 888 and every block fails verification; or a result computed for slot s is served after slot s+3 has begun."
+family = "SEC"
+secondary_families = ["SAF"]
+scope = "forge-time KES period, forge result timing"
+assumptions = ["A2"]
+depends_on = ["SEC-005", "DET-019", "OBS-001"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CONS-11", "CN-PROD-02"]
+
+[[rules]]
+id = "VAL-057"
+name = "ForgedBlockSingleEncoding"
+invariant = "A forged block is emitted as the era-tagged [era, block] envelope by the one block encoder that is the inverse of the block decoder header validation uses, and its header's body hash is computed by the validator's body-hash recipe over the very body bytes it emits; the forge rejects, with a typed error and before emitting any bytes, a tick whose block number and previous hash form an illegal header position (VAL-003); and decoding a forged block yields exactly the header fields and four body segments that were forged, so no forge output exists that the block decoder rejects."
+counterexample = "The forge emits a bare five-element block without the era tag, so its own decoder rejects every forged block at offset 0; or the forge hashes a re-encoded body while the emitted body uses different bytes."
+family = "VAL"
+secondary_families = ["DET"]
+scope = "forged block bytes"
+assumptions = ["A2"]
+depends_on = ["VAL-032", "VAL-003", "DET-002", "DET-007"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CONS-16", "CN-FORGE-03"]
+
+[[rules]]
+id = "VAL-058"
+name = "ForgedTransactionsAdmissibleInOrder"
+invariant = "Every transaction in a forged block is admissible by the mempool admission function against the forge base's ledger state, applied in the transaction snapshot's accumulating order; the forge re-admits the snapshot in that order before building the body and fails with a typed error at the first transaction that is rejected or differs, and never reorders, adds, drops or skips a transaction."
+counterexample = "The forge includes a transaction whose input a preceding transaction in the same block already spent, because it checked each transaction against the base state alone."
+family = "VAL"
+secondary_families = ["ORD"]
+scope = "forged block body"
+assumptions = []
+depends_on = ["VAL-008", "SAF-003"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-LEDGER-12"]
+
+[[rules]]
+id = "SAF-020"
+name = "ForgedBlockSelfAccepted"
+invariant = "A forge attempt ends in exactly one of three closed outcomes: forged and self-accepted, not leader (with a bounded VRF fingerprint), or failed with a structured reason. It is forged and self-accepted only if the forged bytes decode through the block decoder and full block validity (VAL-009) accepts those exact bytes against the forge base; a self-acceptance rejection is a structured failure that hands nothing on. No forged byte is served, announced, broadcast or admitted except as the bytes self-acceptance accepted, and the node keeps following after a failure, the failure being recorded as that tick's outcome."
+counterexample = "The forge handler reports success for a block whose own validation failed and hands it to the serve task, which offers it to peers."
+family = "SAF"
+secondary_families = ["VAL"]
+scope = "every forge path (node and produce modes)"
+assumptions = []
+depends_on = ["VAL-009", "VAL-057", "OBS-001"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-CONS-07", "CN-FORGE-01"]
+
+[[rules]]
+id = "VAL-059"
+name = "ForgeBaseFromBootstrapAuthority"
+invariant = "In every mode, the forge base (ledger state, chain-dependent state, stake distribution view, epoch nonce and tip) is initialized from the state the one bootstrap authority produced and is updated by every later admission, admissions before the first forge included, so each forge builds on the latest admission's state (VAL-051); the protocol version and parameters a forge uses come from that base's ledger state. No forge path builds a synthetic base: no zero-stake or empty ledger, no default protocol parameters or version, no constant previous hash and no second recovered state."
+counterexample = "Produce mode forges against a freshly constructed empty ledger with a zero-stake distribution, so its blocks are never leader-eligible on the real chain; or node mode stamps the header with a default protocol version."
+family = "VAL"
+secondary_families = ["STR"]
+scope = "forge base, every mode"
+assumptions = ["A2"]
+depends_on = ["STR-013", "VAL-051"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-PROD-03"]
+
+[[rules]]
+id = "SAF-021"
+name = "ForgeEpochBoundToActiveAuthority"
+invariant = "A forge for a slot in epoch E uses only the active epoch authority's view for exactly E (its stake distribution and epoch nonce); the authority is consulted before any leader check or signing. If the authority holds an earlier epoch than E and the node is a producer whose support ends at its seed epoch, the slot is a typed no-forge and the node keeps following; if the authority is ahead of E, or E's promotion is missing where continuity is required, the forge halts with a typed terminal error. A block is never signed for epoch E with another epoch's nonce or stake distribution."
+counterexample = "After an epoch boundary the forge keeps using the seed epoch's nonce, signs a block for the new epoch, and peers reject it."
+family = "SAF"
+secondary_families = ["VAL"]
+scope = "forge path, epoch boundaries"
+assumptions = []
+depends_on = ["STR-007", "VAL-024", "SAF-005"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-EPOCH-03"]
+
+[[rules]]
+id = "SAF-022"
+name = "ParticipantForgeOnSelectedHead"
+invariant = "In a declared participant venue, forging first passes SAF-013's catch-up gate; from the first instant the durable servable tip equals the followed peer tip, it enters a participant extension whose forge base at each decision is the live selected durable tip. A decision in the extension refuses with a typed reason when the venue is not declared participant, when any fork-choice decision is pending (a reselection, a fork switch or a missing bridge; SAF-014), or when no durable servable tip exists, and it never gates on the tip of Ade's own last forge. Immediately before signing, the durable tip is read again and the forge is refused if it differs from the decision's base. The decision is a pure total function over closed types that never invokes chain selection and holds no signing material; the extension is not persisted, a restart entering it again only through the catch-up gate."
+counterexample = "The participant decision re-checks that the durable tip still equals Ade's own last forged block, so once a peer's block is admitted it refuses every later slot; or a peer block admitted between decision and signing leaves the forge signing on the old tip."
+family = "SAF"
+secondary_families = ["LIV"]
+scope = "node mode, participant venue forge decision"
+assumptions = ["A1"]
+depends_on = ["SAF-013", "SAF-014", "VAL-031", "STR-015"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-FOLLOW-01", "DC-FOLLOW-FORGE-01"]
+
+[[rules]]
+id = "DET-021"
+name = "ProducerCoordinatorReplay"
+invariant = "The producer coordinator is a deterministic reducer over canonical event streams: for the same initial coordinator state, ledger state, operational-certificate public metadata and complete ordered stream of coordinator events (slot ticks, forge results succeeded or failed, peer lifecycle events and every other coordinator input), it emits byte-identical effects and producer log events. Its forge request is a closed effect carrying the slot, KES period, ledger snapshot reference and chain tip; its state holds no signing key; and wall-clock timestamps and socket arrival order are shell metadata outside the compared streams."
+counterexample = "The coordinator records socket addresses in its replayable log, or stores the KES key in its state to sign directly, so two replays of the same streams differ or key bytes reach the replay surface."
+family = "DET"
+secondary_families = []
+scope = "producer coordinator (node and produce modes)"
+assumptions = ["A1"]
+depends_on = ["SEC-001", "DET-001"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-PROD-02"]
+
+[[rules]]
+id = "STR-018"
+name = "ProduceChainEvolutionLinear"
+invariant = "In produce mode each forge's base is the post-state of the previous self-accepted forge, carried by a linear value that is consumed when it advances, so forging against a stale base cannot be expressed; it advances only when block validity's post-state and self-acceptance agree on the same inputs, a disagreement being a typed error that does not advance; it never constructs an accepted-block token itself; and for the same bootstrap seed, slot sequence and keys the series of block numbers, previous hashes, post-state fingerprints and forged bytes is byte-identical across runs."
+counterexample = "Produce mode keeps the bootstrap ledger as the base for every forge, so its second block re-spends its first block's outputs and repeats its block number."
+family = "STR"
+secondary_families = ["DET"]
+scope = "produce mode chain evolution"
+assumptions = ["A1", "A2"]
+depends_on = ["SAF-020", "VAL-059"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-PROD-03"]
+
+[[rules]]
+id = "SAF-023"
+name = "ProduceServesOnlySelfAccepted"
+invariant = "In produce mode every broadcast reconstructs the accepted block from the forged bytes through self-acceptance against the pre-forge base and publishes it to the served chain through the one atomic publication (SAF-010) before the next slot tick; if self-acceptance rejects, nothing is published and a structured broadcast error is recorded; and a block-served event is emitted only for a block present in the served chain."
+counterexample = "A broadcast is dropped silently when publication fails, while the log still records the block as served."
+family = "SAF"
+secondary_families = ["OBS"]
+scope = "produce mode serving"
+assumptions = []
+depends_on = ["SAF-020", "SAF-010"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-PROD-04"]
+
+[[rules]]
+id = "VAL-060"
+name = "ForgedBlocksAcceptedByReference"
+invariant = "A block Ade forges, self-accepts and serves is accepted by the reference node: a reference cardano-node peer that follows Ade fetches it over chain-sync and block-fetch, validates it and adopts it when it is that peer's best chain, and never rejects it as invalid."
+counterexample = "Ade serves a forged block whose header the reference node rejects for a bad VRF input or a wrong KES evolution, and the peer disconnects."
+family = "VAL"
+secondary_families = ["PRC"]
+scope = "forged and served blocks, live venue"
+assumptions = ["A2"]
+depends_on = ["VAL-007", "VAL-002", "SAF-020"]
+locality = "distributed"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = []
+
+[[rules]]
+id = "STR-019"
+name = "SingleWirePumpPerPeer"
+invariant = "Exactly one wire pump drives each connected peer's chain-sync and block-fetch: it owns that peer's transport handle and is the only producer on that peer's event lane. It emits only the closed events block, tip update, roll backward and disconnected, never a verdict or validity claim; and every chain-sync reply carrying a tip emits exactly one closed event: a tip update for an intersect reply or a roll forward, and the distinct roll-backward event, carrying the peer's post-rollback tip, for a roll backward."
+counterexample = "A second code path reads blocks from the same peer connection and pushes them into the consumer, or the pump reports a rollback only as a lower tip update."
+family = "STR"
+secondary_families = []
+scope = "per-peer wire pump (ade_runtime::admission::wire_pump)"
+assumptions = []
+depends_on = ["STR-012", "SEC-017"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-PUMP-01", "DC-PUMP-01", "DC-PUMP-02"]
+
+[[rules]]
+id = "VAL-061"
+name = "KeepAliveClientWireOnly"
+invariant = "The wire pump runs the node-to-node keep-alive client through the shared keep-alive state machine and codec: it sends a keep-alive on a fixed cadence shorter than the peer's keep-alive timeout, never while one is outstanding, with a cookie from a deterministic wrapping 16-bit counter, and accepts a response only if its cookie matches; a grammar or cookie violation ends that peer's session with a typed error. Keep-alive traffic produces no pump event, no event in any evidence vocabulary and no canonical input (shell diagnostics, excluded from evidence and replay, may record it), is never dispatched as chain-sync or block-fetch traffic, and does not delay or reorder them."
+counterexample = "The pump never sends keep-alive, so the reference peer drops every follow session after about 97 seconds; or a mismatched cookie is ignored."
+family = "VAL"
+secondary_families = ["LIV"]
+scope = "wire pump keep-alive client"
+assumptions = []
+depends_on = ["DET-016", "SEC-016"]
+locality = "local"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-PUMP-03"]
+
+[[rules]]
+id = "LIV-008"
+name = "KeepAliveSurvivesBackpressure"
+invariant = "No stall of the downstream consumer, of any length or cause (block application, an epoch-boundary fold, a checkpoint capture), stops the wire pump from sending keep-alive on its cadence and consuming the peer's response: the wait for downstream capacity also waits on the cadence timer and on inbound frames, so the cadence is reachable while the pump is parked."
+counterexample = "The pump blocks on a full events channel during a ten-minute epoch-boundary fold, misses keep-alive, and the peer drops the session."
+family = "LIV"
+secondary_families = []
+scope = "wire pump under backpressure"
+assumptions = ["A5"]
+depends_on = ["VAL-061"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-PUMP-05"]
+
+[[rules]]
+id = "ORD-006"
+name = "PumpOrderPreservedUnderBackpressure"
+invariant = "Backpressure may delay a peer's events but never reorder them: the events the pump delivers are the same sequence it would deliver unstalled, frames decoded while parked join the same single FIFO as the rest of their chunk, and one frame is dispatched per loop iteration. Frames held while parked are bounded by a fixed, non-configurable constant, exceeding which fails that peer closed with a typed error; the bound holds because the pump issues no new chain-sync or block-fetch request while parked."
+counterexample = "A frame read while parked is dispatched ahead of the remaining frames of the chunk it interrupted, so a roll forward reaches the consumer before the roll backward that preceded it on the wire."
+family = "ORD"
+secondary_families = []
+scope = "wire pump under backpressure"
+assumptions = []
+depends_on = ["STR-019", "SEC-018"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-PUMP-06", "DC-PUMP-07"]
+
+[[rules]]
+id = "SEC-028"
+name = "MultiPeerFairMerge"
+invariant = "When several peers feed the receive path, no connected peer is starved by another: each peer's pump fills its own bounded lane, the lanes are merged round-robin (one item per peer per round) in the configured peer order, never by hash iteration, randomness, clock or scheduler timing, backpressure is per peer, and a disconnected peer's lane is retired without reordering the others. The merge decides only delivery opportunity: peer identity is preserved and chain selection stays independent of arrival order."
+counterexample = "All pumps feed one shared bounded channel, a continuously producing peer fills it, and a competing honest peer's branch never reaches fork choice."
+family = "SEC"
+secondary_families = ["LIV"]
+scope = "multi-peer receive merge"
+assumptions = []
+depends_on = ["OBS-003", "DET-012", "SEC-018"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-PUMP-04"]
+
+[[rules]]
+id = "LIV-009"
+name = "ReconnectTransportOnly"
+invariant = "One total policy classifies every pump outcome: a transport loss (end of stream, read or write failure) on an established session reconnects it, re-dialling on a fixed, monotone, capped backoff schedule with no randomness or clock-derived jitter; a protocol or grammar violation, a deferred-frame overflow or a keep-alive violation ends that peer without retry; and a consumer that has gone away ends the pump. A peer that cannot be parsed, or whose first dial fails, is dropped without retry. Reconnecting re-establishes only the wire session and never turns a fail-closed authority outcome (admission, the rollback depth bound, boundary promotion, the forge fence) into a retry."
+counterexample = "A peer that sends a malformed block is reconnected every second forever, or an unreachable peer at startup is re-dialled in a tight loop."
+family = "LIV"
+secondary_families = []
+scope = "wire pump reconnect"
+assumptions = []
+depends_on = ["SEC-019", "LIV-007"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-PUMP-08", "DC-PUMP-09", "DC-PUMP-10"]
+
+[[rules]]
+id = "STR-020"
+name = "AdmissionModeSingleEntry"
+invariant = "Admission mode is entered through one runner, which composes the seed import, the bootstrap anchor, the bootstrap authority's warm start, the dialer, the per-block admission loop, the log append, the verdict reducer and the evidence log; the imported seed reaches the ledger only through one bridge that persists it as a snapshot at the seed point for the bootstrap authority's warm-start branch, never around that authority."
+counterexample = "An admission test path builds its initial ledger state directly from the imported seed and skips the warm-start branch's checks."
+family = "STR"
+secondary_families = []
+scope = "admission mode"
+assumptions = []
+depends_on = ["STR-013"]
+locality = "local"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-ADMIT-01", "CN-ADMIT-02"]
+
+[[rules]]
+id = "OBS-006"
+name = "AgreementVerdictEvidenceOnly"
+invariant = "The agreement verdict is a closed four-variant value (agreed, lagging, diverged, input not found) computed by a pure reducer from the admission outcome and the peer's announced tip; it compares outcomes already decided and never decides validity, chain selection or canonical state. Lagging means only that no same-slot comparison was possible: the peer's announced tip is at a different slot from the admitted block, ahead or behind, with both slots in the payload so the direction is readable, or the peer announced Origin; it asserts no ancestry and no agreement, and no caller treats it as success, health, readiness or agreement."
+counterexample = "The readiness check counts a lagging verdict as live-ready, so an operator pass is reported green while Ade is behind."
+family = "OBS"
+secondary_families = []
+scope = "agreement verdict reducer and its callers"
+assumptions = []
+depends_on = ["OBS-005"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-ADMIT-01", "DC-ADMIT-06", "DC-ADMIT-08"]
+
+[[rules]]
+id = "OBS-007"
+name = "AdmissionEvidenceBoundAndReplayable"
+invariant = "Every successful admission emits exactly one agreement-verdict event, never two for one block hash; the admission start, bootstrap-complete, block-admitted and verdict events each carry the consensus-input fingerprint (VAL-034), added as a field so the event vocabulary stays closed; and replaying an admission from the prior checkpoint and log yields the same post-admission ledger fingerprint and the same verdict."
+counterexample = "A retried log write emits a second verdict for the same block, or the transcript's verdicts carry no fingerprint, so they cannot be tied to the consensus inputs they were judged under."
+family = "OBS"
+secondary_families = ["DET"]
+scope = "admission and convergence evidence"
+assumptions = ["A1"]
+depends_on = ["OBS-006", "VAL-034", "REC-004"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-ADMIT-02", "DC-ADMIT-07", "DC-ADMIT-10"]
+
+[[rules]]
+id = "SAF-024"
+name = "AdmissionDivergenceHalts"
+invariant = "In admission mode a block whose slot lies outside the consensus inputs' epoch window, and undecodable peer bytes, are stopped before block validity is called; they, and a diverged or input-not-found verdict derived from admission evaluation, each halt the run with a distinct non-zero exit code and a typed halt event; undecodable bytes are classified as diverged (when the peer has a tip at that slot) or as a typed undecodable-bytes halt, never as input not found and never as a clean exit. The reducer stays pure; the halt is the binary's response."
+counterexample = "The runner logs an undecodable block and exits 0, so an adversarial peer makes a failed run look clean."
+family = "SAF"
+secondary_families = []
+scope = "admission mode"
+assumptions = []
+depends_on = ["OBS-006", "VAL-035", "SAF-019"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-ADMIT-03", "DC-ADMIT-11", "DC-ADMIT-12"]
+
+[[rules]]
+id = "OBS-008"
+name = "ClosedIsolatedEventVocabularies"
+invariant = "Each mode's evidence log has its own closed event vocabulary (wire-only, admission, producer, and the three-event convergence subset), written through its own sink, and no mode emits another mode's events; events carry no free-form reason strings and no host-dependent content such as file paths, and peers appear in replayable events only as opaque counters, socket addresses being shell metadata outside replay comparison. Keeping key material out of every log is SEC-025."
+counterexample = "The producer log prints a key file's path in a failure reason, or the convergence transcript contains forge scheduling events."
+family = "OBS"
+secondary_families = []
+scope = "evidence logs, every mode"
+assumptions = []
+depends_on = ["OBS-002", "OBS-005", "SEC-025"]
+locality = "local"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-ADMIT-04", "DC-PROD-01"]
+
+[[rules]]
+id = "VAL-062"
+name = "SeedImportFailsClosed"
+invariant = "The UTxO seed importer accepts only the transaction-output features it fully supports; an unsupported feature or a malformed reference script is a typed import error that stops the import, and no admission path matches that error with a permissive arm, skips the output or falls back to a partial seed."
+counterexample = "The importer drops outputs carrying an unsupported feature and continues, so the seeded UTxO silently differs from the source."
+family = "VAL"
+secondary_families = []
+scope = "UTxO seed import"
+assumptions = []
+depends_on = ["VAL-001"]
+locality = "local"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-ADMIT-09"]
+
+[[rules]]
+id = "DUR-013"
+name = "AdmissionAppendsExactlyOnce"
+invariant = "Every successful admission, received or self-forged, appends exactly one block-admission entry to the write-ahead log, chained from the folded fingerprint (DUR-009), and no admission entry exists without its admission or for a block already admitted on the selected prefix; an append that fails halts the node with the tip unadvanced (SAF-019)."
+counterexample = "A retried admission appends a second entry for the same block, both carrying a prior fingerprint the fold accepts, so recovery replays the block twice."
+family = "DUR"
+secondary_families = ["REC"]
+scope = "admission path, write-ahead log"
+assumptions = ["A6"]
+depends_on = ["DUR-009", "DUR-012", "SAF-019"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/pipeline-production.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-ADMIT-05"]
