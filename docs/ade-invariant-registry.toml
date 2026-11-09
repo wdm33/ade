@@ -19,7 +19,7 @@
 
 schema_version = 3
 project = "ADE"
-registry_count = 87
+registry_count = 101
 
 [[assumptions]]
 id = "A1"
@@ -50,6 +50,14 @@ id = "A4"
 name = "rollback-depth-bound-k"
 text = "the node never adopts a chain that requires rolling back more than k blocks, where k is the consensus security parameter the network's genesis defines under the reference semantics of A2; blocks more than k below the selected tip are immutable."
 approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/epoch.define.consensus.md#batch-1" }
+redefinitions = []
+status = "active"
+
+[[assumptions]]
+id = "A5"
+name = "honest-peer-delivery"
+text = "after a network partition heals, the node stays connected to at least one peer that offers the chain the network is converging on, and messages from that peer are delivered and processed within a bounded time."
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
 redefinitions = []
 status = "active"
 
@@ -2314,3 +2322,367 @@ status = "active"
 deprecated_in = ""
 claim_status = "unresolved"
 legacy_ids = ["DC-EPOCH-47"]
+
+[[rules]]
+id = "VAL-031"
+name = "ChainSelectionMatchesReference"
+invariant = "Given the same candidate chains and consensus state, Ade selects the same chain as the reference node's Praos chain selection: the higher block number wins, an equal block number is decided by the reference Praos tiebreak over slot, issuer, operational-certificate issue number and VRF output, density is never used for caught-up selection, and the decision depends on nothing but those canonical observables and the current selection."
+counterexample = "Two candidate chains of equal block number from different pools, where Ade prefers the one whose header arrived first while the reference node prefers the one with the lower VRF tiebreak value."
+family = "VAL"
+secondary_families = ["ORD"]
+scope = "chain selection"
+assumptions = ["A2"]
+depends_on = ["STR-001", "STR-002"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-CONS-01", "CN-CONS-01", "DC-CONSENSUS-01", "DC-CONS-03"]
+
+[[rules]]
+id = "LIV-003"
+name = "PartitionConvergence"
+invariant = "If, after a network partition heals, the node keeps receiving from at least one peer that offers the chain the network is converging on (N1), and that chain forks from the node's selection at most k blocks deep, then the node's selected chain eventually equals the chain the reference selection rule prefers among the valid chains delivered to it that #5 allows it to adopt, its current selection included, with ties between equally preferred chains settled as the reference rule settles them; it chooses using only protocol-defined observables."
+counterexample = "After a partition heals and the honest chain has been delivered, Ade keeps its own shorter fork indefinitely because it treats blocks it forged as preferred."
+family = "LIV"
+secondary_families = ["FIN"]
+scope = "chain selection across peers"
+assumptions = ["A2", "A4", "A5"]
+depends_on = ["VAL-031", "SAF-007"]
+locality = "distributed"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-CONS-03"]
+
+[[rules]]
+id = "VAL-032"
+name = "HeaderBindsBodyAndContext"
+invariant = "A block is accepted only if its header binds exactly its body and its chain position: the header's body hash equals the hash of the body bytes as received, and its previous-block hash, block number and slot agree with the chain point and consensus state it is validated against."
+counterexample = "A peer delivers a valid header with the body of a different block, or a header whose block number skips one, and the block is accepted."
+family = "VAL"
+secondary_families = []
+scope = "header validation"
+assumptions = ["A2"]
+depends_on = ["DET-002", "VAL-019"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-CONS-04"]
+
+[[rules]]
+id = "STR-008"
+name = "ChainDepStateOwnedByConsensus"
+invariant = "The Praos chain-dependent state (its nonces, operational-certificate counters and last slot) is owned by the consensus layer, not the ledger. Moving forward along a chain, it changes only through validated headers and epoch ticks; a rollback or a verified snapshot restore sets it to the chain-dependent state of the restored point."
+counterexample = "The ledger's block application writes the operational-certificate counter map directly, outside the consensus header transition."
+family = "STR"
+secondary_families = ["DET"]
+scope = "Praos chain-dependent state"
+assumptions = []
+depends_on = ["VAL-022"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CONS-04"]
+
+[[rules]]
+id = "SAF-007"
+name = "RollbackBoundedByK"
+invariant = "No rollback deeper than k blocks, counted in blocks and with k from the network's genesis, is ever applied: a deeper request, or one crossing the immutable tip, is rejected with a typed error and changes nothing; forecast and stability windows, though measured in slots, always cover at least k+1 blocks."
+counterexample = "A peer's fork that diverges 2,161 blocks back on mainnet (k = 2160) is adopted, or a rejected deep rollback leaves the chain database truncated."
+family = "SAF"
+secondary_families = ["FIN"]
+scope = "rollback and chain selection"
+assumptions = ["A2"]
+depends_on = ["SAF-001"]
+locality = "transactional"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CONS-05"]
+
+[[rules]]
+id = "DET-010"
+name = "RollbackAndReplayEquivalence"
+invariant = "Rolling back to a point, or restoring a snapshot and replaying forward from it, yields state byte-identical to applying the same blocks directly from the bootstrap baseline; snapshots and replay are caches of the direct application, never a separate authority, and a replay over an epoch boundary goes through the one epoch-boundary transition."
+counterexample = "Restoring a snapshot taken mid-epoch and replaying across the next boundary skips the boundary's reward update, giving a different state fingerprint from direct application."
+family = "DET"
+secondary_families = ["REC"]
+scope = "rollback, snapshot restore, replay forward"
+assumptions = ["A1", "A2"]
+depends_on = ["DET-001", "VAL-020"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CONS-06", "DC-CONS-22"]
+
+[[rules]]
+id = "DET-011"
+name = "SnapshotRoundTrip"
+invariant = "Every persisted ledger and chain-dependent state snapshot begins with a closed version tag and embeds the state's fingerprint, encodes canonically, and decodes to a state with that same fingerprint; an unknown version or a fingerprint mismatch is rejected."
+counterexample = "A snapshot written by an older format version is decoded under the new layout and silently yields a state with a different fingerprint."
+family = "DET"
+secondary_families = ["VAL"]
+scope = "state snapshots"
+assumptions = ["A1"]
+depends_on = ["DET-007", "VAL-001"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CONS-21"]
+
+[[rules]]
+id = "STR-009"
+name = "EraScheduleAnchored"
+invariant = "The core receives the era schedule only as a typed value bound to the bootstrap anchor hash and recorded in replay evidence; genesis files and configuration are parsed only in the shell, and no core path reads files, JSON or operator configuration."
+counterexample = "A consensus function parses the Shelley genesis JSON itself to find the epoch length, or uses an era schedule not bound to the anchor the node bootstrapped from."
+family = "STR"
+secondary_families = ["DET"]
+scope = "era schedule, shell/core boundary"
+assumptions = ["A1", "A2"]
+depends_on = ["STR-002", "VAL-012"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CONS-07"]
+
+[[rules]]
+id = "VAL-033"
+name = "ForecastRangeEnforced"
+invariant = "A consensus query for a slot beyond the ledger view's safe forecast range returns a typed out-of-range result, never a guessed value; the bound is derived from the era history, the safe zone and the era schedule, never written as a constant by the caller."
+counterexample = "Leader-schedule data for a slot two stability windows ahead is computed from the current epoch's stake distribution instead of being refused."
+family = "VAL"
+secondary_families = ["SAF"]
+scope = "consensus forecasting"
+assumptions = ["A2"]
+depends_on = ["STR-009"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CONS-09"]
+
+[[rules]]
+id = "SEC-011"
+name = "OpCertCounterRule"
+invariant = "A header is valid only under the reference OCERT rule: its pool's current issue number is the one recorded in the chain-dependent state, or 0 when none is recorded and the pool is in the epoch's stake distribution, and a header from a pool with neither is invalid; the header's operational-certificate issue number must be at least the current one and at most one more than it, otherwise the header is invalid with a typed reason. Counters are keyed by pool; a forward header transition never lowers a pool's recorded number, and a rollback or verified snapshot restore sets the counters to those of the restored point."
+counterexample = "A header using an old operational certificate whose issue number is below the pool's recorded one is accepted, letting the holder of a stolen, superseded hot key forge for the pool; or a header whose issue number jumps by two is accepted."
+family = "SEC"
+secondary_families = ["VAL"]
+scope = "header validation, chain-dependent state"
+assumptions = ["A2"]
+depends_on = ["STR-008"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CONS-10"]
+
+[[rules]]
+id = "SEC-012"
+name = "AnnouncedHeaderMatchesDelivered"
+invariant = "When a peer delivers a block, the header bytes in the delivered block are byte-for-byte equal to the header bytes that peer announced for the same slot and hash; a peer cannot switch headers between announcement and delivery."
+counterexample = "A peer announces a header that passes validation, then delivers a block carrying a different header with the same hash claim, and the block is admitted."
+family = "SEC"
+secondary_families = ["VAL"]
+scope = "receive path (chain-sync announcement, block-fetch delivery)"
+assumptions = []
+depends_on = ["VAL-032"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CONS-19"]
+
+[[rules]]
+id = "REC-003"
+name = "LockstepAdmissionAndRollback"
+invariant = "A successful block admission advances the chain database, the ledger state and the Praos chain-dependent state as one transition, and a rollback returns all three to the same point; no path leaves them at different points, admits partially or rolls back partially."
+counterexample = "A rollback truncates the chain database to slot 1000 but leaves the chain-dependent state at slot 1010, so the next header's op-cert counter check uses counters from the abandoned blocks."
+family = "REC"
+secondary_families = ["SAF"]
+scope = "block admission and rollback"
+assumptions = ["A1"]
+depends_on = ["SAF-001", "REC-002"]
+locality = "transactional"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-CONS-20"]
+
+[[rules]]
+id = "DET-012"
+name = "ConsensusIndependentOfArrival"
+invariant = "Every consensus decision (header validity, chain selection, leadership, rollback) is a function of the consensus state, the current selection, the set of candidates delivered, the protocol version and the recorded explicit context, the current slot included; with all of those equal, the decision is the same whatever order peers' messages arrived in, however tasks were scheduled, and whatever the wall clock or OS reported."
+counterexample = "Two runs receive the same two equal-preference candidates from different peers in opposite order and select different chains, or the shell drops a candidate because its peer's message arrived after a timer fired."
+family = "DET"
+secondary_families = ["STR"]
+scope = "consensus decisions, shell/core boundary"
+assumptions = ["A1"]
+depends_on = ["STR-001", "STR-002", "VAL-031"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-CONS-02", "CN-CONS-05"]
+
+[[rules]]
+id = "SEC-013"
+name = "RolloutSkewCannotSplit"
+invariant = "No input, adversarial or not, can lead two supported Ade releases authorized to run on the network at the same time, starting from the same state and receiving the same inputs, to different authoritative states or different selected chains."
+counterexample = "A crafted block that both releases accept is applied with different ledger effects by each, so their nodes persistently disagree on later blocks."
+family = "SEC"
+secondary_families = ["EVO"]
+scope = "Ade release compatibility"
+assumptions = ["A2"]
+depends_on = ["EVO-003", "DET-001"]
+locality = "distributed"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-CONS-02"]

@@ -173,18 +173,18 @@ record = "docs/planning/foundations.define.consensus.md#batch-1"
 [[legacy]]
 id = "T-CONS-01"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-031"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-CONS-02"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-012"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-CONSERV-01"
@@ -325,18 +325,18 @@ record = "docs/planning/ledger.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-CONSENSUS-01"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-031"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONSENSUS-02"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["STR-001"]
+reason = "B05 S2"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-PROTO-01"
@@ -797,42 +797,42 @@ record = "docs/planning/epoch.define.consensus.md#batch-1"
 [[legacy]]
 id = "CN-CONS-01"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-031"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CONS-02"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-013"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CONS-03"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["LIV-003"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CONS-04"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-032"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CONS-05"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-012"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-PLUTUS-01"
@@ -1293,66 +1293,66 @@ record = ""
 [[legacy]]
 id = "DC-CONS-03"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-031"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-04"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-008"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-05"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-007"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-06"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-010"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-07"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-009"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-08"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["STR-001"]
+reason = "B05 S2"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-09"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-033"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-10"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-011"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-VAL-01"
@@ -1556,51 +1556,51 @@ record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-11"
-batch = "B05-consensus"
+batch = "B10-pipeline-production"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-12"
-batch = "B05-consensus"
+batch = "B10-pipeline-production"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-13"
-batch = "B05-consensus"
+batch = "B10-pipeline-production"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-14"
-batch = "B05-consensus"
+batch = "B10-pipeline-production"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-15"
-batch = "B05-consensus"
+batch = "B10-pipeline-production"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-16"
-batch = "B05-consensus"
+batch = "B10-pipeline-production"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-12"
@@ -1620,19 +1620,19 @@ record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CONS-06"
-batch = "B05-consensus"
+batch = "B12-resources-release"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CONS-07"
-batch = "B05-consensus"
+batch = "B10-pipeline-production"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "OP-OPS-04"
@@ -1652,19 +1652,19 @@ record = ""
 
 [[legacy]]
 id = "DC-CONS-17"
-batch = "B05-consensus"
+batch = "B08-network"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-18"
-batch = "B05-consensus"
+batch = "B08-network"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-PROTO-07"
@@ -1700,27 +1700,27 @@ record = ""
 
 [[legacy]]
 id = "CN-CONS-08"
-batch = "B05-consensus"
+batch = "B10-pipeline-production"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-19"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-012"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-20"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["REC-003"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-PROTO-09"
@@ -1765,18 +1765,18 @@ record = ""
 [[legacy]]
 id = "DC-CONS-21"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-011"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-22"
 batch = "B05-consensus"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-010"]
 reason = ""
-record = ""
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-STORE-07"
@@ -1996,19 +1996,19 @@ record = ""
 
 [[legacy]]
 id = "CN-SEED-01"
-batch = "B05-consensus"
+batch = "B11-mithril-evidence"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-SEED-01"
-batch = "B05-consensus"
+batch = "B11-mithril-evidence"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-ANCHOR-01"
@@ -2164,27 +2164,27 @@ record = ""
 
 [[legacy]]
 id = "CN-CONS-IN-01"
-batch = "B05-consensus"
+batch = "B06-consensus-inputs"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-IN-01"
-batch = "B05-consensus"
+batch = "B06-consensus-inputs"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-IN-02"
-batch = "B05-consensus"
+batch = "B06-consensus-inputs"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-VIEW-01"
@@ -2788,11 +2788,11 @@ record = ""
 
 [[legacy]]
 id = "DC-CONS-23"
-batch = "B05-consensus"
+batch = "B10-pipeline-production"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-13"
@@ -2828,11 +2828,11 @@ record = ""
 
 [[legacy]]
 id = "DC-CONS-24"
-batch = "B05-consensus"
+batch = "B10-pipeline-production"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B05"
+record = "docs/planning/consensus.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-17"
