@@ -2146,6 +2146,17 @@ result = "fail"
 artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
 limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "9 named test(s) were not found in the test output at this revision: delegated_zero_stake_pool_is_included_with_zero, bootstrap_reward_update::tests (round-trip/version/commitment/tamper), reduced_window_driver drive_window_applies_bootstrap_reward_delta_to_the_aggregate, delegation apply_bootstrap_reward_deltas_sums_and_fails_closed_on_overflow, epoch_candidate seed2_window_without_rupd_fails_closed / seed2_window_with_wrong_epoch_rupd_fails_closed / seed2_window_with_correct_rupd_derives / non_seed2_window_without_rupd_is_a_strict_noop, epoch_candidate seed2_window_with_a_native_seed_authority_is_a_typed_terminal, bootstrap_reward_update a_v3_record_is_refused_not_reinterpreted, ade_ledger::rules::cert_state_dispatch::poolreap_ce3a (poolreap_reaps_exact_epoch_only -- == e reaped, > e and a STALE < e kept [proves == not <=]; poolreap_refund_registered_else_treasury -- registered operator refunded its deposit, unregistered -> treasury; poolreap_clears_reaped_pool_delegations -- THE dead-clear regression: a delegation to a reaped pool is cleared, a surviving one kept, the delegator registration preserved; poolreap_script_hash_reward_account_refunds_to_script_cred -- a 0xF0 reward account refunds to its ScriptHash credential, NOT a KeyHash projection of the same 28 bytes, and is not sent to treasury; poolreap_adopts_future_pool_params -- staged re-registration params adopted into the active set, future_pools drained, orphan future dropped) …", "ci/ci_check_eview_leadership_complete.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: aggregate_pool_stake still skips zero-stake delegated pools (cardano numDelegators>0 violated)\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence."]
 
+[[rules.evidence]]
+revision = "e563ad94718c21c20bc89441a3d3683c066b3e16"
+date = "2026-11-09"
+command = "cargo test -p <crate> --no-fail-fast for each workspace crate (ade_testkit with the three non-completing corpus tests skipped); bash ci/ci_check_eview_stake_aggregation.sh ci/ci_check_eview_leadership_complete.sh ci/ci_check_bootstrap_rupd_window_end.sh ci/ci_check_seed_reward_authority.sh ci/ci_check_poolreap_single_canonical.sh ci/ci_check_snapshot_fidelity.sh ci/ci_check_store_semantics_lock.sh"
+environment = "linux x86_64, workspace toolchain, local build; no live peer"
+expected = "every named test and CI script passes"
+observed = "tests: 20 passed, 0 failed, 0 ignored, 8 not found; CI scripts: 6 passed, 1 failed; failing CI: ci/ci_check_eview_leadership_complete.sh"
+result = "fail"
+artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
+limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "8 named test(s) were not found in the test output at this revision: delegated_zero_stake_pool_is_included_with_zero, bootstrap_reward_update::tests (round-trip/version/commitment/tamper), reduced_window_driver drive_window_applies_bootstrap_reward_delta_to_the_aggregate, delegation apply_bootstrap_reward_deltas_sums_and_fails_closed_on_overflow, epoch_candidate seed2_window_without_rupd_fails_closed / seed2_window_with_wrong_epoch_rupd_fails_closed / seed2_window_with_correct_rupd_derives / non_seed2_window_without_rupd_is_a_strict_noop, epoch_candidate seed2_window_with_a_native_seed_authority_is_a_typed_terminal, bootstrap_reward_update a_v3_record_is_refused_not_reinterpreted, ade_ledger::rules::cert_state_dispatch::poolreap_ce3a (poolreap_reaps_exact_epoch_only -- == e reaped, > e and a STALE < e kept [proves == not <=]; poolreap_refund_registered_else_treasury -- registered operator refunded its deposit, unregistered -> treasury; poolreap_clears_reaped_pool_delegations -- THE dead-clear regression: a delegation to a reaped pool is cleared, a surviving one kept, the delegator registration preserved; poolreap_script_hash_reward_account_refunds_to_script_cred -- a 0xF0 reward account refunds to its ScriptHash credential, NOT a KeyHash projection of the same 28 bytes, and is not sent to treasury; poolreap_adopts_future_pool_params -- staged re-registration params adopted into the active set, future_pools drained, orphan future dropped)", "ci/ci_check_eview_leadership_complete.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: aggregate_pool_stake still skips zero-stake delegated pools (cardano numDelegators>0 violated)\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence.", "Corrects this invariant's previous evidence record at the same revision: the earlier record's test matching missed references written as '<crate> tests/<file>.rs::<name>' or '<crate>::<path>'; the test outcomes are the same run's (docs/evidence/idse-m2-reevidence.json)."]
+
 [[rules]]
 id = "STR-007"
 name = "SingleEpochAuthority"
@@ -2293,6 +2304,17 @@ observed = "tests: 0 passed, 0 failed, 0 ignored, 5 not found; CI scripts: 0 pas
 result = "fail"
 artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
 limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "5 named test(s) were not found in the test output at this revision: ade_ledger::epoch_accumulator::tests (s3_live_proposal_captured_with_identity_epoch_and_expiry, s3_two_proposals_one_tx_get_sequential_indices_same_txid, s3_vote_on_tracked_proposal_is_terminal, s3_vote_on_untracked_proposal_is_carried_forward, s3_cross_tx_same_block_vote_on_just_submitted_proposal_is_terminal, s3_invalid_tx_carrying_proposal_is_fail_closed, s3_invalid_tx_carrying_vote_is_fail_closed, s3_malformed_field20_is_fail_closed, s3_malformed_field19_is_fail_closed, s3_block_without_governance_fields_is_noop, s3_capture_skips_non_gov_fields_and_is_replay_equivalent, s3_unproven_zero_lifetime_refuses_to_fabricate_expiry, s3_gov_state_none_is_untracked_and_skipped), ade_ledger::ledgerdb_state::tip_tests::v6_commitment_is_deterministic_and_binds_gov (v7 binds the imported gov_action_lifetime), ade_ledger tests/ledgerdb_nonutxo_hermetic.rs::happy_minimal_state_decodes_all_fields (imported_gov.gov_action_lifetime == 6 read from curPParams idx 26), ade_runtime::mithril_native_assembly::tests::native_assembly_maps_each_field_from_its_source (gov_state.gov_action_lifetime seeded from the import, not 0), ade_runtime::chaindb::epoch_accumulator_store::tests::governance_import_gate_rejects_absent_but_allows_empty (S2 absent != empty)", "ci/ci_check_gov_proposal_capture.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: VoteOnTrackedProposal terminal (vote tripwire) is missing\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence."]
+
+[[rules.evidence]]
+revision = "e563ad94718c21c20bc89441a3d3683c066b3e16"
+date = "2026-11-09"
+command = "cargo test -p <crate> --no-fail-fast for each workspace crate (ade_testkit with the three non-completing corpus tests skipped); bash ci/ci_check_gov_proposal_capture.sh"
+environment = "linux x86_64, workspace toolchain, local build; no live peer"
+expected = "every named test and CI script passes"
+observed = "tests: 4 passed, 0 failed, 0 ignored, 1 not found; CI scripts: 0 passed, 1 failed; failing CI: ci/ci_check_gov_proposal_capture.sh"
+result = "fail"
+artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
+limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "1 named test(s) were not found in the test output at this revision: ade_ledger::epoch_accumulator::tests (s3_live_proposal_captured_with_identity_epoch_and_expiry, s3_two_proposals_one_tx_get_sequential_indices_same_txid, s3_vote_on_tracked_proposal_is_terminal, s3_vote_on_untracked_proposal_is_carried_forward, s3_cross_tx_same_block_vote_on_just_submitted_proposal_is_terminal, s3_invalid_tx_carrying_proposal_is_fail_closed, s3_invalid_tx_carrying_vote_is_fail_closed, s3_malformed_field20_is_fail_closed, s3_malformed_field19_is_fail_closed, s3_block_without_governance_fields_is_noop, s3_capture_skips_non_gov_fields_and_is_replay_equivalent, s3_unproven_zero_lifetime_refuses_to_fabricate_expiry, s3_gov_state_none_is_untracked_and_skipped)", "ci/ci_check_gov_proposal_capture.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: VoteOnTrackedProposal terminal (vote tripwire) is missing\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence.", "Corrects this invariant's previous evidence record at the same revision: the earlier record's test matching missed references written as '<crate> tests/<file>.rs::<name>' or '<crate>::<path>'; the test outcomes are the same run's (docs/evidence/idse-m2-reevidence.json)."]
 
 [[rules]]
 id = "VAL-022"
@@ -2516,6 +2538,17 @@ result = "fail"
 artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
 limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "12 named test(s) were not found in the test output at this revision: delegated_zero_stake_pool_is_included_with_zero, ade_runtime::chaindb::epoch_accumulator_advance::tests::boundary_block_crosses_with_mark, ade_runtime::chaindb::epoch_accumulator_advance::tests::boundary_cross_is_idempotent, ade_runtime::chaindb::epoch_accumulator_advance::tests::boundary_cross_missing_block_is_a_fault, ade_runtime::chaindb::epoch_accumulator_store::tests::boundary_mark_witness_bind_read_clear_round_trip, ade_runtime::chaindb::epoch_accumulator_store::tests::boundary_mark_bind_requires_sealed, ade_runtime::chaindb::epoch_accumulator_store::tests::reset_to_bootstrap_drops_the_boundary_mark_binding, ade_runtime::chaindb::epoch_accumulator_store::tests::boundary_mark_binding_survives_reopen …", "ci/ci_check_eview_leadership_complete.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: aggregate_pool_stake still skips zero-stake delegated pools (cardano numDelegators>0 violated)\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence."]
 
+[[rules.evidence]]
+revision = "e563ad94718c21c20bc89441a3d3683c066b3e16"
+date = "2026-11-09"
+command = "cargo test -p <crate> --no-fail-fast for each workspace crate (ade_testkit with the three non-completing corpus tests skipped); bash ci/ci_check_eview_stake_aggregation.sh ci/ci_check_eview_leadership_complete.sh ci/ci_check_eview_source_window.sh ci/ci_check_eview_candidate.sh ci/ci_check_boundary_aligned_mark_capture.sh ci/ci_check_eview_refold_reseal.sh"
+environment = "linux x86_64, workspace toolchain, local build; no live peer"
+expected = "every named test and CI script passes"
+observed = "tests: 37 passed, 0 failed, 0 ignored, 1 not found; CI scripts: 5 passed, 1 failed; failing CI: ci/ci_check_eview_leadership_complete.sh"
+result = "fail"
+artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
+limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "1 named test(s) were not found in the test output at this revision: delegated_zero_stake_pool_is_included_with_zero", "ci/ci_check_eview_leadership_complete.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: aggregate_pool_stake still skips zero-stake delegated pools (cardano numDelegators>0 violated)\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence.", "Corrects this invariant's previous evidence record at the same revision: the earlier record's test matching missed references written as '<crate> tests/<file>.rs::<name>' or '<crate>::<path>'; the test outcomes are the same run's (docs/evidence/idse-m2-reevidence.json)."]
+
 [[rules]]
 id = "VAL-024"
 name = "LeadershipFromSealedView"
@@ -2552,6 +2585,17 @@ observed = "tests: 14 passed, 0 failed, 3 ignored, 13 not found; CI scripts: 5 p
 result = "fail"
 artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
 limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "13 named test(s) were not found in the test output at this revision: ade_ledger::frozen_leadership::tests (codec round-trip, stable + content-bound hash, zero-stake preserved, wrong-version / duplicate / unsorted / trailing rejected; to_pool_distr_view reads stake+VRF directly), ade_ledger::frozen_leadership::tests::from_boundary_snapshot_is_the_delegation_image_not_the_full_registered_set (numDelegators>0 membership: a registered-but-undelegated pool is excluded), ade_ledger::epoch_accumulator::tests::boundary_leadership_effect_batch_invariants_are_enforced (ordered/no-dup/labeled effect, typed terminal), ade_runtime::chaindb::epoch_accumulator_store::tests (S4-0 epoch-indexed: seal_current_and_read_exact_by_epoch, epoch_indexed_leadership_survives_reopen, leadership_authority_fails_closed_on_legacy_store, leadership_authority_rejects_missing_epoch_under_valid_marker, leadership_authority_rejects_wrong_epoch_object, leadership_authority_rejects_wrong_version_marker, leadership_authority_rejects_malformed_object, seal_bootstrap_leadership_epochs_rejects_duplicate_epoch), ade_runtime::chaindb::epoch_accumulator_store::tests::reset_to_bootstrap_restores_only_bootstrap_indexed_leadership (two-key epoch-indexed model: reset restores current := bootstrap, the native post-boundary epochs dropped), ade_runtime::chaindb::epoch_accumulator_store::tests::reset_clears_current_leadership_when_no_bootstrap_object, ade_runtime::chaindb::epoch_accumulator_store::tests::seal_advance_reset_round_trip_is_exact (accumulator seal -> advance -> reorg reset exact round-trip; advance_with_current_leadership seals accumulator + leadership in one redb commit), ce3d_boundary_differential::s4_0_epoch_indexed_leadership_acceptance_1338_to_1342 (full leadership band 1338..=1342 read by EXACT index: bootstrap 1338 seed-record + 1339 MARK, native 1340/1341/1342; distinct objects, byte-stable across reopen, reset restores current := bootstrap, off-band 1337/1343 + legacy store fail closed) …", "3 named test(s) are #[ignore]d and did not run.", "ci/ci_check_consensus_input_provenance.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: production file crates/ade_runtime/src/mithril_bootstrap.rs references merge_seed_epoch_consensus_inputs( outside the shared populator authority (CN-CINPUT-02)\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence.", "ci/ci_check_recovered_ledger_pparams_sourced.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: build_seed_ledger does not take a protocol_params argument (crates/ade_node/src/admission/seed_to_snapshot.rs)\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence.", "ci/ci_check_feed_leader_threshold_view.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: from_seed_epoch_consensus_inputs must be defined exactly once (the single projection authority); found 2\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence.", "ci/ci_check_eview_leadership_complete.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: aggregate_pool_stake still skips zero-stake delegated pools (cardano numDelegators>0 violated)\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence."]
+
+[[rules.evidence]]
+revision = "e563ad94718c21c20bc89441a3d3683c066b3e16"
+date = "2026-11-09"
+command = "cargo test -p <crate> --no-fail-fast for each workspace crate (ade_testkit with the three non-completing corpus tests skipped); bash ci/ci_check_consensus_input_provenance.sh ci/ci_check_recovered_ledger_pparams_sourced.sh ci/ci_check_feed_leader_threshold_view.sh ci/ci_check_eview_leadership_complete.sh ci/ci_check_frozen_leadership_authority.sh ci/ci_check_frozen_promotion_no_seed_window.sh ci/ci_check_frozen_recovery_no_seed_window.sh ci/ci_check_sigma_denominator_authority.sh ci/ci_check_store_semantics_lock.sh"
+environment = "linux x86_64, workspace toolchain, local build; no live peer"
+expected = "every named test and CI script passes"
+observed = "tests: 23 passed, 0 failed, 5 ignored, 2 not found; CI scripts: 5 passed, 4 failed; failing CI: ci/ci_check_consensus_input_provenance.sh, ci/ci_check_recovered_ledger_pparams_sourced.sh, ci/ci_check_feed_leader_threshold_view.sh, ci/ci_check_eview_leadership_complete.sh"
+result = "fail"
+artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
+limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "2 named test(s) were not found in the test output at this revision: ade_ledger::frozen_leadership::tests (codec round-trip, stable + content-bound hash, zero-stake preserved, wrong-version / duplicate / unsorted / trailing rejected; to_pool_distr_view reads stake+VRF directly), ade_runtime::chaindb::epoch_accumulator_store::tests (S4-0 epoch-indexed: seal_current_and_read_exact_by_epoch, epoch_indexed_leadership_survives_reopen, leadership_authority_fails_closed_on_legacy_store, leadership_authority_rejects_missing_epoch_under_valid_marker, leadership_authority_rejects_wrong_epoch_object, leadership_authority_rejects_wrong_version_marker, leadership_authority_rejects_malformed_object, seal_bootstrap_leadership_epochs_rejects_duplicate_epoch)", "5 named test(s) are #[ignore]d and did not run.", "ci/ci_check_consensus_input_provenance.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: production file crates/ade_runtime/src/mithril_bootstrap.rs references merge_seed_epoch_consensus_inputs( outside the shared populator authority (CN-CINPUT-02)\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence.", "ci/ci_check_recovered_ledger_pparams_sourced.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: build_seed_ledger does not take a protocol_params argument (crates/ade_node/src/admission/seed_to_snapshot.rs)\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence.", "ci/ci_check_feed_leader_threshold_view.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: from_seed_epoch_consensus_inputs must be defined exactly once (the single projection authority); found 2\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence.", "ci/ci_check_eview_leadership_complete.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: aggregate_pool_stake still skips zero-stake delegated pools (cardano numDelegators>0 violated)\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence.", "Corrects this invariant's previous evidence record at the same revision: the earlier record's test matching missed references written as '<crate> tests/<file>.rs::<name>' or '<crate>::<path>'; the test outcomes are the same run's (docs/evidence/idse-m2-reevidence.json)."]
 
 [[rules]]
 id = "ORD-005"
@@ -2923,6 +2967,17 @@ result = "pass"
 artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
 limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "5 named test(s) were not found in the test output at this revision: ade_ledger::epoch_accumulator::tests::build_boundary_mark_snapshot_omits_zero_stake_credential, ade_ledger::reduced_aggregate::tests::delegated_zero_stake_pool_is_omitted, ade_ledger::reduced_aggregate::tests::ssactivestake_membership_decision_table, ade_ledger::epoch_accumulator::tests::cross_epoch_boundary_per_credential_mark_pays_member_rewards, ade_ledger::epoch_accumulator::tests::codec_rejects_pre_c_v3_store_rebootstrap_required"]
 
+[[rules.evidence]]
+revision = "e563ad94718c21c20bc89441a3d3683c066b3e16"
+date = "2026-11-09"
+command = "cargo test -p <crate> --no-fail-fast for each workspace crate (ade_testkit with the three non-completing corpus tests skipped); bash ci/ci_check_snapshot_pool_set_inclusion.sh"
+environment = "linux x86_64, workspace toolchain, local build; no live peer"
+expected = "every named test and CI script passes"
+observed = "tests: 5 passed, 0 failed, 0 ignored, 0 not found; CI scripts: 1 passed, 0 failed"
+result = "pass"
+artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
+limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "Corrects this invariant's previous evidence record at the same revision: the earlier record's test matching missed references written as '<crate> tests/<file>.rs::<name>' or '<crate>::<path>'; the test outcomes are the same run's (docs/evidence/idse-m2-reevidence.json)."]
+
 [[rules]]
 id = "VAL-027"
 name = "OwnerStakeSelfDelegated"
@@ -3070,6 +3125,17 @@ observed = "tests: 12 passed, 0 failed, 0 ignored, 16 not found; CI scripts: 4 p
 result = "pass"
 artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
 limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "16 named test(s) were not found in the test output at this revision: bootstrap_reward_update::tests (round-trip/version/commitment/tamper), reduced_window_driver drive_window_applies_bootstrap_reward_delta_to_the_aggregate, delegation apply_bootstrap_reward_deltas_sums_and_fails_closed_on_overflow, epoch_candidate seed2_window_without_rupd_fails_closed / seed2_window_with_wrong_epoch_rupd_fails_closed / seed2_window_with_correct_rupd_derives / non_seed2_window_without_rupd_is_a_strict_noop, epoch_candidate seed2_window_with_a_native_seed_authority_is_a_typed_terminal, bootstrap_reward_update a_v3_record_is_refused_not_reinterpreted, ade_ledger::ledgerdb_state::tip_tests::read_reward_update_deltas_returns_delta_fees, ade_ledger::ledgerdb_state::tip_tests::read_reward_update_deltas_rejects_malformed_delta_fees …"]
+
+[[rules.evidence]]
+revision = "e563ad94718c21c20bc89441a3d3683c066b3e16"
+date = "2026-11-09"
+command = "cargo test -p <crate> --no-fail-fast for each workspace crate (ade_testkit with the three non-completing corpus tests skipped); bash ci/ci_check_bootstrap_rupd_window_end.sh ci/ci_check_seed_reward_authority.sh ci/ci_check_bootstrap_rupd_fee_reduction.sh ci/ci_check_store_semantics_lock.sh"
+environment = "linux x86_64, workspace toolchain, local build; no live peer"
+expected = "every named test and CI script passes"
+observed = "tests: 22 passed, 0 failed, 0 ignored, 6 not found; CI scripts: 4 passed, 0 failed"
+result = "pass"
+artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
+limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "6 named test(s) were not found in the test output at this revision: bootstrap_reward_update::tests (round-trip/version/commitment/tamper), reduced_window_driver drive_window_applies_bootstrap_reward_delta_to_the_aggregate, delegation apply_bootstrap_reward_deltas_sums_and_fails_closed_on_overflow, epoch_candidate seed2_window_without_rupd_fails_closed / seed2_window_with_wrong_epoch_rupd_fails_closed / seed2_window_with_correct_rupd_derives / non_seed2_window_without_rupd_is_a_strict_noop, epoch_candidate seed2_window_with_a_native_seed_authority_is_a_typed_terminal, bootstrap_reward_update a_v3_record_is_refused_not_reinterpreted", "Corrects this invariant's previous evidence record at the same revision: the earlier record's test matching missed references written as '<crate> tests/<file>.rs::<name>' or '<crate>::<path>'; the test outcomes are the same run's (docs/evidence/idse-m2-reevidence.json)."]
 
 [[rules]]
 id = "PRC-004"
@@ -4391,6 +4457,17 @@ observed = "tests: 5 passed, 0 failed, 0 ignored, 2 not found; CI scripts: 2 pas
 result = "pass"
 artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
 limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "2 named test(s) were not found in the test output at this revision: rollback_materialize_overlays_recovered_eta0_replay_equivalent (crates/ade_ledger/src/rollback/materialize.rs -- None overlay => VrfCert; Some(eta0) => Valid + materialized epoch_nonce == eta0 == the live-admit nonce basis), rollback_materialize_does_not_bypass_vrf_on_wrong_eta0 (crates/ade_ledger/src/rollback/materialize.rs -- a WRONG eta0 still fails the header VRF: the overlay is not a bypass)"]
+
+[[rules.evidence]]
+revision = "e563ad94718c21c20bc89441a3d3683c066b3e16"
+date = "2026-11-09"
+command = "cargo test -p <crate> --no-fail-fast for each workspace crate (ade_testkit with the three non-completing corpus tests skipped); bash ci/ci_check_rollback_materialize_closure.sh ci/ci_check_rollback_materialize_eta0.sh"
+environment = "linux x86_64, workspace toolchain, local build; no live peer"
+expected = "every named test and CI script passes"
+observed = "tests: 7 passed, 0 failed, 0 ignored, 0 not found; CI scripts: 2 passed, 0 failed"
+result = "pass"
+artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
+limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "Corrects this invariant's previous evidence record at the same revision: the earlier record's test matching missed references written as '<crate> tests/<file>.rs::<name>' or '<crate>::<path>'; the test outcomes are the same run's (docs/evidence/idse-m2-reevidence.json)."]
 
 [[rules]]
 id = "DET-014"
@@ -6764,6 +6841,17 @@ result = "pass"
 artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
 limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "4 named test(s) were not found in the test output at this revision: ade_node::convergence_evidence::tests::convergence_evidence_absent_path_emits_no_file, ade_node::convergence_evidence::tests::convergence_evidence_writer_emits_closed_vocabulary, ade_node::convergence_evidence::tests::convergence_evidence_write_failure_poisons_and_is_surfaced, ade_node::convergence_evidence::tests::convergence_evidence_context_marks_incomplete_on_write_failure"]
 
+[[rules.evidence]]
+revision = "e563ad94718c21c20bc89441a3d3683c066b3e16"
+date = "2026-11-09"
+command = "cargo test -p <crate> --no-fail-fast for each workspace crate (ade_testkit with the three non-completing corpus tests skipped); bash ci/ci_check_convergence_evidence_emit_only.sh ci/ci_check_convergence_evidence_vocabulary_closed.sh ci/ci_check_convergence_evidence_schema.sh"
+environment = "linux x86_64, workspace toolchain, local build; no live peer"
+expected = "every named test and CI script passes"
+observed = "tests: 7 passed, 0 failed, 0 ignored, 0 not found; CI scripts: 3 passed, 0 failed"
+result = "pass"
+artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
+limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "Corrects this invariant's previous evidence record at the same revision: the earlier record's test matching missed references written as '<crate> tests/<file>.rs::<name>' or '<crate>::<path>'; the test outcomes are the same run's (docs/evidence/idse-m2-reevidence.json)."]
+
 [[rules]]
 id = "SAF-018"
 name = "ReceiveIdempotentByHash"
@@ -7689,6 +7777,17 @@ result = "fail"
 artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
 limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "7 named test(s) were not found in the test output at this revision: ade_node::admission::runner::tests::run_admission_emits_shutdown_on_signal, ade_node::admission::runner::tests::run_admission_emits_shutdown_on_channel_close, ade_node::admission::runner::tests::run_admission_disconnect_to_zero_peers_clean_exit, ade_node::admission::seed_to_snapshot::tests::seed_to_snapshot_writes_via_persistent_cache, ade_node::admission::seed_to_snapshot::tests::seed_to_snapshot_returns_initial_ledger_fingerprint, ade_node::admission::seed_to_snapshot::tests::seed_to_snapshot_two_runs_byte_identical, ade_node::admission::seed_to_snapshot::tests::seed_to_snapshot_propagates_pre_conway_encode_error_as_authority_fatal", "ci/ci_check_admission_runner_closure.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: AdmissionInputs carries Option<_> fields (must be all-required):\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence."]
 
+[[rules.evidence]]
+revision = "e563ad94718c21c20bc89441a3d3683c066b3e16"
+date = "2026-11-09"
+command = "cargo test -p <crate> --no-fail-fast for each workspace crate (ade_testkit with the three non-completing corpus tests skipped); bash ci/ci_check_admission_runner_closure.sh ci/ci_check_admission_no_refscript_skip.sh"
+environment = "linux x86_64, workspace toolchain, local build; no live peer"
+expected = "every named test and CI script passes"
+observed = "tests: 7 passed, 0 failed, 0 ignored, 0 not found; CI scripts: 1 passed, 1 failed; failing CI: ci/ci_check_admission_runner_closure.sh"
+result = "fail"
+artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
+limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "ci/ci_check_admission_runner_closure.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: AdmissionInputs carries Option<_> fields (must be all-required):\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence.", "Corrects this invariant's previous evidence record at the same revision: the earlier record's test matching missed references written as '<crate> tests/<file>.rs::<name>' or '<crate>::<path>'; the test outcomes are the same run's (docs/evidence/idse-m2-reevidence.json)."]
+
 [[rules]]
 id = "OBS-006"
 name = "AgreementVerdictEvidenceOnly"
@@ -7725,6 +7824,17 @@ observed = "tests: 0 passed, 0 failed, 0 ignored, 8 not found; CI scripts: 1 pas
 result = "pass"
 artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
 limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "8 named test(s) were not found in the test output at this revision: ade_node::admission::verdict::tests::verdict_agreed_when_hashes_match, ade_node::admission::verdict::tests::verdict_diverged_when_our_admit_differs_from_peer_hash, ade_node::admission::verdict::tests::verdict_diverged_when_admit_invalid_at_same_slot, ade_node::admission::verdict::tests::verdict_lagging_when_peer_ahead_of_our_slot, ade_node::admission::verdict::tests::verdict_input_not_found_when_admit_missing_input, ade_node::admission::verdict::tests::verdict_lagging_when_peer_tip_is_origin, ade_node::admission::verdict::tests::verdict_derive_is_pure_two_runs_byte_identical, ade_node::admission::verdict::tests::verdict_kind_discriminator_round_trips_each_variant"]
+
+[[rules.evidence]]
+revision = "e563ad94718c21c20bc89441a3d3683c066b3e16"
+date = "2026-11-09"
+command = "cargo test -p <crate> --no-fail-fast for each workspace crate (ade_testkit with the three non-completing corpus tests skipped); bash ci/ci_check_lagging_is_evidence_only.sh"
+environment = "linux x86_64, workspace toolchain, local build; no live peer"
+expected = "every named test and CI script passes"
+observed = "tests: 8 passed, 0 failed, 0 ignored, 0 not found; CI scripts: 1 passed, 0 failed"
+result = "pass"
+artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
+limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "Corrects this invariant's previous evidence record at the same revision: the earlier record's test matching missed references written as '<crate> tests/<file>.rs::<name>' or '<crate>::<path>'; the test outcomes are the same run's (docs/evidence/idse-m2-reevidence.json)."]
 
 [[rules]]
 id = "OBS-007"
@@ -7763,6 +7873,17 @@ result = "fail"
 artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
 limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "1 named test(s) were not found in the test output at this revision: ade_node::admission::runner::tests::run_admission_emits_shutdown_on_signal", "ci/ci_check_admission_runner_closure.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: AdmissionInputs carries Option<_> fields (must be all-required):\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence."]
 
+[[rules.evidence]]
+revision = "e563ad94718c21c20bc89441a3d3683c066b3e16"
+date = "2026-11-09"
+command = "cargo test -p <crate> --no-fail-fast for each workspace crate (ade_testkit with the three non-completing corpus tests skipped); bash ci/ci_check_admission_runner_closure.sh ci/ci_check_admit_replay_equivalence.sh ci/ci_check_live_ledger_view_epoch_window.sh ci/ci_check_admission_log_vocabulary_closed.sh"
+environment = "linux x86_64, workspace toolchain, local build; no live peer"
+expected = "every named test and CI script passes"
+observed = "tests: 8 passed, 0 failed, 0 ignored, 0 not found; CI scripts: 3 passed, 1 failed; failing CI: ci/ci_check_admission_runner_closure.sh"
+result = "fail"
+artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
+limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "ci/ci_check_admission_runner_closure.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: AdmissionInputs carries Option<_> fields (must be all-required):\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence.", "Corrects this invariant's previous evidence record at the same revision: the earlier record's test matching missed references written as '<crate> tests/<file>.rs::<name>' or '<crate>::<path>'; the test outcomes are the same run's (docs/evidence/idse-m2-reevidence.json)."]
+
 [[rules]]
 id = "SAF-024"
 name = "AdmissionDivergenceHalts"
@@ -7800,6 +7921,17 @@ result = "fail"
 artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
 limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "2 named test(s) were not found in the test output at this revision: ade_node::admission::runner::tests::exit_code_constants_round_trip_to_i32, ade_node::admission::runner::tests::halt_for_verdict_only_diverged_or_input_not_found_halts", "ci/ci_check_admission_runner_closure.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: AdmissionInputs carries Option<_> fields (must be all-required):\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence."]
 
+[[rules.evidence]]
+revision = "e563ad94718c21c20bc89441a3d3683c066b3e16"
+date = "2026-11-09"
+command = "cargo test -p <crate> --no-fail-fast for each workspace crate (ade_testkit with the three non-completing corpus tests skipped); bash ci/ci_check_admission_runner_closure.sh ci/ci_check_live_ledger_view_epoch_window.sh ci/ci_check_admission_wire_pump_closure.sh"
+environment = "linux x86_64, workspace toolchain, local build; no live peer"
+expected = "every named test and CI script passes"
+observed = "tests: 5 passed, 0 failed, 0 ignored, 0 not found; CI scripts: 2 passed, 1 failed; failing CI: ci/ci_check_admission_runner_closure.sh"
+result = "fail"
+artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
+limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "ci/ci_check_admission_runner_closure.sh fails at this revision and already failed before the IDSE migration (a3cef7f7): \"FAIL: AdmissionInputs carries Option<_> fields (must be all-required):\". Diagnosed as a stale or over-broad structural gate, not a demonstrated violation; the gate needs repair before it can serve as evidence.", "Corrects this invariant's previous evidence record at the same revision: the earlier record's test matching missed references written as '<crate> tests/<file>.rs::<name>' or '<crate>::<path>'; the test outcomes are the same run's (docs/evidence/idse-m2-reevidence.json)."]
+
 [[rules]]
 id = "OBS-008"
 name = "ClosedIsolatedEventVocabularies"
@@ -7836,6 +7968,17 @@ observed = "tests: 5 passed, 0 failed, 0 ignored, 9 not found; CI scripts: 2 pas
 result = "pass"
 artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
 limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "9 named test(s) were not found in the test output at this revision: ade_node::admission_log::event::tests::admission_log_event_discriminator_round_trips_for_each_variant, ade_node::admission_log::event::tests::admission_log_event_match_is_exhaustive, ade_node::admission_log::event::tests::admission_log_event_agreement_verdict_carries_kind_discriminator, ade_node::admission_log::writer::tests::admission_log_writer_emits_one_object_per_line, ade_node::admission_log::writer::tests::admission_log_writer_serializes_admission_started_canonically, ade_node::admission_log::writer::tests::admission_log_writer_two_runs_are_byte_identical, ade_node::admission_log::writer::tests::admission_log_writer_emits_agreement_verdict_with_kind_field, ade_node::admission_log::writer::tests::admission_log_writer_omits_optional_fields_when_none …"]
+
+[[rules.evidence]]
+revision = "e563ad94718c21c20bc89441a3d3683c066b3e16"
+date = "2026-11-09"
+command = "cargo test -p <crate> --no-fail-fast for each workspace crate (ade_testkit with the three non-completing corpus tests skipped); bash ci/ci_check_admission_log_vocabulary_closed.sh ci/ci_check_convergence_evidence_vocabulary_closed.sh"
+environment = "linux x86_64, workspace toolchain, local build; no live peer"
+expected = "every named test and CI script passes"
+observed = "tests: 14 passed, 0 failed, 0 ignored, 0 not found; CI scripts: 2 passed, 0 failed"
+result = "pass"
+artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
+limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "Corrects this invariant's previous evidence record at the same revision: the earlier record's test matching missed references written as '<crate> tests/<file>.rs::<name>' or '<crate>::<path>'; the test outcomes are the same run's (docs/evidence/idse-m2-reevidence.json)."]
 
 [[rules]]
 id = "VAL-062"
@@ -8319,7 +8462,7 @@ introduced_in = ""
 strengthened_in = []
 status = "active"
 deprecated_in = ""
-claim_status = "partial"
+claim_status = "unresolved"
 legacy_ids = ["DC-CINPUT-07"]
 
 [[rules.evidence]]
@@ -8332,6 +8475,17 @@ observed = "tests: 0 passed, 0 failed, 0 ignored, 13 not found; CI scripts: 1 pa
 result = "pass"
 artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
 limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "13 named test(s) were not found in the test output at this revision: ade_ledger tests/ledgerdb_nonutxo_hermetic.rs::happy_minimal_state_decodes_all_fields (conway_deposit_params decoded from curPParams idx 27/28/29), ade_ledger tests/ledgerdb_nonutxo_hermetic.rs::malformed_drep_activity_type_is_terminal (wrong CBOR type at idx 29 -> MalformedCbor), ade_ledger tests/ledgerdb_nonutxo_hermetic.rs::malformed_pparams_arity_is_terminal (curPParams arity < 31 -> ProtocolParamsMissing), ade_ledger tests/ledgerdb_nonutxo_hermetic.rs::wrong_era_is_terminal (pre-Conway native state -> UnsupportedEra), ade_ledger::ledgerdb_state::tip_tests::v6_commitment_is_deterministic_and_binds_gov (v12 binds conway_deposit_params.drep_activity), ade_ledger::fingerprint::tests::tampered_drep_activity_flips_pparams_fingerprint, ade_ledger::fingerprint::tests::pparams_fingerprint_includes_conway_deposits_when_present, ade_ledger::epoch_accumulator::tests::codec_v2_conway_without_deposit_params_fails_closed (v2 + None -> MissingConwayDepositParams) …"]
+
+[[rules.evidence]]
+revision = "e563ad94718c21c20bc89441a3d3683c066b3e16"
+date = "2026-11-09"
+command = "cargo test -p <crate> --no-fail-fast for each workspace crate (ade_testkit with the three non-completing corpus tests skipped); bash ci/ci_check_conway_deposit_params_bootstrap.sh"
+environment = "linux x86_64, workspace toolchain, local build; no live peer"
+expected = "every named test and CI script passes"
+observed = "tests: 12 passed, 1 failed, 0 ignored, 0 not found; CI scripts: 1 passed, 0 failed; failing tests: ade_testkit tests/conway_deposit_params_single_decoder.rs::harness_and_blue_decoder_agree_on_conway_deposit_params (one-decoder proof: harness == BLUE on the same bytes)"
+result = "fail"
+artifacts = ["docs/evidence/idse-m2-reevidence.json sha256:2409cf6b014553008b719fa8ea9a0cba8d998e0cc3fe83d879eac6f5daf14d47"]
+limits = ["No IDSE cluster has declared acceptance obligations for this invariant yet (Doctrine §10); this record re-runs the checks carried from the legacy registry.", "No mutation witness exists yet for this critical invariant (Doctrine §28).", "harness_and_blue_decoder_agree_on_conway_deposit_params fails because its synthetic fixture holds a pool with stake but no frozen parameters, which the decoder now refuses (VAL-028); the fixture is stale, not a counterexample to this invariant.", "Corrects this invariant's previous evidence record at the same revision: the earlier record's test matching missed references written as '<crate> tests/<file>.rs::<name>' or '<crate>::<path>'; the test outcomes are the same run's (docs/evidence/idse-m2-reevidence.json)."]
 
 [[rules]]
 id = "SEC-033"
