@@ -485,10 +485,10 @@ record = "docs/planning/network.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-NET-01"
 batch = "B12-resources-release"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = "deferred by B08 S4"
-record = "docs/planning/network.define.consensus.md#batch-1"
+reason = "B12 S6 — three-tier peer governor declared, never designed; adding one needs its own Define"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-05"
@@ -525,82 +525,82 @@ record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-MEM-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-067"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MEM-02"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-035"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MEM-03"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-022"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MEM-04"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-024"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MEM-05"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-025"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MEM-06"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-025"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MEM-07"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-025"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MEM-08"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-025"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MEM-09"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-025"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MEM-10"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-026"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CORE-01"
@@ -909,66 +909,66 @@ record = "docs/planning/network.define.consensus.md#batch-1"
 [[legacy]]
 id = "CN-NET-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-037"]
 reason = "deferred by B08 S4"
-record = "docs/planning/network.define.consensus.md#batch-1"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-NET-02"
 batch = "B12-resources-release"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = "deferred by B08 S4"
-record = "docs/planning/network.define.consensus.md#batch-1"
+reason = "B12 S3 — relay diversity is an operator deployment requirement, not a property of Ade"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-NET-03"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
-reason = "deferred by B08 S4"
-record = "docs/planning/network.define.consensus.md#batch-1"
+disposition = "merged"
+new_ids = ["DET-012", "LIV-003", "SEC-028"]
+reason = "B12 S4"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-NET-04"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
-reason = "deferred by B08 S4"
-record = "docs/planning/network.define.consensus.md#batch-1"
+disposition = "merged"
+new_ids = ["SEC-028"]
+reason = "B12 S5"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-MEM-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-035"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-MEM-02"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["LIV-010"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-MEM-03"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-035"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-MEM-04"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-067"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-STORE-01"
@@ -1085,74 +1085,74 @@ record = "docs/planning/foundations.define.consensus.md#batch-1"
 [[legacy]]
 id = "CN-TEST-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-014"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-TEST-02"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-015"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-TEST-03"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-001"]
+reason = "B12 S7"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-REL-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-016"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-REL-02"
 batch = "B12-resources-release"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = ""
-record = ""
+reason = "B12 S9 — ecosystem fault-threshold property no check within Ade can decide"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-REL-03"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-014"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-OPS-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["REC-008"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-OPS-02"
 batch = "B12-resources-release"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = ""
-record = ""
+reason = "B12 S11 — re-bootstrap from a verified source is Ade's only recovery procedure (EVO-005, SEC-015)"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-OPS-03"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-001", "REC-004"]
+reason = "B12 S12"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-META-01"
@@ -1181,114 +1181,114 @@ record = "docs/planning/foundations.define.consensus.md#batch-1"
 [[legacy]]
 id = "RO-TEST-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-014"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "RO-TEST-02"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-015"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "RO-TEST-03"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-001"]
+reason = "B12 S7"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "RO-REL-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-016"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "RO-REL-02"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-014"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "RO-REL-03"
 batch = "B12-resources-release"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = ""
-record = ""
+reason = "B12 S9 — ecosystem fault-threshold property no check within Ade can decide"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "OP-NET-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-037"]
 reason = "deferred by B08 S4"
-record = "docs/planning/network.define.consensus.md#batch-1"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "OP-NET-02"
 batch = "B12-resources-release"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = "deferred by B08 S4"
-record = "docs/planning/network.define.consensus.md#batch-1"
+reason = "B12 S3 — relay diversity is an operator deployment requirement, not a property of Ade"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "OP-NET-03"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
-reason = "deferred by B08 S4"
-record = "docs/planning/network.define.consensus.md#batch-1"
+disposition = "merged"
+new_ids = ["DET-012", "LIV-003", "SEC-028"]
+reason = "B12 S4"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "OP-MEM-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["LIV-010"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "OP-MEM-02"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-013"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "OP-OPS-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["REC-008"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "OP-OPS-02"
 batch = "B12-resources-release"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = ""
-record = ""
+reason = "B12 S11 — re-bootstrap from a verified source is Ade's only recovery procedure (EVO-005, SEC-015)"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "OP-OPS-03"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-001", "REC-004"]
+reason = "B12 S12"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-03"
@@ -1621,10 +1621,10 @@ record = "docs/planning/ledger.define.consensus.md#batch-1"
 [[legacy]]
 id = "CN-CONS-06"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-023"]
 reason = "deferred by B05"
-record = "docs/planning/consensus.define.consensus.md#batch-1"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CONS-07"
@@ -1637,18 +1637,18 @@ record = "docs/planning/pipeline-production.define.consensus.md#batch-1"
 [[legacy]]
 id = "OP-OPS-04"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["SEC-006", "SEC-001", "SEC-005", "SEC-027"]
+reason = "B12 S14"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "OP-OPS-05"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["LIV-011"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-17"
@@ -1693,10 +1693,10 @@ record = "docs/planning/network.define.consensus.md#batch-1"
 [[legacy]]
 id = "RO-LIVE-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["VAL-060"]
+reason = "B12 S13"
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CONS-08"
@@ -1757,10 +1757,10 @@ record = "docs/planning/network.define.consensus.md#batch-1"
 [[legacy]]
 id = "RO-LIVE-02"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-021"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-21"
@@ -1973,26 +1973,26 @@ record = "docs/planning/network.define.consensus.md#batch-1"
 [[legacy]]
 id = "RO-LIVE-03"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-021"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "RO-LIVE-04"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-022"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "RO-LIVE-05"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-021"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-SEED-01"
@@ -2421,10 +2421,10 @@ record = "docs/planning/network.define.consensus.md#batch-1"
 [[legacy]]
 id = "CN-OPERATOR-EVIDENCE-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-018"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-PROD-03"
@@ -2469,10 +2469,10 @@ record = "docs/planning/pipeline-production.define.consensus.md#batch-1"
 [[legacy]]
 id = "RO-CLOSE-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-017"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-MITHRIL-01"
@@ -2581,10 +2581,10 @@ record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 [[legacy]]
 id = "RO-LIVE-06"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-018"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-NODE-02"
@@ -2637,26 +2637,26 @@ record = "docs/planning/node.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-LIVEMEM-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-038"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-SERVEMEM-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-036"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-REHEARSAL-FIDELITY-01"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-019"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-07"
@@ -3173,10 +3173,10 @@ record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-MEM-11"
 batch = "B12-resources-release"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-026"]
 reason = ""
-record = ""
+record = "docs/planning/resources-release.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-FOLLOW-01"

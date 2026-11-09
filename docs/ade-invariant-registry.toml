@@ -19,7 +19,7 @@
 
 schema_version = 3
 project = "ADE"
-registry_count = 236
+registry_count = 260
 
 [[assumptions]]
 id = "A1"
@@ -236,7 +236,7 @@ legacy_ids = ["T-CORE-03"]
 [[rules]]
 id = "DET-005"
 name = "StructuredDeterministicFailures"
-invariant = "Every consensus-relevant failure, whether a rejection a transition returns or an internal inconsistency that triggers the halt of #8, is reported as a value of a closed, structured type that carries no free-form text and no host-dependent content; given equivalent prior state, canonical input, protocol version and explicit context, two executions report byte-identical failures."
+invariant = "Every consensus-relevant failure, whether a rejection a transition returns or an internal inconsistency that triggers the halt of SAF-002, is reported as a value of a closed, structured type that carries no free-form text and no host-dependent content; given equivalent prior state, canonical input, protocol version and explicit context, two executions report byte-identical failures."
 counterexample = "A ledger rejection that carries a formatted string containing a file path, or two runs from the same state, transaction, protocol version and context that reject with different error variants."
 family = "DET"
 secondary_families = ["OBS"]
@@ -251,7 +251,7 @@ enforcement_superseded = []
 tests = []
 ci_scripts = []
 approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
-redefinitions = []
+redefinitions = [{ date = "2026-11-09", by = "wdm33", nature = "reinterpret", record = "docs/planning/resources-release.define.consensus.md#batch-1", evidence_before = 0, previous = { invariant = "Every consensus-relevant failure, whether a rejection a transition returns or an internal inconsistency that triggers the halt of #8, is reported as a value of a closed, structured type that carries no free-form text and no host-dependent content; given equivalent prior state, canonical input, protocol version and explicit context, two executions report byte-identical failures." } }]
 introduced_in = ""
 strengthened_in = []
 status = "active"
@@ -834,7 +834,7 @@ legacy_ids = ["DC-CRYPTO-05", "DC-CRYPTO-10"]
 [[rules]]
 id = "VAL-006"
 name = "SigningMatchesReference"
-invariant = "Ade's Sum6 KES and Praos VRF signing produce output byte-identical to the Haskell cardano-base reference for every input: verification-key derivation, key generation from a seed, evolution across all 64 periods, KES signatures and VRF proofs; every KES signature and VRF proof Ade emits verifies under Ade's own verifier (#8) with the matching verification key; the 608-byte expanded KES signing key serializes and deserializes byte-identically to the reference for every period from 0 to 63, with the current period inferred uniquely from the key's tree shape. The algorithm is Ade's own code: no production path builds a key of an upstream library through unsafe layout assumptions, transmute, vendored private access or fork-only constructors."
+invariant = "Ade's Sum6 KES and Praos VRF signing produce output byte-identical to the Haskell cardano-base reference for every input: verification-key derivation, key generation from a seed, evolution across all 64 periods, KES signatures and VRF proofs; every KES signature and VRF proof Ade emits verifies under Ade's own verifier (SEC-003) with the matching verification key; the 608-byte expanded KES signing key serializes and deserializes byte-identically to the reference for every period from 0 to 63, with the current period inferred uniquely from the key's tree shape. The algorithm is Ade's own code: no production path builds a key of an upstream library through unsafe layout assumptions, transmute, vendored private access or fork-only constructors."
 counterexample = "A seed expansion that uses different prefix bytes from cardano-base, so the derived verification key differs from the one cardano-cli derives from the same key file."
 family = "VAL"
 secondary_families = ["DET"]
@@ -849,7 +849,7 @@ enforcement_superseded = []
 tests = []
 ci_scripts = []
 approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1" }
-redefinitions = []
+redefinitions = [{ date = "2026-11-09", by = "wdm33", nature = "reinterpret", record = "docs/planning/resources-release.define.consensus.md#batch-1", evidence_before = 0, previous = { invariant = "Ade's Sum6 KES and Praos VRF signing produce output byte-identical to the Haskell cardano-base reference for every input: verification-key derivation, key generation from a seed, evolution across all 64 periods, KES signatures and VRF proofs; every KES signature and VRF proof Ade emits verifies under Ade's own verifier (#8) with the matching verification key; the 608-byte expanded KES signing key serializes and deserializes byte-identically to the reference for every period from 0 to 63, with the current period inferred uniquely from the key's tree shape. The algorithm is Ade's own code: no production path builds a key of an upstream library through unsafe layout assumptions, transmute, vendored private access or fork-only constructors." } }]
 introduced_in = ""
 strengthened_in = []
 status = "active"
@@ -1094,7 +1094,7 @@ legacy_ids = ["DC-VAL-06"]
 [[rules]]
 id = "SEC-008"
 name = "WitnessesBindTransaction"
-invariant = "A Conway transaction is accepted only if every key authority it requires has a key or bootstrap witness that verifies over the transaction's preserved body hash, where the required key authorities are the closed set of the key-hash payment credentials and bootstrap addresses of its resolved spending and collateral inputs, its explicit required signers, and the key-hash credentials its certificates, withdrawals, votes and proposals require; every key and bootstrap witness it supplies, required or not, verifies under its own key over that hash. Script-hash credentials are authorized by script witnesses, not keys (#19)."
+invariant = "A Conway transaction is accepted only if every key authority it requires has a key or bootstrap witness that verifies over the transaction's preserved body hash, where the required key authorities are the closed set of the key-hash payment credentials and bootstrap addresses of its resolved spending and collateral inputs, its explicit required signers, and the key-hash credentials its certificates, withdrawals, votes and proposals require; every key and bootstrap witness it supplies, required or not, verifies under its own key over that hash. Script-hash credentials are authorized by script witnesses, not keys (SEC-010)."
 counterexample = "A transaction that withdraws rewards from a key-hash stake credential with no witness for that key, which is accepted; or a supplied but unneeded witness with an invalid signature, which is accepted."
 family = "SEC"
 secondary_families = ["VAL"]
@@ -1109,7 +1109,7 @@ enforcement_superseded = []
 tests = []
 ci_scripts = []
 approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/ledger.define.consensus.md#batch-1" }
-redefinitions = []
+redefinitions = [{ date = "2026-11-09", by = "wdm33", nature = "reinterpret", record = "docs/planning/resources-release.define.consensus.md#batch-1", evidence_before = 0, previous = { invariant = "A Conway transaction is accepted only if every key authority it requires has a key or bootstrap witness that verifies over the transaction's preserved body hash, where the required key authorities are the closed set of the key-hash payment credentials and bootstrap addresses of its resolved spending and collateral inputs, its explicit required signers, and the key-hash credentials its certificates, withdrawals, votes and proposals require; every key and bootstrap witness it supplies, required or not, verifies under its own key over that hash. Script-hash credentials are authorized by script witnesses, not keys (#19)." } }]
 introduced_in = ""
 strengthened_in = []
 status = "active"
@@ -1718,7 +1718,7 @@ legacy_ids = ["DC-EPOCH-16", "DC-EPOCH-38"]
 [[rules]]
 id = "SAF-004"
 name = "AtMostOneActivationPerEpoch"
-invariant = "Within one canonical chain history, at most one epoch view activates for each target epoch, and its durable activation record holds the view's complete identity: target epoch, network, era, transition point, source checkpoint commitment, snapshot phase, nonce commitment and the view's canonical hashes. A second record for the same target epoch on the same history is an idempotent replay if it is byte-identical to the first and a terminal conflict otherwise. A rollback that abandons an activation's transition point invalidates that activation record with the rollback, before any replacement activation for the epoch, and the record is never reused (#16)."
+invariant = "Within one canonical chain history, at most one epoch view activates for each target epoch, and its durable activation record holds the view's complete identity: target epoch, network, era, transition point, source checkpoint commitment, snapshot phase, nonce commitment and the view's canonical hashes. A second record for the same target epoch on the same history is an idempotent replay if it is byte-identical to the first and a terminal conflict otherwise. A rollback that abandons an activation's transition point invalidates that activation record with the rollback, before any replacement activation for the epoch, and the record is never reused (DET-009)."
 counterexample = "After a restart the node activates a second, different view for an epoch whose view was already activated, or the activation record holds only a hash and a point, so a different view with a colliding point would be accepted on recovery."
 family = "SAF"
 secondary_families = ["FIN"]
@@ -1733,7 +1733,7 @@ enforcement_superseded = []
 tests = []
 ci_scripts = []
 approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/epoch.define.consensus.md#batch-1" }
-redefinitions = []
+redefinitions = [{ date = "2026-11-09", by = "wdm33", nature = "reinterpret", record = "docs/planning/resources-release.define.consensus.md#batch-1", evidence_before = 0, previous = { invariant = "Within one canonical chain history, at most one epoch view activates for each target epoch, and its durable activation record holds the view's complete identity: target epoch, network, era, transition point, source checkpoint commitment, snapshot phase, nonce commitment and the view's canonical hashes. A second record for the same target epoch on the same history is an idempotent replay if it is byte-identical to the first and a terminal conflict otherwise. A rollback that abandons an activation's transition point invalidates that activation record with the rollback, before any replacement activation for the epoch, and the record is never reused (#16)." } }]
 introduced_in = ""
 strengthened_in = []
 status = "active"
@@ -2004,7 +2004,7 @@ legacy_ids = ["DC-EPOCH-28"]
 [[rules]]
 id = "LIV-001"
 name = "BoundedRefold"
-invariant = "When a settled rewind point exists and every proof about it holds (canonical at its slot, at least k blocks below the tip, at or before the rollback target, fingerprint verified), re-deriving the epoch accumulator after a rollback replays at most 2k blocks, independent of how long the node has run: once the chain has advanced 2k blocks past bootstrap, the settled point is between k and 2k blocks below the tip, and it survives the recovery pass that follows a durable rollback, being re-proved against the chain as it stands after the rollback commits rather than discarded. Before a settled point exists, or when a proof fails, the refold starts from the certified bootstrap baseline (#15, #19)."
+invariant = "When a settled rewind point exists and every proof about it holds (canonical at its slot, at least k blocks below the tip, at or before the rollback target, fingerprint verified), re-deriving the epoch accumulator after a rollback replays at most 2k blocks, independent of how long the node has run: once the chain has advanced 2k blocks past bootstrap, the settled point is between k and 2k blocks below the tip, and it survives the recovery pass that follows a durable rollback, being re-proved against the chain as it stands after the rollback commits rather than discarded. Before a settled point exists, or when a proof fails, the refold starts from the certified bootstrap baseline (REC-001, DUR-002)."
 counterexample = "Every rollback rewinds to the bootstrap anchor, so after weeks of uptime a one-block reorg costs a ten-hour refold and the node misses its leadership slots; or the recovery pass after a rollback deletes a valid settled point and refolds from bootstrap."
 family = "LIV"
 secondary_families = ["REC"]
@@ -2019,7 +2019,7 @@ enforcement_superseded = []
 tests = []
 ci_scripts = []
 approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/epoch.define.consensus.md#batch-1" }
-redefinitions = []
+redefinitions = [{ date = "2026-11-09", by = "wdm33", nature = "reinterpret", record = "docs/planning/resources-release.define.consensus.md#batch-1", evidence_before = 0, previous = { invariant = "When a settled rewind point exists and every proof about it holds (canonical at its slot, at least k blocks below the tip, at or before the rollback target, fingerprint verified), re-deriving the epoch accumulator after a rollback replays at most 2k blocks, independent of how long the node has run: once the chain has advanced 2k blocks past bootstrap, the settled point is between k and 2k blocks below the tip, and it survives the recovery pass that follows a durable rollback, being re-proved against the chain as it stands after the rollback commits rather than discarded. Before a settled point exists, or when a proof fails, the refold starts from the certified bootstrap baseline (#15, #19)." } }]
 introduced_in = ""
 strengthened_in = []
 status = "active"
@@ -2368,7 +2368,7 @@ legacy_ids = ["T-CONS-01", "CN-CONS-01", "DC-CONSENSUS-01", "DC-CONS-03"]
 [[rules]]
 id = "LIV-003"
 name = "PartitionConvergence"
-invariant = "If, after a network partition heals, the node keeps receiving from at least one peer that offers the chain the network is converging on (N1), and that chain forks from the node's selection at most k blocks deep, then the node's selected chain eventually equals the chain the reference selection rule prefers among the valid chains delivered to it that #5 allows it to adopt, its current selection included, with ties between equally preferred chains settled as the reference rule settles them; it chooses using only protocol-defined observables."
+invariant = "If, after a network partition heals, the node keeps receiving from at least one peer that offers the chain the network is converging on (N1), and that chain forks from the node's selection at most k blocks deep, then the node's selected chain eventually equals the chain the reference selection rule prefers among the valid chains delivered to it that SAF-007 allows it to adopt, its current selection included, with ties between equally preferred chains settled as the reference rule settles them; it chooses using only protocol-defined observables."
 counterexample = "After a partition heals and the honest chain has been delivered, Ade keeps its own shorter fork indefinitely because it treats blocks it forged as preferred."
 family = "LIV"
 secondary_families = ["FIN"]
@@ -2383,7 +2383,7 @@ enforcement_superseded = []
 tests = []
 ci_scripts = []
 approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus.define.consensus.md#batch-1" }
-redefinitions = []
+redefinitions = [{ date = "2026-11-09", by = "wdm33", nature = "reinterpret", record = "docs/planning/resources-release.define.consensus.md#batch-1", evidence_before = 0, previous = { invariant = "If, after a network partition heals, the node keeps receiving from at least one peer that offers the chain the network is converging on (N1), and that chain forks from the node's selection at most k blocks deep, then the node's selected chain eventually equals the chain the reference selection rule prefers among the valid chains delivered to it that #5 allows it to adopt, its current selection included, with ties between equally preferred chains settled as the reference rule settles them; it chooses using only protocol-defined observables." } }]
 introduced_in = ""
 strengthened_in = []
 status = "active"
@@ -2992,7 +2992,7 @@ legacy_ids = ["CN-CINPUT-01"]
 [[rules]]
 id = "SAF-009"
 name = "CandidateViewHashVerified"
-invariant = "Before an epoch view or sealed leadership object is activated or read, its canonical hash is recomputed over every binding (network, era, epoch, source point, checkpoint commitment, nonce, snapshot phase and profile commitment) and over its whole stake and VRF payload, and must equal its stored hash; its bindings cannot change once bound. The profile commitment it binds is blake2b-256 over a domain tag, the genesis hash, the protocol-parameter hash and the active-slot coefficient, all three taken from the durable consensus profile (#6)."
+invariant = "Before an epoch view or sealed leadership object is activated or read, its canonical hash is recomputed over every binding (network, era, epoch, source point, checkpoint commitment, nonce, snapshot phase and profile commitment) and over its whole stake and VRF payload, and must equal its stored hash; its bindings cannot change once bound. The profile commitment it binds is blake2b-256 over a domain tag, the genesis hash, the protocol-parameter hash and the active-slot coefficient, all three taken from the durable consensus profile (DUR-005)."
 counterexample = "A sealed object corrupted on disk keeps its stored identity fields, is matched by identity alone, and its altered stake map decides leadership."
 family = "SAF"
 secondary_families = ["DUR"]
@@ -3007,7 +3007,7 @@ enforcement_superseded = []
 tests = []
 ci_scripts = []
 approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/consensus-inputs.define.consensus.md#batch-1" }
-redefinitions = []
+redefinitions = [{ date = "2026-11-09", by = "wdm33", nature = "reinterpret", record = "docs/planning/resources-release.define.consensus.md#batch-1", evidence_before = 0, previous = { invariant = "Before an epoch view or sealed leadership object is activated or read, its canonical hash is recomputed over every binding (network, era, epoch, source point, checkpoint commitment, nonce, snapshot phase and profile commitment) and over its whole stake and VRF payload, and must equal its stored hash; its bindings cannot change once bound. The profile commitment it binds is blake2b-256 over a domain tag, the genesis hash, the protocol-parameter hash and the active-slot coefficient, all three taken from the durable consensus profile (#6)." } }]
 introduced_in = ""
 strengthened_in = []
 status = "active"
@@ -3018,7 +3018,7 @@ legacy_ids = ["DC-EVIEW-07"]
 [[rules]]
 id = "REC-004"
 name = "CrashRecoveryReplayEquivalent"
-invariant = "All authoritative state is derivable by replay from the bootstrap anchor and the accepted canonical inputs. Two continuous runs from the same recovered or bootstrapped state, with the same ordered block feed, the same clock-tick schedule, the same leadership and key inputs and the same shutdown schedule, produce byte-identical durable outputs (selected tip, ledger fingerprint, write-ahead-log image, checkpoints and halt state), self-forged admissions included. After any process termination or power loss, recovery reaches exactly the last durably committed prefix, and its durable outputs are byte-identical to those of a run that stopped cleanly at that prefix; the ledger fingerprint replay reaches after log entry N equals the fingerprint the log's fold expects after entry N (#10). Recovery starts from the most recent valid snapshot at or below the durable tip and replays forward only the stored blocks after it."
+invariant = "All authoritative state is derivable by replay from the bootstrap anchor and the accepted canonical inputs. Two continuous runs from the same recovered or bootstrapped state, with the same ordered block feed, the same clock-tick schedule, the same leadership and key inputs and the same shutdown schedule, produce byte-identical durable outputs (selected tip, ledger fingerprint, write-ahead-log image, checkpoints and halt state), self-forged admissions included. After any process termination or power loss, recovery reaches exactly the last durably committed prefix, and its durable outputs are byte-identical to those of a run that stopped cleanly at that prefix; the ledger fingerprint replay reaches after log entry N equals the fingerprint the log's fold expects after entry N (DUR-009). Recovery starts from the most recent valid snapshot at or below the durable tip and replays forward only the stored blocks after it."
 counterexample = "A node that loses power mid-admission recovers to a ledger fingerprint different from a clean run over its committed blocks, or a forged block admitted before the crash is replayed with different bytes after it."
 family = "REC"
 secondary_families = ["DET", "DUR"]
@@ -3033,7 +3033,7 @@ enforcement_superseded = []
 tests = []
 ci_scripts = []
 approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/durability-recovery.define.consensus.md#batch-1" }
-redefinitions = []
+redefinitions = [{ date = "2026-11-09", by = "wdm33", nature = "reinterpret", record = "docs/planning/resources-release.define.consensus.md#batch-1", evidence_before = 0, previous = { invariant = "All authoritative state is derivable by replay from the bootstrap anchor and the accepted canonical inputs. Two continuous runs from the same recovered or bootstrapped state, with the same ordered block feed, the same clock-tick schedule, the same leadership and key inputs and the same shutdown schedule, produce byte-identical durable outputs (selected tip, ledger fingerprint, write-ahead-log image, checkpoints and halt state), self-forged admissions included. After any process termination or power loss, recovery reaches exactly the last durably committed prefix, and its durable outputs are byte-identical to those of a run that stopped cleanly at that prefix; the ledger fingerprint replay reaches after log entry N equals the fingerprint the log's fold expects after entry N (#10). Recovery starts from the most recent valid snapshot at or below the durable tip and replays forward only the stored blocks after it." } }]
 introduced_in = ""
 strengthened_in = []
 status = "active"
@@ -3564,7 +3564,7 @@ legacy_ids = ["DC-PROTO-11"]
 [[rules]]
 id = "VAL-044"
 name = "FullMiniProtocolSurface"
-invariant = "Ade implements the full node-to-node set (Handshake, ChainSync, BlockFetch, TxSubmission2, KeepAlive, PeerSharing) and the full node-to-client set (Handshake, LocalChainSync, LocalTxSubmission, LocalStateQuery, LocalTxMonitor), each in the roles the reference node plays and in agreement with #3."
+invariant = "Ade implements the full node-to-node set (Handshake, ChainSync, BlockFetch, TxSubmission2, KeepAlive, PeerSharing) and the full node-to-client set (Handshake, LocalChainSync, LocalTxSubmission, LocalStateQuery, LocalTxMonitor), each in the roles the reference node plays and in agreement with VAL-042."
 counterexample = "A cardano-cli query over the node-to-client socket fails because LocalStateQuery is not served."
 family = "VAL"
 secondary_families = []
@@ -3579,7 +3579,7 @@ enforcement_superseded = []
 tests = []
 ci_scripts = []
 approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/network.define.consensus.md#batch-1" }
-redefinitions = []
+redefinitions = [{ date = "2026-11-09", by = "wdm33", nature = "reinterpret", record = "docs/planning/resources-release.define.consensus.md#batch-1", evidence_before = 0, previous = { invariant = "Ade implements the full node-to-node set (Handshake, ChainSync, BlockFetch, TxSubmission2, KeepAlive, PeerSharing) and the full node-to-client set (Handshake, LocalChainSync, LocalTxSubmission, LocalStateQuery, LocalTxMonitor), each in the roles the reference node plays and in agreement with #3." } }]
 introduced_in = ""
 strengthened_in = []
 status = "active"
@@ -3720,7 +3720,7 @@ legacy_ids = ["DC-PROTO-07", "DC-PROTO-08"]
 [[rules]]
 id = "VAL-047"
 name = "FindIntersectSetsCursor"
-invariant = "After the chain-sync server answers IntersectFound at a point, its read position is exactly that point: the next RequestNext is answered with the block immediately after it when that block is on the unchanged served chain, and otherwise with the waiting or rollback reply #10 allows; an intersection at Origin sets the position before the chain's first block."
+invariant = "After the chain-sync server answers IntersectFound at a point, its read position is exactly that point: the next RequestNext is answered with the block immediately after it when that block is on the unchanged served chain, and otherwise with the waiting or rollback reply DET-017 allows; an intersection at Origin sets the position before the chain's first block."
 counterexample = "After IntersectFound at the client's tip, the server's next RollForward sends block 0, which the client rejects as an unexpected block number."
 family = "VAL"
 secondary_families = ["ORD"]
@@ -3735,7 +3735,7 @@ enforcement_superseded = []
 tests = []
 ci_scripts = []
 approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/network.define.consensus.md#batch-1" }
-redefinitions = []
+redefinitions = [{ date = "2026-11-09", by = "wdm33", nature = "reinterpret", record = "docs/planning/resources-release.define.consensus.md#batch-1", evidence_before = 0, previous = { invariant = "After the chain-sync server answers IntersectFound at a point, its read position is exactly that point: the next RequestNext is answered with the block immediately after it when that block is on the unchanged served chain, and otherwise with the waiting or rollback reply #10 allows; an intersection at Origin sets the position before the chain's first block." } }]
 introduced_in = ""
 strengthened_in = []
 status = "active"
@@ -4292,7 +4292,7 @@ legacy_ids = ["DC-NODE-14"]
 [[rules]]
 id = "VAL-053"
 name = "SingleProducerForgeBase"
-invariant = "In a declared single-producer venue the forge base becomes the node's own selected durable tip only through an established extension: entered by catching up and then self-admitting an own block through the admission path, or, at warm start, by a successful recovery whose durable tip lies above the bootstrap anchor and proves own-forged continuation, and held only while no competing block has been observed on the peer receive stream since catch-up or self-admission, the relay does not produce blocks, the durable chain is contiguous and servable, and no fork-choice decision is required. A failed warm-start entry falls back to #11's catch-up gate; an established extension that loses a fence (a competing block is observed, or the relay produces) refuses to forge, never falling back to the catch-up gate. In the established extension, a clean structural end of the follow feed does not stop forging, while a shutdown request or a fatal feed failure does. A file-based adoption certificate is evidence only, never forge-base authority, and appears in no multi-producer, preprod or production forge path."
+invariant = "In a declared single-producer venue the forge base becomes the node's own selected durable tip only through an established extension: entered by catching up and then self-admitting an own block through the admission path, or, at warm start, by a successful recovery whose durable tip lies above the bootstrap anchor and proves own-forged continuation, and held only while no competing block has been observed on the peer receive stream since catch-up or self-admission, the relay does not produce blocks, the durable chain is contiguous and servable, and no fork-choice decision is required. A failed warm-start entry falls back to SAF-013's catch-up gate; an established extension that loses a fence (a competing block is observed, or the relay produces) refuses to forge, never falling back to the catch-up gate. In the established extension, a clean structural end of the follow feed does not stop forging, while a shutdown request or a fatal feed failure does. A file-based adoption certificate is evidence only, never forge-base authority, and appears in no multi-producer, preprod or production forge path."
 counterexample = "A single-producer node keeps waiting for a relay to echo its own block before forging the next one, or an operator certificate file decides which tip the node forges on."
 family = "VAL"
 secondary_families = []
@@ -4307,7 +4307,7 @@ enforcement_superseded = []
 tests = []
 ci_scripts = []
 approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/node.define.consensus.md#batch-1" }
-redefinitions = []
+redefinitions = [{ date = "2026-11-09", by = "wdm33", nature = "reinterpret", record = "docs/planning/resources-release.define.consensus.md#batch-1", evidence_before = 0, previous = { invariant = "In a declared single-producer venue the forge base becomes the node's own selected durable tip only through an established extension: entered by catching up and then self-admitting an own block through the admission path, or, at warm start, by a successful recovery whose durable tip lies above the bootstrap anchor and proves own-forged continuation, and held only while no competing block has been observed on the peer receive stream since catch-up or self-admission, the relay does not produce blocks, the durable chain is contiguous and servable, and no fork-choice decision is required. A failed warm-start entry falls back to #11's catch-up gate; an established extension that loses a fence (a competing block is observed, or the relay produces) refuses to forge, never falling back to the catch-up gate. In the established extension, a clean structural end of the follow feed does not stop forging, while a shutdown request or a fatal feed failure does. A file-based adoption certificate is evidence only, never forge-base authority, and appears in no multi-producer, preprod or production forge path." } }]
 introduced_in = ""
 strengthened_in = []
 status = "active"
@@ -4500,7 +4500,7 @@ legacy_ids = ["DC-NODE-26"]
 [[rules]]
 id = "SEC-020"
 name = "RollbackTargetFromStoredPoint"
-invariant = "For a peer's RollBackward on the participant path, the rollback target is the stored chain point for the named hash, and the peer's slot must equal the stored slot; apart from the exact persisted-anchor case of #23, which is evaluated first, an unknown hash, a slot mismatch or Origin fails closed before any rollback, log entry or state change, and no target is ever built from a peer slot combined with a local hash."
+invariant = "For a peer's RollBackward on the participant path, the rollback target is the stored chain point for the named hash, and the peer's slot must equal the stored slot; apart from the exact persisted-anchor case of SAF-016, which is evaluated first, an unknown hash, a slot mismatch or Origin fails closed before any rollback, log entry or state change, and no target is ever built from a peer slot combined with a local hash."
 counterexample = "A peer sends RollBackward naming a real block hash with a forged slot, and the node rolls back to a point that is not on its chain."
 family = "SEC"
 secondary_families = ["VAL"]
@@ -4515,7 +4515,7 @@ enforcement_superseded = []
 tests = []
 ci_scripts = []
 approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/node.define.consensus.md#batch-1" }
-redefinitions = []
+redefinitions = [{ date = "2026-11-09", by = "wdm33", nature = "reinterpret", record = "docs/planning/resources-release.define.consensus.md#batch-1", evidence_before = 0, previous = { invariant = "For a peer's RollBackward on the participant path, the rollback target is the stored chain point for the named hash, and the peer's slot must equal the stored slot; apart from the exact persisted-anchor case of #23, which is evaluated first, an unknown hash, a slot mismatch or Origin fails closed before any rollback, log entry or state change, and no target is ever built from a peer slot combined with a local hash." } }]
 introduced_in = ""
 strengthened_in = []
 status = "active"
@@ -4760,7 +4760,7 @@ legacy_ids = ["DC-NODE-42"]
 [[rules]]
 id = "LIV-007"
 name = "ReconnectResumesFromDelivered"
-invariant = "A reconnected peer session builds its FindIntersect candidates by #33's rule from the durable chain at dial time, putting first the last block delivered downstream since the latest rollback when that block is newer than the durable tip, as a resume hint that #21 still resolves; a rollback resets the hint; and blocks buffered from the old session are delivered before the new session's, the per-peer delivery order being preserved across the reconnect."
+invariant = "A reconnected peer session builds its FindIntersect candidates by VAL-055's rule from the durable chain at dial time, putting first the last block delivered downstream since the latest rollback when that block is newer than the durable tip, as a resume hint that SEC-020 still resolves; a rollback resets the hint; and blocks buffered from the old session are delivered before the new session's, the per-peer delivery order being preserved across the reconnect."
 counterexample = "After a reconnect the node asks the peer to roll back to its startup anchor, now more than k blocks behind, and the rollback fails closed."
 family = "LIV"
 secondary_families = ["ORD"]
@@ -4775,7 +4775,7 @@ enforcement_superseded = []
 tests = []
 ci_scripts = []
 approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/node.define.consensus.md#batch-1" }
-redefinitions = []
+redefinitions = [{ date = "2026-11-09", by = "wdm33", nature = "reinterpret", record = "docs/planning/resources-release.define.consensus.md#batch-1", evidence_before = 0, previous = { invariant = "A reconnected peer session builds its FindIntersect candidates by #33's rule from the durable chain at dial time, putting first the last block delivered downstream since the latest rollback when that block is newer than the durable tip, as a resume hint that #21 still resolves; a rollback resets the hint; and blocks buffered from the old session are delivered before the new session's, the per-peer delivery order being preserved across the reconnect." } }]
 introduced_in = ""
 strengthened_in = []
 status = "active"
@@ -4812,7 +4812,7 @@ legacy_ids = ["DC-NODE-44"]
 [[rules]]
 id = "VAL-055"
 name = "IntersectionCandidatesMatchReference"
-invariant = "The points a node offers in chain-sync FindIntersect come only from its durable chain, read back from the tip through stored blocks whose recomputed hashes, heights decreasing by exactly one at each parent link and strictly decreasing slots are checked, any break being a typed error that stops following that peer; the offered depths are the reference client's (0, the Fibonacci numbers below l, and l itself, where l is k or the number of retained blocks if fewer, newest first); the bootstrap anchor is offered only when it is the tip; and one FindIntersect carrying the whole offer is sent per connection. The one exception to durable-chain points is #31's resume hint, offered first after a reconnect; per-peer FIFO delivery makes that block durable before any following rollback is resolved. An IntersectFound naming a point that was not offered fails closed without reconnecting; IntersectNotFound stops following that peer with a typed reason naming the bound that was reached, with no RequestNext, no reconnect and no durable change; and the intersection is never rollback authority, the RollBackward that follows being resolved by #21."
+invariant = "The points a node offers in chain-sync FindIntersect come only from its durable chain, read back from the tip through stored blocks whose recomputed hashes, heights decreasing by exactly one at each parent link and strictly decreasing slots are checked, any break being a typed error that stops following that peer; the offered depths are the reference client's (0, the Fibonacci numbers below l, and l itself, where l is k or the number of retained blocks if fewer, newest first); the bootstrap anchor is offered only when it is the tip; and one FindIntersect carrying the whole offer is sent per connection. The one exception to durable-chain points is LIV-007's resume hint, offered first after a reconnect; per-peer FIFO delivery makes that block durable before any following rollback is resolved. An IntersectFound naming a point that was not offered fails closed without reconnecting; IntersectNotFound stops following that peer with a typed reason naming the bound that was reached, with no RequestNext, no reconnect and no durable change; and the intersection is never rollback authority, the RollBackward that follows being resolved by SEC-020."
 counterexample = "A restarted node offers only its tip, gets no intersection after a short reorg, and stops following."
 family = "VAL"
 secondary_families = []
@@ -4827,7 +4827,7 @@ enforcement_superseded = []
 tests = []
 ci_scripts = []
 approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/node.define.consensus.md#batch-1" }
-redefinitions = []
+redefinitions = [{ date = "2026-11-09", by = "wdm33", nature = "reinterpret", record = "docs/planning/resources-release.define.consensus.md#batch-1", evidence_before = 0, previous = { invariant = "The points a node offers in chain-sync FindIntersect come only from its durable chain, read back from the tip through stored blocks whose recomputed hashes, heights decreasing by exactly one at each parent link and strictly decreasing slots are checked, any break being a typed error that stops following that peer; the offered depths are the reference client's (0, the Fibonacci numbers below l, and l itself, where l is k or the number of retained blocks if fewer, newest first); the bootstrap anchor is offered only when it is the tip; and one FindIntersect carrying the whole offer is sent per connection. The one exception to durable-chain points is #31's resume hint, offered first after a reconnect; per-peer FIFO delivery makes that block durable before any following rollback is resolved. An IntersectFound naming a point that was not offered fails closed without reconnecting; IntersectNotFound stops following that peer with a typed reason naming the bound that was reached, with no RequestNext, no reconnect and no durable change; and the intersection is never rollback authority, the RollBackward that follows being resolved by #21." } }]
 introduced_in = ""
 strengthened_in = []
 status = "active"
@@ -6212,3 +6212,627 @@ status = "active"
 deprecated_in = ""
 claim_status = "unresolved"
 legacy_ids = []
+
+[[rules]]
+id = "VAL-067"
+name = "MempoolAgreesWithLedger"
+invariant = "A transaction that passes resource admission (SEC-035) is admitted to the mempool if and only if standalone transaction validity (VAL-009: phase 1 accepts it and its scripts evaluate successfully), computed by the same phase-1 and script-evaluation functions block validity uses, accepts it against the mempool's running state (the base ledger state with every earlier admitted transaction applied); no mempool-only validity rule exists, and a resource refusal is reported as a distinct reason, never as invalidity."
+counterexample = "The mempool skips the script-integrity hash check and admits a transaction that the block containing it then fails on."
+family = "VAL"
+secondary_families = []
+scope = "mempool admission"
+assumptions = ["A2"]
+depends_on = ["VAL-008", "VAL-009"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-MEM-01", "CN-MEM-04"]
+
+[[rules]]
+id = "STR-022"
+name = "ClosedTxIngress"
+invariant = "Every transaction source (node-to-node submission, node-to-client submission, tests) reduces to one closed ingress event before mempool admission; the source variant is metadata for evidence, policy and replay only and never changes the validity verdict."
+counterexample = "Transactions from the local client socket skip the size check that peer-submitted transactions get."
+family = "STR"
+secondary_families = []
+scope = "transaction ingress"
+assumptions = []
+depends_on = ["STR-004", "VAL-067"]
+locality = "local"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-MEM-03"]
+
+[[rules]]
+id = "DET-024"
+name = "MempoolReplay"
+invariant = "Replaying the same ordered ingress trace against the same base ledger state produces a byte-identical sequence of mempool states and admission outcomes."
+counterexample = "The mempool orders its accepted set by hash-map iteration, so two replays of one trace produce different accepted orders."
+family = "DET"
+secondary_families = []
+scope = "mempool"
+assumptions = ["A1"]
+depends_on = ["DET-001", "STR-022"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-MEM-04"]
+
+[[rules]]
+id = "SEC-035"
+name = "BoundedDeterministicAdmission"
+invariant = "Untrusted inbound work (transactions, peer requests) is admitted through fixed, bounded policies before it consumes authoritative resources (validation time, mempool capacity, storage), and when demand exceeds a bound the work shed is chosen by a deterministic rule over the recorded arrival order, never by timing, randomness or resource exhaustion; shedding never changes the verdict of any work admitted."
+counterexample = "Under a transaction flood the mempool grows until allocation fails and the node crashes, or which transactions survive depends on thread timing."
+family = "SEC"
+secondary_families = ["DET"]
+scope = "transaction and request admission"
+assumptions = ["A1"]
+depends_on = ["SEC-002", "SEC-018"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-MEM-01", "DC-MEM-02", "CN-MEM-03"]
+
+[[rules]]
+id = "LIV-010"
+name = "AuthoritativeWorkNotStarved"
+invariant = "Block validation, chain selection and persistence never wait on mempool or peer-connection work: they run on execution resources that transaction admission and connection handling cannot occupy or block, so their progress does not depend on ingress or churn load, however high it is within the configured bounds."
+counterexample = "Transaction admission and block validation share one worker pool, and a burst of submissions keeps a received block queued behind them."
+family = "LIV"
+secondary_families = ["STR"]
+scope = "node scheduling"
+assumptions = []
+depends_on = ["SEC-035"]
+locality = "local"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-MEM-02", "OP-MEM-01"]
+
+[[rules]]
+id = "DET-025"
+name = "FingerprintIndependentOfStorage"
+invariant = "The UTxO and ledger-state fingerprints, and every post-state, are independent of how the UTxO is stored and represented: in-memory and on-disk backends produce byte-identical replay from the same log and checkpoint; the fingerprint is computed by the canonical encoder over canonically encoded keys, never from a backend's iteration order or allocation addresses; a compact representation reads the same values and exposes the same bytes as the fully parsed one; and UTxO lookup returns owned values, so changing the backend changes no verdict, fingerprint or failure."
+counterexample = "The on-disk backend iterates keys in its own page order and the fingerprint over it differs from the in-memory run."
+family = "DET"
+secondary_families = []
+scope = "UTxO storage and fingerprint"
+assumptions = []
+depends_on = ["DET-001", "DET-004", "DET-007"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-MEM-05", "DC-MEM-06", "DC-MEM-08", "DC-MEM-09"]
+
+[[rules]]
+id = "SAF-025"
+name = "BoundedUtxoMemory"
+invariant = "The in-memory part of the UTxO (the read cache and the last-k change log) is bounded by fixed constants no option can change, and reaching a bound never changes an authoritative output."
+counterexample = "The read cache grows with every lookup during a long catch-up until the process runs out of memory."
+family = "SAF"
+secondary_families = []
+scope = "UTxO backend"
+assumptions = []
+depends_on = ["DET-025"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-MEM-07"]
+
+[[rules]]
+id = "DET-026"
+name = "UtxoCommitmentVersionedIncremental"
+invariant = "The UTxO component of the ledger fingerprint is a named commutative set commitment (Ristretto255 multiset hash over the canonical encodings of each input and output, domain-separated and version-tagged), versions never mixed in one fold; maintaining it incrementally per block, or reusing a cached component while the UTxO is unchanged (invalidated by any UTxO mutation), always equals the full recomputation byte for byte. Forward-sync and forge admissions take the post fingerprint from the cached component rather than a full recomputation, and convergence evidence reuses the post fingerprint the admission just computed."
+counterexample = "The cached component survives a rollback that restored spent outputs, so the logged post fingerprint differs from a recompute."
+family = "DET"
+secondary_families = []
+scope = "UTxO fingerprint"
+assumptions = []
+depends_on = ["DUR-009", "DET-025"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-MEM-10", "DC-MEM-11"]
+
+[[rules]]
+id = "PRC-013"
+name = "OwnedMemoryBelowReference"
+invariant = "Measured on the same venue and chain, Ade's owned resident memory (private dirty plus anonymous resident memory) stays below the reference node's, by a measurement method recorded with the evidence, and no change made to reduce memory alters ledger semantics, chain selection, persisted bytes or replay."
+counterexample = "A memory reduction drops the full UTxO from the fingerprint, saving memory while silently changing the post fingerprints."
+family = "PRC"
+secondary_families = []
+scope = "resource evidence"
+assumptions = ["A2"]
+depends_on = ["DET-025", "DET-001"]
+locality = "distributed"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["OP-MEM-02"]
+
+[[rules]]
+id = "SEC-036"
+name = "ServeRangeWorkBounded"
+invariant = "A peer's block-fetch range request makes the serve path read at most a fixed number of blocks, without materializing an unbounded range or scanning the whole index per block; a larger range fails closed before storage or CPU work grows, and the bound is fixed, not a runtime option."
+counterexample = "A peer requests the range from the anchor to the tip and the serve task reads the whole chain into memory."
+family = "SEC"
+secondary_families = []
+scope = "serving"
+assumptions = []
+depends_on = ["SEC-002", "VAL-046"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-SERVEMEM-01"]
+
+[[rules]]
+id = "SEC-037"
+name = "NoPeerDiscoveryWhenForging"
+invariant = "A node with forging enabled dials only the peers the operator configured; it never dials a peer learned from the network (peer sharing or ledger relay registrations)."
+counterexample = "A producer accepts peer-sharing replies and starts dialling the addresses they name, exposing it to arbitrary public peers."
+family = "SEC"
+secondary_families = []
+scope = "outbound connections"
+assumptions = []
+depends_on = ["SEC-025"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-NET-01", "OP-NET-01"]
+
+[[rules]]
+id = "PRC-014"
+name = "DifferentialFuzzingReleaseBlocking"
+invariant = "Consensus-relevant inputs (blocks, headers, transactions and wire messages) are fuzzed differentially against the reference node across every supported protocol version and every decode and validation path, and accept/reject agreement with the reference on the pinned authoritative corpora (blocks, transactions and ledger-state hashes) is checked before every release; any verdict mismatch from either blocks a release until resolved."
+counterexample = "A release ships with a decoder that the fuzz corpus never exercised under the newest protocol version."
+family = "PRC"
+secondary_families = []
+scope = "release"
+assumptions = ["A2"]
+depends_on = ["VAL-007", "VAL-008", "PRC-002"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-TEST-01", "RO-TEST-01", "CN-REL-03", "RO-REL-02"]
+
+[[rules]]
+id = "PRC-015"
+name = "PermanentRegressionCorpus"
+invariant = "Every input that ever caused a fork, a venue mismatch or a parser disagreement with the reference becomes a named, permanent entry in the regression corpus, checked on every run of the test suite."
+counterexample = "The block that once crashed the decoder is fixed but not kept, and a later refactor reintroduces the crash."
+family = "PRC"
+secondary_families = []
+scope = "test corpus"
+assumptions = ["A2"]
+depends_on = ["PRC-001"]
+locality = "local"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-TEST-02", "RO-TEST-02"]
+
+[[rules]]
+id = "PRC-016"
+name = "MixedVersionEvidenceBeforeRelease"
+invariant = "A release is eligible for a network only with evidence that it agrees with every supported predecessor running alongside it (EVO-003, SEC-013) on malformed and boundary-case inputs."
+counterexample = "A release changes a decoder's handling of an indefinite-length map and ships without being run beside the previous release."
+family = "PRC"
+secondary_families = []
+scope = "release"
+assumptions = ["A2"]
+depends_on = ["EVO-003", "SEC-013"]
+locality = "distributed"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-REL-01", "RO-REL-01"]
+
+[[rules]]
+id = "PRC-017"
+name = "UnmaskedCloseGate"
+invariant = "A cluster closes only on the real exit status of an unmasked full test run; piped or filtered output is display only, never the pass or fail authority; and a slice that changes canonical bytes, encoded forms, decoder inputs or golden fixtures closes only after every consumer of the changed output across all crates has been found and checked."
+counterexample = "The close gate runs `cargo test | tail`, whose exit status is tail's, and a failing test closes the cluster."
+family = "PRC"
+secondary_families = []
+scope = "cluster closure"
+assumptions = []
+depends_on = ["PRC-001"]
+locality = "local"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["RO-CLOSE-01"]
+
+[[rules]]
+id = "LIV-011"
+name = "ForgeWithinSlotDeadline"
+invariant = "On a leader slot, forging, self-acceptance and handing the block to serving complete before the slot's deadline on the venue's slot length; missing the deadline loses the slot (pipeline-production's ForgeKesWindowFromBoundGenesis discards the late result) but violates no other invariant."
+counterexample = "Self-acceptance re-folds the whole UTxO fingerprint, takes 20 seconds, and every leader slot is lost."
+family = "LIV"
+secondary_families = []
+scope = "forging"
+assumptions = ["A2"]
+depends_on = ["DET-019"]
+locality = "local"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["OP-OPS-05"]
+
+[[rules]]
+id = "PRC-018"
+name = "PeerAcceptanceEvidenceCorrelated"
+invariant = "Peer-acceptance evidence for forged blocks is a closed, versioned manifest built only by one pure correlator: the forged block's hash is the required correlation key, a peer signal's slot must agree when present, conflicting peer signals yield no evidence, the peer-log parser accepts only the allow-listed acceptance lines (a self-acceptance, receipt or verdict line never counts), the forged block's hash and slot are read from the forge artifact, never recomputed or parsed from block bytes; and the manifest names the Ade commit, reference node and cli versions, network, block hash, slot, operational-certificate and genesis fingerprints, the Ade evidence file, the raw peer log with its SHA-256 (which must match the committed log), the command that captured it, the filter used to display it (documentation only, never authority) and the acceptance keyword it matched."
+counterexample = "The correlator counts Ade's own forge-succeeded line as acceptance, or a manifest names a filtered excerpt instead of the raw peer log."
+family = "PRC"
+secondary_families = []
+scope = "acceptance evidence"
+assumptions = ["A2"]
+depends_on = ["PRC-002"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["RO-LIVE-06", "CN-OPERATOR-EVIDENCE-01"]
+
+[[rules]]
+id = "PRC-019"
+name = "RehearsalNonPromotable"
+invariant = "A private-testnet rehearsal of block acceptance runs the same node-mode path as the public venue, with no rehearsal-only flag, branch, bootstrap authority or constructor, differing only in operator inputs and the evidence label; its evidence is marked rehearsal, stored only in the rehearsal location, built by the same correlator, and never counted or referenced as public-venue acceptance evidence."
+counterexample = "A private-only helper makes the rehearsal forge succeed, and its manifest is cited as bounty acceptance."
+family = "PRC"
+secondary_families = []
+scope = "rehearsal evidence"
+assumptions = ["A2"]
+depends_on = ["PRC-018"]
+locality = "local"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-REHEARSAL-FIDELITY-01"]
+
+[[rules]]
+id = "PRC-020"
+name = "SyncLiveLegWitnessed"
+invariant = "A claim that Ade syncs from a certified snapshot to the reference tip is supported only with an operator-witnessed live run on a private Conway testnet of two reference nodes, its transcript and peer logs committed with their hashes under mithril-evidence's SyncEvidenceManifest."
+counterexample = "The sync claim is marked supported from a fixture comparison alone."
+family = "PRC"
+secondary_families = []
+scope = "sync evidence"
+assumptions = ["A2"]
+depends_on = ["PRC-002"]
+locality = "distributed"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = []
+
+[[rules]]
+id = "SEC-038"
+name = "LiveFeedBuffersClosedConstants"
+invariant = "Peer-driven memory on the live feed is bounded before authoritative decoding by closed constants that no command-line option, environment variable or configuration can change or disable: a per-mini-protocol reassembly buffer that exceeds its bound fails closed with a typed error and drops that peer, and the pump's lookahead stops draining at its bound so the bounded channel back-pressures it; nothing is truncated or partly decoded."
+counterexample = "A configuration key lets an operator set the reassembly bound to unlimited, and a peer streams a 2 GiB frame."
+family = "SEC"
+secondary_families = []
+scope = "live feed"
+assumptions = []
+depends_on = ["SEC-002", "SEC-018"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["DC-LIVEMEM-01"]
+
+[[rules]]
+id = "REC-008"
+name = "ReconciliationOnlyThroughCanonicalChain"
+invariant = "After a partition or any incident, authoritative state is reconciled only by the node's own paths over the canonical chain (following and selecting chains through admission and fork choice, and recovery from the durable chain and log) or by a verified re-bootstrap through the single bootstrap authority (STR-013, under SEC-015); no operator command, tool or import writes ledger, chain or consensus state outside those paths."
+counterexample = "An operator tool patches the ledger snapshot to match a peer after a partition and the node resumes from it."
+family = "REC"
+secondary_families = []
+scope = "incident handling"
+assumptions = ["A4"]
+depends_on = ["REC-004", "DUR-012", "STR-014", "STR-013", "SEC-015"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-OPS-01", "OP-OPS-01"]
+
+[[rules]]
+id = "PRC-021"
+name = "LiveFollowWindow"
+invariant = "A live follow or admission-agreement pass against the reference peer counts only if its transcript covers at least 30 continuous minutes, records the peer's tip, Ade's tip and the agreement verdict for every admitted block, and meets mithril-evidence's OperatorPassTranscript conditions."
+counterexample = "A two-minute run with one agreed verdict is recorded as the live follow pass."
+family = "PRC"
+secondary_families = []
+scope = "live evidence"
+assumptions = ["A2"]
+depends_on = ["PRC-002"]
+locality = "distributed"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["RO-LIVE-02", "RO-LIVE-03", "RO-LIVE-05"]
+
+[[rules]]
+id = "PRC-022"
+name = "WireSmokePass"
+invariant = "A wire-smoke pass against the reference peer counts only if the wire-only run completes the node-to-node handshake, sends one FindIntersect offering Origin, records the peer's announced tip, emits only the closed wire-only event vocabulary (never admission, verdict or ledger events) and exits cleanly."
+counterexample = "The smoke run exits 0 after a failed handshake, and the pass is recorded."
+family = "PRC"
+secondary_families = []
+scope = "live evidence"
+assumptions = ["A2"]
+depends_on = ["VAL-004"]
+locality = "distributed"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["RO-LIVE-04"]
+
+[[rules]]
+id = "PRC-023"
+name = "LiveAcceptanceReleaseGate"
+invariant = "Block production is claimed, and a release presented as block-producing, only with committed evidence built under PRC-018 from a sustained live session on a public venue in which a reference cardano-node peer adopted Ade-forged blocks delivered over chain-sync and block-fetch. Without stake able to win slots on the venue the gate is unmet and the claim stays unresolved; it is never waived, and rehearsal evidence (PRC-019) never satisfies it."
+counterexample = "The release notes claim block production on the strength of a private-testnet rehearsal while no public-venue manifest exists."
+family = "PRC"
+secondary_families = []
+scope = "release, block-production claim"
+assumptions = ["A2"]
+depends_on = ["PRC-018", "PRC-019"]
+locality = "distributed"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-09", record = "docs/planning/resources-release.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-CONS-06"]

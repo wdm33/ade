@@ -60,6 +60,8 @@ The batches are ordered from the foundations up, so that a line's `depends_on` c
 | B11 | `mithril-evidence` | MITHRIL ANCHOR REF DIFF EVIDENCE | 19 |
 | B12 | `resources-release` | MEM LIVEMEM SERVEMEM OPS REL TEST LIVE OPERATOR CLOSE REHEARSAL | 48 |
 
+**M1 status: complete (2026-11-09).** All twelve batches are approved and applied. The registry holds 260 invariants and assumptions A1–A7. Every one of the 482 legacy IDs has a disposition in the map: 414 migrated, 52 merged, 16 excluded, none pending. The batch slugs above were planned before drafting; the legacy-ID counts in the last column are the plan's estimates, and the map records the final assignment.
+
 **Drafting rules.**
 - Each legacy entry becomes one draft line, is merged into one, or becomes an excluded settlement (`S<n>`) with its reason. Exclusions therefore pass through the same human reply as the lines.
 - Families follow Doctrine §6, security first.
