@@ -19,4 +19,514 @@
 
 schema_version = 3
 project = "ADE"
-registry_count = 0
+registry_count = 19
+
+[[assumptions]]
+id = "A1"
+name = "ordered-recorded-inputs"
+text = "for each authoritative state machine (ledger, chain selection, and each mini-protocol's state), the shell delivers inputs one at a time in one total order, and records the starting state, that order and each input's explicit context, so the history can be replayed completely."
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+status = "active"
+
+[[assumptions]]
+id = "A2"
+name = "reference-node-semantics"
+text = "the Haskell cardano-node defines the reference semantics for every observable protocol behaviour Ade claims to match; each comparison names the exact reference build it uses (the live venue runs 11.0.1; the pinned ledger-state hash corpus was extracted from 10.6.2). Ade executes only Conway semantics: it enters at a certified non-Origin Conway tip and never replays or executes historical eras, keeping historical era facts only as identifiers and slot-time geometry."
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+status = "active"
+
+[[rules]]
+id = "DET-001"
+name = "ReplayByteIdentity"
+invariant = "Replaying the same canonical starting state with the same ordered canonical inputs, protocol version and recorded context produces byte-identical authoritative outputs, including the ledger-state fingerprint, persisted state encodings, the consensus event stream, declared effects and every validity verdict."
+counterexample = "Two replays of one block stream from one snapshot end with ledger-state fingerprints that differ, or with verdict streams or persisted state encodings that differ in any byte."
+family = "DET"
+secondary_families = ["REC"]
+scope = "authoritative core (ledger, consensus, block and transaction validity, persisted state)"
+assumptions = ["A1"]
+depends_on = []
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-DET-01"]
+
+[[rules]]
+id = "DET-002"
+name = "DesignatedByteAuthority"
+invariant = "Each authoritative hash, signature check and persisted or transmitted byte string uses its designated byte authority: protocol hashes and signatures (block header, block body, transaction ID, script and datum hashes) are computed over the bytes as they were received or produced on the wire, never over a re-encoding of decoded data; Ade's own commitments (state fingerprints and persisted records) are computed over the output of the single canonical encoder for that type."
+counterexample = "A block-body hash computed over a re-encoding of the decoded body, for a body whose producer used an indefinite-length array, so the hash differs from the one in the signed header and a valid block is rejected; or a state fingerprint computed over two different encodings of the same state."
+family = "DET"
+secondary_families = ["VAL"]
+scope = "codec, ledger, consensus, storage"
+assumptions = ["A2"]
+depends_on = []
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-ENC-01"]
+
+[[rules]]
+id = "DET-003"
+name = "RoundTripIdentity"
+invariant = "For every byte string that decodes successfully, encoding the decoded value yields exactly the original bytes."
+counterexample = "A transaction whose witness set uses an indefinite-length map decodes, and re-encodes to a definite-length map with different bytes."
+family = "DET"
+secondary_families = ["VAL"]
+scope = "codec (ledger and mini-protocol encodings)"
+assumptions = ["A2"]
+depends_on = ["DET-002"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-ENC-03"]
+
+[[rules]]
+id = "STR-001"
+name = "AuthoritativeCorePurity"
+invariant = "Code in the BLUE core paths performs no I/O, reads no clock, environment or randomness, spawns no tasks and contains no async code; a core function's only inputs are its arguments."
+counterexample = "A ledger rule that reads the system time to decide a validity interval, or a BLUE function declared async that awaits a channel."
+family = "STR"
+secondary_families = ["DET"]
+scope = "BLUE core paths (.idse-config.json core_paths)"
+assumptions = []
+depends_on = []
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-CORE-01", "T-CORE-02", "DC-CORE-01"]
+
+[[rules]]
+id = "DET-004"
+name = "HostIndependentResults"
+invariant = "No BLUE computation's result depends on floating point, on a collection's iteration order unless that order is canonical, or on the host's locale, timezone, pointer width or endianness."
+counterexample = "A reward computation that rounds through f64 and gives a different lovelace amount on another architecture, or a state fingerprint built by iterating a HashMap."
+family = "DET"
+secondary_families = []
+scope = "BLUE core paths"
+assumptions = []
+depends_on = ["STR-001"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-CORE-02", "T-COLL-01", "T-PLATFORM-01"]
+
+[[rules]]
+id = "SAF-001"
+name = "AtomicTransitions"
+invariant = "Every authoritative state change is a transition that takes the prior state, the input and explicit context, and returns either the complete new state with its declared effects or a structured rejection; a rejection leaves the prior state exactly as it was."
+counterexample = "Applying a block fails on its third transaction and returns an error, but the first two transactions' UTxO changes remain in the ledger state."
+family = "SAF"
+secondary_families = ["STR"]
+scope = "ledger, consensus and chain-state transitions"
+assumptions = []
+depends_on = ["STR-001"]
+locality = "transactional"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-CORE-03"]
+
+[[rules]]
+id = "DET-005"
+name = "StructuredDeterministicFailures"
+invariant = "Every consensus-relevant failure, whether a rejection a transition returns or an internal inconsistency that triggers the halt of #8, is reported as a value of a closed, structured type that carries no free-form text and no host-dependent content; given equivalent prior state, canonical input, protocol version and explicit context, two executions report byte-identical failures."
+counterexample = "A ledger rejection that carries a formatted string containing a file path, or two runs from the same state, transaction, protocol version and context that reject with different error variants."
+family = "DET"
+secondary_families = ["OBS"]
+scope = "ledger, consensus and codec failures, and the halt reports of #8"
+assumptions = ["A1"]
+depends_on = ["STR-001"]
+locality = "local"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-ERR-01", "CN-META-02"]
+
+[[rules]]
+id = "SAF-002"
+name = "FailFastOnInvariantRisk"
+invariant = "When the node detects an internal inconsistency that could corrupt authoritative state, replay or chain selection, as opposed to an invalid external input, it halts deterministically instead of continuing."
+counterexample = "After applying a block, the ledger's recomputed UTxO total disagrees with its running total; the node logs a warning and keeps following the chain."
+family = "SAF"
+secondary_families = []
+scope = "node-wide"
+assumptions = []
+depends_on = ["SAF-001"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-ERR-02"]
+
+[[rules]]
+id = "DET-006"
+name = "BuildInvariantSemantics"
+invariant = "No cargo feature, cfg flag, build profile or optimization level changes an authoritative result or a persisted byte."
+counterexample = "An arithmetic overflow in a ledger rule that panics in a debug build and wraps in a release build, or a feature-gated code path that rounds a reward differently."
+family = "DET"
+secondary_families = ["EVO"]
+scope = "BLUE core paths and persisted formats"
+assumptions = []
+depends_on = ["STR-001"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-BUILD-01", "CN-BUILD-01"]
+
+[[rules]]
+id = "EVO-001"
+name = "SingleSemanticInterpretation"
+invariant = "Given identical canonical inputs and identical explicit governing data (protocol version, on-chain protocol parameters, genesis and bootstrap-anchor data), exactly one semantic interpretation exists: no build option, operator configuration value, command-line flag or alternative code path changes ledger, consensus or persistence semantics. Operator configuration may change only transport, logging and telemetry."
+counterexample = "Two implementations of Conway reward calculation, selected by a configuration flag, or a configuration option that disables a ledger validation rule."
+family = "EVO"
+secondary_families = ["DET"]
+scope = "node-wide"
+assumptions = ["A2"]
+depends_on = ["DET-006"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-BUILD-02", "CN-BUILD-02", "CN-BUILD-03", "CN-BUILD-04"]
+
+[[rules]]
+id = "STR-002"
+name = "ShellCanonicalizesInputs"
+invariant = "Transport artifacts (socket fragmentation, mux segment boundaries, interleaving across mini-protocols, read timing and timeouts) never reach the core: two transport histories that deliver the same ordered sequence of whole messages to each mini-protocol, from the same starting state, under the same protocol version, with the same recorded context and the same authoritative input order, produce identical core outcomes. Nondeterministic facts the core legitimately needs, such as the current slot, enter only as recorded explicit context."
+counterexample = "A chain-sync validity decision that differs depending on how a header was split across mux segments, or a core function that reads a timeout flag the shell set."
+family = "STR"
+secondary_families = ["DET"]
+scope = "shell/core boundary, mux demultiplexing"
+assumptions = ["A1"]
+depends_on = ["STR-001"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-BOUND-01", "T-TRANSPORT-01"]
+
+[[rules]]
+id = "STR-003"
+name = "CoreDependsOnlyInward"
+invariant = "No BLUE path depends on RED code: a crate whose modules are all BLUE depends, directly or transitively, on no RED crate and on no library providing networking I/O, filesystem access, an async runtime, a clock, randomness or a general-purpose serialization framework; a BLUE module inside a mixed crate imports none of that crate's RED modules and none of those libraries."
+counterexample = "ade_ledger's Cargo.toml gains a dependency on ade_runtime, tokio or serde_json, or the BLUE module ade_network::mux::frame imports ade_network::mux::transport."
+family = "STR"
+secondary_families = []
+scope = "workspace crate and module graph"
+assumptions = []
+depends_on = ["STR-001"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-BOUND-02"]
+
+[[rules]]
+id = "PRC-001"
+name = "EveryInvariantMechanicallyEnforced"
+invariant = "Every active invariant in the registry has at least one substantive mechanical check (a test, a CI script, or a type the build compiles) that the registry names, that exists at the current revision, and that the project's check suite (test_cmd and the ci/ scripts) runs; no entry is counted as enforced by waiver."
+counterexample = "An active registry entry whose only listed check is a test that does not exist, or a CI script that no part of the check suite runs."
+family = "PRC"
+secondary_families = []
+scope = "invariant registry and check suite"
+assumptions = []
+depends_on = []
+locality = "local"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-CI-01", "CN-META-01"]
+
+[[rules]]
+id = "PRC-002"
+name = "ReproducibleEquivalenceClaims"
+invariant = "Every claim that Ade agrees with the reference node names the exact reference build, the comparison surface, the fixtures and the replay inputs it was checked against, and rerunning the named check on those reproduces the claimed result; artifacts extracted from one reference build never establish agreement with a different build."
+counterexample = "A \"block validity agrees with the reference node\" claim backed only by a log from a live run, or ledger-state hashes extracted from cardano-node 10.6.2 cited as evidence of agreement with 11.0.1."
+family = "PRC"
+secondary_families = ["OBS"]
+scope = "compatibility evidence"
+assumptions = ["A2"]
+depends_on = ["DET-001"]
+locality = "local"
+criticality = "standard"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["CN-META-03"]
+
+[[rules]]
+id = "SEC-001"
+name = "SigningInShellVerificationInCore"
+invariant = "Private key material (KES, VRF and cold keys) is loaded, held and passed only by RED shell code, and every signing or proving call is made from RED code; no BLUE transition takes a private key as input or produces a signature or VRF proof. Every signature, VRF and KES verification that decides whether a block, header or transaction is accepted is computed in BLUE code, and no RED code passes a verification verdict into a BLUE transition."
+counterexample = "A BLUE block-construction function that takes a KES signing key and signs the header, or a RED function that checks a header's KES signature and hands the BLUE header validator a boolean it trusts."
+family = "SEC"
+secondary_families = ["STR"]
+scope = "keys, forging, verification"
+assumptions = []
+depends_on = ["STR-001"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-KEY-01"]
+
+[[rules]]
+id = "CON-001"
+name = "ValueConservation"
+invariant = "Every accepted ledger transition preserves value as the Conway ledger defines it. For a transaction applied with its scripts valid, consumed value (inputs, withdrawals, deposit refunds, minted value) equals produced value (outputs, fee, new deposits, treasury donation, burned value); for a transaction applied with its scripts invalid, only its collateral inputs are consumed, and they equal the collateral return plus the collateral collected as fee. Reserves, treasury, reward accounts, deposits and the fee pot change only through the protocol rules that authorize those movements."
+counterexample = "A script-valid transaction whose produced value (outputs, fee, new deposits, treasury donation, burned value) exceeds its consumed value (inputs, withdrawals, deposit refunds, minted value) by one lovelace is accepted, a script-invalid transaction whose collateral return exceeds its collateral inputs is accepted, or an epoch transition moves funds into the treasury without a rule authorizing it."
+family = "CON"
+secondary_families = ["VAL"]
+scope = "ledger (transactions and epoch transitions)"
+assumptions = ["A2"]
+depends_on = ["SAF-001"]
+locality = "transactional"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-CONSERV-01"]
+
+[[rules]]
+id = "SAF-003"
+name = "SingleSpendPerHistory"
+invariant = "Along any one adopted chain history, no transaction output is consumed more than once, whether as a regular input or as collateral."
+counterexample = "Two blocks on the adopted chain each contain a transaction spending the same TxIn, one as a regular input and one as collateral, and both are accepted."
+family = "SAF"
+secondary_families = ["VAL"]
+scope = "ledger UTxO"
+assumptions = ["A2"]
+depends_on = ["SAF-001"]
+locality = "transactional"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-NOSPEND-01"]
+
+[[rules]]
+id = "ORD-001"
+name = "NoRetroactiveValidation"
+invariant = "The verdict on a block or transaction depends only on the chain prefix before it and on context fixed by that prefix or recorded before its validation, such as the slot it claims; no data first derived after that point (a later block, a later epoch's stake distribution or nonce, a later checkpoint) changes its verdict, and an adopted checkpoint is never reinterpreted under a different rule version."
+counterexample = "A header's VRF leader check uses the epoch nonce of the epoch after the header's own, a value that exists only once that later epoch's stability window has passed; or a stored checkpoint is reloaded under a newer rule version and its blocks are judged again with a different verdict."
+family = "ORD"
+secondary_families = ["VAL"]
+scope = "ledger and consensus validation"
+assumptions = ["A1", "A2"]
+depends_on = ["DET-001"]
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-CAUSAL-01"]
+
+[[rules]]
+id = "SEC-002"
+name = "BoundedPreValidationAllocation"
+invariant = "Before deterministic validation accepts it, an untrusted input can make the node allocate memory or do work only up to a fixed, stated bound that does not depend on length fields the input itself declares."
+counterexample = "A CBOR array header from a peer that declares 2^32 elements makes the decoder preallocate a 2^32-element vector."
+family = "SEC"
+secondary_families = ["SAF"]
+scope = "ingress: codec, mini-protocols, block and transaction admission"
+assumptions = []
+depends_on = []
+locality = "local"
+criticality = "critical"
+enforcement_compile_time = []
+enforcement_runtime = []
+enforcement_superseded = []
+tests = []
+ci_scripts = []
+approval = { by = "wdm33", date = "2026-11-08", record = "docs/planning/foundations.define.consensus.md#batch-1" }
+redefinitions = []
+introduced_in = ""
+strengthened_in = []
+status = "active"
+deprecated_in = ""
+claim_status = "unresolved"
+legacy_ids = ["T-RESOURCE-01"]

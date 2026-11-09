@@ -13,98 +13,98 @@ legacy_count = 482
 [[legacy]]
 id = "T-DET-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-001"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-ENC-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-002"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-ENC-02"
-batch = "B01-foundations"
+batch = "B02-codec-wire-crypto"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B01 S1: as written it contradicts Cardano's valid non-canonical CBOR; its closed-grammar intent belongs with the B02 decoder lines"
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-ENC-03"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-003"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-CORE-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-001"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-CORE-02"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-001", "DET-004"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-CORE-03"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-001"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-CORE-04"
 batch = "B01-foundations"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = ""
-record = ""
+reason = "S2: 'where practical' is not falsifiable; the rule is Constitution rule 4, applied through each invariant's type-level witness"
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-ERR-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-005"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-ERR-02"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-002"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-BUILD-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-006"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-BUILD-02"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["EVO-001"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-REC-01"
@@ -125,26 +125,26 @@ record = ""
 [[legacy]]
 id = "T-COLL-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-004"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-BOUND-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-002"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-BOUND-02"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-003"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-INGRESS-01"
@@ -157,18 +157,18 @@ record = ""
 [[legacy]]
 id = "T-CI-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-001"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-KEY-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-001"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-CONS-01"
@@ -189,18 +189,18 @@ record = ""
 [[legacy]]
 id = "T-CONSERV-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["CON-001"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-NOSPEND-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-003"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-EPOCH-01"
@@ -213,34 +213,34 @@ record = ""
 [[legacy]]
 id = "T-CAUSAL-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["ORD-001"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-TRANSPORT-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-002"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-RESOURCE-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-002"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-PLATFORM-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-004"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CBOR-01"
@@ -605,10 +605,10 @@ record = ""
 [[legacy]]
 id = "DC-CORE-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-001"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-PROTO-06"
@@ -1053,34 +1053,34 @@ record = ""
 [[legacy]]
 id = "CN-BUILD-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-006"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-BUILD-02"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["EVO-001"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-BUILD-03"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["EVO-001"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-BUILD-04"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["EVO-001"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-TEST-01"
@@ -1157,26 +1157,26 @@ record = ""
 [[legacy]]
 id = "CN-META-01"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-001"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-META-02"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-005"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-META-03"
 batch = "B01-foundations"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-002"]
 reason = ""
-record = ""
+record = "docs/planning/foundations.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "RO-TEST-01"
