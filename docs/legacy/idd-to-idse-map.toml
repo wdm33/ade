@@ -277,50 +277,50 @@ record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-LEDGER-01"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-001", "STR-001"]
+reason = "B03 S1: replay determinism (DET-001) and purity (STR-001)"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-02"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-001"]
+reason = "B03 S2"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-03"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-007", "VAL-008"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-04"
-batch = "B03-ledger"
+batch = "B04-epoch"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B03 S11"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-PLUTUS-01"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-008"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-PLUTUS-02"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-005"]
+reason = "B03 S8"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONSENSUS-01"
@@ -493,26 +493,26 @@ record = ""
 [[legacy]]
 id = "DC-LEDGER-05"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-008"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-06"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-015"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-07"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["EVO-003"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-DIFF-01"
@@ -685,82 +685,82 @@ record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 [[legacy]]
 id = "CN-LEDGER-01"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-001", "STR-001"]
+reason = "B03 S1: replay determinism (DET-001) and purity (STR-001)"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-LEDGER-02"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-001"]
+reason = "B03 S2"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-LEDGER-03"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-007", "VAL-008"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-LEDGER-04"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["EVO-003"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-LEDGER-05"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["EVO-001"]
+reason = "B03 S5"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-LEDGER-06"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["SAF-001", "DET-005"]
+reason = "B03 S4: no authoritative residue (SAF-001), deterministic failure report (DET-005)"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-LEDGER-07"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["CON-001"]
+reason = "B03 S6"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-LEDGER-08"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["SAF-003"]
+reason = "B03 S7"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-LEDGER-09"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-008"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-LEDGER-10"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-011"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-EPOCH-01"
@@ -837,34 +837,34 @@ record = ""
 [[legacy]]
 id = "CN-PLUTUS-01"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-008"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-PLUTUS-02"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-005"]
+reason = "B03 S8"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-PLUTUS-03"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-015"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-PLUTUS-04"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["STR-001", "DET-004"]
+reason = "B03 S9"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-PROTO-01"
@@ -1357,138 +1357,138 @@ record = ""
 [[legacy]]
 id = "DC-VAL-01"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["STR-001", "STR-002", "DET-004"]
+reason = "B03 S3: only inputs are arguments; arrival order (STR-002); floats and iteration (DET-004)"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-VAL-02"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-009"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-VAL-03"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["ORD-002"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-VAL-04"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-007"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-VAL-05"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["SAF-001"]
+reason = "B03 S4"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-VAL-06"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-010"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-TXV-01"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["STR-001", "STR-002", "DET-004"]
+reason = "B03 S3: only inputs are arguments; arrival order (STR-002); floats and iteration (DET-004)"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-TXV-02"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-009"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-TXV-03"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-008"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-TXV-04"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["SAF-001"]
+reason = "B03 S4"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-TXV-05"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-008"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-TXV-06"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["CON-002"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-TXV-07"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["CON-002"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-08"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-011"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-09"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-011"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-10"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-005"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-11"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-006"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CRYPTO-03"
@@ -1604,19 +1604,19 @@ record = ""
 
 [[legacy]]
 id = "DC-LEDGER-12"
-batch = "B03-ledger"
+batch = "B10-pipeline-production"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B03 S13"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-13"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-012"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CONS-06"
@@ -3445,18 +3445,18 @@ record = ""
 [[legacy]]
 id = "DC-LEDGER-VALUE-01"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-013"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-PARAMS-01"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-014"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MITHRIL-03"
@@ -3532,11 +3532,11 @@ record = ""
 
 [[legacy]]
 id = "DC-GOV-01"
-batch = "B03-ledger"
+batch = "B04-epoch"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B03 S12"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CINPUT-07"
@@ -3773,82 +3773,82 @@ record = ""
 [[legacy]]
 id = "DC-LEDGER-PHASE2-01"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-016"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-PHASE2-02"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["CON-003"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-PHASE2-03"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-016"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-PHASE2-04"
-batch = "B03-ledger"
+batch = "B07-durability-recovery"
 disposition = "pending"
 new_ids = []
-reason = ""
-record = ""
+reason = "deferred by B03 S14"
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-SCRIPT-01"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-017"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-SCRIPT-02"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-009"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-SCRIPT-03"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-010"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-TXV-08"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-008"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-TXV-09"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-018"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-VAL-07"
 batch = "B03-ledger"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-019"]
 reason = ""
-record = ""
+record = "docs/planning/ledger.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-REC-07"
