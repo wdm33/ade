@@ -2,743 +2,450 @@
 
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 >
-> Regenerate with `/head-deltas <baseline>` after every cluster close. Baseline is recorded in `.idd-config.json` `head_deltas_baseline`.
+> Regenerate with `/head-deltas <baseline>` after every cluster close. The baseline is recorded in `.idse-config.json` `head_deltas_baseline` (currently `1e4896eb`).
 
-> Baseline: `470f9b89` (MEM-OPT-UTXO-DISK close — `OP-MEM-02` flipped `declared → enforced` SCOPED, 2026-06-17 00:58)
-> HEAD: `1e4896eb` (`chore(node): LIVE-FORGE-HARDENING cluster-close review nits`, 2026-07-31 17:25)
-> Span: **`470f9b89 → 1e4896eb`** — **232 commits** (no merges), **387 files changed, +74,026 / −5,752 lines**.
+> Baseline: `1e4896eb` (2026-07-31 17:25:58 -0400)
+> HEAD: `74c67670` (chore(idse): correct 14 re-evidence records (test-reference matching), 2026-11-09 10:56:49 -0500)
+> 222 commits, 1091 files changed, +107842 / -15676 lines
 
-> **THE HEADLINE (read first).** This is a **cluster-close refresh** and the baseline **advances** to `1e4896eb`
-> (`LIVE-FORGE-HARDENING` close). Over ~6 weeks the node went from *"fails closed off its single bootstrapped seed
-> epoch"* to **literal continuous self-sufficient multi-boundary operation**: `CE-4B` (`c5bdc064`) crossed
-> **three real preview boundaries 1340→1341→1342→1343** (seed+2 → seed+5) in one ~2.9h run with **no halt, no manual
-> arming, no re-import**, and `CE-4` was declared a milestone (`bcbae327`). Getting there required (a) the epoch-view
-> **activation gate removal** (`a17c7aab`, ECA-1 — `EVIEW_ACTIVATION_ARMED` is gone; activation is automatic and
-> deterministic from durable state); (b) a **rolling Praos-nonce reshape inside the consensus core** (`ade_core`,
-> ECA-B1/B2) so `eta0(seed+2)` is self-derived on the live follow path and byte-matches `cardano-node`; (c) a durable
-> **non-UTxO `EpochAccumulator`** (`DC-EPOCH-19`/`20`/`21`/`22`) that self-evolves the ledger across boundaries; (d) a
-> **sealed authority flip** (`S4`, `db702a54`) so promotion reads epoch-indexed *frozen* leadership only, never the seed
-> window; and (e) **restart + rollback + warm-restart-after-rollback replay-equivalence** (`S5`, `CE-4A.3-R1..R4`),
-> byte-identical through the production loop. The just-closed **`LIVE-FORGE-HARDENING`** (`b52f2240` S1 + `dc14787a`
-> S2 + `1e4896eb` nits) hardens the forge path: it now follows live rollbacks (S1) and makes the **durable store the
-> sole candidate-freeze authority** via the v5→v6 seed sidecar (S2, `DC-EPOCH-16` strengthened).
+> **Baseline note.** `1e4896eb` has no tag. `git rev-parse 1e4896eb` resolves and `git merge-base 1e4896eb HEAD == 1e4896eb`, so the baseline is a strict ancestor of HEAD. The span has no merge commits. Of the 1,091 changed paths, 622 are renames: the IDSE relocation (`fa48afa8`) moved the legacy IDD record under `docs/legacy/`. The line counts include that move, the new IDSE registry and 96 new evidence files under `docs/evidence/`. Crate source accounts for +28,039 / −2,431 over 193 files.
 
-> **CORRECTION to the prior (`cdcd9397`) framing — `ade_core` is NO LONGER byte-identical.** The on-disk doc this
-> replaces was regenerated at `cdcd9397` (only **75 of these 232 commits** in) and asserted *"`ade_core` untouched
-> (48→48) — the consensus authority is byte-identical."* **That is stale.** As of HEAD, `ade_core` has changed
-> **+574 / −300 across 16 files (+1 BLUE canonical type, 48→49)** — the **ECA-B1/B2 rolling Praos-nonce reshape**
-> (`nonce.rs` reshaped `NonceInput`/`HeaderContribution`/`EpochBoundary`, `CandidateFreeze` removed,
-> `MissingLastEpochBlockNonce` added; `praos_state.rs` `last_epoch_block_nonce: Option<Nonce>`; `header_validate.rs`
-> Step-9 threading; `era_schedule.rs` `praos_rsw_slots`). This is a **versioned, backward-compatible** reshape
-> (always-write `array(10)`, accept legacy `array(9) → None`, fail-closed on an absent operand — never a fabricated
-> nonce), **not** a semantic weakening — but the consensus core **was** modified. Any doc still claiming the core is
-> byte-identical is describing `cdcd9397`, not HEAD.
-
-> **Baseline note (load-bearing).** Baseline is **`470f9b89`** (MEM-OPT-UTXO-DISK cluster-close; `OP-MEM-02 → enforced`
-> SCOPED; pushed to `origin/main`, 2026-06-17) and is **valid**: `git rev-parse 470f9b89` resolves and
-> `git merge-base 470f9b89 1e4896eb == 470f9b89` (a strict ancestor; `470f9b89` carries no tag). HEAD is
-> **`1e4896eb`** (`origin/main`, the `LIVE-FORGE-HARDENING` close). **This IS a cluster-close refresh** — so per IDD
-> discipline the baseline **advances** to `1e4896eb` (the caller updates `.idd-config.json` `head_deltas_baseline`
-> separately). The prior on-disk doc stopped at `cdcd9397` (mid native-Mithril band, ~157 commits short of HEAD); this
-> regen supersedes it across nine additional cluster arcs.
-
-> **Working-tree note.** At this regen the working-tree `HEAD` is `1e4896eb` (== `origin/main`), with uncommitted
-> in-flight `EPOCH-CONSENSUS-VIEW` / next-cluster scratch present (`docs/active/*.md` runbooks, two untracked
-> cluster-slice dirs, `wire_smoke.jsonl`, a modified live-pass guide). §1 narrates the **committed** span
-> `470f9b89..1e4896eb` verbatim from `git log`; all counts read the tree at HEAD `1e4896eb`. **The other three
-> grounding docs (CODEMAP / SEAMS / TRACEABILITY) are on-disk dated 2026-06-24 and were last regenerated at
-> `cdcd9397`** — they are **STALE** relative to HEAD and do not contain the bands-5→13 modules/rules/gates. Run
-> `/codemap`, `/seams`, `/traceability` to re-align them (see the Anomalies block).
+> **Invariant IDs in this document.** Ade moved to IDSE v3.0 (`strict` profile) inside this span, on 2026-11-08/09. Invariants are cited by their IDSE IDs from `docs/ade-invariant-registry.toml`. Commit subjects in §1 are verbatim from git and still carry legacy IDD IDs. Follow those forward through `docs/legacy/idd-to-idse-map.toml`, which gives every legacy ID a disposition.
 
 ---
 
-# The span in thirteen bands (`470f9b89 → 1e4896eb`)
+## 0. Headline
 
-Reading oldest→newest. The first four bands (`470f9b89..cdcd9397`, 75 commits) were narrated by the prior on-disk doc
-and are compressed here; bands 5–13 (`cdcd9397..1e4896eb`, 157 commits) are the new material. All counts are exact
-(`git rev-list --count` per boundary; they sum to 232).
-
-| Band | Range | Commits | Cluster / theme | Headline rule(s) |
-|---|---|---|---|---|
-| **1. Standalone fixes + Mithril evidence** | `1b79add0 … cf508424` | 16 | C2-preprod / live-follow hardening + participant-forge + Mithril documented-interface evidence | `DC-WAL-05`, `DC-CINPUT-05`, `DC-MEM-11`, `CN-FOLLOW-01`, `DC-FOLLOW-FORGE-01`; `RO-MITHRIL-IMPORT-01`/`T-CONS-01` flips |
-| **2. EPOCH-CONSENSUS-VIEW (EVIEW substrate)** | `84e1019c … a50a3ee8` | 41 | The native cross-epoch stake/consensus view — hermetic substrate; shipped **INERT (gated off)** | `DC-EVIEW-01..11` (+`04b`), `DC-EPOCH-04..11` |
-| **3. EPOCH-CONTINUITY-ACTIVATION (gate removal)** | `ad704f86 … f09cc0ec` | 7 | **Removes the `EVIEW_ACTIVATION_ARMED` gate** → activation automatic; leadership-complete view; v4 sidecar | **`DC-EPOCH-13`**, `DC-EVIEW-12/13`, `DC-CINPUT-06`, `DC-EPOCH-12/14` |
-| **4. Native Mithril bootstrap decode** | `7386bf82 … cdcd9397` | 11 | Native V2 LedgerDB decode → canonical CertState + faithful UTxO → materialize → FirstRun | `DC-MITHRIL-03..07`, `DC-LEDGER-VALUE-01`, `DC-LEDGER-PARAMS-01` |
-| **5. Grounding regen + registry reconcile** | `5333d0b6 … 25d11636` | 4 | The `cdcd9397` grounding-doc regen + registry status backfill / DC-EVIEW-08 re-scope (housekeeping) | — |
-| **6. Native operator/judge startup (LIVE-1)** | `6e04f1fc … 25a6bde3` | 11 | The two-command judge flow (`ade mithril snapshot fetch` + `ade node run`); native FirstRun builds the EVIEW checkpoint inline; getting-started guide | `DC-MITHRIL-08` |
-| **7. ECA-5 + ECA-B (cross-boundary continuity)** | `5599f297 … dabb4210` | 19 | Cross the FIRST boundary; **rolling Praos nonce in `ade_core`**; live RSW candidate-freeze; per-boundary authority advance; warm-start recovery across a boundary | `DC-EPOCH-15`, **`DC-EPOCH-16`**, `DC-EPOCH-17` |
-| **8. LIVE-LEDGER-EPOCH-TRANSITION S1–S3** | `c4e0413b … aeeaf89d` | 29 | The **non-UTxO `EpochAccumulator`** + `apply_selected_block`; durable within-epoch advance; byte-exact boundary mark + POOLREAP; CE-3c/CE-3d live | `DC-EPOCH-18/19/20/21/22` |
-| **9. Conway governance (CPDE + CRE)** | `d2522faf … 710f23db` | 33 | `CONWAY-PROPOSAL-DEPOSIT-EXPIRY` (close the −500B gap) + `CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY` (import → capture votes → activate ratify/enact gate) | `DC-GOV-01`, `DC-CINPUT-07` |
-| **10. CE-3d closure (B3c / go-stake / RVBP)** | `52a6e2c7 … e476415a` | 15 | Base-UTxO byte-exact; −343B go-stake localized; the reduced-validation boundary plane; fee-pot deltaF + snapshot pool-set — CE-3d byte-exact | `DC-EPOCH-23/24/25` |
-| **11. LIVE-LEDGER S4/S5 + CE-4A/CE-4B** | `e096e014 … 5e83aaaa` | 38 | Restart/rollback replay-equivalence (S5); **sealed authority flip** (S4); **two-** then **three-boundary continuous operation** (CE-4A/CE-4B); warm-restart-after-rollback recovery (R4) | `DC-EPOCH-16` (enforced live) + S4/S5 rules |
-| **12. LIVE ops (LIVE-1b / LIVE-2)** | `fde0dd9e … 0ef65c6c` | 3 | Bounded recovery-checkpoint retention (disk-fill fix); LIVE-2 forge-machinery + KES/opcert validity-window verification | — |
-| **13. LIVE-FORGE-HARDENING (the close)** | `2f12bb0b … 1e4896eb` | 5 | **S1** forge path follows live rollbacks; **S2** durable store is the sole candidate-freeze authority (v5→v6 sidecar persists `k`); nits | **`DC-EPOCH-16`** strengthened (`+LIVE-FORGE-HARDENING-S2`) |
-
----
-
-## Bands 1–4 — the EVIEW → ECA → native-Mithril arc (`470f9b89 … cdcd9397`, 75 commits) — *previously documented, compressed*
-
-These four bands were fully narrated in the prior on-disk doc. In brief:
-
-- **Band 1** landed the standalone C2-preprod / live-follow fixes (persist admitted bytes before the WAL `DC-WAL-05`;
-  warm-start era-schedule from durable venue geometry `DC-CINPUT-05`; the LIVE-FOLLOW-THROUGHPUT cached-UTxO-fingerprint
-  fix `DC-MEM-11`; participant forge on the AO-selected durable head `CN-FOLLOW-01` / `DC-FOLLOW-FORGE-01`) and the
-  Mithril documented-interface evidence gate (`RO-MITHRIL-IMPORT-01 partial→enforced`, `T-CONS-01 declared→enforced`).
-- **Band 2 (EVIEW)** built the native cross-epoch consensus view as a **pure projection of the single ledger authority**
-  (`stake_ref` → `pointer_resolve` → `reduced_utxo`/`reduced_advance` → `reduced_aggregate` → `reduced_snapshot` →
-  `reduced_epoch_view`), plus the durable/transient checkpoint storage and the activation substrate — **shipped INERT**
-  behind `EVIEW_ACTIVATION_ARMED = false`.
-- **Band 3 (ECA)** **removed** that gate (`a17c7aab`, `DC-EPOCH-13`): epoch-view activation became automatic and
-  deterministic from canonical durable state, with a leadership-complete view (`DC-EVIEW-12`), cardano-faithful pool
-  lifecycle (`DC-EVIEW-13`), and the v4 seed sidecar (`DC-CINPUT-06`).
-- **Band 4 (native Mithril decode)** added the native V2 LedgerDB decoders (state → `CertState`; tables MemPack `TxOut`
-  → UTxO) and the assemble/materialize/FirstRun path (`DC-MITHRIL-03..07`), plus the Word64 value domain
-  (`DC-LEDGER-VALUE-01`) and era-aware min-UTxO rule (`DC-LEDGER-PARAMS-01`).
-
-The gate-removal (band 3) remains true at HEAD: `git grep EVIEW_ACTIVATION_ARMED 1e4896eb -- crates/` is **empty**.
-
-## Band 5 — grounding regen + registry reconcile (`5333d0b6 … 25d11636`, 4 commits)
-
-Housekeeping around the prior refresh: the four grounding docs were regenerated at `cdcd9397` (`a24d0c39` — this is the
-commit that produced the now-stale on-disk CODEMAP/SEAMS/TRACEABILITY dated 2026-06-24), `DC-EPOCH-14`/`DC-MITHRIL-04`
-status was backfilled, a deleted test ref was dropped, and `DC-EVIEW-08` was re-scoped to the ECA window-replay
-architecture. No source behavior change.
-
-## Band 6 — native operator/judge startup, LIVE-1 (`6e04f1fc … 25a6bde3`, 11 commits)
-
-The operator-facing **two-command judge flow**: `ade mithril snapshot fetch` (native acquisition + manifest,
-`ade_node::mithril_fetch`, S4) then `ade node run` (the native bootstrap + warm-start entrypoint closed to legacy
-inputs, S3). Native FirstRun now **resolves genesis from the committed `--network` profile** (S2 Gap 1a, manifest-bound)
-and **builds the EVIEW reduced checkpoint inline** at bootstrap (**`DC-MITHRIL-08`**, S2 Gap 2). Adds native
-operational continuity (warm-start snapshot + in-memory seed inputs, S5), relay-only forge-OFF follow (S6), a fix to the
-leader-VRF `eta0` PraosState nonce-slot read (S7), the snapshot-fetch symlink-layout fix (S8), and the
-**getting-started guide** for running Ade on preview.
-
-## Band 7 — ECA-5 + ECA-B, cross-boundary continuity (`5599f297 … dabb4210`, 19 commits) — **the `ade_core` reshape**
-
-The band that first **crosses a real epoch boundary** and rewrites how the Praos nonce evolves on the live path.
-
-- **ECA-5 (`08fa37f6`, `26565bec`; `DC-EPOCH-15`, enforced):** cross the boundary — the forecast horizon extends with
-  N+1 authority promotion; the native-Mithril first-boundary bridge survives seed→seed+1.
-- **ECA-B1 (`79467c84`; `DC-EPOCH-16`):** the **rolling Praos nonce on the follow path** — folds the live per-header
-  update into ONE `HeaderContribution` and **retires the dead `CandidateFreeze` split** inside `ade_core::consensus`
-  (`nonce.rs`, `praos_state.rs`, `header_validate.rs`). Backward-compatible chain-dep codec (`array(10)`, legacy
-  `array(9) → None`); an explicit no-`last_epoch_block_nonce` form that **fails closed** (`MissingLastEpochBlockNonce`)
-  — never a fabricated nonce.
-- **ECA-B2 (`9040615b`, `14880463`, `e8589e1e`; `DC-EPOCH-16 declared→enforced` at `44e07782`):** live **RSW
-  candidate-freeze** (`ceil(4k/f)` from the verified venue era-geometry via the single BLUE `praos_rsw_slots`) + the
-  boundary tick on the follow path; B2c seeds the evolving nonce from the full 6-nonce PraosState. `eta0(seed+2)` is now
-  self-derived live and byte-matches `cardano-node epochNonce(seed+2)`.
-- **ECA-B3 (`b058ff1c`, `23829091`, `b1d0fc7b`, `c13d4414`; `DC-EPOCH-17`, declared):** generalize the activation seam
-  to **advance per boundary** — `ActiveEpochAuthority.advance`, `run_node_sync` yields a `SyncOutcome` so the checkpoint
-  advances per-boundary, a lag-aware activation predicate crosses boundary 2.
-- Plus a flipped-Credential-tag fix in the native-bootstrap decode (`84fec1b5`, `DC-LEDGER-10`), observable follow
-  progress (`node.log`, `ade_node::ops_log`), and **warm-start recovery across a crossed boundary** (`dabb4210`).
-
-> **This is where `ade_core` changed** (see the CORRECTION note in the header). The reshape is versioned and
-> fail-closed, but the consensus authority is no longer byte-identical to baseline.
-
-## Band 8 — LIVE-LEDGER-EPOCH-TRANSITION S1–S3, the boundary accumulator (`c4e0413b … aeeaf89d`, 29 commits)
-
-The cluster (`DC-EPOCH-19`) that makes the live-followed ledger **self-evolve its non-UTxO state across boundaries**
-instead of fail-closing off the seed epoch.
-
-- **S1 (`5d16eaef`; `DC-EPOCH-19`, declared):** the non-UTxO **`EpochAccumulator`** + the `apply_selected_block`
-  contract — the self-sustaining ledger loop (`ade_ledger::epoch_accumulator`).
-- **S2 (`b2185be6 … 7c7b3a30`; `DC-EPOCH-20`, declared):** the durable **`EpochAccumulatorStore`** (single-blob home),
-  the within-epoch advancer (observe-only, stalls on a boundary), seal-at-firstrun, advance-on-live-follow,
-  advance-to-tip reconciliation (warm-start catch-up + reorg rematerialize), validity-aware within-epoch fees
-  (invalid-tx collateral, not declared fee), and the S2 RECOVER warm-start survival proof.
-- **S3 (`f41456da … b8e33ff0`; `DC-EPOCH-21`/`22`, declared):** the byte-exact boundary gate — one canonical POOLREAP,
-  a **per-credential** boundary mark (byte-exact member + leader rewards), the accumulator boundary-cross entry point,
-  the durable `BoundaryMark` witness (point + lineage bound before the cross), and the boundary-aligned co-advancer.
-  CE-3c proven live (the accumulator crosses two real preview boundaries). Seeds the accumulator mark/set/go from the
-  certified snapshot; derives monetary-expansion `eta` from the network's real epoch length (CE-3d).
-
-## Band 9 — Conway governance: CPDE + CRE (`d2522faf … 710f23db`, 33 commits)
-
-Two governance clusters that close the residual reward gap and stand up the ratification/enactment authority.
-
-- **`CONWAY-PROPOSAL-DEPOSIT-EXPIRY` (`d2522faf … 84286d95`):** import all post-seed boundary inputs (fee pot, RUPD, gov
-  proposals) at bootstrap; reject a pre-import accumulator at warm-start (absent ≠ empty); capture live gov proposals +
-  a vote tripwire + imported expiry-lifetime authority; the S4.0 ratification census (committee-only authority resolves
-  the whole tracked set); the **boundary deposit-expiry-refund evaluator** that closes the **−500B CE-3d gap**
-  (`6934afb4`), proven on the real proposals (`84286d95`).
-- **`CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY` (`406888ab … 710f23db`):** import + commitment-bind per-action voting
-  thresholds (S1p1), the bootstrap DRep vote-delegation baseline from the DState UMap (S1p2a) and DRep-expiry +
-  committee-hot-key baseline from the VState (S1p2b); capture live votes into tracked proposals' vote maps replacing the
-  tripwire (S2); the enactment-census decoders (`prevPParams`, enacted-authority `PParamUpdate` root,
-  `maxBlockExUnits.mem`, deposit pot) bound to selected-chain ImmutableDB witnesses (`ade_testkit::immutabledb_witness`);
-  the DRep voting-stake derivation (S3); version `ConwayGovState` with authoritative `num_dormant` (no fabricated
-  default, S4.1); **activate the DRep/committee ratification gate on the live boundary** (`262415bd`, S4.2); one
-  governance authority for the Conway epoch boundary + correct the expired-deposit drop (S4.3a); atomic exec-units
-  parameter-change enactment (S4.3c); the S5 differential proof + provenance-bound residual report. New rules
-  `DC-GOV-01` (declared), `DC-CINPUT-07` (declared, Conway deposit params bootstrap).
-
-## Band 10 — CE-3d closure: B3c / go-stake / RVBP (`52a6e2c7 … e476415a`, 15 commits)
-
-Drives CE-3d to **byte-exact**. B3c.0 proves the base UTxO byte-exact and adjudicates the −343B go-stake residual REAL;
-the residual is localized to the reward-account contribution (`a882d304`) and root-caused to a pre-RUPD mark snapshot,
-fixed by a staged **post-RUPD mark** built from a point-bound base (CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION S1). The
-**REDUCED-VALIDATION-BOUNDARY-PLANE** (RVBP) introduces the capability-typed split — reduced-boundary projection types +
-`FullBoundaryStateRequired` (`ade_ledger::reduced_boundary`), reduced-plane typed non-authority on the live path
-(P1/P2 + B1), and the recovery/fork-switch/boundary proof (P3). Closes the reward/pots residual by reducing the
-bootstrap fee pot by the RUPD `feeSS` (deltaF, **`DC-EPOCH-23`**) and fixing the snapshot pool-set to cardano
-`ssActiveStake` NonZero membership (**`DC-EPOCH-24`**); rejects a pre-C accumulator store (schema v3→v4). CE-3d final
-green declaration flips `DC-EPOCH-23`/`DC-EPOCH-24` to **enforced** (`e476415a`). (`DC-EPOCH-25` — the reduced-plane /
-trusted-replay boundary rule — lands **declared**.)
-
-## Band 11 — LIVE-LEDGER S4/S5 + CE-4A/CE-4B, continuous self-sufficiency (`e096e014 … 5e83aaaa`, 38 commits) — **the milestone**
-
-The largest band. It makes restart/rollback replay-equivalent, seals the leadership authority, and proves literal
-multi-boundary continuous operation.
-
-- **S5 — restart/rollback replay-equivalence (`e096e014 … 687fea98`):** a BLUE k-bounded + lineage-checked
-  **rollback-admission guard** (`ade_ledger::rollback::admission`, step 1); persist the accumulator lineage anchor
-  (`LastAdvancedPoint`, step 2a); the BLUE recovery-reconcile decision (step 2b p1) wired as event-qualified recovery
-  admission into the runtime (crash-safe live-rollback pre-clear, step 2b p2); and the **recovery replay-equivalence
-  positive proof** — byte-identical reset+refold vs an uninterrupted run (`687fea98`, S5 2c).
-- **S4 — the sealed authority flip (`1c45479b … db702a54`):** `PoolDistrView::from_accumulator`; the Leadership
-  Distribution Authority Trace (leadership = SET stake + snapshot-frozen params VRF); the self-contained
-  **`FrozenLeadershipPoolDistr`** (`ade_ledger::frozen_leadership`, seed identity + durable codec/store schema + native
-  boundary-freeze proven vs reference `nesPd`); epoch-index the frozen leadership behind a sole exact-epoch read (S4-0);
-  **S4-L1** retire seed-window authority from the initial/warm leadership view (`e9de61e7`); **S4-L2** the sealed
-  authority flip — promotion reads epoch-indexed frozen leadership only (`db702a54`).
-- **CE-4A — mechanical continuous self-sufficiency (`8b5d209e … 5e83aaaa`):** CE-4A.1 production-loop continuous
-  self-sufficiency across **two real boundaries** 1340→1342, `eta0(1341)` byte-exact (`9c6fc3c4`); CE-4A.2 the
-  self-derived boundary outputs **byte-match cardano** at 1341 and 1342 across 6 hard surfaces (`af3dc9c7`); CE-4A.3
-  restart+rollback replay-equivalence through the production loop — R1 warm-start reconstructs the frozen-promoted epoch
-  authority (`7266f90c`), R2/R3 controlled durable rollback + rollback-aware EVIEW resolution byte-identical
-  (`fd3826fd`), **R4 warm-restart crash-window recovery after rollback**, byte-identical (`5e83aaaa`, R4a+R4b+R4c —
-  root cause: `warm_start_recovery` materialized the schedule with RSW=None → candidate over-tracked past the freeze
-  slot → wrong `eta0`; fixed by threading the venue RSW into recovery).
-- **CE-4B (`c5bdc064`) + CE-4 milestone (`bcbae327`):** literal **three-boundary continuous operation 1340→1343**
-  (N→N+1→N+2→N+3), self-sufficient, ~2.9h, frozen leadership 1341–1344 sealed, no halt.
-
-## Band 12 — LIVE ops, LIVE-1b / LIVE-2 (`fde0dd9e … 0ef65c6c`, 3 commits)
-
-`LIVE-1b`: **bounded recovery-checkpoint retention** fixes a `chain.db` disk-fill (`fde0dd9e`). `LIVE-2`: verify the
-forge machinery on the current binary + record the live-forge procedure and the verified KES/opcert validity window
-(docs).
-
-## Band 13 — LIVE-FORGE-HARDENING, the close (`2f12bb0b … 1e4896eb`, 5 commits) — **the reason for this regen**
-
-The just-closed cluster (`HEAD`). Two slices + nits:
-
-- **S1 (`b52f2240`) — forge-path rollback-follow:** the forge path now **follows live rollbacks**, reusing the existing
-  BLUE rollback machinery (no new BLUE transition). RED shell only (`node_lifecycle.rs`, `node_sync.rs`).
-- **S2 (`dc14787a`) — the durable store is the sole candidate-freeze authority (`DC-EPOCH-16` strengthened):** the seed
-  sidecar schema advances **v5→v6** (`FIELDS_OUTER 13→14`) to persist `security_param` (`k`). A single
-  `sidecar_freeze_rsw` helper derives the candidate-freeze `RSW = ceil(4k/f)` **from the durable store** (via the same
-  BLUE `praos_rsw_slots`) for **both** `warm_start_recovery` **and** the forward live-loop schedule, so an absent /
-  unsupported restart `--network` can no longer leave the candidate freeze INERT; the restart-CLI RSW is retained **only
-  as a fail-closed cross-check** (mismatch → terminal). The importer **requires** `k` (fail-closed `MissingField`, no
-  fabricated default). This appended `strengthened_in += "LIVE-FORGE-HARDENING-S2"` and **two tests** to `DC-EPOCH-16`
-  (append-only; the rule stays `enforced`).
-- **Nits (`1e4896eb`) = HEAD:** an importer **ingress guard rejecting a degenerate active-slot coefficient**
-  (`active_slots_coeff.numer == 0`, i.e. `f = 0` → undefined freeze window; symmetric with the existing `denom == 0`
-  guard) + a one-line `node_lifecycle.rs` doc-rot fix. `importer.rs +26`, `node_lifecycle.rs ±2`.
-
-> **BLUE-touch precision (do not over-read "no BLUE edit").** `LIVE-FORGE-HARDENING` leaves the **authoritative
-> consensus core `ade_core` untouched** and adds **no new ledger/consensus transition**. Its only edit under a BLUE
-> `core_path` prefix is the **additive, versioned seed-sidecar codec** (`ade_ledger::seed_consensus_inputs`, +116, the
-> v5→v6 `k` persistence — a durable-input schema, append-only) plus a **1-line** `ade_ledger::consensus_view.rs` touch.
-> Everything else (`node_lifecycle`, `node_sync`, `consensus_inputs::importer`, `mithril_native_assembly`,
-> `seed_consensus_merge`, …) is the RED `ade_node`/`ade_runtime` shell.
-
----
-
-## 0. Headline (full span `470f9b89 → 1e4896eb`)
-
-| Count | Baseline (`470f9b89`) | HEAD (`1e4896eb`) | Δ (full span) |
+| Count | Baseline (`1e4896eb`) | HEAD (`74c67670`) | Δ |
 |---|---|---|---|
-| **Continuous operation** | fail-closes off the seed epoch | **3 real boundaries crossed live, self-sufficient** (`CE-4B` 1340→1343) | The span's reason for being. Restart + rollback + warm-restart-after-rollback all byte-identical through the production loop (`S5`, `CE-4A.3-R1..R4`). |
-| **Epoch-view activation** | — | **AUTOMATIC (no semantic gate)** | `EVIEW_ACTIVATION_ARMED` removed (`a17c7aab`, ECA-1); **ZERO at HEAD** (`git grep` empty in `crates/`). Enforced by `DC-EPOCH-13`. |
-| **`ade_core` (consensus authority)** | `48` BLUE types, byte-identical | **`49` BLUE types, +574 / −300 over 16 files** | **CHANGED** — the ECA-B1/B2 rolling Praos-nonce reshape (versioned, backward-compatible, fail-closed). **Supersedes the prior `48→48` claim.** |
-| Crates (workspace members) | 12 | **12** | **No delta.** No new `Cargo.toml`; member list byte-identical (`ade_mem_diag`/`ade_core_interop` already present at baseline). |
-| CI gates (`ci/ci_check_*.sh`) | 200 | **255** | **+55 new / 2 modified / 0 removed.** (`ci_check_credential_discriminant_closed.sh`, `ci_check_warmstart_eta0_overlay.sh` modified.) One non-gate helper also added (`ci/capture_mithril_documented_evidence.sh`); one modified (`ci/build_consensus_inputs_bundle.sh`). |
-| Registry rules (`docs/ade-invariant-registry.toml`) | 380 | **432** | **+52, ZERO removed** (`comm -23` of sorted `id =` lists empty; `comm -13` = exactly 52). |
-| Registry status (enforced / scaffolding / partial / declared) | 253 / 1 / 23 / 103 | **297 / 1 / 23 / 111** | enforced **+44**, scaffolding 0, partial **0**, declared **+8**. The 52 new IDs land **42 enforced / 10 declared**; existing-rule flips (`RO-MITHRIL-IMPORT-01`, `T-CONS-01`, `DC-EPOCH-16` → enforced) net the tally. |
-| BLUE canonical types (approx, over BLUE `core_paths`) | ~466 | **~558** | **≈ +92** — `ade_ledger 185 → 272` (+87), `ade_codec 11 → 13` (+2), `ade_types 82 → 84` (+2), **`ade_core 48 → 49` (+1)**; `ade_crypto 22`/`ade_plutus 8`/`ade_network` BLUE sub-paths (~110) unchanged. Approximate (structural `pub struct`/`pub enum` grep). |
-| Tests (`#[test]` / `#[tokio::test]` attrs, approx) | ~2,666 | **~3,320** | **≈ +654** — the EVIEW/ECA/accumulator hermetic suites, the LedgerDB-decode corpus/oracle suites, the governance (CPDE/CRE) census suites, the CE-3d differential suites, the kill-harness/memory tests. |
-| New source modules (`.rs` under `crates/**/src/`) | — | **+38** | 19 BLUE (`ade_ledger` ×18 + `ade_codec` ×1), 18 RED (`ade_node` ×8 + `ade_runtime` ×10), 1 testkit harness. Plus **25 new test files**. No new crate. |
-| Grounding docs (CODEMAP / SEAMS / TRACEABILITY) | regenerated at MEM-OPT-UTXO-DISK content-HEAD | **STALE at `cdcd9397` (2026-06-24)** | Only this HEAD_DELTAS is regenerated to HEAD. The other three are **~157 commits behind** — see Anomalies. |
+| Methodology | legacy IDD (`.idd-config.json`) | **IDSE v3.0, `strict`** (`.idse-config.json`, namespace `ADE`) | Opted in at `b64bb741`. The legacy record is frozen under `docs/legacy/` (`fa48afa8`). |
+| Invariant registry (`docs/ade-invariant-registry.toml`) | 432 legacy IDD rules | **260 IDSE invariants + 7 assumptions (A1–A7)** | A new registry was built through **12 Define batches**. The legacy registry is frozen at `docs/legacy/idd-invariant-registry.toml` with **482** entries (432 + 50 added in this span before the freeze, none removed). All 482 have dispositions: **414 migrated / 52 merged / 16 excluded / 0 pending**. |
+| Crates (workspace members) | 12 | **12** | No change. The `members` list is identical at both refs. |
+| CI gates (`ci/ci_check_*.sh`) | 255 | **286** | **+31 new, 33 modified, 0 removed.** Two non-gate CI files were added: `ci/idse_legacy_carried.py` and `ci/store-semantics-surface.lock`. |
+| New source modules (`crates/**/src/*.rs`) | — | **+10** | 8 BLUE (`ade_ledger` ×7, `ade_crypto` ×1), 1 BLUE test-only module (`ade_codec`) and 1 RED (`ade_node`). There are also 21 new integration-test files and 14 new block/UTxO fixtures. |
+| `ade_core` (consensus authority) | — | **+1,301 / −0, 1 file** (`consensus/era_schedule.rs`) | Purely additive: the era-aware wall-clock→slot authority and the bootstrap-bound timing authority (LIVE-2b/2c). |
+| Tests (`#[test]` / `#[tokio::test]`, approx) | ~3,320 | **~3,663** | ≈ +343. |
+| `STORE_SEMANTICS_VERSION` | (did not exist) | **13** | Introduced at 1 in `ade_ledger::store_semantics` (P6, `e9d9db46`). Later slices raised it, for example to 8 at LV-3 (`cb65ec6e`), 12 at LV-15b-0 steps 3–5 (`2b0035d7`) and 13 at the LV-15b-0 pool-set fix (`0ddb36d1`). `e563ad94` added a semantics-neutral lock entry at 13 without bumping the version. |
 
-## 1. Commit Log (newest first, full span `470f9b89..1e4896eb`)
+### The span in fourteen bands (oldest → newest)
 
-Verbatim from `git log --oneline --no-merges 470f9b89..1e4896eb`. **232 commits, no merges.** Type is the
-conventional-commits prefix (or a non-standard-but-unambiguous prefix, marked `*(…)*`). Prefix tally (exact):
-**`feat`×122, `docs`×55, `fix`×22, `test`×22, `chore`×6**, plus **1 each** of `refactor`, `perf`, and the non-standard
-`harden` / `registry` / `evidence`. **All 232 carry a clear scope; none is unclassifiable.**
+| # | Range (oldest … newest) | Commits | Cluster / theme | IDSE invariants carried forward |
+|---|---|---|---|---|
+| 1 | `d036f8e2 … df1efae2` | 4 | Grounding regen at the LIVE-FORGE-HARDENING close; `consensus_stream_replay` corpus refreshed for the rolling-nonce model; S1 forge-path rollback guard registered | SAF-017 |
+| 2 | `86e29110 … b00216c8` | 5 | LIVE-WIRE-LIVENESS: keep-alive under downstream backpressure (S1); reconnect of an established live feed (S2) | LIV-008, ORD-006, LIV-009, LIV-007 |
+| 3 | `18875f49 … 3a97ca9b` | 5 | ACCUMULATOR-REFOLD-BOUND: post-rollback accumulator refold bounded to a settled rewind point; forge-tick `skip_reason` | REC-001, DET-009, SAF-006, LIV-001 |
+| 4 | `0c95d1ad … c2257080` | 15 | EVIEW-R1/R2 (a refold re-seals frozen leadership byte-identically) and LIVE-REFOLD-THRASH RF-1 (settled-rewind triple integrity; the rewind survives recovery) | VAL-023, DET-009, DUR-002, LIV-001 |
+| 5 | `18aad6cf … 3ebdf83f` | 19 | PREPROD-ENTRY-AUTHORITY P1–P6: `psFutureStakePoolParams` grammar, venue era-schedule epoch detection, epoch-agreement invariant, mainnet-constant containment, store-semantics version gate, self-describing replay divergence, per-venue differential | VAL-025, VAL-012, EVO-005, PRC-005, OBS-004, PRC-004 |
+| 6 | `47cfe76a … 7d6f4421` | 15 | PREPROD-NONCE-1/2/3 (eta0 commitment taken at the final candidate freeze; bridge-boundary differential) and SLICE-P2 (durably representable reduced projection) | VAL-022, PRC-004 |
+| 7 | `937b2ab7 … 8b41b9e3` | 2 | CRE-S7: enact `minPoolCost` (Conway PPU key 16) | — |
+| 8 | `732646d8 … 946185e8` | 19 | LIVE-2 / LIVE-2b / LIVE-2c: a leadership authority that cannot answer is not "not leader"; canonical era-aware slot authority in `ade_core`; forge timing bound to the store; one forge slot authority, no vanishing tick | DET-019, OBS-001 |
+| 9 | `affb355d … cb751374` | 15 | LIVE-2c B6: per-pass co-advance cost census; `slot→hash` index in ChainDb; stop re-attempting a known-failed boundary (co-advance 115 s → 0.3 s) | — |
+| 10 | `16e0a144 … fcbabb67` | 3 | B12 census: the +1 tip offset is benign observation order (762/762) | — |
+| 11 | `941f98a2 … 8b9e9e38` | 22 | BND: typed boundary-stall vs apply-failure (BND-1); Cardano's phase-2-invalid collateral-only UTxO effect (2a); resolved collateral balance (2b); accumulator `Phase2Invalid` transition (2c); UTxO authority retains spent collateral (2d) | SAF-005, VAL-016, CON-003, DUR-011 |
+| 12 | `f544fad0 … e9db66b1` | 3 | B12 slice: the followed-peer-tip signal records a tip the peer SERVED and Ade durably admitted | SAF-013 |
+| 13 | `d5d26c1c … a3cef7f7` | 76 | LEADERVALUE census, then LV-1 … LV-17: sigma denominator, seed-boundary reward owner, owner stake, snapshot fidelity, donation pot, co-advance retry, relay-loop gate determinism, native-script threshold/depth/witness verdicts, every supplied witness verifies, UTxO-free admission obligations, frozen ratification record, durable FindIntersect ancestry, LV-17 opened | VAL-024, VAL-029, VAL-027, VAL-020, STR-005, VAL-028, CON-005, LIV-002, VAL-017, SEC-009, SEC-010, SEC-008, VAL-018, VAL-019, VAL-021, VAL-030, REC-005, VAL-055 |
+| 14 | `fa48afa8 … 74c67670` | 19 | **IDSE migration.** M0: relocate and opt in. M1: twelve Define batches. M2: carry tests, CI scripts and code loci over; retarget legacy-registry gates; restore two broken gates; re-evidence at `e563ad94`; correct 14 re-evidence records (`74c67670`) | all 260 (registry built) |
+
+The band counts are exact and sum to 222.
+
+---
+
+## 1. Commit Log
+
+Verbatim from `git log --oneline --no-merges 1e4896eb..HEAD`, newest first. **222 commits, no merges.** The Type column is the commit-subject prefix. `define` is the IDSE Define commit format (`Define: …`, idse.md §10), not a conventional-commits type. Prefix tally (exact): **`docs`×125, `feat`×45, `fix`×25, `define`×12, `test`×6, `chore`×6, `ci`×2, `perf`×1.** Every commit has a prefix, so none is unclassified.
 
 | Hash | Type | Summary |
 |------|------|---------|
-| `1e4896eb` | chore | chore(node): LIVE-FORGE-HARDENING cluster-close review nits |
-| `dc14787a` | feat | feat(node): S2 the durable store is the sole candidate-freeze authority (DC-EPOCH-16) |
-| `240cfab3` | docs | docs(live-forge): S2 slice doc -- warm-start candidate-nonce identity (DC-EPOCH-16) |
-| `b52f2240` | feat | feat(node): LIVE-FORGE-HARDENING S1 -- the forge path follows live rollbacks |
-| `2f12bb0b` | docs | docs(live-forge): open LIVE-FORGE-HARDENING -- cluster + S1 (forge-path rollback-follow) |
-| `0ef65c6c` | docs | docs(live): LIVE-2 -- record verified KES/opcert validity window |
-| `f08191a7` | docs | docs(live): LIVE-2 -- verify forge machinery on the current binary + live-forge procedure |
-| `fde0dd9e` | fix | fix(node): LIVE-1b -- bounded recovery-checkpoint retention (chain.db disk-fill) |
-| `5e83aaaa` | feat | feat(node): CE-4A.3-R4 -- warm-restart crash-window recovery after rollback (R4a+R4b+R4c, byte-identical) |
-| `bcbae327` | docs | docs(ledger): CE-4 milestone declaration + registry evidence (literal three-boundary continuous operation) |
-| `c5bdc064` | feat | feat(ledger): CE-4B -- three-boundary continuous operation 1340->1343 self-sufficient (N->N+1->N+2->N+3) |
-| `8a085b10` | docs | docs(ledger): open CE-4B -- literal three-boundary continuous-operation proof (N->N+1->N+2->N+3) |
-| `4bc49fa6` | docs | docs(ledger): CE-4A.3-R4 findings -- R4a/R4b fixed+validated, R4c (VRF/nonce reconstruction) OPEN; impl parked |
-| `5858bf00` | docs | docs(ledger): file CE-4A.3-R4 -- warm-restart-after-rollback-before-refold hardening (not a #13 blocker) |
-| `fd3826fd` | feat | feat(epoch): CE-4A.3-R3 rollback-aware eview resolution + #13 rollback/refold byte-identical |
-| `849bc9f0` | docs | docs(ledger): open CE-4A.3-R3 -- rollback-aware eview activation resolution (the #13 blocker) |
-| `58b87dbb` | docs | docs(ledger): CE-4A.3-R2 (#13) ratified mechanism -- controlled durable rollback (option a) |
-| `ceb390e7` | docs | docs(ledger): open CE-4A.3-R2 (#13) -- rollback + refold replay-equivalence through the production loop (scoped) |
-| `7266f90c` | feat | feat(epoch): CE-4A.3-R1 -- warm-start recovery reconstructs the frozen-promoted epoch authority |
-| `ca1ae06b` | docs | docs(ledger): open CE-4A.3-R1 — warm-start recovery reconstructs the frozen-promoted epoch authority (scoped) |
-| `7f4aa463` | docs | docs(ledger): open CE-4A.3 — restart + rollback replay-equivalence through the production loop (scoped) |
-| `af3dc9c7` | test | test(node): CE-4A.2 — self-derived boundary outputs byte-match cardano at 1341 and 1342 (6 hard surfaces) |
-| `22903e8d` | docs | docs(ledger): open CE-4A.2 — boundary outputs byte-match cardano at both self-derived boundaries (scoped) |
-| `9c6fc3c4` | test | test(node): CE-4A.1 — production-loop continuous self-sufficiency across two real boundaries |
-| `5c04eefb` | docs | docs(ledger): CE-4A.1 fail-loud + machine-readable evidence bundle (spec refinement) |
-| `8b5d209e` | docs | docs(ledger): open CE-4A -- mechanical continuous self-sufficiency (two boundaries via the production run-loop) |
-| `db702a54` | feat | feat(ledger): S4-L2 sealed authority flip -- promotion reads epoch-indexed frozen leadership only (LIVE-LEDGER-EPOCH-TRANSITION S4-L2) |
-| `e9de61e7` | feat | feat(node): S4-L1 — retire seed-window authority from the initial/warm leadership view |
-| `7158ddc2` | docs | docs(ledger): open S4 — the sealed authority flip (epoch-indexed frozen leadership → sole production leader schedule) |
-| `c7e1c18f` | feat | feat(ledger): epoch-index the frozen leadership authority behind a sole exact-epoch read (S4-0) |
-| `8cdd1471` | feat | feat(ledger): native boundary leadership freeze proven vs reference nesPd (S4-pre-2) |
-| `3f93252d` | feat | feat(node): certify the frozen leadership bootstrap lineage (S4-pre-1c) |
-| `13829660` | feat | feat(ledger): persist the frozen leadership authority — canonical codec + durable store schema (S4-pre-1b) |
-| `501bf89a` | feat | feat(ledger): FrozenLeadershipPoolDistr — the self-contained leadership authority + seed identity (S4-pre-1a) |
-| `952a03b6` | docs | docs(ledger): open S4-pre — Frozen Leadership Distribution Authority (self-contained leadership PoolDistr) |
-| `67890681` | feat | feat(ledger): Leadership Distribution Authority Trace — leadership = SET stake + snapshot-frozen params VRF (S4 discovered-proof-failure) |
-| `ae30fe18` | docs | docs(ledger): open the Leadership Distribution Authority Trace slice (S4 discovered-proof-failure follow-up) |
-| `d37af69a` | feat | feat(ledger): PoolDistrView::from_accumulator — the accumulator-derived leadership authority (S4 step 1, no behavior change) |
-| `1c45479b` | docs | docs(ledger): open S4 — the sealed authority flip (accumulator-derived PoolDistrView replaces the seed-window read) |
-| `687fea98` | test | test(ledger): S5 2c — recovery replay-equivalence positive proof (byte-identical reset+refold vs uninterrupted) |
-| `8d6bf874` | feat | feat(node): S5 2b part 2 — wire event-qualified recovery admission into the runtime (crash-safe live-rollback pre-clear) |
-| `aa2bba37` | feat | feat(rollback): BLUE recovery-reconcile decision (S5 step 2b, part 1 — recovery authority) |
-| `3682068b` | feat | feat(chaindb): persist the accumulator lineage anchor (LastAdvancedPoint) (S5 step 2a — store authority) |
-| `48fc423a` | feat | feat(rollback): BLUE k-bounded + lineage-checked rollback-admission guard (S5 step 1) |
-| `306ceb40` | docs | docs(ledger): revise S5 scope — the k-bounded rollback guard + lineage-checked reset land in S5, not S4 |
-| `e096e014` | docs | docs(ledger): open S5 — restart/rollback replay-equivalence contract (the S4 recovery-promotion precondition) |
-| `e476415a` | docs | docs(ledger): CE-3d final green declaration — flip DC-EPOCH-23 (fee/pot) + DC-EPOCH-24 (snapshot pool-set) to enforced, byte-exact on the v5 schema-v4 seed |
-| `392433a1` | feat | feat(epoch): reject a pre-C accumulator store (schema v3->v4) — one replay meaning for the persisted snapshot-inclusion semantics (DC-EPOCH-24) |
-| `e469f878` | feat | feat(epoch): snapshot pool-set = cardano ssActiveStake NonZero membership — close the CE-3d go phantom-pool residual (DC-EPOCH-24) |
-| `fd8b07c8` | feat | feat(epoch): reduce the bootstrap fee pot by the RUPD feeSS (deltaF) — close the CE-3d reward/pots residual (DC-EPOCH-23) |
-| `88128e72` | feat | feat(bootstrap): import snapshot-bound Conway deposit params into native-Mithril bootstrap authority (DC-CINPUT-07) |
-| `1580b123` | test | test(ledger): reduced-plane recovery/fork-switch/boundary proof (RVBP P3) |
-| `dafe0faf` | feat | feat(ledger): build the epoch-boundary mark POST-RUPD from a point-bound base (CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION S1) |
-| `aa9107a9` | feat | feat(ledger): reduced-plane typed non-authority on the live path (RVBP P1/P2 + B1) |
-| `c15be61e` | feat | feat(ledger): reduced-boundary projection types + FullBoundaryStateRequired (RVBP P1 foundation) |
-| `5c5b8f7f` | docs | docs(ledger): open REDUCED-VALIDATION-BOUNDARY-PLANE -- invariants + P1 slice (the reduced-plane typed non-authority) |
-| `3de15187` | docs | docs(ledger): S2 design -- the reduced-validation boundary plane (capability-typed split) |
-| `a3faf1e0` | docs | docs(ledger): CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION S1 -- boundary reorder design (staged post-RUPD mark, both paths) |
-| `a52afd77` | test | test(ledger): CE3D-REWARD-ACCOUNT-EVOLUTION-CORRECTION S0 -- the go-stake residual root-caused to a pre-RUPD mark snapshot (GREEN diagnosis) |
-| `a882d304` | test | test(ledger): CE3D-GO-STAKE-DERIVATION-LOCALIZATION S1 -- the -343B go-stake residual localized to the reward-account contribution (GREEN evidence) |
-| `52a6e2c7` | test | test(ledger): B3c.0 -- base UTxO proven byte-exact; the -343B go-stake residual adjudicated REAL (GREEN evidence) |
-| `710f23db` | test | test(gov): bind S5 report provenance -- exact fixtures, decoder, code commits, canonical hash (reproducible) |
-| `dff581ab` | test | test(gov): the CRE S5 differential proof + residual report -- one artifact, three separated claims |
-| `d02cff14` | feat | feat(gov): atomic exec-units parameter-change enactment -- the single-authority enact path (CRE S4.3c) |
-| `16a40260` | test | test(gov): V11 live-seed lineage evidence -- fresh re-bootstrap + warm-restart proven (CRE S4.3b-bootstrap obligation A) |
-| `163e1428` | test | test(gov): the real-witness manifest -- 69c948cd..#0 decodes via keys 20/21 from real bytes (CRE S4.3b-bootstrap obligation B) |
-| `0e13d139` | feat | feat(gov): V11 executable execution-memory + previous-action state, inert (CRE S4.3b) |
-| `f4a1f748` | refactor | refactor(gov): one governance authority for the Conway epoch boundary + correct the replay expired-deposit drop (CRE S4.3a) |
-| `262415bd` | feat | feat(gov): activate the DRep/committee ratification gate on the live boundary (CRE S4.2) |
-| `6d2948c7` | test | test(gov): S4.1b operational capstone — live V2 governance seed re-bootstrap + warm-restart proof |
-| `2bf3b41d` | test | test(gov): S4.1b — V2 governance seed binding + restart proof (the sealed re-bootstrap boundary) |
-| `d6efe3e6` | feat | feat(gov): version ConwayGovState with authoritative num_dormant — no fabricated default (CRE S4.1) |
-| `c2f5960e` | test | test(gov): the CRE S4 oracle anchor — the real ratify gate reproduces the census enactment |
-| `96793f46` | feat | feat(ledger): extract the DRep voting-stake derivation as the CRE S3 distribution authority |
-| `bae70fe9` | test | test(ledger): repair the stale VState stub in the ledgerdb_state hermetic fixture |
-| `c0471d09` | feat | feat(testkit): bind the CRE enactment census to selected-chain witnesses (ImmutableDB reader + permanent fixture) |
-| `b73701a7` | feat | feat(ledger): decode prevPParams + the enacted-authority PParamUpdate root (CRE enactment census) |
-| `04f1c2b8` | test | test(governance): CRE enactment-census row-emission scaffold (canonical rows + the four evidence additions) |
-| `7b2f4755` | feat | feat(ledger): decode maxBlockExUnits.mem + the deposit pot for the CRE enactment census |
-| `7a27c475` | fix | fix(ledger): tolerate a retired block producer in the non-UTxO decode (surfaced by the CRE enactment census) |
-| `965b308a` | test | test(governance): CRE enactment-census probe -- validate the decoder at epoch 1088 (ratify/enact ground-truth fixture, WIP) |
-| `feb5cf10` | test | test(governance): lock S2 vote-capture replay determinism + reclassify as canonical vote-record authority (CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S2) |
-| `c497db9b` | feat | feat(governance): capture live votes into the tracked proposals' vote maps, replacing the vote tripwire (CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S2) |
-| `9a2b4818` | feat | feat(governance): import the DRep-expiry + committee-hot-key baseline from the VState (CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S1 part 2b) |
-| `e57433cc` | feat | feat(governance): import the bootstrap DRep vote-delegation baseline from the DState UMap (CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S1 part 2a) |
-| `524829e5` | feat | feat(governance): import + commitment-bind the per-action voting thresholds, without activating the gate (CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY S1 part 1) |
-| `406888ab` | docs | docs(governance): open CONWAY-RATIFICATION-AND-ENACTMENT-AUTHORITY + the S0 oracle ground-truth harness |
-| `84286d95` | test | test(governance): S5 — prove the S4 refund closes the -500B CE-3d gap on the real proposals (CONWAY-PROPOSAL-DEPOSIT-EXPIRY) |
-| `6934afb4` | feat | feat(epoch): the boundary deposit-expiry-refund evaluator — close the -500B CE-3d gap (CONWAY-PROPOSAL-DEPOSIT-EXPIRY S4) |
-| `0fbb85e2` | feat | feat(governance): the S4.0 ratification census — prove the committee-only authority resolves the whole tracked set (CONWAY-PROPOSAL-DEPOSIT-EXPIRY) |
-| `27e23fd9` | feat | feat(epoch): capture live gov proposals + a vote tripwire + the imported expiry-lifetime authority (CONWAY-PROPOSAL-DEPOSIT-EXPIRY S3) |
-| `665f72e4` | fix | fix(test): repair the stale non-UTxO hermetic fixture for the gov-state decoder |
-| `9855ad56` | feat | feat(bootstrap): reject a pre-import accumulator at warm-start — absent != empty (CONWAY-PROPOSAL-DEPOSIT-EXPIRY S2) |
-| `d2522faf` | feat | feat(bootstrap): import all post-seed boundary inputs — fee pot, RUPD, gov proposals (CONWAY-PROPOSAL-DEPOSIT-EXPIRY S1) |
-| `aeeaf89d` | fix | fix(ledger): pay script-hash and pool-owner stakers their exact reward share |
-| `7e3c09ef` | feat | feat(epoch): seed nesBcur and retire the redundant bootstrap-RUPD application |
-| `1702006e` | fix | fix(epoch): derive monetary-expansion eta from the network's real epoch length, not a mainnet constant (LIVE-LEDGER-EPOCH-TRANSITION, CE-3d) |
-| `e8127575` | fix | fix(bootstrap): seed the EpochAccumulator's mark/set/go from the certified snapshot (LIVE-LEDGER-EPOCH-TRANSITION, CE-3d) |
-| `b8e33ff0` | docs | docs(epoch): CE-3c proven live -- the accumulator crosses two real preview boundaries (LIVE-LEDGER-EPOCH-TRANSITION S3, DC-EPOCH-22) |
-| `8232fe73` | feat | feat(epoch): the BOUNDARY-ALIGNED co-advancer -- the accumulator crosses live (DC-EPOCH-22, LIVE-LEDGER-EPOCH-TRANSITION S3 #2b-iii) |
-| `ee33cc4c` | feat | feat(epoch): the durable BoundaryMark witness -- point + lineage, bound before the cross (DC-EPOCH-22, LIVE-LEDGER-EPOCH-TRANSITION S3 #2b-ii) |
-| `8d047dee` | feat | feat(epoch): the accumulator boundary-cross entry point -- supply the mark, fire NEWEPOCH (DC-EPOCH-22, LIVE-LEDGER-EPOCH-TRANSITION S3 #2b-i) |
-| `c1a0ec85` | feat | feat(epoch): per-credential boundary mark -- byte-exact member + leader rewards (DC-EPOCH-21, LIVE-LEDGER-EPOCH-TRANSITION S3) |
-| `ce22ca27` | docs | docs(epoch): S3 item #2 finding -- the boundary mark must be PER-CREDENTIAL, not per-pool (LIVE-LEDGER-EPOCH-TRANSITION) |
-| `f41456da` | fix | fix(epoch): one canonical POOLREAP at the boundary -- fix the dead delegation-clear + the reward-account discriminant (DC-EPOCH-21, LIVE-LEDGER-EPOCH-TRANSITION S3) |
-| `e05a3ec1` | docs | docs(epoch): scope S3 -- the byte-exact boundary gate, two reconciliation items RESOLVED (LIVE-LEDGER-EPOCH-TRANSITION) |
-| `7c7b3a30` | test | test(epoch): close S2 CE-2b with an exactly-one-fee-scan-per-admit capstone (LIVE-LEDGER-EPOCH-TRANSITION) |
-| `d7653561` | fix | fix(epoch): warm-start recovery dispatch -- recover the seed+1 bridge authority, not only seed+2 (EPOCH-CONSENSUS-VIEW) |
-| `f76d738b` | docs | docs(epoch): record the S2 RECOVER warm-start survival proof + a separate EVIEW finding |
-| `89c1bc79` | docs | docs(epoch): record + mechanically guard S2 RECOVER (LIVE-LEDGER-EPOCH-TRANSITION DC-EPOCH-20) |
-| `59153f36` | feat | feat(epoch): advance-to-tip accumulator reconciliation -- warm-start catch-up + reorg rematerialize (LIVE-LEDGER-EPOCH-TRANSITION S2) |
-| `6f18ee0e` | docs | docs(epoch): record the S2 within-epoch wiring live-proven on preview (LIVE-LEDGER-EPOCH-TRANSITION S2) |
-| `68846dcc` | feat | feat(epoch): advance the durable accumulator on the live follow -- observe-only after each durable admit (LIVE-LEDGER-EPOCH-TRANSITION S2, DC-EPOCH-20) |
-| `a842cfe1` | feat | feat(epoch): seal the bootstrap SEED accumulator at native firstrun -- the durable within-epoch substrate (LIVE-LEDGER-EPOCH-TRANSITION S2, DC-EPOCH-20) |
-| `53e6829a` | feat | feat(epoch): the bootstrap SEED accumulator -- manifest-bound, two-buffer split (LIVE-LEDGER-EPOCH-TRANSITION S2, PO-3/CE-2f) |
-| `9fe01011` | feat | feat(epoch): the within-epoch accumulator advancer -- observe-only stall on a boundary (LIVE-LEDGER-EPOCH-TRANSITION S2, DC-EPOCH-20) |
-| `b2185be6` | feat | feat(epoch): durable EpochAccumulatorStore -- the accumulator's single-blob home (LIVE-LEDGER-EPOCH-TRANSITION S2, DC-EPOCH-20, PO-2) |
-| `cbf3e68a` | feat | feat(epoch): validity-aware within-epoch fees -- invalid-tx collateral, not declared fee (LIVE-LEDGER-EPOCH-TRANSITION S2, PO-1) |
-| `59f04758` | docs | docs(epoch): scope LIVE-LEDGER-EPOCH-TRANSITION S2 + declare DC-EPOCH-20 -- atomic-or-rematerialized selected-block admission |
-| `5d16eaef` | feat | feat(epoch): the non-UTxO EpochAccumulator + apply_selected_block contract -- the self-sustaining ledger loop (DC-EPOCH-19, LIVE-LEDGER-EPOCH-TRANSITION S1) |
-| `2ba2bdb3` | docs | docs(epoch): scope LIVE-LEDGER-EPOCH-TRANSITION + declare DC-EPOCH-19 -- the continuous self-sustaining ledger loop |
-| `d6e52170` | fix | fix(epoch): surface the specific bootstrap-RUPD-absent reason at the seed+2 activation seam (DC-EPOCH-18) |
-| `c4e0413b` | feat | feat(epoch): apply the bootstrap reward update at the window-end -- byte-exact seed+2 stake (DC-EPOCH-18, EPOCH-CONSENSUS-VIEW B3c) |
-| `dabb4210` | feat | feat(consensus): warm-start recovery across a crossed epoch boundary |
-| `bbae56be` | feat | feat(node): observable follow progress + a known log destination (node.log) |
-| `84fec1b5` | fix | fix(ledger): correct flipped Credential tag in native-bootstrap decode (DC-LEDGER-10) |
-| `c13d4414` | fix | fix(epoch): lag-aware activation predicate + did-advance seam -- cross boundary 2 (DC-EPOCH-17, ECA-B3) |
-| `b1d0fc7b` | feat | feat(epoch): yield-at-boundary -- run_node_sync returns SyncOutcome so the checkpoint advances per-boundary (DC-EPOCH-17, ECA-B3b) |
-| `23829091` | feat | feat(epoch): generalize the activation seam to advance per boundary -- replay-derived seed+2 (DC-EPOCH-17, ECA-B3) |
-| `b058ff1c` | feat | feat(epoch): ActiveEpochAuthority.advance -- per-boundary authority advance (DC-EPOCH-17, ECA-B3) |
-| `fc68a295` | docs | docs(epoch): scope ECA-B3 + declare DC-EPOCH-17 -- replay-derived seed+2 authority |
-| `44e07782` | docs | docs(epoch): flip DC-EPOCH-16 declared -> enforced -- eta0(seed+2) proven live (ECA-B2c) |
-| `e8589e1e` | fix | fix(epoch): seed the evolving nonce from the full 6-nonce PraosState (DC-EPOCH-16, ECA-B2c) |
-| `14880463` | feat | feat(epoch): B2 part 2 -- live RSW freeze + boundary tick on the follow path (DC-EPOCH-16) |
-| `9040615b` | feat | feat(epoch): B2 part 1 -- RSW era-geometry field + the verified venue k source (DC-EPOCH-16) |
-| `7356679a` | docs | docs(epoch): scope ECA-B2 -- live candidate-freeze (RSW) + boundary tick + the eta0(seed+2) gate |
-| `79467c84` | feat | feat(epoch): rolling Praos nonce on the follow path -- chain-dep combine + back-compat snapshot (DC-EPOCH-16, ECA-B1) |
-| `c0bc425b` | docs | docs(epoch): declare DC-EPOCH-16 + scope ECA-B1 (rolling Praos nonce on the follow path) |
-| `4657cee5` | chore | chore(epoch): reconcile EVIEW gates + registry to the post-activation reality (ECA Tier A) |
-| `26565bec` | feat | feat(epoch): native Mithril first-boundary bridge -- survive seed->seed+1 (ECA-5, DC-EPOCH-15) |
-| `08fa37f6` | feat | feat(epoch): cross the epoch boundary -- forecast horizon extends with N+1 authority promotion (DC-EPOCH-15, ECA-5) |
-| `5599f297` | docs | docs(epoch): declare DC-EPOCH-15 (forecast horizon <=> N+1 authority promotion) + ECA-5 slice summary |
-| `25a6bde3` | docs | docs: getting-started guide for running Ade on Cardano preview |
-| `87e74843` | fix | fix(mithril): snapshot fetch layout symlinks must be absolute (relative --output-dir dangled) (S8) |
-| `886ca138` | fix | fix(epoch): native Mithril decode read the leader-VRF eta0 from the wrong PraosState nonce slot (S7) |
-| `b0bbaaf5` | feat | feat(epoch): relay-only live follow -- port the forge-ON follow setup into forge-OFF (S6) |
-| `54833173` | feat | feat(epoch): native operational continuity -- warm-start snapshot + in-memory seed inputs (S5) |
-| `6d223a36` | feat | feat(mithril): `ade mithril snapshot fetch` -- native acquisition + manifest (S4) |
-| `3af74b8a` | feat | feat(cli): `ade node run` native entrypoint -- bootstrap + warm-start, closed to legacy inputs (S3) |
-| `769196af` | feat | feat(epoch): the judge-facing --bootstrap-mithril native startup command (S2 Gap 1b) |
-| `59cfa802` | feat | feat(epoch): native FirstRun resolves genesis from the committed --network profile, manifest-bound (S2 Gap 1a) |
-| `aa7503bc` | feat | feat(epoch): native Mithril FirstRun builds the EVIEW reduced checkpoint inline (DC-MITHRIL-08, S2 Gap 2) |
-| `6e04f1fc` | test | test(epoch): hermetic ADE1 shadow-derive regression + shadow stake-agreement evidence |
-| `25d11636` | docs | docs(invariant-registry): re-scope DC-EVIEW-08 to the ECA window-replay architecture |
-| `7964d4df` | chore | chore(registry): drop a deleted test ref + bind a self-declaring CI gate |
-| `a24d0c39` | docs | docs(grounding): regenerate the four grounding docs at cdcd9397 |
-| `5333d0b6` | chore | chore(registry): backfill omitted status on DC-EPOCH-14 + DC-MITHRIL-04 |
-| `cdcd9397` | feat | feat(epoch): live FirstRun -> native Mithril bootstrap invocation (DC-MITHRIL-07, S1d) |
-| `942cd97c` | feat | feat(epoch): tables -> authoritative UTxOState materialization (DC-MITHRIL-06, S1c) |
-| `c952c767` | feat | feat(epoch): native Mithril authority transition -- assemble + atomic persist (DC-MITHRIL-03, S1b) |
-| `e84ebb0c` | chore | chore(registry): repair DC-MITHRIL-01/02 ID collision + add a uniqueness guard |
-| `53c27bc4` | feat | feat(epoch): native non-UTxO snapshot decoder + manifest-bound network identity (S1a-1) |
-| `cb20ab02` | feat | feat(ledger): era-aware protocol-parameter min-UTxO representation (DC-LEDGER-PARAMS-01, S1a-2) |
-| `7c769801` | docs | docs(testkit): track pre-existing epoch_boundary_logic hang as a CI hygiene blocker |
-| `5426dceb` | feat | feat(ledger): output asset quantity is the Word64 domain (OutputAssetQuantity, DC-LEDGER-VALUE-01) |
-| `6cab0d6c` | feat | feat(epoch): native V2 LedgerDB tables MemPack TxOut decoder -> faithful UTxO (DC-MITHRIL-02, Stage 2) |
-| `3bbba530` | feat | feat(epoch): native V2 LedgerDB state decoder -> canonical CertState (DC-MITHRIL-01, Stage 1) |
-| `7386bf82` | feat | feat(epoch): reclassify cli exporter as auxiliary; V2 LedgerDB native-decode probe + manifest v2 |
-| `f09cc0ec` | feat | feat(epoch): bootstrap-cert-state producer, live-verified on Preview |
-| `0a500e59` | test | test(epoch): prove warm-start fail-closes on a wrong CLI network magic (DC-EPOCH-14) |
-| `ad41b274` | feat | feat(epoch): atomic epoch-authority transition + crash recovery (ECA-2/3/4) |
-| `124c87da` | feat | feat(epoch): persist the consensus-profile hashes in the v4 seed sidecar (ECA-2-pre) |
-| `a17c7aab` | feat | feat(epoch): remove the EVIEW_ACTIVATION_ARMED semantic gate (ECA-1) |
-| `4614e977` | feat | feat(epoch): leadership-complete EpochConsensusView + exclusive projection (ECA-0b) |
-| `ad704f86` | feat | feat(epoch): cardano-faithful pool lifecycle in the reduced window (ECA-0a) |
-| `a50a3ee8` | feat | feat(epoch): wire the gated epoch-view activation into the relay loop (S3f-4d-wire-3b-2) |
-| `4c63c03d` | feat | feat(epoch): the gated boundary orchestration (S3f-4d-wire-3b-1) |
-| `e6e07ae0` | feat | feat(epoch): the boundary-activation orchestration (S3f-4d-wire-3a) |
-| `bcef6404` | feat | feat(epoch): the readiness witness + the sole authoritative derive (S3f-4d-wire-2b) |
-| `39b2c314` | feat | feat(epoch): runtime readiness witness + replay seed-state checkpoint (S3f-4d-wire-2a) |
-| `e14a0e15` | feat | feat(epoch): live source-window extraction for dual-path activation (S3f-4d-wire-1) |
-| `bfa0b54a` | feat | feat(epoch): live stake-by-pool derive for the shadow proof (DC-EPOCH-11, S3f-4d-mat-shadow mechanism) |
-| `3c7d9cc2` | feat | feat(epoch): fail-closed readiness gate for the live reduced checkpoint (DC-EPOCH-11, S3f-4d-mat-4) |
-| `b151f399` | feat | feat(epoch): reorg re-materialize for the live reduced checkpoint (DC-EPOCH-11, S3f-4d-mat-3) |
-| `a916eece` | feat | feat(epoch): wire the live reduced checkpoint into the relay loop (DC-EPOCH-11, S3f-4d-mat-2c) |
-| `3d597fcb` | feat | feat(epoch): live ChainDB-replay checkpoint advancer (DC-EPOCH-11, S3f-4d-mat-2b) |
-| `fdc3d062` | feat | feat(epoch): reduced-checkpoint per-block advance primitive (DC-EPOCH-11, S3f-4d-mat-2a) |
-| `0ac92cba` | feat | feat(epoch): live reduced-checkpoint build at bootstrap (DC-EPOCH-11, S3f-4d-mat-1) |
-| `38aa5518` | feat | feat(epoch): boundary activation orchestration -- the sequenced flip (DC-EPOCH-10) |
-| `28c05bff` | feat | feat(epoch): activation candidate derivation from a validated window (DC-EPOCH-09) |
-| `235e3183` | feat | feat(epoch): activation source window + named-role source->target mapping (DC-EPOCH-08) |
-| `49a4d8ce` | feat | feat(epoch): activation durable-before-visible + crash recovery (DC-EPOCH-06) |
-| `91293215` | feat | feat(epoch): activation predicate + atomically-published active view (DC-EPOCH-05/07) |
-| `29253e4c` | feat | feat(epoch): WAL activation record -- the durable activation substrate (DC-EPOCH-04) |
-| `86353625` | feat | feat(epoch): deterministic fail-closed epoch-rebind seam (DC-EVIEW-11, strengthens DC-EPOCH-03) |
-| `7f7d266a` | feat | feat(epoch): the window driver -- advance + aggregate over a block window (DC-EVIEW-10) |
-| `bd8b0def` | feat | feat(epoch): manifest-bound bootstrap cert-state import (DC-EVIEW-09) |
-| `3c2db639` | feat | feat(epoch): activation consumption point -- the boundary consumes the aggregate (DC-EVIEW-08 S3f-1) |
-| `62eb6738` | docs | docs(epoch): record the S3c live differential-oracle result (DC-EVIEW-05) |
-| `a9d1f148` | fix | fix(ci): S3b-1 checkpoint gate no longer false-positives on the S3c reader |
-| `ce778913` | feat | feat(epoch): the bound, immutable EpochConsensusView (DC-EVIEW-07) |
-| `88fdfadf` | feat | feat(epoch): snapshot formation + the k-immutability stability gate (DC-EVIEW-06) |
-| `77a7e3f3` | feat | feat(epoch): per-pool stake aggregation -- the linchpin (DC-EVIEW-05) |
-| `8c0ff66f` | feat | feat(epoch): windowed advance of the reduced-UTxO checkpoint (DC-EVIEW-04b) |
-| `83ead7be` | feat | feat(epoch): durable reduced-UTxO checkpoint -- the minimal native state (DC-EVIEW-04) |
-| `388a3b61` | docs | docs(epoch): scope EPOCH-CONSENSUS-VIEW S3b-1 -- durable reduced-UTxO checkpoint (pre-code) |
-| `d6d015eb` | docs | docs(epoch): scope EPOCH-CONSENSUS-VIEW S3b (umbrella) -- replay-window materialization |
-| `c71a308f` | feat | feat(epoch): era-parameterized pointer decode + resolution (DC-EVIEW-03) |
-| `7a2462b1` | docs | docs(epoch): scope EPOCH-CONSENSUS-VIEW S3a -- pointer decode/resolution (pre-code) |
-| `a8b5d1c6` | docs | docs(epoch): scope EPOCH-CONSENSUS-VIEW slice 3 -- native next-epoch view (pre-code) |
-| `8f74ccef` | feat | feat(epoch): typed era-gated stake-reference classification (DC-EVIEW-02) |
-| `502b23b5` | docs | docs(epoch): scope EPOCH-CONSENSUS-VIEW slice 2 -- typed stake-reference classification |
-| `85fbc04f` | feat | feat(epoch): prove the bounded crash-safe transient-materialization gate (DC-EVIEW-01) |
-| `28be6635` | docs | docs(epoch): slice 1 resolved entry obligations + tightenings + GREEN classification |
-| `39a6b5af` | docs | docs(epoch): EPOCH-CONSENSUS-VIEW slice 1 scope -- redb temporary-materialization gate |
-| `84e1019c` | docs | docs(epoch): EPOCH-CONSENSUS-VIEW design-analysis record (architecture selected, mechanism unapproved) |
-| `cf508424` | docs | docs(node): adoption channel is the localRoot dial, not a duplex responder |
-| `300959c6` | fix | fix(node): participant forge derives base from the live AO-selected durable tip, not a self-forge latch (DC-FOLLOW-FORGE-01) |
-| `5e3c0855` | feat | feat(node): participant venue forges on the AO-selected durable head (CN-FOLLOW-01) |
-| `0c2dae4d` | fix | fix(forge): KES-period gate returns the opcert-anchored relative evolution, not the absolute period (DC-CRYPTO-10) |
-| `5b99333c` | *(harden)* | harden(node): forward-sync cache hit-path test + structural rollback invalidation (DC-MEM-11) |
-| `88e64df2` | perf | perf(node): forward-sync admit reuses cached UTxO fingerprint, not O(n) per-block recompute (DC-MEM-11) |
-| `c51d7d81` | fix | fix(forge): KES shell-init anchors evolution-0 at opcert_start, evolves to current (OP-OPS-04) |
-| `1be6e855` | fix | fix(node): warm-start era-schedule uses durable venue geometry (DC-CINPUT-05) |
-| `3c6c30ea` | fix | fix(admission): persist admitted block bytes before WAL (DC-WAL-05) |
-| `13d506cc` | *(registry)* | registry: enforce RO-MITHRIL-IMPORT-01 with documented evidence gate |
-| `31ae1f63` | *(evidence)* | evidence: add Mithril documented-interface preprod bundle |
-| `f268d3d9` | fix | fix(evidence): capture runs end-to-end on the live venue + out-of-tree seed handling |
-| `176c7059` | fix | fix(evidence): harden mithril capture for non-destructive scratch venue (no tautology) |
-| `93dc99bb` | feat | feat(evidence): mithril documented-interface capture + validation tooling (prep, no flip) |
-| `88c862cc` | docs | docs(invariant-registry): bind T-CONS-01 to CN-CONS-01 enforcement (declared -> enforced) |
-| `1b79add0` | chore | chore(idd): bump head_deltas_baseline 862cd2cb -> 470f9b89 (MEM-OPT-UTXO-DISK close) |
+| `74c67670` | chore | chore(idse): correct 14 re-evidence records (test-reference matching) |
+| `08c7c3f5` | chore | chore(idse): re-evidence pass at e563ad94 (migration M2) |
+| `e563ad94` | ci | ci: restore two gates the IDSE relocation broke |
+| `225933b4` | ci | ci: retarget the legacy-registry gates to the IDSE registry |
+| `233cf8ab` | chore | chore(idse): carry legacy tests, CI scripts and code loci into the IDSE registry |
+| `3009610f` | define | Define: resources-release — VAL-067, STR-022, DET-024, SEC-035, LIV-010, DET-025, SAF-025, DET-026, PRC-013, SEC-036, SEC-037, PRC-014, PRC-015, PRC-016, PRC-017, LIV-011, PRC-018, PRC-019, PRC-020, SEC-038, REC-008, PRC-021, PRC-022, PRC-023, 14 reinterpretations |
+| `e61adb99` | define | Define: mithril-evidence — PRC-007, DET-022, STR-021, SEC-029, SEC-030, SEC-031, DUR-014, VAL-063, VAL-064, SEC-032, VAL-065, VAL-066, SEC-033, PRC-008, PRC-009, OBS-009, DET-023, PRC-010, SEC-034, PRC-011, PRC-012, A7 |
+| `91e54254` | define | Define: pipeline-production — DET-020, VAL-056, SEC-026, SEC-027, VAL-057, VAL-058, SAF-020, VAL-059, SAF-021, SAF-022, DET-021, STR-018, SAF-023, VAL-060, STR-019, VAL-061, LIV-008, ORD-006, SEC-028, LIV-009, STR-020, OBS-006, OBS-007, SAF-024, OBS-008, VAL-062, DUR-013, SAF-013 redefined |
+| `3ff46dcd` | define | Define: node — STR-013, STR-014, DET-019, SEC-019, LIV-004, VAL-050, LIV-005, SAF-012, STR-015, VAL-051, SAF-013, VAL-052, VAL-053, SAF-014, OBS-001, OBS-002, VAL-054, SAF-015, STR-016, REC-006, SEC-020, REC-007, SAF-016, OBS-003, SEC-021, SEC-022, SEC-023, LIV-006, SEC-024, SAF-017, LIV-007, OBS-004, VAL-055, OBS-005, SAF-018, SEC-025, SAF-019, STR-017 |
+| `fd1e24d2` | define | Define: network — DET-016, SEC-016, VAL-042, VAL-043, VAL-044, EVO-006, VAL-045, SAF-010, VAL-046, DET-017, VAL-047, SEC-017, STR-012, SAF-011, VAL-048, DET-018, SEC-018, VAL-049, DUR-012, PRC-006 |
+| `21e504b8` | define | Define: durability-recovery — REC-004, DUR-006, DUR-007, SEC-015, DUR-008, STR-011, DET-014, EVO-005, PRC-005, DUR-009, DUR-010, VAL-039, DUR-011, REC-005, VAL-040, DET-015, VAL-041, A6 |
+| `e10a8aea` | define | Define: consensus-inputs — VAL-034, VAL-035, SEC-014, DUR-004, VAL-036, DUR-005, SAF-008, VAL-037, DET-013, VAL-038, STR-010, SAF-009 |
+| `00591e38` | define | Define: consensus — VAL-031, LIV-003, VAL-032, STR-008, SAF-007, DET-010, DET-011, STR-009, VAL-033, SEC-011, SEC-012, REC-003, DET-012, SEC-013, A5 |
+| `87f5905d` | define | Define: epoch — VAL-020, STR-007, ORD-003, VAL-021, CON-004, VAL-022, SAF-004, ORD-004, SAF-005, DUR-001, VAL-023, VAL-024, ORD-005, VAL-025, REC-001, DET-009, SAF-006, LIV-001, DUR-002, DUR-003, REC-002, VAL-026, VAL-027, VAL-028, CON-005, VAL-029, PRC-004, LIV-002, EVO-004, VAL-030, A4 |
+| `8b49f686` | define | Define: ledger — VAL-007, VAL-008, VAL-009, ORD-002, VAL-010, SEC-008, CON-002, VAL-011, STR-005, VAL-012, VAL-013, VAL-014, DET-008, VAL-015, VAL-016, CON-003, VAL-017, SEC-009, SEC-010, VAL-018, VAL-019, EVO-003, STR-006 |
+| `8bc4db2e` | define | Define: codec-wire-crypto — VAL-001, VAL-002, VAL-003, VAL-004, VAL-005, VAL-006, STR-004, EVO-002, SEC-003, SEC-004, SEC-005, SEC-006, SEC-007, DET-007, PRC-003, A3; redefines SEC-001 |
+| `e218bc41` | define | Define: foundations — DET-001, DET-002, DET-003, DET-004, DET-005, DET-006, STR-001, STR-002, STR-003, SAF-001, SAF-002, SAF-003, EVO-001, PRC-001, PRC-002, SEC-001, SEC-002, CON-001, ORD-001, A1, A2 |
+| `b64bb741` | chore | chore(idse): opt Ade into IDSE v3.0 (strict) |
+| `fa48afa8` | chore | chore(idse): move the legacy IDD record under docs/legacy |
+| `a3cef7f7` | test | test(runtime): LV-16 -- same-cursor recovery comparators with built-in sensitivity checks |
+| `e4fa7f00` | docs | docs(lv): SLICE LV-17 opened -- certified accumulator recovery across rollback |
+| `352bf783` | fix | fix(node): LV-16 -- a recovered node offers its durable ancestry in FindIntersect |
+| `fe44ae21` | docs | docs(lv): SLICE LV-16 -- DC-PUMP-02 TipUpdate kept; single-point callers; checkable same-point comparisons |
+| `cf10839c` | docs | docs(lv): SLICE LV-16 -- a recovered node finds its common ancestor with the peer |
+| `0ddb36d1` | fix | fix(ledger): LV-15b-0 -- frozen SPO distribution keeps cardano's pool set; store semantics 13 |
+| `0300fd3c` | docs | docs(lv): SLICE LV-15b-0 -- CE-9 at 305 finds the pool membership defect; 322 reference regenerated |
+| `15105624` | docs | docs(lv): SLICE LV-15b-0 -- 322 stays an open adverse case; step 6 evidence rules |
+| `2b0035d7` | feat | feat(ledger): LV-15b-0 steps 3-5 -- frozen ratification record, store semantics 12, bootstrap import |
+| `277eb39f` | docs | docs(lv): SLICE LV-15b-0 -- record shape, import on real bytes, CE-9 reference, mutations |
+| `29adcf95` | docs | docs(lv): SLICE LV-15b-0 -- step 2 is live execution; lands only with store 12 |
+| `a1d36385` | feat | feat(ledger): LV-15b-0 step 2 -- delegation lifecycle, frozen distributions, decide/apply split |
+| `d07e09cf` | docs | docs(lv): SLICE LV-15b-0 -- record shape and application follow proposalsApplyEnactment |
+| `b94d31e8` | docs | docs(lv): SLICE LV-15b-0 -- native reproduction, lifecycle reference rules, recovery equivalence |
+| `dfc3a42c` | docs | docs(lv): LV-15b-0 step 1 census -- every voting-stake difference has a named cause |
+| `45183daa` | docs | docs(lv): SLICE LV-15b-0 -- frozen distributions are evidence only; census by cause |
+| `e7c88eab` | docs | docs(lv): SLICE LV-15b-0 -- ratification consumes the authority frozen at the start of the epoch |
+| `98d3c4fb` | docs | docs(lv): CENSUS LV-15b section 9 -- the Mithril snapshot carries a finished ratification result |
+| `3fae80d3` | test | test(ledger): LV-15b ratification timing -- Ade enacts a late vote one epoch early |
+| `978dd469` | docs | docs(lv): CENSUS LV-15b -- which protocol parameters admission may trust, and when |
+| `e51da2f4` | docs | docs(lv): LV-15a results -- 997,827 txs censused clean; live restart at peer tip |
+| `bbde0036` | fix | fix(ledger): LV-15a -- admission obligations needing neither UTxO nor pparams |
+| `b424aa17` | docs | docs(lv): SLICE LV-15a -- admission obligations needing neither UTxO nor pparams |
+| `59ad7fa1` | docs | docs(lv): CENSUS LV-15 decision -- full UTxO is the single admission authority |
+| `a772e04f` | docs | docs(lv): CENSUS LV-15 -- what the block path decides, against Conway LEDGER |
+| `64964b4b` | docs | docs(lv): LV-14 results -- 1,028,987 supplied witnesses verified; live restart follows |
+| `df057072` | fix | fix(ledger): LV-14 -- every supplied witness signature verifies |
+| `2b7468df` | docs | docs(lv): SLICE LV-14 -- every supplied witness signature verifies |
+| `7d933a9d` | docs | docs(lv): LV-13 scope -- reduced mode closes only the UTxO-free part |
+| `fb576e9e` | docs | docs(lv): LV-13 results -- zero census findings over 991,602 txs; live restart follows |
+| `e6910d5a` | fix | fix(ledger): LV-13 -- native-script witness verdicts decide transaction validity |
+| `69934446` | docs | docs(lv): SLICE LV-13 -- native-script witness verdicts decide transaction validity |
+| `6435e3ab` | docs | docs(lv): LV-12 results -- deep native scripts on a 256 KiB thread; live restart follows |
+| `a82d11b8` | fix | fix(codec): LV-12 -- native scripts and CBOR skipping keep their work on the heap |
+| `4ae299cd` | docs | docs(lv): SLICE LV-12 -- native scripts and CBOR skipping do not depend on thread stack |
+| `25a59869` | docs | docs(lv): LV-11 results -- the stopped store resumes past block 5,184,855; no store bump |
+| `a4610e16` | fix | fix(ledger): LV-11 -- script_n_of_k thresholds are signed int64 end to end |
+| `091ee63f` | docs | docs(lv): SLICE LV-11 -- native-script thresholds keep Cardano's signed 64-bit meaning |
+| `09e42263` | docs | docs(lv): LV-10 census -- the node stopped on a negative native-script threshold Ade decodes as unsigned |
+| `bffdfa21` | docs | docs(lv): SLICE LV-10 -- census of the block-body decode that stopped the node at 313 |
+| `f6f2cf26` | docs | docs(lv): LV-8 live record postscript -- the same run later failed closed on an unrelated body decode |
+| `cc8a5a5f` | fix | fix(ci): LV-9 -- the relay-loop containment gate reads the loop body from a here-string |
+| `f2d05149` | docs | docs(lv): SLICE LV-9 -- the relay-loop containment gate gives the same answer every run |
+| `d226e33d` | docs | docs(lv): DC-EPOCH-46 enforced -- live, a fresh bootstrap reaches epoch 310 with no restart |
+| `6b5c34b9` | fix | fix(node): LV-8 -- a retry target must be in the accumulator's own epoch; the boundary edge is pinned |
+| `4a37624c` | fix | fix(node): LV-8 -- a co-advance pass retries once when only the checkpoint was behind, and halts otherwise |
+| `b813de72` | docs | docs(lv): SLICE LV-8 -- a co-advance pass never leaves leadership stale only because the checkpoint was behind |
+| `f7c7c7ad` | docs | docs(lv): LV-7 census -- LeadershipEpochNotSealed is a skipped crossing; the walk's resolver sits behind it |
+| `73fda1d1` | docs | docs(lv): DC-EPOCH-45 enforced -- live, the treasury equals cardano's after 305->306 |
+| `fec37fb9` | fix | fix(ledger): LV-6 -- treasury donations are held in one pot and moved to the treasury once, at the boundary |
+| `5f887e7e` | docs | docs(lv): LV-6 entry obligations answered -- the seed's donation pot is read as 0, the persistence surface is named |
+| `8854651c` | docs | docs(lv): LV-6 design approved; cardano's boundary order quoted -- withdrawals first, donations after |
+| `0b62cbf7` | docs | docs(lv): SLICE LV-6 -- a treasury donation is held in one pot and moved to the treasury once, at the boundary |
+| `a011ec94` | docs | docs(lv): DC-EPOCH-41 enforced -- every reward balance equals cardano's on the real seed-boundary crossing |
+| `2bb47336` | docs | docs(lv): LV-5 findings -- the 1 ADA is two epoch-305 treasury donations Ade never moves into the treasury |
+| `7596bd65` | docs | docs(lv): SLICE LV-5 -- find where Ade's treasury first leaves cardano's, before touching any arithmetic |
+| `bc828c57` | docs | docs(lv): close LV-4 -- DC-EPOCH-40/43/44 enforced; the 1 ADA treasury gap becomes LV-5 |
+| `76e77411` | docs | docs(lv): LV-4 live -- every pool equal at both boundaries, reserves exact; 1 ADA treasury gap remains |
+| `19387e86` | feat | feat(ledger): LV-4 -- a stake snapshot keeps whole credentials and frozen pool parameters |
+| `4dfa6b0c` | docs | docs(lv): LV-4 entry obligations answered -- the seed snapshot matches cardano field for field; one more import defect found |
+| `1e4db2b1` | docs | docs(lv): SLICE LV-4 -- a stake snapshot keeps what cardano's keeps: whole credentials and frozen pool parameters |
+| `878cb7e5` | docs | docs(lv): the boundary after the seed -- fees confirmed live, and a retired pool's last rewards go unpaid |
+| `d7de0fbd` | feat | feat(ledger): LV-2 -- the seed boundary's reward has an owner; "not computed yet" is no longer "empty" |
+| `67ba3e3c` | docs | docs(lv): LV-2 entry obligations all answered -- the fee pot is exact and the replay path gets a rule |
+| `cb65ec6e` | feat | feat(ledger): LV-3 -- an owner's stake counts for a pool only when it is delegated to that pool |
+| `99077bb1` | docs | docs(lv): SLICE LV-3 -- an owner's stake counts for a pool only when it is delegated to that pool |
+| `8c1328df` | test | test(lv): LV-2 E1 -- the native seed reward matches cardano for 11,050 of 11,056 credentials |
+| `c5a2ec69` | docs | docs(lv): SLICE LV-2 -- "not computed yet" is not "computed, and empty" |
+| `029e082c` | docs | docs(leadervalue): CE-LV1-9 RUN and NOT MET -- the halt is a missing first-boundary reward update |
+| `b502bd5c` | feat | feat(ledger): LV-1 -- the sigma denominator stops being a sum of the pools that survived a filter |
+| `2880cb96` | docs | docs(lv): SLICE LV-1 -- the sigma denominator is a snapshot fact, not a sum of survivors |
+| `4f3cd689` | docs | docs(leadervalue): ORACLE EXTRACTION -- the sigma denominator is folded over the STAKE map, never the pool map |
+| `dc14d6a6` | docs | docs(leadervalue): correct the census record -- the anomaly is ONE membership entry |
+| `68bf2a3e` | docs | docs(leadervalue): WITHDRAW two claims -- the census answer was one command away |
+| `88264dca` | feat | feat(evidence): the seed-window gap is code, not data -- and the oracle for it is gone |
+| `d5d26c1c` | feat | feat(evidence): LEADERVALUE census -- the FIRST native leadership freeze copies the bootstrap stake |
+| `e9db66b1` | docs | docs(b12): CE-B12-10 BLOCKED -- and the blocker is not the one that was recorded |
+| `96c7af68` | feat | feat(node): B12 -- the peer that SERVED us a block has demonstrably got it |
+| `f544fad0` | docs | docs(b12): SLICE B12 -- the signal records what a peer SAYS, not what it PROVED |
+| `8b9e9e38` | docs | docs(bnd): retire the BND handoffs -- the question is answered, the precondition is discharged |
+| `ba2e95e9` | docs | docs(bnd): BND-2d addendum -- the accumulator crossed the NEXT boundary too |
+| `f19be266` | docs | docs(bnd): BND-2d LIVE BAR MET -- the retention resolves what the authority already spent |
+| `ef6f06e0` | chore | chore(evidence): retire the v5 run store at the v6 bump |
+| `56e0a4e4` | feat | feat(ledger): BND-2d -- the UTxO authority retains what it destroys |
+| `3422dfe1` | docs | docs(bnd): SLICE BND-2d -- the positioning contract, and the design it selects |
+| `eb55a637` | fix | fix(registry): the three BND rules took ids that were already assigned |
+| `c3e73b1a` | docs | docs(bnd): next entry point -- answer the positioning contract before picking a design |
+| `4171d2ac` | docs | docs(bnd): BND-2c live bar FAILED -- the resolver cannot see a spent collateral input |
+| `737f5881` | fix | fix(ci): reconcile the store-semantics lock -- the v3->v4 bump skipped its own gate |
+| `390c8191` | feat | feat(ledger): BND-2c -- the accumulator applies Cardano's Phase2Invalid transition |
+| `d2673b20` | docs | docs(bnd): SLICE BND-2c -- the accumulator's exact phase-2-invalid transition |
+| `89dd1aac` | feat | feat(ledger): BND-2b -- the UTxO authority resolves, the accumulator consumes one scalar |
+| `7badddee` | docs | docs(bnd): SLICE BND-2b -- the UTxO authority resolves, the accumulator consumes one scalar |
+| `1ac85759` | docs | docs(bnd): BND-2a CLOSED -- fresh v4 bootstrap proves all six live criteria |
+| `d619ebda` | feat | feat(ledger): BND-2a -- phase-2-invalid txs get Cardano's collateral-only UTxO effect |
+| `c3bd7e0d` | docs | docs(bnd): SLICE BND-2a -- one authoritative UTxO effect, validity-aware |
+| `3092ce51` | docs | docs(bnd): BND-2 existing-code census -- the UTxO/stake path has NO phase-2-invalid semantics |
+| `ea15efc9` | docs | docs(bnd): BND-2 ORACLE EXTRACTION -- the phase-2-invalid transition, from cardano-ledger |
+| `3505c0c6` | feat | feat(accumulator): BND-1 -- a boundary stall and an apply failure stop being one state |
+| `ad5e0a5f` | docs | docs(bnd): SLICE BND-1 -- a boundary stall and an apply failure stop being one state |
+| `941f98a2` | feat | feat(ledger): BND CENSUS -- 130,350,133 is NOT a boundary; the withdrawal limb fired |
+| `fcbabb67` | feat | feat(node): B12 CENSUS -- the +1 is (a) benign observation order, measured 762/762 |
+| `ed5cab43` | docs | docs(b12): capture the gate's own VERDICT alongside the tuple it decided on |
+| `16e0a144` | docs | docs(b12): SUPERSEDE the candidate fix -- B12 is a gate to investigate, not one to weaken |
+| `cb751374` | docs | docs(b6): the fix VALIDATED live -- 0 ForgeTicks -> 449, B12 now the sole barrier |
+| `a42c686d` | fix | fix(node): stop re-attempting a known-failed boundary every pass -- co-advance 115s -> 0.3s |
+| `6fabd089` | feat | feat(node): B6 ROOT CAUSE -- a FAILING boundary crossing, retried at full cost every pass |
+| `686c961f` | feat | feat(node): decompose the co-advance -- the index fix was only ~25% of it |
+| `1175ba20` | fix | fix(chaindb): backfill the slot->hash index on open -- the fallback was 8x SLOWER than the code it replaced |
+| `82b2e8f3` | perf | perf(chaindb): a slot->hash index, so reads cost what they RETURN not what the store HOLDS |
+| `aeee4974` | docs | docs(b6): the census ran and answered -- hypothesis C, a FIXED per-pass cost |
+| `ef310eba` | feat | feat(node): B6 census instrument -- one pass, four competing hypotheses |
+| `1ae5c1ea` | docs | docs(live2c): the store snapshot is sparse -- 8.8 GB actual, 12.8 GB apparent, 21 GB free |
+| `06f8fae0` | docs | docs(live2c): the B6 census is ONE time-attribution pass, and "same store" is a moving target |
+| `b365d056` | docs | docs(live2c): pin the B6 entry point -- census first, and two obligations that must not merge |
+| `b5589ad9` | docs | docs(live2c): a starved loop derives a STALE slot, and it will look like this fix regressing |
+| `99e4f5e2` | docs | docs(live2c): record the post-reorg refold COST measured in run 6 |
+| `1fe28c76` | docs | docs(live2c): run 6 refutes the run-5 reading of B6, and the claim is withdrawn |
+| `affb355d` | docs | docs(live2c): the LIVE preprod result -- 19-day slot defect closed, and B6 is not merely transient |
+| `946185e8` | docs | docs(live2): correct LIVE-2b's B11 attribution and sync the 2c CE tables |
+| `5bc7f7fe` | docs | docs(registry): DC-NODE-45/46 -- one forge slot authority, no vanishing tick |
+| `747b01ae` | feat | feat(node): ONE forge slot authority, and no admitted tick may disappear (LIVE-2c parts 2+3) |
+| `8dd36d1c` | feat | feat(consensus): bind the forge timing calendar to the STORE, not the operator (LIVE-2c part 1) |
+| `3b099e09` | docs | docs(live2c): pin the ACTIVATION contract, and correct two findings by measurement |
+| `68e62c78` | docs | docs(live): sync the LIVE-2c CE table with what is actually closed |
+| `8cf14529` | feat | feat(consensus): anchor the timing domain to a BOOTSTRAP FACT, not the clock (LIVE-2c) |
+| `352dfb95` | feat | feat(consensus): DerivedTimingAnchor -- a compact timing projection WITH lineage (CE-L2c-13) |
+| `f050f472` | test | test(consensus): make the Conway-only scope boundary MECHANICAL (CE-L2c-12) |
+| `e25bfcdb` | docs | docs(live): pin the Conway scope boundary in LIVE-2c -- calendar geometry, not era support |
+| `a8bb1ac9` | docs | docs(consensus): classify slot_at as BLUE; open LIVE-2c forge-slot wiring |
+| `31f7c754` | feat | feat(consensus): canonical era-aware wall-clock -> slot authority (LIVE-2b) |
+| `7e2c66ee` | docs | docs(live): LIVE-2b root cause SELECTED -- the forge slot ignores Byron's 20s slots |
+| `d30605ec` | feat | feat(node): LIVE-2b discriminator -- it named the branch, and the answer was neither candidate |
+| `eeacfde0` | docs | docs(live): LIVE-2b ForgeTick reachability -- the branch table, read from code |
+| `4c03592a` | fix | fix(forge): close the CANNOT-ANSWER collapse on the AUTHORITATIVE node path (LIVE-2) |
+| `bef325bb` | docs | docs(live): record the CE-L2-6 finding -- the gap was evidentiary, not diagnostic |
+| `4985a59b` | fix | fix(forge): an authority that CANNOT ANSWER must not read as not-leader (LIVE-2, CE-L2-6) |
+| `732646d8` | docs | docs(live): open LIVE-2 forge readiness; release the v2 ade-preprod-p2 store |
+| `8b41b9e3` | feat | feat(governance): enact minPoolCost (Conway key 16) -- CRE-S7, all 8 CEs |
+| `937b2ab7` | docs | docs(governance): open CRE-S7 with the ratified action MEASURED against cardano-node |
+| `7d6f4421` | docs | docs(epoch): close CE-N2-5 and PREPROD-NONCE-3; seal the next preprod blocker (CRE-S7) |
+| `2367f170` | fix | fix(ledger): make the reduced projection durably representable (SLICE-P2, CE-P2-1..6) |
+| `0bfefdce` | docs | docs(ledger): diagnose SLICE-P2 -- it is two defects wearing one error |
+| `b2546f5a` | feat | feat(epoch): bind the bridge boundary to the FINAL eta0 (PREPROD-NONCE-2, CE-N2-4) |
+| `6c65cb39` | docs | docs(epoch): resolve the CE-N2-4 bridge-nonce design question (PREPROD-NONCE-2) |
+| `41484298` | docs | docs(node): record the PREPROD-NONCE-2 stopping point and the binding next-session order |
+| `0481db1b` | feat | feat(ledger): add the typed bridge-eta0 finality decision (PREPROD-NONCE-2, CE-N2-4 step 1) |
+| `81df0bac` | feat | feat(node): refuse a non-final bridge eta0 commitment (PREPROD-NONCE-2, CE-N2-3) |
+| `d4e534bf` | docs | docs(node): narrow PREPROD-NONCE-2 to a bootstrap-bridge commitment slice |
+| `368a8685` | docs | docs(node): PREPROD-NONCE-2 -- reference-prove eta0(305) against cardano-node |
+| `6960bf12` | docs | docs(node): open PREPROD-NONCE-2 -- epoch activation waits for candidate-freeze finality |
+| `cb68e333` | docs | docs(node): PREPROD-NONCE-1 confirmed on a fresh store -- the mismatch localizes to ONE operand |
+| `d115cc42` | docs | docs(node): PREPROD-NONCE-1 root cause PROVEN -- the eta0 commitment is taken at the seed point |
+| `55805c32` | feat | feat(node): emit the first-boundary nonce operands (PREPROD-NONCE-1 instrumentation) |
+| `47cfe76a` | docs | docs(node): open PREPROD-NONCE-1 -- preprod 304->305 eta0 boundary equivalence |
+| `3ebdf83f` | docs | docs(evidence): retire the pre-P6 preprod store with its forensic record |
+| `221031cb` | test | test(ledger): prove epoch semantics PER VENUE, not from a mainnet corpus (P6-S5, DC-EPOCH-37) |
+| `734ac76e` | feat | feat(node): make a warm-start replay divergence self-describing (P6-S4, DC-NODE-44) |
+| `e9d9db46` | feat | feat(store): enforce the authority-semantics version gate -- strict, no stamp tool (P6) |
+| `2359963a` | docs | docs(store): scope P6 (P4-S2) -- the store-semantics version gate |
+| `45c2b942` | feat | feat(ledger): enforce the epoch-agreement invariant and contain the mainnet constants (P5) |
+| `f2a2a8d9` | docs | docs(ledger): open P5 -- the epoch-agreement invariant and venue-constant containment |
+| `e1de7a2e` | feat | feat(node): prove the P4 root cause -- warm-start replays a pre-P3 store under post-P3 ledger semantics |
+| `6795964b` | feat | feat(node): instrument warm-start fingerprint mismatch; seal P4 -- a SIGKILL in the rollback window is unrecoverable |
+| `05a2654f` | docs | docs: land two uncommitted corrections -- seed-import/forge split, and PO-S3-2 stale-pending fix |
+| `5f2636c2` | fix | fix(ledger): bind epoch-boundary detection to the venue era schedule (P3) |
+| `3bda3ade` | docs | docs(ledger): P3 -- prove the live path by probe; the era schedule is dropped at the last hop |
+| `4b3341a6` | feat | feat(node): instrument capture refusal; seal P3 -- slot_to_epoch hardcodes MAINNET constants |
+| `42fa8e64` | docs | docs(node): seal P2 -- preprod reaches tip then fails closed capturing a REDUCED state |
+| `6a581493` | docs | docs(ledger): P1 fixed; record that a Mithril snapshot is only bootstrappable from part of an epoch |
+| `1b49007e` | fix | fix(ledger): decode psFutureStakePoolParams in its own CDDL grammar (P1) |
+| `adcc6ddf` | docs | docs(ledger): P1 -- future_pools is AUTHORITATIVE, so the fix needs a real proof |
+| `05753c85` | docs | docs(ledger): P1 root cause RESOLVED -- psFutureStakePoolParams keeps the certificate's CDDL form |
+| `18aad6cf` | feat | feat(ledger): report the byte offset on a fixed-width decode mismatch; seal PREPROD-ENTRY P1 |
+| `c2257080` | docs | docs(node): record that ARMING the settled bound may be rarer than discarding it was |
+| `d4f19c87` | feat | feat(node): re-certify the settled rewind after a durable rollback (RF-1) |
+| `218c6d41` | docs | docs(node): close EVIEW-R2 -- CE-R2-5 met live; negative control retained |
+| `a6d584e2` | feat | feat(runtime): bind the settled rewind triple with a verified fingerprint (CE-RF-6) |
+| `7ca03756` | docs | docs(node): RF-1 severity raised -- refold thrash is a DEMONSTRATED forge blocker |
+| `db131647` | docs | docs(node): record the measured RF-1 refold-growth baseline from two live stores |
+| `e9946576` | docs | docs(evidence): retire superseded run stores behind a retention rule (15G -> 87G free) |
+| `237c7596` | docs | docs(node): open LIVE-REFOLD-THRASH RF-1 -- the bounded rewind is discarded one pass later |
+| `80aac15c` | docs | docs(node): EVIEW-R2 CE-R2-4 met live -- refold re-seals byte-identically on preview |
+| `1dc48e74` | fix | fix(node): position the reduced checkpoint on the boundary point before sealing leadership |
+| `ebec6b34` | docs | docs(node): seal EVIEW-R2 -- a refold must re-seal frozen leadership byte-identically |
+| `0fc2e478` | feat | feat(node): emit the eview activation record-vs-candidate diff; resolve EVIEW-R1 mechanism |
+| `41f511eb` | feat | feat(node): typed emit-only recovery/refold trace (who reset the accumulator, and why) |
+| `a23f5da3` | feat | feat(node): emit both compared tips on a DC-NODE-15 forge refusal |
+| `0c95d1ad` | docs | docs(eview): seal EVIEW-R1 -- activation WAL vs refolded accumulator lineage defect |
+| `3a97ca9b` | feat | feat(node): surface WHY a forge tick skipped (CN-NODE-04 skip_reason) |
+| `6f014cf9` | docs | docs(registry): register the bounded-refold invariants as enforced (DC-EPOCH-26..31) |
+| `c4f88e84` | test | test(node): close CE-AR-3 + CE-AR-5 for the bounded accumulator rewind |
+| `8a81e6ee` | feat | feat(node): bound the post-rollback accumulator refold to a settled rewind point |
+| `18875f49` | fix | fix(node): label a post-rollback accumulator refold distinctly from a fresh boundary crossing |
+| `b00216c8` | docs | docs(registry): register wire-liveness invariants as enforced (DC-PUMP-05..10, DC-NODE-43) |
+| `daa793db` | docs | docs(wire): record LIVE-WIRE-LIVENESS S2 live acceptance (CE-WL-5 + CE-WL-8) |
+| `5cf45a6f` | fix | fix(node): reconnect an established live feed (LIVE-WIRE-LIVENESS S2) |
+| `db9bde19` | fix | fix(runtime): keep-alive survives downstream backpressure (LIVE-WIRE-LIVENESS S1) |
+| `86e29110` | docs | docs(wire): LIVE-WIRE-LIVENESS S1 slice doc -- keep-alive under backpressure |
+| `df1efae2` | feat | feat(node): land S1 INV-FH-4 within-epoch forge-path rollback guard proof + DC-NODE-42 |
+| `a9c21eab` | docs | docs(node): register LIVE-FORGE-HARDENING S1 rollback-follow (DC-NODE-28/29) |
+| `bc83e20d` | fix | fix(testkit): refresh the consensus_stream_replay corpus for the ECA-B rolling-nonce model |
+| `d036f8e2` | docs | docs(grounding): regenerate the four grounding docs at LIVE-FORGE-HARDENING close + advance baseline |
 
-> **Note (commit-attribution policy).** Per this repo's `CLAUDE.md` override (vibe-coded-node bounty trailer
-> requirement), commits carry a `Co-Authored-By:` model-attribution trailer — an Ade-local override of the global
-> no-AI-attribution rule, applying to **commit messages only**. It does not affect this doc's content.
-
-## 2. New Modules
-
-The span adds **38 new source modules** (`.rs` under `crates/**/src/`, no new crate, no new `Cargo.toml`) + **25 new
-test files**. BLUE classification/reduction/decode primitives live in `ade_ledger` + `ade_codec`; the durable-storage
-checkpoints/accumulators + the RED orchestration shell live in `ade_runtime` + `ade_node`. Modules first documented in
-the prior (`cdcd9397`) refresh are marked *(bands 1–4)*; the rest are new to this refresh.
-
-### BLUE modules (`ade_ledger`, `ade_codec`)
-
-| Module | Color | Purpose | Added in |
-|--------|-------|---------|----------|
-| `ade_codec::address::pointer` | BLUE | Era-parameterized pointer decode (`Ptr{slot,txIx,certIx}`, `PointerDecodeError`). | EVIEW S3a *(band 2)* |
-| `ade_ledger::stake_ref` | BLUE | Typed, era-gated stake-reference classification; no fixed byte offset is authoritative. | EVIEW S2 *(band 2)* |
-| `ade_ledger::pointer_resolve` | BLUE | Pointer→credential resolution (pre-Conway only). | EVIEW S3a *(band 2)* |
-| `ade_ledger::reduced_utxo` / `reduced_advance` / `reduced_aggregate` / `reduced_snapshot` / `reduced_epoch_view` | BLUE | The EVIEW reduction pipeline: `TxIn→(Coin,ReducedStakeRef)` → per-block advance → per-pool `StakeByPool` → k-immutable snapshot → bound immutable `EpochConsensusView`. | EVIEW S3b–S3e *(band 2)* |
-| `ade_ledger::bootstrap_manifest` | BLUE | Manifest-bound bootstrap cert-state import (`BootstrapManifest`/`…Error`). | EVIEW S3f *(band 2)* |
-| `ade_ledger::ledgerdb_state` / `ledgerdb_tables` / `mithril_utxo_materialize` | BLUE | Native V2 LedgerDB decoders (state→`CertState`+pool distr+Praos nonces; tables MemPack `TxOut`→UTxO) + tables→`UTxOState`. Raw CBOR is RED input; the projection is authority. | Mithril decode *(band 4)* |
-| `ade_ledger::epoch_accumulator` | BLUE | The **non-UTxO `EpochAccumulator`** + `apply_selected_block` — the self-sustaining ledger loop. | LIVE-LEDGER S1 (`5d16eaef`) |
-| `ade_ledger::frozen_leadership` | BLUE | **`FrozenLeadershipPoolDistr`** — the self-contained leadership authority (SET stake + snapshot-frozen VRF) + seed identity. | S4-pre (`501bf89a`) |
-| `ade_ledger::reduced_boundary` | BLUE | RVBP reduced-boundary projection types + `FullBoundaryStateRequired` (capability-typed non-authority). | RVBP P1 (`c15be61e`) |
-| `ade_ledger::bootstrap_reward_update` | BLUE | Apply the bootstrap reward update at window-end — byte-exact seed+2 stake (`DC-EPOCH-18`). | B3c (`c4e0413b`) |
-| `ade_ledger::bootstrap_bridge` | BLUE | Bootstrap bridge plumbing for the seed→seed+1 authority transition. | ECA/native-Mithril bridge |
-| `ade_ledger::cred` | BLUE | Canonical credential type (surfaced by the flipped-Credential-tag decode fix, `DC-LEDGER-10`). | band 7 (`84fec1b5`) |
-| `ade_ledger::rollback::admission` | BLUE | The **k-bounded + lineage-checked rollback-admission guard** + recovery-reconcile decision. | S5 (`48fc423a`) |
-
-### RED / storage modules (`ade_node`, `ade_runtime`)
-
-| Module | Color | Purpose | Added in |
-|--------|-------|---------|----------|
-| `ade_runtime::chaindb::reduced_utxo_checkpoint` / `reduced_window_driver` / `transient_epoch_view` | GREEN-by-contract / RED | The durable reduced-UTxO checkpoint (crash-safe, marker-LAST, hash-chain fingerprint; never authority, never on the live path), its window driver, and the transient replay-window lifecycle. | EVIEW *(band 2)* |
-| `ade_runtime::chaindb::epoch_accumulator_store` / `epoch_accumulator_advance` | RED | The durable single-blob `EpochAccumulatorStore` + the within-epoch advancer (observe-only; stalls on a boundary). | LIVE-LEDGER S2 (`b2185be6`) |
-| `ade_runtime::mithril_native_assembly` | RED | The native Mithril authority transition — assemble the canonical state + atomic persist. | Mithril S1b *(band 4)* |
-| `ade_runtime::consensus_inputs::cert_state_extract` | RED | Cert-state extraction plumbing for the bootstrap-cert-state producer. | ECA (`f09cc0ec`) |
-| `ade_runtime::bin::transient_view_kill_target` | RED (test bin) | The SIGKILL kill-target for the crash-safe transient-materialization proof (`DC-EVIEW-01`). | EVIEW S1 *(band 2)* |
-| `ade_node::epoch_source_window` / `epoch_candidate` / `epoch_activate` / `epoch_activation` / `epoch_wire` / `epoch_rebind` | RED | The activation orchestration shell (source-window validate → sole authoritative derive → predicate → WAL→publish → rebind to forge). `epoch_wire` no longer carries `EVIEW_ACTIVATION_ARMED` (removed ECA-1). | EVIEW wire *(band 2)*; gate removed *(band 3)* |
-| `ade_node::native_firstrun` / `bootstrap_export` | RED | The live FirstRun → native Mithril bootstrap invocation + the (reclassified auxiliary) CLI exporter / V2 native-decode probe. | Mithril *(band 4)* |
-| `ade_node::mithril_fetch` | RED | `ade mithril snapshot fetch` — native snapshot acquisition + manifest. | LIVE-1 S4 (`6d223a36`) |
-| `ade_node::ops_log` | RED | Observable follow progress + a known log destination (`node.log`). | band 7 (`bbae56be`) |
-
-### Testkit
-
-| Module | Color | Purpose | Added in |
-|--------|-------|---------|----------|
-| `ade_testkit::harness::immutabledb_witness` | test | The ImmutableDB reader + permanent fixture binding the CRE enactment census to selected-chain witnesses. | CRE (`c0471d09`) |
-
-> **Cross-reference (CODEMAP) — STALE.** The on-disk `docs/ade-CODEMAP.md` was regenerated at `cdcd9397` and does **not**
-> contain the bands-5→13 modules — verified: `frozen_leadership`, `epoch_accumulator`, `reduced_boundary`,
-> `mithril_fetch`, `ops_log`, `bootstrap_reward_update` each return **0 hits** in the CODEMAP. **Run `/codemap`** to add
-> these under §BLUE (`ade_ledger::{epoch_accumulator, frozen_leadership, reduced_boundary, bootstrap_reward_update,
-> bootstrap_bridge, cred, rollback::admission}`) and §RED (`ade_runtime::chaindb::{epoch_accumulator_store,
-> epoch_accumulator_advance}`, `ade_node::{mithril_fetch, ops_log}`, `ade_testkit::harness::immutabledb_witness`).
-
-## 3. Modules Modified
-
-Per-module diffstats over the full span. Trivial touches (single-line, formatting) are omitted.
-
-| Module / crate | Color / scope | Key changes |
-|--------|---------------|-------------|
-| `ade_ledger` (`+20,147 / −611`, 63 files) | **BLUE** | The single largest surface. New EVIEW/accumulator/Mithril/governance/reduced-plane families (§2), plus modified `rules.rs` (EVIEW-gated mark path; per-credential boundary mark; POOLREAP), `delegation.rs` (cardano-faithful pool lifecycle), `snapshot/{utxo_state,chain_dep}.rs` (materialization; `array(10)` chain-dep codec), `value.rs`/`mary.rs`/`pparams.rs` (Word64 value domain + `MinUtxoRule`), `seed_consensus_inputs.rs` (v4→v6 sidecar: consensus-profile hashes then `security_param`/`k`), `wal/event.rs` (`EpochConsensusViewActivated`). |
-| `ade_node` (`+16,400 / −298`, 45 files) | **RED** | `node_lifecycle.rs` / `node_sync.rs` carry the relay-loop reduced-checkpoint advance, the automatic epoch-boundary activation, the accumulator co-advance, the per-boundary authority advance, the sealed-leadership promotion (S4), the rollback-follow forge path (LFH S1), and the `sidecar_freeze_rsw` shared freeze-window derivation (LFH S2). `cli.rs` gains `ade node run` / `ade mithril snapshot fetch` / `--bootstrap-mithril`. |
-| `ade_runtime` (`+8,840 / −82`, 64 files) | **RED** | The chaindb checkpoint/accumulator stores (§2), `consensus_inputs::importer.rs` (bootstrap import of fee pot / RUPD / gov proposals / Conway deposit params; the `k`-required + `f≠0` ingress guards), `mithril_bootstrap.rs`/`genesis_bootstrap.rs`/`seed_consensus_merge.rs` (native bootstrap path), `consensus/genesis_parser.rs` (`security_param`). |
-| **`ade_core`** (`+574 / −300`, 16 files) | **BLUE — consensus authority** | **The ECA-B1/B2 rolling Praos-nonce reshape.** `consensus/nonce.rs` (reshaped `NonceInput`, one `HeaderContribution`, `EpochBoundary` combine+rotation+no-reset, `CandidateFreeze` removed, `MissingLastEpochBlockNonce` fail-closed), `consensus/praos_state.rs` (`last_epoch_block_nonce: Option<Nonce>`), `consensus/header_validate.rs` (Step-9 threading of `prev_block_hash` + `freeze_boundary`), `consensus/era_schedule.rs` (`praos_rsw_slots`). Versioned + backward-compatible; **not** byte-identical to baseline. |
-| `ade_testkit` (`+5,413 / −117`, 26 files) | test | The EVIEW/accumulator hermetic suites, the LedgerDB-decode corpus/oracle suites, the CPDE/CRE governance census suites, the CE-3d differential + B3c-localization suites, the ImmutableDB witness harness. |
-| `ade_codec` (`+383 / −1`, 3 files) | **BLUE** | The `address::pointer` module (§2) + the address module wiring. |
-| `ade_types` (`+38 / −4`, 1 file) | **BLUE** | Value/min-UTxO domain types (`OutputAssetQuantity` / `MinUtxoRule` surface). |
-| `ade_network` (`+2 / −0`, 2 files) | mixed (BLUE sub-paths unchanged) | Trivial; no BLUE sub-path type change. |
-
-> **BLUE was touched, including the consensus core.** Unlike the prior refresh (which correctly reported `ade_core`
-> untouched at `cdcd9397`), the full span **does** modify `ade_core` (the Praos-nonce reshape). `ade_crypto` and
-> `ade_plutus` are unchanged; the `ade_network` BLUE sub-paths are unchanged.
-
-## 4. Feature Flags
-
-**No project feature-flag deltas anywhere in the span.** Ade declares **no `[features]` table** in any workspace
-`Cargo.toml` at either ref (`git grep '^\[features\]'` empty at `470f9b89` and `1e4896eb`), **no `#[cfg(feature = …)]`**
-gate in `crates/`, and **no `compile_error!`** coupling. The former activation gate (`EVIEW_ACTIVATION_ARMED`) was a
-plain `const bool` — a *semantic* gate, not a feature flag — and it was **removed** (`a17c7aab`); it is absent at HEAD.
-There is no flag coupling to report.
-
-## 5. CI Checks (200 → 255 over the full span; +55 new, 2 modified, 0 removed)
-
-`git diff --name-status 470f9b89..1e4896eb -- 'ci/ci_check_*.sh'`: **55 `A`, 2 `M`, 0 `D`**
-(`git ls-tree … | grep -c ci_check_` = **200 → 255**). Plus one non-gate helper added
-(`ci/capture_mithril_documented_evidence.sh`) and one modified (`ci/build_consensus_inputs_bundle.sh`, LFH-S2 emits
-`security_param`).
-
-### Through `cdcd9397` (bands 1–4): 38 new gates *(previously documented)*
-
-The prior refresh detailed these: the EVIEW substrate (+21: `ci_check_eview_*` ×18 + `ci_check_transient_view_*` ×3),
-the ECA band (+5: `automatic_activation`, `atomic_authority`, `leadership_complete`, `pool_lifecycle`,
-`seed_sidecar_v4`), the native-Mithril band (+9: `ledgerdb_state_decode`, `ledgerdb_tables_decode`,
-`mithril_authority_transition`, `tables_to_utxostate`, `native_firstrun_no_cli_seed`, `native_nonutxo_decode`,
-`value_quantity_domain`, `mithril_documented_evidence`, `registry_unique_ids`), and band 1 (+3: `forward_sync_fp_cache`,
-`participant_forge_on_selected_head`, `admission_runner_no_block_byte_map`).
-
-### `cdcd9397 → HEAD` (bands 6–13): 17 new gates + 2 modified
-
-| Check | Status | Rule / cluster | What it checks |
-|-------|--------|----------------|----------------|
-| `ci_check_native_firstrun_reduced_checkpoint.sh` | **New** | `DC-MITHRIL-08` (band 6) | Native Mithril FirstRun builds the EVIEW reduced checkpoint inline at bootstrap. |
-| `ci_check_eview_forecast_crossing.sh` | **New** | `DC-EPOCH-15` (ECA-5) | Crossing a boundary extends the forecast horizon with N+1 authority promotion. |
-| `ci_check_praos_nonce_follow_evolution.sh` | **New** | `DC-EPOCH-16` (ECA-B1/B2) | The rolling Praos nonce on the follow path (one `HeaderContribution`; RSW candidate-freeze; boundary tick; fail-closed on an absent operand — never a fabricated nonce). |
-| `ci_check_epoch_accumulator_no_utxo.sh` | **New** | `DC-EPOCH-19` (S1) | The `EpochAccumulator` is non-UTxO; `apply_selected_block` is the self-sustaining loop. |
-| `ci_check_epoch_accumulator_recovery.sh` | **New** | `DC-EPOCH-20` (S2) | The durable accumulator advances observe-only, seals at firstrun, and reconciles (warm-start catch-up + reorg rematerialize). |
-| `ci_check_poolreap_single_canonical.sh` | **New** | `DC-EPOCH-21` (S3) | Exactly one canonical POOLREAP at the boundary; per-credential mark; reward-account discriminant. |
-| `ci_check_boundary_aligned_mark_capture.sh` | **New** | `DC-EPOCH-22` (S3) | The boundary-aligned co-advancer + the durable `BoundaryMark` witness (point + lineage, bound before the cross). |
-| `ci_check_bootstrap_rupd_window_end.sh` | **New** | `DC-EPOCH-18` (B3c) | The bootstrap reward update applies at window-end → byte-exact seed+2 stake. |
-| `ci_check_bootstrap_rupd_fee_reduction.sh` | **New** | `DC-EPOCH-23` (CE-3d) | The bootstrap fee pot is reduced by the RUPD `feeSS` (deltaF). |
-| `ci_check_snapshot_pool_set_inclusion.sh` | **New** | `DC-EPOCH-24` (CE-3d) | Snapshot pool-set = cardano `ssActiveStake` NonZero membership; pre-C store rejected (schema v3→v4). |
-| `ci_check_conway_deposit_params_bootstrap.sh` | **New** | `DC-CINPUT-07` (band 9) | Snapshot-bound Conway deposit params imported into the native-Mithril bootstrap authority. |
-| `ci_check_gov_proposal_capture.sh` | **New** | `DC-GOV-01` (band 9) | Live gov proposals + votes captured into the tracked proposals' vote maps (replacing the tripwire). |
-| `ci_check_reduced_boundary_plane.sh` | **New** | RVBP (band 10) | The reduced-boundary plane is typed non-authority on the live path (`FullBoundaryStateRequired`). |
-| `ci_check_trusted_replay_boundary.sh` | **New** | RVBP / recovery (band 10) | The trusted replay boundary for the reduced plane (recovery / fork-switch / boundary). |
-| `ci_check_frozen_leadership_authority.sh` | **New** | S4-pre | `FrozenLeadershipPoolDistr` is the self-contained leadership authority (SET stake + snapshot-frozen VRF), proven vs reference `nesPd`. |
-| `ci_check_frozen_recovery_no_seed_window.sh` | **New** | S4-L1 | Warm/initial leadership recovery no longer reads the seed-window authority. |
-| `ci_check_frozen_promotion_no_seed_window.sh` | **New** | S4-L2 | Promotion reads the epoch-indexed frozen leadership only (candidate ≥ seed+2), never the seed window. |
-| `ci_check_credential_discriminant_closed.sh` | **Modified** | `DC-LEDGER-10` (band 7) | Tightened for the flipped-Credential-tag native-bootstrap decode fix. |
-| `ci_check_warmstart_eta0_overlay.sh` | **Modified** | ECA-B (band 7) | Updated as the B2 live boundary-tick replaced the ECA-5 bridge `eta0` overlay. |
-
-> **Cross-reference (TRACEABILITY) — STALE.** The on-disk `docs/ade-TRACEABILITY.md` was regenerated at `cdcd9397`; the
-> 17 gates above (and the modified pair) are **not** yet reflected there. Each binds a registry rule (verified: the new
-> gate names appear in the corresponding rule's `ci_scripts` / `code_locus` at HEAD). **Run `/traceability`.** Note the
-> **declared-but-gated** pattern: the continuous-operation rules `DC-EPOCH-17/19/20/21/22/25`, `DC-CINPUT-07`,
-> `DC-GOV-01` have gates that run green over the hermetic/corpus substrate but the registry status is **`declared`** —
-> gate present + green; the flip to `enforced` is owed pending a committed live-flip transcript (the same pattern as
-> `DC-EPOCH-11` / `DC-EVIEW-08`). This is the expected mid-arc state, not an orphan defect.
-
-## 6. Canonical Type Registry Delta
-
-**n/a — no separate canonical-type registry is configured** (`.idd-config.json` `canonical_type_registry: null`);
-canonical-type rules live inline in the invariant registry under family **T**. The informational structural count
-(`pub struct`/`pub enum` over the BLUE `core_paths`) moves **≈ `466 → 558` (+92, approximate)**:
-
-- **`ade_ledger` +87** (`185 → 272`): the EVIEW reduction family, the accumulator/frozen-leadership/reduced-boundary
-  families, the Mithril decode family, the governance/bootstrap families, the value/min-UTxO domain.
-- **`ade_codec` +2** (`11 → 13`): `Ptr`, `PointerDecodeError`.
-- **`ade_types` +2** (`82 → 84`): the value/min-UTxO surface.
-- **`ade_core` +1** (`48 → 49`): the Praos-nonce reshape (`NonceInput`/`HeaderContribution` grammar). **This is the one
-  structural change to the authoritative consensus core** — see §3 and the header CORRECTION.
-- **Unchanged:** `ade_crypto` (22), `ade_plutus` (8), the `ade_network` BLUE sub-paths (~110).
-
-**Zero BLUE canonical types removed** (append-only within the major version).
-
-## 7. Normative / Invariant Rule Delta (380 → 432 full span; **+52, ZERO removals**)
-
-The span added **52 rule IDs, zero removed** (registry **380 → 432**; `comm -23` of the sorted `id =` lists is empty;
-`comm -13` = exactly 52). Status tally: **enforced 253 → 297 (+44)**, **declared 103 → 111 (+8)**, **partial 23 → 23
-(0)**, **enforced_scaffolding 1 → 1 (0)**. Of the 52 new IDs, **42 land `enforced`, 10 land `declared`**; existing-rule
-flips (`RO-MITHRIL-IMPORT-01`, `T-CONS-01`, `DC-EPOCH-16` → `enforced`) net the tally.
-
-**The 52 new IDs by family:**
-
-- **`DC-EVIEW-01..13` (+`04b`)** — 14 IDs, the EVIEW substrate (all `enforced` except `DC-EVIEW-08` `declared`).
-- **`DC-EPOCH-04..25`** — 22 IDs, the activation + continuity + boundary arc. `enforced`: `04,05,06,07,08,09,10,12,13,14,15,16,18,23,24`. **`declared`**: `11,17,19,20,21,22,25` (the live-continuity + reduced-plane rules; gated + green, live-flip owed).
-- **`DC-MITHRIL-03..08`** — 6 IDs, native Mithril decode/assemble/materialize/FirstRun (all `enforced`).
-- **`DC-CINPUT-05/06/07`** — 3 IDs. `05`/`06` `enforced`; **`07`** (Conway deposit params bootstrap) `declared`.
-- **`DC-LEDGER-VALUE-01` / `DC-LEDGER-PARAMS-01`** — Word64 value domain + era-aware min-UTxO (`enforced`).
-- **`DC-WAL-05`, `DC-MEM-11`, `CN-FOLLOW-01`, `DC-FOLLOW-FORGE-01`** — band-1 fixes (all `enforced`).
-- **`DC-GOV-01`** — live gov-proposal/vote capture (`declared`).
-
-**Strengthenings of existing rules** (append-only `strengthened_in`) include `OP-OPS-04`, `DC-CRYPTO-10` (band 1), and
-notably **`DC-EPOCH-16`** which gained `strengthened_in += "LIVE-FORGE-HARDENING-S2"` and **two appended tests**
-(`seed_cinput_v6_persists_k_for_durable_candidate_freeze_window`,
-`sidecar_freeze_rsw_derives_from_store_and_cross_checks_the_cli`) at the HEAD close — the rule stays `enforced`.
-
-*(The configured `normative_docs` — the CE-79 tier-gate statement + addendum, the three contract docs, the CE-73
-reclassification, and `CLAUDE.md` — were **not** changed anywhere in the span: `git diff --name-only 470f9b89..1e4896eb`
-over those six paths is empty. The §7 delta is entirely the invariant-registry change.)*
-
-This section is informational; the rule IDs, status values, and the zero-removal result are exact (read from the
-registry at both refs). The BLUE-type and test counts are approximate attribute greps.
+> **Commit-attribution note.** Under the Ade-only exception recorded in `CLAUDE.md` (granted 2026-11-08), commit messages carry a `Co-Authored-By:` model trailer. It covers commit messages only and does not affect this document.
 
 ---
 
-## Anomalies & cross-reference summary (surface prominently)
+## 2. New Modules
 
-- **`ade_core` (the consensus authority) IS modified — the prior `48→48` byte-identical claim is STALE.** The
-  ECA-B1/B2 rolling Praos-nonce reshape changed `ade_core` (+574 / −300, +1 BLUE type). It is versioned + backward-
-  compatible + fail-closed (never a fabricated nonce), but the core is **not** byte-identical to baseline. Any doc
-  asserting otherwise is describing `cdcd9397`.
-- **The three sibling grounding docs are STALE (`cdcd9397`, 2026-06-24).** CODEMAP / SEAMS / TRACEABILITY do not contain
-  the bands-5→13 modules, rules, or gates (verified: 6 new module names return 0 CODEMAP hits). **Run `/codemap`,
-  `/seams`, `/traceability`** to re-align them with HEAD before relying on them for structural questions.
-- **KNOWN pre-existing test failures in the configured replay command (do NOT attribute to this cluster).**
-  `cargo test -p ade_testkit` (`.idd-config.json` `replay_cmd`) currently has **4 failures in `consensus_stream_replay`**
-  — `NonceEvolution` `MissingLastEpochBlockNonce` at the epoch boundary — from the **in-flight ECA-B rolling-nonce
-  reshape** (that corpus needs refreshing by the still-open `EPOCH-CONSENSUS-VIEW` cluster). These are **unrelated to
-  `LIVE-FORGE-HARDENING`** (which added no BLUE transition). A separate pre-existing `ade_testkit` hang in
-  `epoch_boundary_logic::all_epoch_boundaries_fire` was already noted at `7c769801`. The full-workspace replay is thus
-  known-red until the corpus is regenerated; per-cluster gating runs on targeted suites.
-- **Zero canonical-type removals; zero rule removals; zero CI removals; zero crate removals** across the span (all
-  expected: 0). The registry enforces ID uniqueness mechanically (`ci_check_registry_unique_ids.sh`).
-- **10 of the 52 new rules land `declared`** — the live-continuity + reduced-plane + governance-capture rules
-  (`DC-EPOCH-11/17/19/20/21/22/25`, `DC-CINPUT-07`, `DC-GOV-01`, `DC-EVIEW-08`). Their gates run green over the
-  hermetic/corpus substrate, but the `enforced` flip is owed pending committed live-flip transcripts — notable given
-  `CE-4A`/`CE-4B` proved multi-boundary continuous operation live; the *registry* has not yet recorded those flips.
-- **`LIVE-FORGE-HARDENING` BLUE-touch is precise, not zero.** LFH left `ade_core` and the ledger transition untouched;
-  its only BLUE-`core_path` edit is the additive versioned seed-sidecar codec (`ade_ledger::seed_consensus_inputs`,
-  v5→v6 `k` persistence) + a 1-line `consensus_view.rs` touch. Report it as "no authoritative-transition change,"
-  **not** "no BLUE edit."
-- **All 232 commits carry a clear conventional scope** — 3 use a non-`feat/fix/…` but unambiguous prefix
-  (`harden(node):`, `registry:`, `evidence:`), surfaced rather than guessed. None is unclassifiable.
+**No new crate.** The workspace `members` list is identical at `1e4896eb` and HEAD (12 crates), and no `Cargo.toml` was added. The span adds **10 new source modules** under `crates/**/src/`:
+
+| Module | Color | Purpose | Key sub-paths / types | Added in (cluster/slice) |
+|--------|-------|---------|---------------|--------------------------|
+| `ade_ledger::collateral` | BLUE | The ADA a phase-2-invalid transaction consumes, computed over the **resolved** collateral UTxO entries. Mirrors `Cardano.Ledger.Babbage.Collateral` `collAdaBalance`. | `collateral_balance`, `CollateralBalanceError` | BND-2b (`89dd1aac`). VAL-016, CON-003 |
+| `ade_ledger::governance::frozen` | BLUE | Ratification for boundary E→E+1 is decided from the authority frozen at the start of E (`ratify_frozen` → `RatificationRecord`) and applied only at E→E+1 (`apply_ratification_record`). | `FrozenRatificationInput`, `FrozenGovernanceView`, `FrozenPoolStake`, `RatificationSource`, `RatificationOutcome`, `UnenactableReason` | LV-15b-0 step 2 (`a1d36385`), steps 3–5 (`2b0035d7`). VAL-021, VAL-030 |
+| `ade_ledger::replay_divergence` | BLUE | A self-describing warm-start replay divergence report that replaces the bare `FingerprintMismatch { expected, recovered }`. | `ReplayDivergenceReport` | P6-S4 (`734ac76e`). OBS-004 |
+| `ade_ledger::rollback::intersection` | BLUE | Chain-sync intersection authority: which durable-ancestry points a recovering node offers in `FindIntersect`, and what the peer's reply means. The reply is captured input and is never treated as rollback authority. | `ChainPoint`, `AncestorHeader`, `IntersectionCandidates`, `IntersectionBound`, `IntersectionAncestryError` | LV-16 (`352bf783`). REC-005, VAL-055 |
+| `ade_ledger::store_semantics` | BLUE | The authority-semantics version of a durable store, separate from its byte layout. Strict check, with no stamp or remediation tool. | `STORE_SEMANTICS_VERSION` (= 13 at HEAD), `check_store_semantics_version`, `AuthorityArtifact`, `FoundSemanticsVersion`, `StoreSemanticsVersionMismatch` | P6 (`e9d9db46`). EVO-005, PRC-005 |
+| `ade_ledger::tx_validity::script_witnesses` | BLUE | The one authority for a Conway transaction's witness-script closure (`babbageUtxowTransition`), with reduced and exact evidence levels. | `ScriptsNeeded`, `ScriptPurpose`, `ReducedScriptVerdict`, `ExactScriptVerdict`, `NativeScriptVerdict`, `ScriptClosureFailures` | LV-13 (`e6910d5a`). SEC-010 |
+| `ade_ledger::tx_validity::utxo_free` | BLUE | Admission obligations that need neither the UTxO nor protocol parameters (validity interval, network IDs, bootstrap attribute size, declared body size). Each equals Cardano's predicate or is weaker than it. | `check_utxo_free_tx`, `check_validity_interval`, `check_tx_networks`, `check_declared_body_size`, `UtxoFreeRejection` | LV-15a (`bbde0036`). VAL-018, VAL-019 |
+| `ade_crypto::sha3` | BLUE | SHA3-256 (FIPS 202), used only for the bootstrap-witness key hash `Blake2b-224(SHA3-256(..))`. Adds the `sha3 = "0.10"` dependency. | `sha3_256` | LV-13 (`e6910d5a`) |
+| `ade_codec::cbor::skip_differential_tests` | BLUE (test-only) | The pre-LV-12 recursive `skip_item`, kept verbatim as a differential reference for the new iterative skipper. | — | LV-12 (`a82d11b8`). SEC-009 |
+| `ade_node::forge_timing` | RED | The committed venue timing registry. The store, keyed by the seed sidecar's genesis hash, selects the timing calendar; `--network` cannot. This is the one place the bootstrap-bound forge slot authority is established. | `venue_timing_history_for_genesis`, `establish_forge_timing_authority`, `GenesisTimingCrossCheck`, `ForgeTimingError` | LIVE-2c part 1 (`8dd36d1c`). DET-019 |
+
+**New integration-test files (21):**
+- `ade_ledger/tests/`: `bnd2a_phase2_invalid_utxo_effect`, `bnd2d_collateral_retention`, `lv1_sigma_denominator_authority`, `lv3_self_delegated_owner_stake`, `lv4_snapshot_fidelity`, `lv11_native_script_threshold`, `lv12_native_script_depth`, `lv13_native_script_witness_verdict`, `lv14_every_supplied_witness_verifies`, `lv15a_utxo_free_admission_obligations`. There are also 14 block/UTxO fixtures under `tests/fixtures/`.
+- `ade_runtime/tests/`: `body_decode_census`, `frozen_ratification_census`, `leadership_distr_census`, `lv15b0_native_record_differential`, `lv15b0_real_pulser_import`, `lv16_recovered_store_equivalence`, `seed_boundary_reward_census`, `store_semantics_version_gate`, `treasury_donation_census`.
+- `ade_node/tests/`: `b12_served_or_advertised_peer_tip`, `lv16_durable_intersection`.
+
+> **Cross-reference (CODEMAP).** `docs/ade-CODEMAP.md` has been regenerated at `08c7c3f5`; the regeneration is in the working tree and not yet committed. It names 9 of the 10 new modules. The exception is the test-only `ade_codec::cbor::skip_differential_tests`, which is expected since CODEMAP does not catalog test modules.
+
+---
+
+## 3. Modules Modified
+
+Per-crate diffstats over `1e4896eb..HEAD`. Two kinds of change are excluded as trivial: the IDSE relocation's comment-path rewrites (`docs/clusters/…` → `docs/legacy/clusters/completed/…`, from `fa48afa8`) and single-line touches.
+
+| Module | Scope | Key changes |
+|--------|-------|-------------|
+| `ade_ledger` | **BLUE.** 83 files, +12,861 / −1,347 (7 new src modules, 10 new test files, 14 fixtures) | **Accumulator and boundary.** `epoch_accumulator.rs` (+1,222 / −204) gains: a typed boundary-stall vs apply-failure state (BND-1); a `Phase2Invalid` transition consuming the resolved collateral scalar (BND-2b/2c); a seed-boundary reward owner, where "not computed yet" is distinct from "empty" (LV-2); a treasury donation pot moved to the treasury once, at the boundary (LV-6); and the frozen ratification record (LV-15b-0). `rules.rs` binds epoch-boundary detection to the venue era schedule (P3). **Snapshot and leadership.** The sigma denominator is a snapshot fact (LV-1). Owner stake counts only for owners delegated to that pool (LV-3, store v8). Stake snapshots keep whole tagged credentials and frozen pool parameters (LV-4). The frozen SPO distribution keeps Cardano's pool set (LV-15b-0, store semantics 13). **Native Mithril decode.** `ledgerdb_state.rs` (+787 / −125) decodes `psFutureStakePoolParams` in its own CDDL grammar (P1), reports the byte offset on a fixed-width mismatch, and imports the snapshot's finished ratification result (LV-15b-0). **Governance.** `governance.rs` / `gov_cert.rs` / `snapshot/gov_state.rs` add `minPoolCost` enactment (CRE-S7; `ExecUnitsParamUpdate` → `EnactableParamUpdate`), the delegation lifecycle and the decide/apply split (LV-15b-0). **Tx validity.** Native-script `n_of_k` thresholds are signed int64 (LV-11, `scripts.rs`). Native-script witness verdicts decide validity (LV-13, `witness.rs`, `script_witnesses`). Every supplied vkey/bootstrap witness signature verifies (LV-14). UTxO-free admission obligations (LV-15a). **Store and recovery.** `store_semantics` (P6), `replay_divergence` (P6-S4), `rollback::intersection` (LV-16), the bridge-eta0 finality decision (`bootstrap_bridge.rs`, PREPROD-NONCE-2), and a durably representable reduced projection (SLICE-P2). Mainnet constants are contained (P5). |
+| `ade_node` | **RED.** 22 files, +6,539 / −365 (1 new src module, 2 new test files) | `node_lifecycle.rs` (+3,340 / −170) carries most of the shell work: reconnecting an established live feed (LIVE-WIRE-LIVENESS S2); a bounded post-rollback refold with a distinct refold label (ACCUMULATOR-REFOLD-BOUND); a typed emit-only refold/recovery trace and the eview activation record-vs-candidate diff (EVIEW-R1); positioning the reduced checkpoint on the boundary point before sealing leadership (EVIEW-R2); re-certifying the settled rewind after a durable rollback (RF-1); warm-start fingerprint and P4 root-cause instrumentation; first-boundary nonce operands (PREPROD-NONCE-1); B6 co-advance decomposition and the known-failed-boundary short-circuit; BND census and BND-1/2c/2d wiring; one co-advance retry when only the checkpoint was behind, with the retry target pinned to the accumulator's epoch (LV-8); and durable ancestry in `FindIntersect` (LV-16). `node_sync.rs` / `produce_mode.rs` close the CANNOT-ANSWER → not-leader collapse on the authoritative path (LIVE-2) and add the B12 served-tip signal. `epoch_wire.rs` / `native_firstrun.rs` refuse a non-final bridge eta0 commitment and bind the bridge boundary to the final eta0 (PREPROD-NONCE-2). The seed-reward owner is threaded into activation (LV-2). `live_log/sched_event.rs` adds forge-tick `skip_reason`, both compared tips on a forge refusal, and the no-vanishing-tick accounting (LIVE-2c). The new `forge_timing` module is described in §2. |
+| `ade_runtime` | **RED** (with GREEN-by-contract chaindb caches). 33 files, +6,410 / −457 (9 new test files) | `admission/wire_pump.rs` (+987 / −243): keep-alive survives downstream backpressure (LIVE-WIRE-LIVENESS S1), and the LV-16 intersection is wired. `chaindb/epoch_accumulator_store.rs` (+954): the settled-rewind triple with a verified fingerprint (CE-RF-6), bounded refold, the store-semantics gate, the frozen ratification record and the LV-1 snapshot. `chaindb/epoch_accumulator_advance.rs`: BND-1 typed stall, BND-2c/2d, LV-6 donations. `chaindb/persistent.rs`: a `slot→hash` index plus a backfill on open (B6 perf, `82b2e8f3` / `1175ba20`) and the semantics-version gate. `chaindb/reduced_utxo_checkpoint.rs`: resolved collateral and retained spent collateral (BND-2b/2d). `clock.rs` / `producer/coordinator.rs`: a single forge slot authority (LIVE-2c). `mithril_native_assembly.rs`: LV-2/LV-4/LV-6/LV-15b-0 import fields. |
+| `ade_core` | **BLUE (consensus authority).** 1 file, +1,301 / −0 | `consensus/era_schedule.rs` changes additively only. Added: `slot_at` (canonical era-aware wall-clock → slot, LIVE-2b, `31f7c754`), `ScheduleCommitment` / `schedule_timing_commitment`, `DerivedTimingAnchor` (a compact timing projection with lineage, `352dfb95`), `VenueTimingSegment` / `VenueTimingHistory`, `BootstrapTimingBinding` / `BootstrapBoundTimingAuthority` (the timing domain anchored to a bootstrap fact, not the clock, `8cf14529`), `slot_start_time_ms`, and the error enums `SlotDerivationError`, `TimingAnchorError` and `TimingAuthorityError`. It also adds 21 `#[test]`s, including the mechanical Conway-only scope boundary (`f050f472`). No existing item was changed or removed. |
+| `ade_types` | **BLUE.** 1 file, +170 / −84 | `allegra/script.rs`: `NativeScript` changes from a recursive enum to a post-order struct over `NativeScriptNode` (`All{arity}`, `Any{arity}`, `MOfN{threshold: i64, arity}`, …), plus `MalformedPostOrder`. These carry LV-11 (signed threshold) and LV-12 (depth-independent, heap-only work). |
+| `ade_codec` | **BLUE.** 4 files, +427 / −51 | `cbor/mod.rs`: `skip_item` is now iterative (LV-12). `allegra/script.rs`: the post-order native-script decode with an int64 threshold (LV-11/12). The new test module is described in §2. |
+| `ade_crypto` | **BLUE.** 7 files, +49 / −5 | New `sha3` module and dependency (LV-13). The remaining 4 files change only comment paths (relocation). |
+| `ade_testkit` | **GREEN/test.** 30 files, +264 / −104 | `harness/snapshot_loader.rs` (+99 / −4): snapshot-loader support for the LV-4/LV-15b-0 fields. `consensus_stream_replay` corpus refreshed for the rolling-nonce model (`bc83e20d`). `ce3d_boundary_differential`, `epoch_oracle_comparison` and `conway_deposit_params_single_decoder` are adjusted. The other ~24 files change only comment paths (relocation). |
+| `ade_core_interop` | test bins | **Trivial.** 12 files, +18 / −18: relocation comment-path rewrites only. |
+| `ade_network`, `ade_plutus`, `ade_mem_diag` | — | Unchanged. |
+
+> **BLUE was touched, including the consensus core.** `ade_core` grew by 1,301 lines with no deletions. Every added item is a new timing/slot authority; the nonce, header-validation and fork-choice authorities did not change. `ade_types::NativeScript` changed its shape (an enum became a post-order struct) to remove recursion on adversarial depth.
+
+---
+
+## 4. Feature Flags
+
+**No feature-flag deltas.** No workspace `Cargo.toml` declares a `[features]` table at either ref (`git grep '^\[features\]'` is empty at `1e4896eb` and HEAD). There is no `#[cfg(feature = …)]` in `crates/` and no `compile_error!` coupling. The only manifest-level change is a new non-optional dependency, `sha3 = "0.10"`, in `ade_crypto/Cargo.toml` (LV-13). There is no flag coupling to report.
+
+---
+
+## 5. CI Checks
+
+`git diff --name-status 1e4896eb..HEAD -- ci/` shows **31 `A` gates, 33 `M` gates and 0 `D`**. Gate count (`git ls-tree -r --name-only <ref> ci/ | grep -c ci_check_`): **255 → 286**. Two non-gate CI files were added: `ci/store-semantics-surface.lock` (P6, `e9d9db46`), the semantics-bearing surface lock read by `ci_check_store_semantics_lock.sh`, and `ci/idse_legacy_carried.py` (`225933b4`), the retarget helper that checks a legacy ID was carried into an active IDSE invariant that lists the gate.
+
+### Cluster work before the migration (bands 1–13): 31 new gates, 3 materially modified
+
+| Check | Status | IDSE invariant(s) (registry `ci_scripts`) | Cluster of origin | What it checks |
+|-------|--------|-------------------------------|-------------------|----------------|
+| `ci_check_wire_liveness.sh` | New | LIV-008, ORD-006, LIV-009 | LIVE-WIRE-LIVENESS (`b00216c8`) | Wire/pump cooperative liveness: keep-alive under backpressure, pump order, transport-only reconnect. |
+| `ci_check_accumulator_refold_bound.sh` | New | REC-001, DET-009, SAF-006, LIV-001 | ACCUMULATOR-REFOLD-BOUND (`6f014cf9`) | A post-rollback accumulator refold rewinds to a settled point, not the bootstrap anchor. |
+| `ci_check_eview_refold_reseal.sh` | New | VAL-023, DET-009 | EVIEW-R2 (`1dc48e74`) | A refold re-seals frozen leadership byte-identically. |
+| `ci_check_settled_triple_integrity.sh` | New | DUR-002 | RF-1 / CE-RF-6 (`a6d584e2`) | The settled rewind triple is bound by a verified fingerprint. |
+| `ci_check_settled_rewind_survives_recovery.sh` | New | LIV-001 | RF-1 (`d4f19c87`) | A bounded settled rewind survives the recovery pass after rollback. |
+| `ci_check_epoch_agreement.sh` | New | VAL-025 | P5 (`45c2b942`) | The ledger epoch agrees with the venue schedule. |
+| `ci_check_venue_constant_containment.sh` | New | VAL-012 | P5 (`45c2b942`) | Mainnet `SHELLEY_START_*` / epoch-length constants stay contained. |
+| `ci_check_store_semantics_gate.sh` | New | EVO-005 | P6 (`e9d9db46`) | No authoritative store reader bypasses the semantics-version gate, and there is no "trust me" remediation. |
+| `ci_check_store_semantics_lock.sh` | New | PRC-005 (+ STR-005, VAL-020/021/024/027/028/029/030, CON-005) | P6 (`e9d9db46`) | A semantics-bearing source change must bump `STORE_SEMANTICS_VERSION` or record a neutral entry in the lock. |
+| `ci_check_recovery_fault_self_describing.sh` | New | OBS-004 | P6-S4 (`734ac76e`) | A recovery divergence stays self-describing. |
+| `ci_check_venue_differential.sh` | New | PRC-004 | P6-S5 (`221031cb`) | Epoch semantics are proven per venue, not from a mainnet-shaped corpus. |
+| `ci_check_bridge_nonce_freeze_differential.sh` | New | VAL-022, PRC-004 | PREPROD-NONCE-2 (`b2546f5a`) | The nonce / candidate-freeze differential covers seed position × venue. |
+| `ci_check_forge_slot_authority.sh` | New | DET-019, OBS-001 | LIVE-2c (`747b01ae`) | One forge slot authority, and no admitted forge tick may disappear. |
+| `ci_check_bnd_typed_stall_cause.sh` | New | SAF-005 | BND-1 (`3505c0c6`) | A boundary stall and a within-epoch apply failure are distinct states. |
+| `ci_check_phase2_invalid_utxo_effect.sh` | New | VAL-016 | BND-2a (`d619ebda`) | The phase-2-invalid UTxO effect is collateral-only, derived in one place, with validity-blind consumers. |
+| `ci_check_collateral_balance_resolver.sh` | New | VAL-016, CON-003 | BND-2b (`89dd1aac`) | `collAdaBalance` is computed over the resolved collateral entries. |
+| `ci_check_collateral_retention_positioning.sh` | New | DUR-011 | BND-2d (`56e0a4e4`) | The UTxO authority retains spent collateral on the accumulator's behalf. |
+| `ci_check_followed_peer_tip_served_evidence.sh` | New | SAF-013 | B12 (`96c7af68`) | The followed-peer-tip signal reports the strongest evidence: the advertised tip, or a served tip that was durably admitted. |
+| `ci_check_sigma_denominator_authority.sh` | New | VAL-024 | LV-1 (`b502bd5c`) | The leader-check sigma denominator is a snapshot fact. |
+| `ci_check_owner_stake_authority.sh` | New | VAL-027 | LV-3 (`cb65ec6e`) | Owner stake counts only for owners delegated to that pool, and it has one definition. |
+| `ci_check_seed_reward_authority.sh` | New | VAL-020, VAL-029 | LV-2 (`d7de0fbd`) | The seed→seed+1 reward has exactly one owner, selected by a typed fact rather than an empty map. |
+| `ci_check_snapshot_fidelity.sh` | New | STR-005, VAL-020, VAL-027, VAL-028 | LV-4 (`19387e86`) | Stake snapshots keep tagged credentials and frozen pool parameters. |
+| `ci_check_donation_pot.sh` | New | CON-005 | LV-6 (`fec37fb9`) | Treasury donations are held in one pot and moved once, at the boundary. |
+| `ci_check_coadvance_retry.sh` | New | LIV-002 | LV-8 (`4a37624c`) | A co-advance pass retries once when only the checkpoint was behind, and halts otherwise. |
+| `ci_check_native_script_threshold_signed.sh` | New | VAL-017 | LV-11 (`a4610e16`) | `script_n_of_k` thresholds are signed int64 end to end. |
+| `ci_check_native_script_depth_independent.sh` | New | SEC-009 | LV-12 (`a82d11b8`) | Native scripts and CBOR skipping do not depend on thread stack depth. |
+| `ci_check_native_script_witness_verdict.sh` | New | SEC-010 | LV-13 (`e6910d5a`) | One authority decides a Conway tx's witness-script closure. |
+| `ci_check_every_supplied_witness_verifies.sh` | New | SEC-008 | LV-14 (`df057072`) | Every supplied vkey/bootstrap witness signature verifies over the body hash. |
+| `ci_check_utxo_free_admission_obligations.sh` | New | VAL-018, VAL-019 | LV-15a (`bbde0036`) | Validity-interval, network and body-size checks that need neither UTxO nor pparams. |
+| `ci_check_frozen_ratification_authority.sh` | New | VAL-021, VAL-030 | LV-15b-0 (`2b0035d7`) | Ratification for E→E+1 comes from the authority frozen at the start of E. |
+| `ci_check_durable_intersection.sh` | New | REC-005, VAL-055, STR-019 | LV-16 (`352bf783`) | A recovered node offers its durable ancestry in `FindIntersect`. |
+| `ci_check_eview_window_driver.sh` | Modified (+26 / −9) | DET-013 | BND-2d (`56e0a4e4`) | Extended for retained spent collateral in the reduced window driver. |
+| `ci_check_forge_followed_tip_admission.sh` | Modified (+13 / −1) | VAL-051, SAF-013, VAL-052, VAL-053 | B12 (`96c7af68`) | Extended for the served-tip evidence. |
+| `ci_check_node_run_loop_containment.sh` | Modified (+8 / −8) | DET-019, VAL-050, SAF-012, STR-015, SEC-025 | LV-9 (`cc8a5a5f`) | Reads the relay-loop body from a here-string so every run gives the same answer. |
+
+The cluster-era commits `d7de0fbd` (LV-2) and `19387e86` (LV-4) also made code-level edits to `ci_check_bootstrap_rupd_fee_reduction.sh`, `ci_check_epoch_accumulator_no_utxo.sh` and `ci_check_snapshot_pool_set_inclusion.sh`. Those three were then retargeted in band 14.
+
+### IDSE migration (band 14): 0 new gates, 30 modified
+
+| Group | Gates | Commit | What changed |
+|-------|-------|--------|--------------|
+| **Retargeted to the IDSE registry (16)** | `bootstrap_rupd_fee_reduction`, `boundary_aligned_mark_capture`, `chainsync_findintersect_compat`, `conway_deposit_params_bootstrap`, `epoch_accumulator_no_utxo`, `epoch_accumulator_recovery`, `feed_leader_threshold_view`, `feed_tag24_unwrap`, `forge_successor_evolved_spine`, `frozen_leadership_authority`, `frozen_promotion_no_seed_window`, `poolreap_single_canonical`, `rollback_materialize_eta0`, `served_chain_projection`, `snapshot_pool_set_inclusion`, `warmstart_eta0_overlay` | `225933b4` | Each gate used to assert a legacy ID's `status`. It now calls `ci/idse_legacy_carried.py`, which requires the ID to be migrated or merged, every target to be an active IDSE invariant, and the gate to be listed in a target's `ci_scripts`. Code-level assertions are unchanged. |
+| **Rewritten for IDSE (4)** | `registry_unique_ids` (checks both the IDSE and the frozen legacy registry), `registry_code_locus_exists` (IDSE registry: unique IDs, resolvable `depends_on`, every enforcement locus and `ci_scripts` path exists; PRC-001), `genesis_replay_open_obligation` (genesis replay stays unclaimed: the legacy entry stays excluded under A2, and A2 still says Ade never replays historical eras), `producer_corpus_present` (follows the legacy production-corpus entry to PRC-023; no `supported` claim without passing evidence) | `225933b4` | Rewritten against the IDSE registry. |
+| **Restored (1)** | `no_async_in_blue` | `e563ad94` | Now reads `core_paths` from `.idse-config.json` (identical paths) after the old config moved. `store-semantics-surface.lock` gained a neutral version-13 entry for the relocation's comment-path rewrite in two surface files, which also restores `ci_check_store_semantics_lock` and `ci_check_collateral_retention_positioning`. |
+| **Path-only (9)** | `ba02_evidence_manifest_schema`, `operator_evidence_manifest_schema`, `rehearsal_manifest_schema`, `sync_evidence_manifest_schema`, `receive_paths_corpus_present`, `server_paths_corpus_present`, `utxo_admission_seam`, `utxo_fp_cache`, `utxo_pre_resolve` | `fa48afa8` | Document paths moved under `docs/legacy/`. No behavioral change. |
+
+> **Known-red gates (pre-existing, not caused by the migration).** The re-evidence artifact `docs/evidence/idse-m2-reevidence.json` ran 259 registry-named CI scripts at `e563ad94`. **37 exited non-zero** (`ci[].rc != 0`), and every one already failed at `a3cef7f7`, before the migration began. The registry evidence diagnoses each as a stale or over-broad structural gate, not a demonstrated violation, that needs repair before it can serve as evidence. Where a retargeted gate is among them, its registry assertion passes and only its code-level assertion fails. The failing gates are: `admission_runner_closure`, `consensus_input_provenance`, `epoch_accumulator_recovery`, `eview_activation_predicate`, `eview_automatic_activation`, `eview_bootstrap_cert_state`, `eview_epoch_rebind`, `eview_forecast_crossing`, `eview_leadership_complete`, `eview_live_checkpoint`, `eview_pool_lifecycle`, `eview_seed_sidecar_v4`, `feed_leader_threshold_view`, `forge_purity`, `forged_durable_admit_via_pump`, `gov_proposal_capture`, `hash_uses_wire_bytes`, `keep_alive_wire_only`, `lifecycle_owner_uses_bootstrap_initial_state`, `live_fork_choice_apply`, `local_durable_forge_base`, `mempool_ingress_closure`, `native_firstrun_no_cli_seed`, `native_nonutxo_decode`, `no_haskell_fingerprint_equality`, `node_forge_single_epoch_fail_closed`, `node_mode_closure`, `node_path_fidelity`, `node_sync_via_pump`, `participant_forge_on_selected_head`, `post_switch_convergence_window`, `receive_detector_venue_split`, `recover_follow_wal_lineage`, `recovered_ledger_pparams_sourced`, `rollback_target_canonical_binding`, `warm_start_re_entry`, `warmstart_eta0_overlay`.
+
+> **Cross-reference (TRACEABILITY).** `docs/ade-TRACEABILITY.md` has been regenerated against the IDSE registry at `08c7c3f5`; the regeneration is in the working tree and not yet committed. All 31 new gates appear in it. In the IDSE registry, every new gate is named in at least one invariant's `ci_scripts`. Of the 33 modified gates, 5 are named by no IDSE invariant: `genesis_replay_open_obligation`, `registry_unique_ids`, `utxo_admission_seam`, `utxo_fp_cache` and `utxo_pre_resolve`. Across HEAD as a whole, **27 of 286 gates** are named by no IDSE invariant's `ci_scripts`. Some are hygiene gates by design (`registry_unique_ids`, `module_headers`, `no_secrets`); others carry legacy MEM-OPT / EVIEW / producer-loop enforcement that the Define batches did not attach to a `ci_scripts` list.
+
+---
+
+## 6. Canonical Type Registry Delta
+
+Omitted: `.idse-config.json` `canonical_type_registry` is `null`.
+
+*Informational, approximate (`pub struct` / `pub enum` names over BLUE `src/`):* `ade_ledger` 269 → 328, `ade_core` 49 → 58, `ade_types` 80 → 82; `ade_codec` 13, `ade_crypto` 22 and `ade_plutus` 8 are unchanged. Two `ade_ledger` names disappear: `ExecUnitsParamUpdate` and `ExecUnitsUpdateError`. They were **renamed** in CRE-S7 (`8b41b9e3`) to `EnactableParamUpdate` / `EnactableUpdateError` when `minPoolCost` joined the enactable subset. This is a generalisation, not a semantic removal.
+
+## 7. Normative Rule Delta
+
+Omitted: `.idse-config.json` `normative_docs` is `[]`.
+
+### Invariant registry delta *(informational — the IDSE migration)*
+
+The invariant registry was **replaced, not edited.** `docs/ade-invariant-registry.toml` held 432 legacy IDD rules at the baseline. At HEAD it holds the **IDSE v3.0 registry** (`schema_version = 3`, `registry_count = 260`).
+
+- **Legacy registry, frozen.** `docs/legacy/idd-invariant-registry.toml` has **482** entries. That is 432 at baseline plus 50 added by cluster work in bands 1–13, with zero removed (`comm -23` of the sorted ID lists is empty). Its status tally is enforced 343, declared 112, partial 26, enforced_scaffolding 1. `docs/legacy/idd-to-idse-map.toml` gives all 482 a disposition: **414 migrated, 52 merged, 16 excluded, 0 pending**. The 50 legacy IDs added in this span all map to active IDSE invariants: 49 migrated and 1 merged (into VAL-020 + STR-005).
+- **IDSE registry: 260 invariants + 7 assumptions.** All 260 were approved line by line across **12 Define batches**: node 38, epoch 30, pipeline-production 27, resources-release 24, ledger 23, mithril-evidence 21, network 20, foundations 19, durability-recovery 17, codec-wire-crypto 15, consensus 14, consensus-inputs 12. Assumptions A1–A7 were added along the way (A7 `mithril-snapshot-trust` in the mithril-evidence batch).
+  - By family: VAL 67, SEC 38, DET 26, SAF 25, PRC 23, STR 22, DUR 14, LIV 11, OBS 9, REC 8, EVO 6, ORD 6, CON 5.
+  - Criticality: 215 critical, 45 standard. Status: 260 `active`, 0 deprecated.
+  - 16 invariants carry a recorded redefinition from Define consensus (e.g. SEC-001, SAF-013).
+  - 7 invariants carry no `legacy_ids` (they are new in IDSE): PRC-003, VAL-060, SEC-031, DUR-014, SEC-034, PRC-012, PRC-020.
+- **Claim status after the M2 re-evidence pass at `e563ad94`** (`08c7c3f5`), as corrected by `74c67670`: **partial 184, unresolved 75, falsified 1, supported 0.** `74c67670` appended 14 corrected records after fixing how test references were matched; the earlier records stay. VAL-066 moved from partial to unresolved because its stale synthetic fixture now fails. There are 252 evidence records (195 pass, 57 fail); 22 invariants have no evidence record. Every record discloses its limits. In particular, no IDSE cluster has declared acceptance obligations yet, and no critical invariant has a mutation witness yet. The artifact is `docs/evidence/idse-m2-reevidence.json`.
+
+---
+
+## Anomalies & cross-reference summary
+
+- **PRC-001 `EveryInvariantMechanicallyEnforced` is `falsified`.** The re-evidence pass found 20 active invariants that name no test, CI script or enforcement locus: SAF-002, PRC-002, ORD-001, SEC-002, PRC-003, VAL-015, EVO-003, SEC-015, VAL-040, SEC-031, DUR-014, SEC-034, PRC-012 and more. This is an open IDSE obligation, not a regression in code.
+- **Registry "removal" is a replacement, not a discipline violation.** The legacy rules left the active registry path because the registry was replaced, and every one of the 482 has a recorded disposition (0 pending). The 16 `excluded` dispositions each carry an approved settlement in the map. No IDSE invariant was removed, because the IDSE registry starts in this span.
+- **Canonical-type "removals": 2, both renames** (`ExecUnitsParamUpdate` / `ExecUnitsUpdateError` → `Enactable*`, CRE-S7). No canonical-type registry is configured, so this is informational.
+- **37 CI scripts fail at `e563ad94`** (re-evidence artifact, `ci[].rc != 0`, of 259 run). All 37 already failed at `a3cef7f7`, before the migration. The registry evidence diagnoses them as stale or over-broad structural gates, not demonstrated violations, so they need repair before they can serve as evidence. They should be tracked and must not be attributed to M2. The full list is in §5.
+- **Sibling grounding docs have been regenerated but not committed.** CODEMAP, SEAMS and TRACEABILITY were regenerated at `08c7c3f5` against the IDSE registry. They are modified in the working tree and not yet committed. They predate `74c67670`, which touched only evidence records in the registry and no code, CI or invariant text. The committed versions are still the `d036f8e2` (content-HEAD `1e4896eb`) generation.
+- **27 of 286 CI gates are named by no IDSE invariant's `ci_scripts`.** Either TRACEABILITY will show them as orphan enforcement, or a later Define/redefinition should attach them.
+- **`ade_core` was modified.** The change is additive (+1,301 / −0, timing/slot authority only), but the consensus core is not byte-identical to the baseline.
+- **Commits without a conventional-commits prefix and no clear scope: 0.** The 12 `Define:` commits use the IDSE Define format.
 
 ---
 
 ## Generation notes
 
-### Regen `470f9b89 → 1e4896eb` (cluster-close refresh — LIVE-FORGE-HARDENING; baseline advances)
+### Regen `1e4896eb → 74c67670` (IDSE migration complete; first HEAD_DELTAS under IDSE)
 
-- **Baseline valid; IS a cluster-close refresh.** `git rev-parse 470f9b89` resolves; `git merge-base 470f9b89
-  1e4896eb == 470f9b89` (strict ancestor; no tag). HEAD `1e4896eb` is the `LIVE-FORGE-HARDENING` close on `origin/main`.
-  Per IDD discipline the baseline **advances** to `1e4896eb` (config `head_deltas_baseline` updated by the caller).
-- **Counts are mechanical (git/grep/ls).** Commit log + `--shortstat` over `470f9b89..1e4896eb` (**232** commits, no
-  merges / **387** files / **+74,026 / −5,752**); CI gate count via `git ls-tree -r --name-only <ref> ci/ | grep -c
-  ci_check_` (**200 → 255**; name-status **55 A / 2 M / 0 D**); registry via `grep -c '^id = '` (**380 → 432**;
-  `comm -23` empty; `comm -13` = 52) and `grep '^status = ' | sort | uniq -c` (enforced/scaffolding/partial/declared
-  **253/1/23/103 → 297/1/23/111**); BLUE types via `pub (struct|enum)` grep over the BLUE `core_paths` src trees
-  (`ade_ledger 185→272`, `ade_codec 11→13`, `ade_types 82→84`, **`ade_core 48→49`**, `ade_crypto 22`, `ade_plutus 8`);
-  tests via the `#[test]`/`#[tokio::test]` attribute grep (**~2,666 → ~3,320**, approximate).
-- **`ade_core` change verified in source.** `git diff --numstat 470f9b89..1e4896eb -- crates/ade_core/` = +574/−300 over
-  16 files; the DC-EPOCH-16 registry `code_locus` names `ade_core/src/consensus/{nonce,praos_state,header_validate,
-  era_schedule}.rs`. Surfaced as a CORRECTION to the prior `cdcd9397` framing.
-- **The activation gate is GONE (verified).** `git grep EVIEW_ACTIVATION_ARMED 1e4896eb -- crates/` is empty.
-- **Crate count unchanged (12 → 12).** Workspace `members` lists byte-identical at both refs; no new `Cargo.toml`.
-- **No feature flag / `compile_error!` / new `--feature` CLI surface** at any ref.
-- **Normative docs unchanged across the span.** `git diff --name-only 470f9b89..1e4896eb` over the six configured
-  `normative_docs` paths is empty; the §7 delta is entirely the invariant-registry change.
-- **§1 is verbatim from `git log` (newest first).** No editorial per commit; aggregation lives in the band narratives
-  and §3.
-- **This doc is regenerated in isolation; the other three grounding docs are NOT.** CODEMAP / SEAMS / TRACEABILITY are
-  on-disk at `cdcd9397` (2026-06-24) and must be regenerated to re-align with HEAD — see the Anomalies block. Prefer
-  regenerating over patching.
+- **The baseline is valid.** `git rev-parse 1e4896eb` resolves, and `git merge-base 1e4896eb HEAD == 1e4896eb` (strict ancestor, no tag). The baseline is read from `.idse-config.json` `head_deltas_baseline`. This regeneration does not advance it; the caller decides.
+- **Counts are mechanical.**
+  - Commits: `git rev-list --count` gives 222, with `--no-merges` also 222.
+  - Files and lines: `git diff --shortstat` gives 1,091 files, +107,842 / −15,676. `--name-status -M` gives 260 A / 209 M / 622 R.
+  - Per-crate stats: `git diff --shortstat -- crates/<c>/`.
+  - CI: `git ls-tree` + `grep -c ci_check_` gives 255 → 286; `--name-status -- ci/` gives 31 A / 33 M / 0 D.
+  - Legacy registry: `grep '^id = '` + `comm` gives 432 → 482, with 0 removed.
+  - IDSE registry: parsed with `tomllib` (families, criticality, claim status, evidence results, approval records).
+  - Tests: an approximate `#[test]` attribute grep.
+- **IDSE ID mapping.** Each gate's IDSE IDs come from the HEAD registry's `ci_scripts` fields. Cluster-to-invariant attributions in the band table come from the same join, plus `docs/legacy/idd-to-idse-map.toml` for the 50 legacy IDs added in the span.
+- **§1 is verbatim from `git log`.** Synthesis lives in the band table and §3.
+- **Working tree.** An untracked `wire_smoke.jsonl` exists and is not part of any count.

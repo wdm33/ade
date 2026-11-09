@@ -80,6 +80,13 @@ The batches are ordered from the foundations up, so that a line's `depends_on` c
   Nothing is `supported` until an IDSE cluster declares and meets its obligations (Doctrine §10).
 - Regenerate CODEMAP and TRACEABILITY (plus SEAMS and HEAD_DELTAS) in IDSE form, update the crate list in `CLAUDE.md`, and run `/explorer --build`.
 
+**M2 status: complete (2026-11-09).**
+- **Carry-over** (233cf8ab): legacy tests, CI scripts and code loci are now on the IDSE entries.
+- **CI retarget** (225933b4, e563ad94): 20 gates retargeted, and the two gates the relocation broke are restored.
+- **Re-evidence at e563ad94** (08c7c3f5, corrected in 74c67670; artifact `docs/evidence/idse-m2-reevidence.json`): 184 partial, 75 unresolved, 1 falsified (PRC-001).
+- **Failing CI scripts:** 37 already failed before the migration. Each is diagnosed as a stale or over-broad structural gate, and repairing them is owed to the first IDSE cluster.
+- **Grounding docs:** CODEMAP, SEAMS, HEAD_DELTAS and TRACEABILITY are regenerated in IDSE form, and the CLAUDE.md crate list is updated. The explorer builds with 0 export errors.
+
 ## M3: ade-atlas redesign (repository `wdm33/ade-atlas`)
 
 - Retarget the atlas parser to the IDSE sources: the registry, cluster and slice documents, consensus records, CODEMAP and TRACEABILITY.

@@ -16,10 +16,15 @@ Ade is a Cardano block-producing node written in Rust. The workspace is organize
 - `ade_codec` — CBOR encoding/decoding
 - `ade_types` — Cardano domain types
 - `ade_crypto` — Pure cryptographic verification
-- `ade_core` — Ledger, consensus, and protocol logic
+- `ade_core` — Consensus and protocol logic (Praos, chain selection, era schedule)
+- `ade_ledger` — Ledger rules: block and transaction validity, epoch transitions, governance, mempool admission
 - `ade_testkit` — Test infrastructure
+- `ade_network` — Node-to-node and node-to-client mini-protocols: mux, handshake, chain-sync, block-fetch, keep-alive (pure codecs and state machines)
+- `ade_plutus` — Plutus script evaluation, cost models and script context
 - `ade_runtime` — I/O, networking, storage, signing (imperative shell)
 - `ade_node` — Binary entry point
+- `ade_core_interop` — Live cardano-node interop driver and readiness probe (shell; no authoritative decisions)
+- `ade_mem_diag` — Allocator diagnostic probe (shell diagnostics only; nothing authoritative may depend on it)
 
 ## IDSE
 

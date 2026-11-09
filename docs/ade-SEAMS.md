@@ -1,371 +1,534 @@
 # Seams — Where New Work Can Attach (Ade)
 
 > **Status:** Living architectural document. Regenerated; not hand-edited.
-> Per-project instance of `~/.claude/methodology/templates/seams.md`.
+> Per-project instance of `~/.claude/methodology/templates/seams.md`, in IDSE v3.0 form.
 
-> 12 crates, **564 canonical types**, **255 CI checks**, **432 registry rules** at HEAD (`1e4896eb`, **LIVE-FORGE-HARDENING cluster close**). This regeneration introspects the code at HEAD and reads the invariant registry (`docs/ade-invariant-registry.toml`, 432 rules). **The seam surface grew by CLOSED additions only:** a new BLUE self-sustaining ledger authority (the epoch accumulator), a new BLUE sealed leadership authority (frozen leadership), a typed reduced-boundary NON-authority, Conway governance/deposit-refund surfaces, a version-gated seed sidecar (**v5 → v6**, `security_param`), and a closed 2-network profile registry. **No new peer-negotiated ingress, no openly-extensible / plugin / runtime-registered registry, and no second stake / consensus / fork-choice authority.**
->
-> ### ⚠️ CODEMAP IS STALE — read this first (cross-reference honesty)
->
-> **This SEAMS is regenerated at HEAD `1e4896eb`, but `docs/ade-CODEMAP.md` is still at `cdcd9397` (2026-06-24) — 157 commits behind.** The CODEMAP's per-module authority tables, TCB colors, dependency direction, and crate list (12 crates) remain valid inputs and were used as the module inventory here. But the CODEMAP's **counts are stale** (it reads 508 canonical types / 238 CI / 418 rules; HEAD is **564 / 255 / 432**) and it does **not** describe the modules the span since Jun 24 added — the epoch accumulator (`ade_ledger::epoch_accumulator` + the RED `chaindb::epoch_accumulator_{store,advance}`), the frozen leadership authority (`ade_ledger::frozen_leadership`), the reduced boundary plane (`ade_ledger::reduced_boundary`), the bootstrap reward update (`ade_ledger::bootstrap_reward_update`), the credential-discriminant chokepoint (`ade_ledger::cred`), the S5 rollback-admission guard (`ade_ledger::rollback::admission`), and the native-Mithril first-run surfaces (`ade_node::{mithril_fetch, bootstrap_export}`, `NetworkProfile`). **CODEMAP should be regenerated to restore lockstep** — the §2/§3 entries below for these modules were sourced by direct code introspection, not CODEMAP. (See §7 + the cross-reference warnings.)
->
-> ### The span since the last SEAMS (`cdcd9397 → 1e4896eb`) — the load-bearing summary
->
-> Five concurrent threads; none opens a peer-negotiated ingress, an openly-extensible registry, or a second authority:
->
-> - **LIVE-LEDGER-EPOCH-TRANSITION — the CE-4 self-sustaining ledger (the span's headline).** Ade now evolves EVERY future epoch transition (rewards, stake snapshots, pool/cert lifecycle, leadership) from durable canonical state ALONE — no second Mithril import, no CLI oracle, no injected per-epoch authority. Two new BLUE authorities carry this: **(a) the epoch accumulator** `ade_ledger::epoch_accumulator` (`LedgerState` MINUS the full UTxO, PLUS the two-buffer block-production model) whose `apply_selected_block(prior, block_bytes, ctx) -> next | LedgerTransitionError` is the total/deterministic/replay-equivalent transition contract, reproducing cardano's NEWEPOCH order (`DC-EPOCH-19/20/21`); **(b) the frozen leadership authority** `ade_ledger::frozen_leadership::FrozenLeadershipPoolDistr` (cardano's `nesPd` captured self-contained: per-pool `(active_stake, vrf_keyhash)` frozen at a SNAP boundary) — the **S4 sealed authority flip** made promotion of candidate leadership past the bootstrap bridge (`>= seed+2`) read SOLELY from a promotion-certified, epoch-indexed frozen object, retiring the seed-window read (`DC-EPOCH-25`). The accumulator persists in a RED single-blob redb store (`chaindb::epoch_accumulator_store`) that is a durable CACHE of a BLUE-derivable value (rematerialized by replay, `DC-EPOCH-20`); S5 added the BLUE **rollback-admission guard** `ade_ledger::rollback::admission::admit_rollback` (the last recovery safety rail before S4 promotes). New closed surfaces: `LedgerTransitionError`, `FrozenLeadershipError`, `RollbackAdmissionError` — §3-closed.
-> - **REDUCED-VALIDATION-BOUNDARY-PLANE — a typed NON-authority for reduced followers.** A `track_utxo=false` follower reaching a Conway boundary lacks the authoritative inputs, so instead of a reward-only stub mark (which was proven to leak into recovery persistence + WAL fingerprints) it produces a `ade_ledger::reduced_boundary::ReducedBoundaryProjection`: epoch/slot progression + block-window rollover ONLY. **The two results are DISTINCT, non-interchangeable types (I-RVB-1):** a `ReducedBoundaryProjection` is not a `LedgerState`, cannot be widened, cannot be serialized as an accumulator snapshot, cannot be fingerprinted as full authority. §3-closed.
-> - **CONWAY governance (deposit-expiry-refund + ratify-then-enact) + the CE-3d byte-exact closures.** The boundary deposit-expiry-refund evaluator (`DC-GOV-01`), the ratify-then-enact authority (`T-EPOCH-01`, `CN-EPOCH-01..04`), the bootstrap reward-update fee-buffer (`DC-EPOCH-18/23`, the −500B / deltaF residual), and the snapshot pool-set = cardano `ssActiveStake` NonZero membership fix (`DC-EPOCH-24`). The credential-discriminant chokepoint `ade_ledger::cred` consolidates the `array(2)[tag,hash28]` KeyHash/ScriptHash convention across EVERY native-state decoder.
-> - **Native-Mithril FIRST-RUN CONTINUITY — the judge-facing two-command flow.** `ade mithril snapshot fetch` (RED `ade_node::mithril_fetch`, the ONLY step that talks to Mithril; derives the certified point NATIVELY via `decode_ledgerdb_tip`, no frozen node) lays out a purely-local verified directory that `ade node run --snapshot-dir` then consumes. The public `ade <group> <action>` subcommand entrypoint (`ade node run`, `ade mithril snapshot fetch`) is sugar over the closed `--mode` set, resolving the native bootstrap/warm-start route **closed to legacy inputs**. The **`NetworkProfile` registry** (`ade_node::bootstrap_export::resolve_network_profile`) is a **closed 2-network enumeration** — `preview` | `preprod` | else fail-closed "the registry is closed (preview|preprod)".
-> - **LIVE-FORGE-HARDENING — warm-start self-sufficiency (the seed sidecar carries `k`).** The seed-epoch sidecar bumped **v5 → v6** (`SEED_CINPUT_SCHEMA_VERSION = 6`, `FIELDS_OUTER 13 → 14`), persisting `security_param` (k) so warm-start derives the candidate-freeze window `RSW = ceil(4k/f)` from the DURABLE STORE, not a restart CLI (`DC-EPOCH-16`). The decoder **gates the schema VERSION before the outer arity** so an older `array(13)` v5 store surfaces the TYPED `UnknownVersion` (a precedented re-bootstrap-to-upgrade, never read as corruption). The live consensus-inputs importer **REQUIRES `security_param`** (fail-closed `MissingField`, no fabricated default); the JSON `RawConsensusInputs` carries it as `#[serde(default)] Option<u64>` for parse-compat, validated-required at lift, with a `k == 0` `BadField` guard at ingress.
->
-> ### Honesty framing (load-bearing)
->
-> 1. **The epoch accumulator is a self-sustaining BLUE authority, and its durable store is a rematerializable CACHE — not a second ledger.** `apply_selected_block` is the ONE transition; the redb `epoch_accumulator_store` is a durable cache of a BLUE-derivable value (reconstructible by folding `apply_selected_block` over the durable selected chain, `DC-EPOCH-20`), and `verify_advanced_through`/`verify_ready_at` fail closed so a lagging / wrong-lineage / overshot store is never read as authority — recovery rematerializes it to the WAL tail first. The LARGE stake-bearing UTxO substrate stays in the disk-backed reduced checkpoint (MEM-OPT `track_utxo=false`); the accumulator carries only the non-UTxO facts.
-> 2. **Frozen leadership retired the seed-window read as the forward promotion source — this is a distinct sealed authority.** Past the bootstrap bridge (`>= seed+2`) the promoted candidate leadership is read SOLELY from a promotion-certified, epoch-indexed `FrozenLeadershipPoolDistr` (carrying its own `source_checkpoint_commitment`, schema **v6/S4-L2**) — never a seed-window replay, a bootstrap re-materialization, a live-checkpoint shortcut, or a fabricated (zero) commitment (`ci_check_frozen_promotion_no_seed_window.sh`). Warm-start recovery legitimately re-derives the seed+2 twin as a RECOVERY identity check — a different, S5-guarded path (`ci_check_frozen_recovery_no_seed_window.sh`).
-> 3. **The reduced boundary plane is a NON-authority by type — it cannot be mistaken for full ledger state.** `ReducedBoundaryProjection` / `ReducedCertProjection::Unavailable` / `ReducedGovernanceProjection::Unavailable` are the reduced follower's honest "authoritative epoch effects UNAVAILABLE"; the authoritative boundary (`rules::apply_epoch_boundary_*`) remains the SOLE producer of RUPD-applied rewards, pots, mark/set/go, and governance enactment.
-> 4. **`security_param` (k) is durable replay authority, never operator-supplied loosely.** k threads `genesis securityParam → NativeGenesisConstants → LiveConsensusInputs{Raw,Canonical} → SeedEpochConsensusInputs` (v6 sidecar); the importer fail-closes if it is absent; the `NetworkProfile` carries the reviewed per-network constant (`preview 432`, `preprod 2160`) for the bootstrap-export path. The restart-CLI RSW is retained ONLY as a fail-closed cross-check (mismatch → terminal).
-> 5. **Carried and unchanged in shape:** `select_best_chain` (byte-unchanged), `mempool_ingress`, `pump_block`, the UTxO fingerprint authority, the single `bootstrap_initial_state`, the native Mithril V2 decoders + the v2 manifest, the AUTOMATIC state-keyed EVIEW activation (the `EVIEW_ACTIVATION_ARMED` gate was removed in ECA-1 — carried fact, `DC-EPOCH-13`), the closed `WalEntry` sum (tags 0/1/3/4, tag 2 reserved — **unchanged**; the accumulator + frozen leadership persist in their OWN redb stores, not new WAL tags).
->
-> ### Counts (mechanical, with sources)
->
-> | Count | Value | Source (at `1e4896eb`) |
-> |---|---|---|
-> | Crates | **12** | `grep -cE '"crates/' Cargo.toml`. Unchanged across the span. |
-> | Canonical types | **564** | structural grep (`git grep -hE "^(pub )?(struct\|enum) "`) over the 6 BLUE crate `src/` trees (453) + the 9 BLUE `ade_network` submodule paths (111). Per-crate: `ade_codec` 13, `ade_types` 84, `ade_crypto` 22, `ade_core` 50, `ade_plutus` 9, `ade_ledger` 275. **Δ vs the prior SEAMS (508): +56** — `ade_ledger` 220 → 275 (+55: the epoch accumulator + frozen leadership + reduced boundary + bootstrap reward update + `cred` + rollback-admission + Conway governance decode types) + `ade_core` 49 → 50 (+1). The RED orchestration types (`epoch_accumulator_store`, `mithril_fetch`, `bootstrap_export`) are NOT canonical-counted. |
-> | CI checks | **255** | `ls ci/ci_check_*.sh \| wc -l`. **Δ vs the prior SEAMS (238): +17** — `ci_check_{frozen_leadership_authority, frozen_promotion_no_seed_window, frozen_recovery_no_seed_window, epoch_accumulator_no_utxo, epoch_accumulator_recovery, reduced_boundary_plane, trusted_replay_boundary, bootstrap_rupd_fee_reduction, bootstrap_rupd_window_end, snapshot_pool_set_inclusion, poolreap_single_canonical, conway_deposit_params_bootstrap, gov_proposal_capture, boundary_aligned_mark_capture, praos_nonce_follow_evolution, eview_forecast_crossing, native_firstrun_reduced_checkpoint}.sh`. |
-> | Registry rules | **432** | `grep -cE '^id = ' docs/ade-invariant-registry.toml`. **Status:** 297 `enforced` / 23 `partial` / 111 `declared` / 1 `enforced_scaffolding` / 0 `deprecated`. **Δ vs the prior SEAMS (418): +14** — `DC-EPOCH-15..25`, `DC-GOV-01`, `CN-EPOCH-01..04`, `T-EPOCH-01`, `T-RESOURCE-01`, `CN-OPERATOR-EVIDENCE-01`, `RO-SYNC-EVIDENCE-01` additions/strengthenings. **No rule weakened.** |
->
-> ### CODEMAP cross-reference (read honestly)
->
-> This SEAMS reads `docs/ade-CODEMAP.md`, but **the CODEMAP is at `cdcd9397` while this SEAMS is at `1e4896eb` — they are NOT in lockstep** (see the staleness warning above). The CODEMAP's per-module authority tables, TCB colors, dependency direction (RED → GREEN → BLUE), and closed-enum list remain the upstream source for the carried §2/§3/§5/§6 material; the registry (432 rules) is the canonical count source; the NEW span modules were sourced by direct code introspection. **TCB-color note (per source at HEAD):** the span touched **BLUE** (`ade_ledger::{epoch_accumulator, frozen_leadership, reduced_boundary, bootstrap_reward_update, cred, rollback::admission}` + the Conway governance decode; `ade_core` +1), **GREEN-by-content** (the pure BLUE-derivable transition contracts; the seed-consensus merge/importer pure halves), and **RED** (`ade_runtime::chaindb::epoch_accumulator_{store,advance}`; `ade_node::{mithril_fetch, bootstrap_export, ops_log}` glue). The self-sustaining authorities live in `ade_ledger` (BLUE) and are persisted by the RED `ade_runtime` shell, never the reverse.
+> 12 modules, 637 canonical types, 286 CI checks, 260 invariants at HEAD (`08c7c3f5`). CODEMAP read: `docs/ade-CODEMAP.md` at the same HEAD.
 
-This document describes **the closure surface of the system** — where new work can attach safely, where it cannot, and what shape attachments must take. It is the architectural complement to CODEMAP: CODEMAP says what each module *is*, SEAMS says where the system *opens*.
+**Regenerated for IDSE.** This is the first SEAMS since Ade migrated from legacy IDD to IDSE v3.0 (`strict`, namespace `ADE`; `docs/planning/idse-migration-plan.md`, step M2). The previous SEAMS was written at `1e4896eb` under IDD. Every invariant reference below is an IDSE ID from `docs/ade-invariant-registry.toml` (260 invariants, assumptions A1–A7). Legacy IDs are not cited; to follow one quoted in a source comment, use `docs/legacy/idd-to-idse-map.toml`.
+
+**How to read the citations.** "(VAL-024)" means the registry entry whose `enforcement_runtime` loci or `ci_scripts` name the construct, or whose statement names it. No IDSE cluster has run yet, so every cited entry is `partial` or `unresolved` (PRC-001 is `falsified`). A citation records which invariant governs a seam. It does not claim the invariant is established (Doctrine §10). Items marked **no registry locus** are governed only by their source banner and CI gate. They are listed under §7.
+
+This document describes **the closure surface of the system**: where new work can attach safely, where it cannot, and what shape attachments must take. CODEMAP says what each module *is*; SEAMS says where the system *opens*.
 
 ---
 
 ## 1. Surface Reduction Rules
 
-> External inputs reduce to canonical form before entering authoritative pipelines. Ade's external surfaces are the N2N/N2C wire, operator files, and `argv`. Each reduces to a canonical type before any BLUE authority sees it. **The span added NO new peer-negotiated ingress.** It added: an operator-file surface refinement (the **v6** seed sidecar now carries `security_param`), a required-field tightening (the live consensus-inputs importer fail-closes on absent `security_param`), a closed **`NetworkProfile`** registry (preview|preprod), and a judge-facing Mithril **acquisition** surface (`ade mithril snapshot fetch`) whose output is a purely-local verified directory the node then reduces through the UNCHANGED native composition.
+> External inputs reduce to canonical form before entering authoritative pipelines (Doctrine §17; STR-002, STR-004). Ade has eleven external surfaces: the network in four forms, argv, three operator-file routes, durable-store rehydration, the wall clock and the process environment. Each one is listed below with its reduction.
 
-**Rule:** New ingress surfaces attach by producing the canonical type's bytes and entering the same authoritative pipeline. They **may not** introduce new pipeline steps, reorder existing steps, or shortcut into the core via a back door.
+**Rule:** New ingress surfaces attach by producing the canonical type's bytes and entering the same authoritative pipeline. They **may not** introduce new pipeline steps, reorder existing steps, or shortcut into the core via a back door (STR-004, STR-014, DUR-012).
 
-### Surface: N2N inbound wire (received blocks/headers/txs/rollbacks — the LIVE `--mode node` feed) — carried, unchanged in shape
+### Surface 1: N2N client feed (dialed peers; chain-sync + block-fetch + keep-alive) — confirmed
 
 ```
-Surface: N2N inbound wire (TCP + mux + handshake; ChainSync RollForward / RollBackward + BlockFetch + the tx-submission2 grammar)
-Reduces to: AdmissionPeerEvent (RED, ade_runtime::admission::wire_pump) → NodeSyncItem { Block { peer, bytes } | RollBack(Point) } (RED, ade_node::node_sync; PEER-TAGGED, DC-NODE-34) → BLUE DecodedBlock (ade_codec) → BLUE BlockVerdict (ade_ledger::block_validity)
-Pipeline (fixed; steps cannot be reordered):
-  1. mux frame decode                          (BLUE ade_network::mux::frame — single authority)
-  2. session reassembly / segmentation         (GREEN ade_network::session — one DeliverPeerFrame per complete CBOR item)
-  3. tag-24 unwrap                              (BLUE ade_codec::unwrap_tag24 — the SOLE tag-24 authority; CN-WIRE-12)
-  4. AdmissionPeerEvent emission                (RED wire_pump — Block / TipUpdate / RollBackward {peer, point, tip} / Disconnected; the keep-alive client emits NONE — DC-PUMP-01/03)
-  5. fair per-peer merge                        (GREEN ade_node::fair_merge — deterministic round-robin; N-AO S8 / DC-PUMP-04)
-  6. peer-tagged NodeSyncItem                   (RED node_sync — DC-NODE-34 threads the origin peer through)
-  7. classify_receive → resolve_disposition     (GREEN-by-fn — Admit | NeedsForkChoice | RollbackFollow; DC-NODE-23/24)
-  8a. (Admit)          bounded inbound fold → BLUE decode + block_validity → pump_block durable admit  (DC-MEM-07 fold fronts mempool_ingress; DC-NODE-05/12)
-  8b. (NeedsForkChoice) per-peer candidate aggregation → select_best_chain → S4 prove-then-commit (N-AO; §2)
-  8c. (RollbackFollow) admit_rollback (S5 admissibility) → materialize_rolled_back_state (eta0-overlaid) + commit_rollback (DC-NODE-25/26/29, T-REC-06)
-Cross-surface state sharing: the per-peer wire-pump lanes share one deterministic fair-merge cursor (N-AO S8); the rollback target is bound to the durable ChainDb stored slot+hash (DC-NODE-29), never peer-supplied.
+Surface: N2N inbound feed from each --peer (TCP, mux, N2N handshake)
+Reduces to: AdmissionPeerEvent {Block | TipUpdate | RollBackward | Disconnected} (RED ade_runtime::admission::wire_pump)
+            -> NodeSyncItem {Block{peer, bytes} | RollBack{peer, point}} (RED ade_node::node_sync)
+            -> decoded Conway block (BLUE ade_ledger::block_validity::decode_block over ade_codec)
+            -> BlockVerdict (BLUE ade_ledger::block_validity)
+Pipeline (fixed; no step may be reordered):
+  1. mux frame decode                               BLUE ade_network::mux::frame::decode_frame (STR-012)
+  2. handshake, then per-mini-protocol reassembly   GREEN ade_network::session::step (SAF-011, DET-018, VAL-048, SEC-038)
+  3. tag-24 unwrap                                  BLUE ade_codec::unwrap_tag24, the one envelope authority (VAL-002)
+  4. one wire pump per peer, closed 4-event output  RED wire_pump (STR-019, VAL-061, LIV-008, ORD-006, LIV-009)
+  5. bounded round-robin merge of peer lanes        GREEN-by-content ade_node::fair_merge (SEC-028; PER_PEER_LANE_CAP = 64)
+  6. peer-tagged sync item                          RED node_sync (OBS-003; MAX_WIRE_PUMP_LOOKAHEAD = 256)
+  7. one receive classifier                         node_sync::classify_receive -> ReceiveDisposition
+                                                    {AlreadyHave | LinearExtend | RefuseSingleProducer | NeedsForkChoice} (VAL-054, SAF-015, SAF-018)
+  8a. LinearExtend: header, then body, then durable admit
+                                                    validate_and_apply_header -> block validity -> ade_runtime::forward_sync::pump::pump_block
+                                                    (ORD-002, VAL-009, DUR-010, DUR-012, DUR-013, REC-003)
+  8b. NeedsForkChoice: candidate from own-validated headers -> select_best_chain -> prove the branch, then commit
+                                                    (SEC-021, VAL-031, SEC-022, SEC-023, STR-016, REC-006)
+  8c. RollBackward: target resolved from the stored chain point -> admit_rollback -> materialize_rolled_back_state + commit_rollback
+                                                    (SEC-020, SAF-016, SAF-017, SAF-007, STR-011, REC-003)
+Cross-surface state sharing: the per-peer lanes share one deterministic merge cursor (SEC-028). Rollback targets bind to the
+durable ChainDb's stored slot and hash, never to a peer-supplied pair (SEC-020). FindIntersect points come only from the
+durable chain, validated back from the tip (VAL-055, LIV-007).
 ```
 
-**Self-sustaining-ledger note (the accumulator advance + the rolling nonce ride the admit chokepoint — no new step):** after each durably-admitted selected-chain block, the node advances (in lockstep with the WAL `AdmitBlock` chain, in ChainDB order) the reduced checkpoint AND the **epoch accumulator** (`chaindb::epoch_accumulator_advance` → `apply_selected_block`), and evolves the **rolling Praos chain-dep nonce** (`DC-EPOCH-16`: one indivisible BLUE transition per validated header over `{slot, prev_block_hash, vrf_nonce_output, freeze_boundary}`, `freeze_boundary = firstSlotNextEpoch − ceil(4k/f)`). None of this is a new pipeline step — it is a durable-side projection bolted to the EXISTING `pump_block` chokepoint, never on a peer-delivered-but-unadmitted block, never influenced by peer arrival / scheduler / async interleaving. **MEM notes (carried):** step 8a's `post_fp` uses the cached `UtxoFpCache` constant on the `track_utxo=false` path (`DC-MEM-05`/`OP-MEM-02`/`DC-MEM-11`); the GREEN `bounded_admission` fold gates inbound bytes BEFORE `mempool_ingress` within `MAX_INBOUND_ADMISSION_{BYTES,COUNT}` (`DC-MEM-07`); the tx-submission2 grammar is real-capture-locked (`DC-PROTO-11`).
+After each durable admit, the same chokepoint advances the epoch accumulator and the reduced UTxO checkpoint in log order (REC-002). It also evolves the Praos nonce through one indivisible transition per validated header (VAL-022). None of this adds a pipeline step: it is a projection fixed to `pump_block`, and it never runs on a block that was delivered but not admitted.
 
-### Surface: argv (closed mode set + the public `ade <group> <action>` subcommand sugar)
+### Surface 2: N2N server side (inbound peers on `--listen`) — confirmed
+
+```
+Surface: N2N listener (ade_runtime::network::n2n_listener), one session per inbound peer
+Reduces to: OrchestratorEvent::{PeerN2nServerChainSyncFrame | PeerN2nServerBlockFetchFrame}
+            -> BLUE server reducers ade_network::{chain_sync, block_fetch}::server
+            -> OutboundCommand {ChainSync | BlockFetch | ClosePeer} (RED, typed, per-peer)
+Pipeline:
+  1. handshake against the closed version table (EVO-006, VAL-004)
+  2. the one serve-dispatch core: ade_runtime::network::serve_dispatch (VAL-050, SAF-020; ci_check_single_serve_dispatch_authority.sh)
+  3. reads only the durable projection: ChainDbServedSource, capped at MAX_SERVE_RANGE_BLOCKS = 256 (VAL-050, SEC-036)
+  4. BLUE reducer reply (DET-017, VAL-045, VAL-046, VAL-047, SEC-016)
+  5. typed outbound command on that peer's own channel only (SEC-017)
+Cross-surface state sharing: the served chain is the durable adopted chain, published atomically (SAF-010). No peer session
+shares working state with another (SEC-019). The serve side changes no authoritative state.
+```
+
+### Surface 3: transaction ingress (N2N TxSubmission2, N2C LocalTxSubmission) — chokepoint confirmed; live-node wiring is a candidate
+
+```
+Surface: transaction bytes from any source
+Reduces to: ade_ledger::mempool::ingress::IngressEvent { source: IngressSource {N2N | N2C}, tx_bytes }
+Pipeline:
+  1. bounded inbound fold within MAX_INBOUND_ADMISSION_COUNT = 1024 / MAX_INBOUND_ADMISSION_BYTES = 4 MiB (SEC-035)
+  2. mempool_ingress(mempool, event) -> admit (BLUE; the verdict never branches on `source`) (STR-022, VAL-067, DET-024)
+Cross-surface state sharing: one mempool state; the source is metadata for evidence, policy and replay only.
+```
+
+**Candidate:** at HEAD, `mempool_ingress` is reached only from the `ade_core_interop` live bridges (`tx_submission.rs`, `local_tx_submission.rs`, `live_tx_submission_session`) and from `ade_node::mem_measure`. `--mode node` does not route peer transactions into it. See §7.
+
+### Surface 4: N2C local socket — candidate
+
+The BLUE codecs and state machines for every node-to-client mini-protocol exist (`ade_network::codec::{n2c_handshake, local_chain_sync, local_tx_submission, local_state_query, local_tx_monitor}`, `ade_network::n2c::*`; VAL-044, EVO-006 with `N2C_SUPPORTED` v16–v23). No crate under `src/` opens a Unix listener. The only `UnixStream` users are the RED capture binaries `ade_network/src/bin/capture_n2c_*`. **The node exposes no N2C ingress at HEAD**, so this surface has no reduction pipeline to state. `_(needs human judgment)_`: VAL-044 says Ade implements the N2C set "in the roles the reference node plays". See §7.
+
+### Surface 5: argv — confirmed
 
 ```
 Surface: argv
-Reduces to: Cli / Mode (closed: WireOnly | Admission | KeyGenKes | Produce | Node | MithrilSnapshotFetch) — ade_node::cli
-Pipeline: parse → closed Mode dispatch in main() → per-mode driver
-Cross-surface state sharing: none (a CLI flag set is a CLOSED allow-list, mirrored by ci_check_node_path_fidelity.sh).
+Reduces to: ade_node::cli::{Cli, Mode}. Mode is closed, 7 variants:
+            WireOnly | Admission | KeyGenKes | Produce | Node | BootstrapExport | MithrilSnapshotFetch
+Pipeline: parse (closed flag set; an unknown action is terminal) -> Mode dispatch in main() -> the one driver per mode
+Cross-surface state sharing: none.
 ```
 
-- The **Mode set stayed closed**; the span added exactly one mode (`MithrilSnapshotFetch`) for the judge-facing acquisition command. No `--mode` decides consensus semantics; there is NO activation flag (the `EVIEW_ACTIVATION_ARMED` const was removed — carried).
-- **The public subcommand entrypoint** (`ade node run …`, `ade mithril snapshot fetch …`) is **sugar over the closed `--mode` set** (MITHRIL-FIRST-RUN-CONTINUITY S3). `ade node run` resolves `Mode::Node` and takes the **native bootstrap-or-warm-start route, closed to legacy inputs** (bootstrap genesis from `--network`, warm-start genesis from the durable store; `wal_dir` required). It is a naming/ergonomics seam, NOT a new authority path.
-- The native FirstRun route is SELECTED by file-flag presence (`--bootstrap-mithril` + `--snapshot-dir`, or `--mithril-state-path && --mithril-tables-path && --shelley-genesis-path`) and FORBIDS `--json-seed-path` / `--consensus-inputs-path` on that route (`NativeRouteForbiddenFlag`, terminal). `track_utxo` stays an internal/bootstrap toggle confined to the EVIEW transient window, never a new wire/CLI ingress.
+The `ade node run …` and `ade mithril snapshot fetch …` subcommands are parsed into the same `Mode` set. They do not add a mode. `--mode node` is the single live-lifecycle owner (STR-014). A flag selects a route, never a semantics (EVO-001, DET-006). The native route refuses `--json-seed-path` and `--consensus-inputs-path` as terminal `NativeRouteForbiddenFlag` errors (SEC-030).
 
-### Surface: operator file ingress (KES skey / opcert / Shelley genesis / seed dump / recovered-anchor sidecar / **v6 seed-epoch sidecar** / manifest-bound cert-state / native-Mithril V2 LedgerDB state+tables)
+### Surface 6: operator key, opcert and genesis files — confirmed (one warning)
 
 ```
-Surface: operator files
-Reduces to: KesSecret / OperationalCert / ConwayGenesisConfig / canonical seed entries / SeedEpochConsensusInputs (v6) / RecoveredAnchorPoint / the manifest-bound cert-state / (native Mithril) BLUE CertState + Word64 UTxOState — via the single RED parsers in ade_runtime / the BLUE decoders in ade_ledger (each fail-closed)
-Pipeline: read bytes → RED parser / native BLUE decoder → canonical BLUE type → bootstrap_initial_state (the single lifecycle owner; CN-NODE-01)
-Cross-surface state sharing: the recovered seed-epoch eta0 sidecar is read once by bootstrap and overlaid onto BOTH the WarmStart and rollback-materialize chain_dep (T-REC-04 / T-REC-06); the v6 sidecar's security_param drives the shared sidecar_freeze_rsw helper on BOTH the recovery replay and the forward live-loop schedule (DC-EPOCH-16)
+Surface: cold / KES / VRF signing keys, operational certificate, Shelley (and companion) genesis files
+Reduces to: ColdSigningKey / KesSecret / VrfSigningKey (RED ade_runtime::producer::keys, ade_kes_envelope; SEC-006, SEC-001)
+            DecodedOpCertEnvelope (RED producer::opcert_envelope; SEC-006)
+            GenesisAnchor / EraSchedule bound to BootstrapAnchorHash (RED genesis parsers -> BLUE ade_core::consensus::era_schedule; STR-009, VAL-039)
+Pipeline: read bytes -> one closed RED parser per grammar -> canonical type -> ProducerShell (keys never leave it) / bootstrap authority
+Cross-surface state sharing: forging is enabled only for the complete operator set (SEC-025). The forge slot authority is selected
+by the durable genesis hash, so operator genesis values act only as fail-closed cross-checks (DET-019).
 ```
 
-**NEW `security_param` threading (LIVE-FORGE-HARDENING S2 — `DC-EPOCH-16`):** the network security parameter `k` is **durable replay authority**, never a loose default. It threads `genesis securityParam → NativeGenesisConstants → LiveConsensusInputs{Raw,Canonical} → SeedEpochConsensusInputs` (the **v6** sidecar), and the warm-start reconstruction derives the candidate-freeze window `RSW = ceil(4k/f)` from the DURABLE STORE via the single BLUE `praos_rsw_slots` — byte-identical to the live/fresh-bootstrap freeze. Two fail-closed gates guard it:
+**Cross-reference warning:** VAL-039 requires *one* closed Shelley-genesis parser. Three exist at HEAD: `ade_runtime::producer::genesis_parser::parse_shelley_genesis` (the one VAL-039's loci name), `ade_runtime::consensus::genesis_parser::parse_genesis` (era schedule) and `ade_node::native_firstrun::parse_native_shelley_genesis` (native route constants). See §7.
 
-- **The v6 sidecar decoder gates the schema VERSION before the outer arity** (`ade_ledger::seed_consensus_inputs`, `SEED_CINPUT_SCHEMA_VERSION = 6`, `FIELDS_OUTER = 14`): decode reads the version FIRST and returns the TYPED `UnknownVersion { expected: 6, found }` when it does not match, THEN checks the arity — so a real older-shape `array(13)` v5 store surfaces `UnknownVersion` (a precedented "re-bootstrap to upgrade" signal), never a generic `Structural` shape error that would read as durable corruption.
-- **The live consensus-inputs importer REQUIRES `security_param`** (`ade_runtime::consensus_inputs::importer`): `raw.security_param.ok_or(MissingField { field: "security_param" })?` — fail-closed, no fabricated default; plus a `k == 0` `BadField` guard at ingress (symmetric with the `f = 0` guard). The JSON `RawConsensusInputs` (`ade_runtime::consensus_inputs::json`) declares `#[serde(default)] pub security_param: Option<u64>` for backward PARSE-compat, validated-required at LIFT.
-
-**Native-Mithril V2 LedgerDB ingress (`DC-MITHRIL-01..07`, carried):** the FirstRun native route reduces four operator files (verified V2 LedgerDB `state` + `tables` MemPack + the verified manifest + Shelley genesis) to the bootstrapped authority through the UNCHANGED closed native chain (`verify_and_import_cert_state` → `ledgerdb_state::decode_native_nonutxo_state` → `ledgerdb_tables::read_txout` → `mithril_utxo_materialize::materialize_tables_to_utxo` → `verify_utxo_binding` → `assemble_native_mithril_seed` → `bootstrap_from_native_mithril_snapshot` → `bootstrap_initial_state`), with NO cardano-cli / JSON seed on the path. The raw cardano-node CBOR is INPUT, never authority; inline-datum / reference-script bytes are embedded VERBATIM (tag-24), never re-decoded; the credential discriminant now routes through the ONE `ade_ledger::cred` chokepoint so the `KeyHash`/`ScriptHash` convention cannot drift between the `state` / snapshot-cert-state / gov-state decoders.
-
-### Surface: Mithril snapshot acquisition (`ade mithril snapshot fetch`) — a network fetch that reduces to a purely-local verified directory
+### Surface 7: native Mithril snapshot (acquisition + first-run directory) — confirmed
 
 ```
-Surface: ade mithril snapshot fetch --network <preview|preprod> [--certificate <hash>]
-Reduces to: a local verified-snapshot directory (state / tables laid out where `ade node run --snapshot-dir` expects) + manifest.json + a compact receipt — NOT authority
-Pipeline (RED ade_node::mithril_fetch; the ONLY step that talks to Mithril):
-  1. resolve the committed NetworkProfile + Mithril aggregator/keys for --network  (closed 2-network registry; §3)
-  2. download (or reuse) a Mithril cardano-db snapshot with --include-ancillary
-  3. derive the certified point NATIVELY from the snapshot's ledger state (decode_ledgerdb_tip → slot + header hash; NO frozen cardano-node)
-  4. lay out state/tables + emit manifest.json + receipt
-Cross-surface state sharing: none at fetch time. `ade node run` then consumes the local directory through the UNCHANGED native composition — the network fetch grants BYTES, not truth; the certified point + the manifest binding are what the BLUE decoders verify.
+Surface A: ade mithril snapshot fetch --network <preview|preprod>   (RED ade_node::mithril_fetch; the only code that talks to Mithril)
+Reduces to: a local verified directory (ledger state + UTxO tables) + manifest.json + receipt. These are bytes, not authority.
+Surface B: ade node run --snapshot-dir <dir>   (native first run)
+Reduces to: canonical CertState + UTxOState + SeedEpochConsensusInputs, bound to one manifest point
+Pipeline (fixed):
+  1. snapshot point coherence: certified point == the ledger state's own tip; era is Conway (SEC-031)
+  2. BLUE decoders: ledgerdb_state::decode_native_nonutxo_state (VAL-063), ledgerdb_tables + mithril_utxo_materialize (VAL-064)
+  3. manifest binding of separately typed seed / cert-state / UTxO seed (SEC-032; BootstrapManifest v2)
+  4. GREEN assembly: ade_runtime::mithril_native_assembly::assemble_native_mithril_seed (SEC-030, VAL-066)
+  5. reduced checkpoint sealed at the certified slot before the UTxO is consumed (VAL-065)
+  6. the one bootstrap authority: ade_runtime::bootstrap::bootstrap_initial_state (STR-013, SEC-015)
+  7. commit point: the WAL provenance append (DUR-014, DUR-004)
+Cross-surface state sharing: none at fetch time. The network fetch grants bytes; the BLUE decoders and the manifest binding
+decide what they mean (SEC-034).
 ```
 
-> The v1→v2 UTxO-fingerprint cutover and the seed-sidecar version bump are **NOT wire/peer-facing surfaces** — Ade-INTERNAL durable-replay contracts (§4). **The EVIEW activation candidate and the epoch-accumulator advance are NOT operator/wire surfaces** — both are derived from canonical DURABLE state already inside the node; no peer fetch / CLI query / cache / env var may supply a missing block or decide them (`DC-EPOCH-08/11/20`). Full per-surface detail (BA-02 operator-pass evidence, Mithril provenance `RO-MITHRIL-IMPORT-01`, the forge-constant/operator-key/run-loop surfaces) is carried in the §2 domain tables and the §3 registries.
+### Surface 8: cardano-cli seed + consensus-input bundle route — confirmed
+
+```
+Surface: --json-seed-path (cardano-cli UTxO dump), --consensus-inputs-path (cardano-cli JSON), --mithril-manifest-path
+Reduces to: canonical UTxOState + fingerprint (GREEN ade_runtime::seed_import; DET-022, VAL-062)
+            SeedEpochConsensusInputs v6 (GREEN ade_runtime::consensus_inputs importer; VAL-034, VAL-035, STR-010)
+            BootstrapAnchor via the one mint (STR-021)
+Pipeline: import -> Mithril-manifest cross-check against the anchor from the separately extracted seed (SEC-029)
+          -> bootstrap_initial_state (STR-013) -> WAL fact (DUR-004)
+Cross-surface state sharing: the seed record is written only by verified-bootstrap paths (SEC-014).
+```
+
+This route serves `--mode node` first run (`first_run_mithril_bootstrap`) and `--mode admission` (STR-020). The tooling that produces its bundle is `--mode bootstrap_export` (RED `ade_node::bootstrap_export`, §2).
+
+### Surface 9: durable-store rehydration — confirmed
+
+```
+Surface: chain.db (blocks, WAL, snapshots, sidecars), epoch-accumulator.redb, reduced-checkpoint.redb
+Reduces to: WalEntry (closed, 4 variants), snapshot payloads behind a version tag, the accumulator blob,
+            FrozenLeadershipPoolDistr, SeedEpochConsensusInputs, RecoveredAnchorPoint
+Pipeline (fixed):
+  1. semantics marker check per artifact, before any recovery work (EVO-005; check_store_semantics_version)
+  2. layout and fingerprint version checks (ChainDb FINGERPRINT_VERSION, fail-closed both ways)
+  3. lineage binding to one bootstrap anchor (DUR-008)
+  4. snapshot version tag before payload; fingerprint recomputed (DET-015, DET-011)
+  5. WAL fingerprint-chain fold from the anchor (DUR-009)
+  6. one bootstrap authority, warm-start branch (STR-013, VAL-041, DUR-005, REC-007)
+Cross-surface state sharing: one admission prefix defines ChainDb, chain-dependent state, accumulator and checkpoint (REC-002).
+```
+
+### Surface 10: wall clock — confirmed
+
+```
+Surface: wall-clock time
+Reduces to: SlotNo, through one conversion: BootstrapBoundTimingAuthority::slot_at (BLUE ade_core::consensus::era_schedule)
+Pipeline: SystemClock (RED ade_runtime::clock; the only SystemTime::now in ade_runtime, ci_check_clock_seam.sh)
+          -> captured ms -> slot over the committed venue calendar chosen by the durable genesis hash (DET-019)
+Cross-surface state sharing: only the slot crosses into the orchestrator core (DET-019, DET-012).
+```
+
+`ade_node::node_lifecycle` also reads `Instant::now` for timing diagnostics. Those reads feed logs only (OBS-002).
+
+### Surface 11: process environment — candidate
+
+Production `src/` reads two environment inputs. `ADE_MEM_PHASE_DIAGNOSTIC` (in `ade_node::admission::bootstrap`) gates the quarantined diagnostic. `ADE_MITHRIL_AGGREGATOR`, `ADE_MITHRIL_GENESIS_VKEY` and `ADE_MITHRIL_ANCILLARY_VKEY` (in `ade_node::mithril_fetch::resolve_mithril_profile`) override the committed Mithril profile, and the preprod keys are empty, so they must be supplied this way. The `CE4A_*` reads in `node_lifecycle.rs` sit in its `#[cfg(test)]` module. `_(needs human judgment)_`: SEC-034 binds verification to "the selected network's committed Mithril keys". See §7.
 
 ---
 
 ## 2. Data-Only vs. Authoritative Layers
 
-> For every domain where a tooling/transport layer and an authoritative layer coexist, the boundary is named. **The compilation/enforcement chokepoint never moves.**
+> For each domain where a tooling or transport layer meets an authoritative layer, the boundary is named. **The chokepoint never moves.** Colors follow CODEMAP: crate color from `.idse-config.json` `core_paths`, and sub-tree color from file banners.
 
-### Domain: self-sustaining epoch evolution — the EPOCH ACCUMULATOR (RED durable cache vs. BLUE transition authority) *(LIVE-LEDGER-EPOCH-TRANSITION; `DC-EPOCH-19/20/21`)*
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **The single ledger-transition authority (self-sustaining)** | `ade_ledger::epoch_accumulator::{EpochAccumulator, apply_selected_block, LedgerTransitionError}` | **BLUE** | `apply_selected_block(prior, block_bytes, ctx) -> next \| LedgerTransitionError` — total, deterministic, replay-equivalent (same inputs ⇒ byte-identical `EpochAccumulator`). Boundary transitions come FIRST, one per crossed boundary, in cardano NEWEPOCH order. The accumulator is `LedgerState` MINUS the full UTxO, PLUS the two-buffer block-production model. Reproduces cardano's NEWEPOCH (POOLREAP single-canonical, `DC-EPOCH-21`). |
-| **Durable accumulator store (RED cache of a BLUE-derivable value)** | `ade_runtime::chaindb::epoch_accumulator_store` (redb `META_TABLE` "epoch_acc_meta": `last_advanced_slot` / `seed_slot` / `complete` / `leadership_schema_version` + `CURRENT_LEADERSHIP_BY_EPOCH: TableDefinition<u64,&[u8]>`) | **RED store / BLUE-derivable content** | A SINGLE-BLOB store (current accumulator blob + `LAST_SLOT`, immutable sealed bootstrap blob + `SEED_SLOT`). Reconstructible by folding `apply_selected_block` over the durable selected chain (`DC-EPOCH-20` rematerialization) — a lost/corrupt store is rebuilt by replay, never authority on its own. `seal_bootstrap` writes the completeness marker LAST (a SIGKILL before it leaves `is_complete() == false`); `advance` writes blob + `LAST_SLOT` in ONE redb commit (never a torn blob/slot pair); a reorg is `reset_to_bootstrap` + forward replay, never an ad hoc inverse mutation. `verify_advanced_through` / `verify_ready_at` fail closed on a lagging / wrong-lineage / overshot store. |
-| **Accumulator advance (RED orchestration of the proven transform)** | `ade_runtime::chaindb::epoch_accumulator_advance` | **RED** | Sequences `apply_selected_block` over the durable selected chain in lockstep with the WAL `AdmitBlock` tail; never a parallel reimplementation. |
-| **Bootstrap reward update (the seed+2 replay input)** | `ade_ledger::bootstrap_reward_update::BootstrapRewardUpdate` | **BLUE** | The snapshot-bound, manifest-committed replay INPUT that lets a native-Mithril-bootstrapped node reproduce cardano's epoch-boundary reward distribution at the FIRST post-bootstrap replay-derived authority (seed+2) WITHOUT persisting a mutated "post-RUPD seed" (`DC-EPOCH-18`). Applied exactly ONCE, window-end (`DC-EPOCH-23`, the CE-3d fee-buffer / deltaF residual). |
-
-**Rule:** New self-sustaining-ledger work adds RED durable caches + advance orchestration AROUND the UNCHANGED BLUE `apply_selected_block`. **The accumulator MUST carry only the non-UTxO facts** (the large stake-bearing UTxO substrate stays in the disk-backed reduced checkpoint; `ci_check_epoch_accumulator_no_utxo.sh`); it MUST be **rematerializable by replay** (a lost store is rebuilt, never a fallback authority; `ci_check_epoch_accumulator_recovery.sh`); one write-txn per advance + reconcile-or-halt on recovery; the boundary transition reproduces cardano NEWEPOCH order. **The transition authority never moves** — no second epoch-boundary evaluator.
-
-### Domain: sealed leadership authority — FROZEN LEADERSHIP (the S4 authority flip; BLUE self-contained object) *(LIVE-LEDGER-EPOCH-TRANSITION S4; `DC-EPOCH-25`)*
+### Domain: ledger transition and the epoch accumulator — confirmed
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
-| **The SOLE forward leadership authority** | `ade_ledger::frozen_leadership::{FrozenLeadershipPoolDistr, LeadershipPoolEntry, FrozenLeadershipError}` (`FROZEN_LEADERSHIP_SCHEMA_VERSION = 6`) | **BLUE** | Cardano's leadership `PoolDistr` (`nesPd`) captured self-contained: per-pool `(active_stake, vrf_keyhash)` FROZEN at a cardano SNAP boundary + (v6/S4-L2) `source_checkpoint_commitment`. `to_pool_distr_view(asc) -> PoolDistrView` reads stake + VRF DIRECTLY from it — **never** from active `cert_state.pool.pools`, the `go` snapshot, `future_pools`, or the `retiring` map (leadership includes zero-stake registered AND retired/POOLREAP'd pools whose VRF is absent from active state). Constructors: `from_seed_epoch_consensus_inputs` / `from_boundary_snapshot` / `from_mark_pool_distr`; `canonical_hash` + `encode/decode_frozen_leadership`. |
-| **Epoch-indexed frozen-leadership store** | `ade_runtime::chaindb::epoch_accumulator_store` `CURRENT_LEADERSHIP_BY_EPOCH` (`u64 → blob`) + `leadership_schema_version` marker | **RED store / BLUE content** | The durable, epoch-indexed, promotion-certified leadership objects, written ATOMICALLY with each accumulator advance. Promotion reads THIS by target epoch, never a live-checkpoint lookup or seed-window replay. |
-| **Rollback-admission recovery rail (S5)** | `ade_ledger::rollback::admission::{admit_rollback, RollbackPoint, RollbackAdmissionError}` | **BLUE** | Pure + total + fail-closed: before recovery rematerializes the accumulator + reduced checkpoint by `reset_to_bootstrap` + re-fold of a canonical prefix, the rollback target must be ADMISSIBLE (not a split lineage, not deeper than the immutable point tip−k, not below the sealed anchor). The last recovery safety rail before S4 promotes the accumulator to leadership authority. **NOT fork-choice** — it admits/rejects ONE target, it does not select among competing forks. |
+| **Authoritative transition** | `ade_ledger::epoch_accumulator::apply_selected_block` (+ `_with_resolver`) | BLUE | The one non-UTxO ledger transition. Boundaries come first, in NEWEPOCH order (VAL-020, SAF-005, VAL-025). Fails with the closed `LedgerTransitionError` (21 variants). |
+| **Durable cache of a derivable value** | `ade_runtime::chaindb::epoch_accumulator_store` | RED store, BLUE-derivable content | Settled triple bound by fingerprint (DUR-002). Rewind only to a settled canonical point (REC-001, SAF-006). Refold is replay-equivalent and bounded (DET-009, LIV-001). Semantics marker (EVO-005). |
+| **Loader / advance** | `ade_runtime::chaindb::epoch_accumulator_advance` | RED | Sequences `apply_selected_block` over the durable chain in WAL order (REC-002). Retries once only for the checkpoint-lag case (LIV-002). |
 
-**Rule:** Past the bootstrap bridge (`candidate >= seed+2`), the promoted candidate leadership MUST be read SOLELY from a promotion-certified, epoch-indexed `FrozenLeadershipPoolDistr` — **never a seed-window replay, a bootstrap re-materialization, a live-checkpoint shortcut, or a fabricated (zero) checkpoint commitment** (`ci_check_frozen_promotion_no_seed_window.sh`; the retired window-replay `seed+2` ceiling is GONE — every boundary past the bridge crosses through the frozen object). Warm-start recovery re-deriving the seed+2 twin is a DISTINCT S5-guarded recovery identity check (`ci_check_frozen_recovery_no_seed_window.sh`). Deriving leadership from `go` + active params is a DISPROVEN hypothesis, not an optimization target. `admit_rollback` fails closed on any inadmissible target — never a silent rematerialization from an inadmissible prefix.
+**Rule:** new epoch effects go into `apply_selected_block` and the BLUE boundary. The accumulator holds no full UTxO map (DUR-003; `ci_check_epoch_accumulator_no_utxo.sh`). A lost or stale store is rebuilt by replay, never read as a fallback (DET-010).
 
-### Domain: reduced validation boundary plane — a typed NON-authority (RVBP) *(REDUCED-VALIDATION-BOUNDARY-PLANE P1; I-RVB-1)*
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **The SOLE authoritative boundary** | `ade_ledger::rules::apply_epoch_boundary_with_registrations` (RUPD-applied rewards, pots, mark/set/go, governance/pparam enactment) | **BLUE** | REQUIRES point-bound `BoundaryBaseStake`. Unchanged — the SOLE producer of authoritative epoch effects. |
-| **The reduced follower's honest non-authority** | `ade_ledger::reduced_boundary::{ReducedBoundaryProjection, ReducedEpochProgress, ReducedBlockWindow, ReducedCertProjection (closed: Unavailable), ReducedGovernanceProjection (closed: Unavailable)}` | **BLUE** | When a `track_utxo=false` follower reaches a Conway boundary it lacks the authoritative inputs, so it produces a `ReducedBoundaryProjection`: epoch/slot progression + block-window rollover ONLY. Everything authoritative is UNAVAILABLE. |
-
-**Rule (I-RVB-1):** The two results are DISTINCT, non-interchangeable types — a `ReducedBoundaryProjection` **is not** a `LedgerState`, **cannot be widened** into one, **cannot be serialized** as an accumulator snapshot, and **cannot be fingerprinted** as full authority (`ci_check_reduced_boundary_plane.sh` / `ci_check_trusted_replay_boundary.sh`). A reduced follower NEVER builds a reward-only stub mark (proven to leak into recovery persistence + WAL fingerprints); it emits the reduced projection and defers authoritative epoch effects to a full-authority path.
-
-### Domain: Conway governance — ratify-then-enact + deposit-expiry refund (BLUE authority; the CE-3d closures) *(CONWAY-*; `DC-GOV-01`, `T-EPOCH-01`, `CN-EPOCH-01..04`, `DC-EPOCH-24`)*
+### Domain: leadership authority — confirmed
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
-| **Boundary governance authority** | `ade_ledger` Conway ratify-then-enact + the boundary deposit-expiry-refund evaluator | **BLUE** | Exactly ONE authoritative committee + governance interpretation per epoch (`T-EPOCH-01`); effects activate only at protocol-defined epoch boundaries (`CN-EPOCH-01`); enactment is atomic (full effects in the SAME boundary). |
-| **Governance-deposit-expiry refund (negative proof)** | `DC-GOV-01` evaluator | **BLUE** | Ade refunds a removed governance proposal's deposit to its return account at expiry — the −500B CE-3d governance-refund gap closure. |
-| **Snapshot pool-set inclusion (CE-3d)** | `DC-EPOCH-24` — snapshot pool-set = cardano `ssActiveStake` NonZero membership | **BLUE** | The per-epoch stake snapshot pool-set matches cardano's `ssActiveStake` NonZero membership; POOLREAP is single-canonical (`ci_check_snapshot_pool_set_inclusion.sh` / `ci_check_poolreap_single_canonical.sh`). |
-| **Credential-discriminant chokepoint** | `ade_ledger::cred` (the ONE `array(2)[tag,hash28]` → `KeyHash`(0)/`ScriptHash`(1) function) | **BLUE** | EVERY native-state CBOR decoder (`ledgerdb_state`, `snapshot::cert_state`, `snapshot::gov_state`) maps `(tag, hash28)` through this ONE function so the convention cannot drift between decoders (a flipped discriminant silently mislabels ~every delegator → per-pool stake collapse → the cross-epoch leader schedule rejects valid blocks). |
+| **Sealed authority** | `ade_ledger::frozen_leadership::{FrozenLeadershipPoolDistr, canonical_hash, to_pool_distr_view}` | BLUE | Sealed for E+2 in the same commit as the boundary advance (VAL-023). It is the only source for a leader check in epoch E (VAL-024). The hash is recomputed before it is read (SAF-009). |
+| **Store** | the epoch-indexed leadership table in `epoch_accumulator_store` | RED | Atomic with the accumulator (SAF-006). |
+| **Consumers** | `ade_core::consensus::leader_check`, `ade_node` forge path | BLUE / RED | Same leader-check functions for validation and forge (VAL-056, VAL-036). Forge epoch bound to the active authority (SAF-021). |
 
-**Rule:** New governance work adds BLUE enactment logic at the boundary authority + the corresponding decode support routed through `ade_ledger::cred`. **Enactment is atomic** (no split effects); **exactly one interpretation per epoch**; future decisions may not leak into present validation, nor later states retroactively reinterpret prior checkpoints (`CN-EPOCH-04`). The reduced plane produces NO governance authority (`ReducedGovernanceProjection::Unavailable`).
+**Rule:** leadership is never re-derived at use time. A new binding field means a schema bump (§4).
 
-### Domain: native Mithril first-run continuity + the closed NetworkProfile registry (RED acquisition / GREEN assembly vs. BLUE decoders + authority) *(MITHRIL-FIRST-RUN-CONTINUITY; native Mithril `DC-MITHRIL-01..07` carried)*
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **Mithril acquisition (the ONLY Mithril talker)** | `ade_node::mithril_fetch::{MithrilProfile, resolve_mithril_profile, FetchError, run_mithril_snapshot_fetch}` | **RED** | `ade mithril snapshot fetch` downloads a verified Mithril cardano-db snapshot, derives the certified point NATIVELY (`decode_ledgerdb_tip` — slot + header hash, NO frozen node), and lays out a purely-local verified directory + `manifest.json`. `ade node run` then consumes the local dir; the fetch grants BYTES, not truth. |
-| **Closed network-profile registry** | `ade_node::bootstrap_export::{NetworkProfile, resolve_network_profile}` | **RED (reviewed constants)** | `resolve_network_profile(network)` is a CLOSED enumeration: `preview` (magic 2, k=432, epoch 86400) \| `preprod` (magic 1, k=2160, epoch 432000) \| else fail-closed "the registry is closed (preview\|preprod)". Carries reviewed per-network constants (genesis hash, ASC, epoch length, `security_param`, `max_lovelace_supply`), never operator-supplied; `verify_live_magic` / `verify_epoch` fail-closed before export. **Adding a network = a reviewed entry here + a test.** |
-| **Native decoders + single bootstrap authority (carried)** | `ade_ledger::{ledgerdb_state, ledgerdb_tables, mithril_utxo_materialize, bootstrap_manifest}` (BLUE) → `ade_runtime::{mithril_native_assembly, bootstrap::bootstrap_initial_state}` (GREEN pure assembly / RED persist) | **BLUE / GREEN / RED** | Unchanged — the raw V2 LedgerDB CBOR is reduced to canonical `CertState` + Word64 `UTxOState`, bound to ONE manifest point (`verify_utxo_binding` terminal on mismatch); the persist funnels through the single `bootstrap_initial_state` (no bootable partial authority on an interrupted import). |
-
-**Rule:** New network support = a reviewed `NetworkProfile` entry (closed registry) + a test; the profile constants (incl. `security_param`) are durable, reviewed, never operator-supplied. The Mithril fetch is the ONLY Mithril talker; `ade node run` consumes a purely-local verified directory through the UNCHANGED native composition. The native route FORBIDS the cardano-cli / JSON seed.
-
-### Domain: native cross-epoch stake/consensus view + AUTOMATIC activation (ECA; carried) *(EPOCH-CONTINUITY-ACTIVATION; `DC-EPOCH-05..17`, `DC-EVIEW-11`)*
+### Domain: reduced follower vs. authoritative boundary — confirmed (one candidate link)
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
-| **Single stake/ledger authority (UNTOUCHED)** | `ade_ledger::rules` epoch boundary + `apply_block_with_verdicts` | **BLUE** | The `EpochConsensusView` is a PURE PROJECTION of it — no second stake computation. |
-| **Bound, leadership-complete next-epoch view** | `ade_ledger::reduced_epoch_view::{EpochConsensusView, ViewBindings, consensus_profile_commitment}` | **BLUE** | Carries the per-pool VRF keyhash half (`DC-EVIEW-07`); `matches(&ViewBindings)` + `verify_canonical_hash` is the INERT gate. |
-| **Forecast-horizon crossing (NEW)** | the relay loop's `EraSchedule` forecast horizon ⟺ durable N+1 authority promotion (`DC-EPOCH-15`) | **RED glue / BLUE detector** | The forecast horizon and the durable N+1 authority promotion are kept coincident (`ci_check_eview_forecast_crossing.sh`). |
-| **Rolling Praos chain-dep nonce (NEW, strengthened)** | `ade_core::consensus::{nonce, praos_state, header_validate}` + `ade_node::node_sync` (`DC-EPOCH-16`) | **BLUE transition / RED driver** | One indivisible BLUE nonce transition per validated followed header; the candidate freezes at `firstSlotNextEpoch − ceil(4k/f)`; the boundary tick combines + rotates with NO reset. `security_param` sources the freeze window from the durable v6 sidecar (LIVE-FORGE-HARDENING S2). |
-| **Activation orchestration + predicate (AUTOMATIC, carried)** | `ade_node::{epoch_wire, epoch_source_window, epoch_candidate, epoch_activate, epoch_activation, epoch_rebind}` | **RED glue / GREEN-pure predicate** | The ONLY gate is the pure `activation_predicate` over canonical durable state — NO flag (`DC-EPOCH-13`). One-way `ActiveEpochView` Seed→Promoted, atomic in place (`DC-EPOCH-14`). |
-| **Durable activation marker** | `ade_ledger::wal::event::WalEntry::EpochConsensusViewActivated` (TAG 4) | **BLUE** | The durable proof of activation; explicit idempotence; never advances the fingerprint chain. WAL sum unchanged (tags 0/1/3/4). |
+| **Authoritative boundary** | `ade_ledger::rules::apply_epoch_boundary_with_registrations` | BLUE | The only producer of reward-applied pots, mark/set/go and enactment (VAL-020). |
+| **Typed non-authority** | `ade_ledger::reduced_boundary::ReducedBoundaryProjection` (+ `ReducedCertProjection::Unavailable`, `ReducedGovernanceProjection::Unavailable`) | BLUE | Epoch and slot progression plus block-window rollover only. Its banner says it is not a `LedgerState` and cannot be widened, serialized as an accumulator or fingerprinted as authority. **No registry locus** (§7). Gates: `ci_check_reduced_boundary_plane.sh`, `ci_check_trusted_replay_boundary.sh` (both named by no registry entry). |
+| **Reduced UTxO checkpoint** | `ade_runtime::chaindb::reduced_utxo_checkpoint` | GREEN cache in a RED crate | Mirrors the ledger's own UTxO application (DET-013). Retains collateral values (DUR-011). Serves as the `CollateralValueResolver` (CON-003). |
 
-**Rule (carried):** The `EpochConsensusView` stays a PURE PROJECTION; the activation candidate is reproducible from canonical DURABLE inputs ALONE (no peer/network/CLI/cache/env/wall-clock); activation is AUTOMATIC and DETERMINISTIC — the deterministic PREDICATE is the only gate; `track_utxo=true` stays inside the transient window.
+### Domain: Conway governance ratification — confirmed
 
-### Domain: native Mithril bootstrap decoders / value-param / MEM / fork-choice SELECT / participant follow-forge (carried verbatim)
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Loader** | `ade_ledger::snapshot::gov_state`, `ledgerdb_state` (snapshot import, `RatificationSource::ImportedFromSnapshot`) | BLUE | Refuses an inconsistent import with `RatificationImportRefusal` (3). |
+| **Authoritative** | `ade_ledger::governance::frozen::{ratify_frozen, apply_ratification_record}` | BLUE | Decided once from the prior boundary and applied atomically, without rereading votes or stake (VAL-021). Deposits are returned exactly once (CON-004). Vote-delegation lifecycle (VAL-030). Typed proposals (STR-006). |
 
-> These carried domains are unchanged in shape this span. Each: the RED tooling/transport layer parses/packs/moves bytes; the BLUE authority enforces; the chokepoint never moves.
+**Rule:** a new governance effect goes into the frozen ratification record and its single application. Gate: `ci_check_frozen_ratification_authority.sh`.
 
-- **Native Mithril V2 decoders → canonical authority** (`DC-MITHRIL-01..07`): `ledgerdb_state` / `ledgerdb_tables` / `mithril_utxo_materialize` reduce diagnostic CBOR to BLUE `CertState` + Word64 `UTxOState`, bound to one manifest point; the v2 `BootstrapManifest` (`0xB1`, 174 bytes) binds separately-typed seed + cert-state + UTxO-seed by blake2b hash; persist funnels through `bootstrap_initial_state`.
-- **Era-faithful value/param** (`DC-LEDGER-VALUE-01` / `DC-LEDGER-PARAMS-01`): `OutputAssetQuantity(u64)` vs `MintBurnQuantity(i64)`; `MinUtxoRule = LegacyAbsoluteMin(Coin) | PerByte(Coin)`.
-- **MEM-OPT-UTXO-DISK / MEM-OPT-OPS / MEM-MEASURE**: the BLUE fingerprint (`fingerprint = fingerprint_v2`, `fingerprint_v1` FROZEN) + `UtxoSetCommitment` + the owned `UtxoStore`/`UtxoMembership` seam + `OverlayUtxo`; the DORMANT/REUSED redb backend; `StaticUtxoFp`/`UtxoFpCache` (exit-35 fail-closed); the `ade_mem_diag` unsafe-quarantine; the bounded inbound-admission fold + observe-only memory evidence.
-- **Live multi-candidate fork-choice SELECT + adopt** (N-AO): `ade_core::consensus::fork_choice::select_best_chain` (byte-unchanged, sole `DC-CONS-03`); prove-then-commit via `fork_switch::prevalidate_branch`; adopt via `materialize_rolled_back_state` / `commit_rollback` / `pump_block`.
-- **Participant follow-forge + tx-submission2 + eta0 overlay**: forge base = the AO-selected durable tip; `mempool_ingress` the single admission chokepoint; `PraosChainDepState::overlay_recovered_eta0` the SOLE eta0-overlay site.
+### Domain: consensus-input import — confirmed
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Data-only tooling** | `ade_runtime::consensus_inputs::{json, importer}` | GREEN (banner) in a RED crate | Parses the cardano-cli JSON. A missing field fails closed, with no default (VAL-034). |
+| **Authoritative record** | `ade_ledger::seed_consensus_inputs::{SeedEpochConsensusInputs, encode_/decode_…}` (schema v6) | BLUE | One closed type (STR-010), written only by verified-bootstrap paths (SEC-014). Geometry and profile stay durable (DUR-005). |
+| **Merge** | `ade_runtime::seed_consensus_merge` | GREEN | Maps into the record without re-deriving geometry (DUR-005). |
+
+### Domain: genesis, era schedule and slot timing — confirmed (VAL-039 warning)
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Data-only tooling** | `ade_runtime::{consensus, producer}::genesis_parser`, `ade_node::native_firstrun::parse_native_shelley_genesis` | RED | Parse genesis JSON. No float; no default network (VAL-039). |
+| **Reviewed venue constants** | `ade_node::forge_timing` (banner GREEN: "transports reviewed venue constants inward; owns no conversion") | GREEN in a RED crate | Selects the committed calendar by the durable genesis hash. `ForgeTimingError` (5) is closed. |
+| **Authoritative** | `ade_core::consensus::era_schedule::{EraSchedule, BootstrapBoundTimingAuthority, VenueTimingHistory}` | BLUE | The one slot conversion (DET-019). Anchored schedule (STR-009). Forecast range (VAL-033, ORD-005). Protocol-version boundaries (EVO-004). |
+
+### Domain: native Mithril bootstrap — confirmed
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Acquisition (data-only)** | `ade_node::mithril_fetch`, `ade_runtime::mithril_import` | RED | Downloads, verifies and lays out bytes. **`mithril_fetch` has no registry locus** (SEC-034 names no locus). |
+| **Decoders** | `ade_ledger::{ledgerdb_state, ledgerdb_tables, mithril_utxo_materialize, bootstrap_manifest, cred}` | BLUE | Faithful decode (VAL-063, VAL-064). One credential discriminant (STR-005; `cred.rs` has no registry locus). Manifest binding (SEC-032). |
+| **Assembly** | `ade_runtime::mithril_native_assembly::assemble_native_mithril_seed` | GREEN (pure) | Snapshot plus genesis only (SEC-030, VAL-066). |
+| **Authority** | `ade_runtime::bootstrap::bootstrap_initial_state` | GREEN (banner "single bootstrap authority") | The one bootstrap function (STR-013). The WAL append is the commit point (DUR-014). |
+
+### Domain: cardano-cli seed route and bootstrap export — confirmed; export tooling is a candidate
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Data-only tooling** | `ade_node::bootstrap_export` (`--mode bootstrap_export`) | RED | Captures a pinned-point bundle against the closed `NetworkProfile`. Its loci name VAL-022 and PRC-004 only. It is not classified as data-only by any invariant. `_(needs human judgment)_` |
+| **Importer** | `ade_runtime::seed_import` | GREEN | One deterministic importer (DET-022), fail-closed (VAL-062). |
+| **Authority** | `ade_ledger::bootstrap_anchor` mint, Mithril binding predicate | BLUE / RED | One mint (STR-021). Independent-origin cross-check (SEC-029). |
+
+### Domain: fork choice, rollback and intersection — confirmed
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Candidate construction** | `ade_node::{candidate_aggregator, selector_state}`, `ade_runtime::consensus::{chain_selector, candidate_fragment}` | GREEN | Candidates built only from Ade-validated headers (SEC-021). |
+| **Selector** | `ade_core::consensus::fork_choice::select_best_chain` | BLUE | The single selector (VAL-031, DET-012). |
+| **Branch bytes (loader)** | `ade_node::fork_switch::{BranchBodySource, prevalidate_branch}` | RED | Bytes only. No rollback commits before the branch validates (SEC-022). Anchor within k (SEC-023; `lca_walk`). |
+| **Commit** | `ade_ledger::rollback::{admission::admit_rollback, materialize::materialize_rolled_back_state, commit::commit_rollback}` | BLUE | One materializer (STR-011). Lockstep (REC-003). Bounded by k (SAF-007). `admit_rollback` has no registry locus. |
+| **Intersection** | `ade_ledger::rollback::intersection::{select_intersection_candidates, classify_intersect_reply}` | BLUE | Points from durable ancestry only. A reply is never rollback authority (VAL-055, REC-005). |
+
+### Domain: store semantics versioning — confirmed
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Tooling** | `ci/store-semantics-surface.lock` + `ci/ci_check_store_semantics_lock.sh` | GREEN (CI) | Content-hashes the semantics-bearing files. A change fails CI until it is reconciled as a bump or a recorded neutral entry (PRC-005). |
+| **Authoritative** | `ade_ledger::store_semantics::{STORE_SEMANTICS_VERSION, check_store_semantics_version}` | BLUE | Fails closed on an absent, older or newer marker. The only remedy is re-bootstrap; there is no stamp tool (EVO-005). |
+| **Marker writers** | `chaindb::persistent`, `epoch_accumulator_store`, `reduced_utxo_checkpoint` | RED | Each stores its own marker (EVO-005). |
+
+### Domain: mempool — chokepoint confirmed; live wiring is a candidate
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Transport bridges** | `ade_core_interop::{tx_submission, local_tx_submission}` | RED | Build `IngressEvent`s. |
+| **Authoritative** | `ade_ledger::mempool::{ingress::mempool_ingress, admit}` | BLUE | Agrees with standalone tx validity (VAL-067). Closed ingress (STR-022). Replay (DET-024). |
+| **Policy** | `ade_ledger::mempool::policy` (banner GREEN, inside a BLUE crate) | GREEN | Eviction and ordering. Deterministic shedding (SEC-035). |
+
+### Domain: serving the chain — confirmed
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Read source** | `ade_runtime::network::served_chain_projection::ChainDbServedSource` | RED | Durable projection, bounded range (VAL-050, SEC-036). |
+| **Dispatch** | `ade_runtime::network::serve_dispatch` | RED | The one dispatch core for `produce` and `node` (VAL-050, SAF-020). |
+| **Authoritative reducers** | `ade_network::{chain_sync, block_fetch}::server` | BLUE | VAL-045, VAL-046, VAL-047, DET-017. |
+
+### Domain: keys, signing and forge — confirmed
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Key custody and signing** | `ade_runtime::producer::{keys, signing, producer_shell::ProducerShell}` | RED | The only owner of private keys (SEC-001). KES window from the bound genesis (SEC-027, SEC-005). Byte parity with the reference (VAL-006). |
+| **Authoritative** | `ade_core::consensus::leader_check`, `ade_ledger::producer` (forge pure over the producer tick, self-acceptance) | BLUE | No keys cross in (SEC-026). Pure forge (DET-020). Single encoding (VAL-057). Self-acceptance (SAF-020). Shared header pre-image (SEC-007). |
+| **Coordinators** | `ade_runtime::producer::{coordinator, chain_evolution, tick_assembler, …}`, `ade_node::{forge_intent, run_loop_planner}` | GREEN | DET-021, STR-018, SAF-012, SEC-025, OBS-001. |
+
+### Domain: evidence and diagnostics — confirmed (non-authority layer)
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Evidence reducers** | `ade_node::{admission::verdict, admission_log, convergence_evidence, post_switch_continuity, ba02_evidence, rehearsal_evidence, live_log}` | GREEN | Closed vocabularies. Emit-only, and never read by admission, selection, rollback or forge (OBS-002, OBS-005, OBS-006, OBS-008, OBS-009, DET-023, PRC-018, PRC-019). |
+
+### Domain: Plutus evaluation — confirmed (a BLUE quarantine over a vendored evaluator, not a RED/BLUE pair)
+
+`ade_plutus` (BLUE) is the only importer of `aiken_uplc` (git tag `v1.1.21`) and `pallas-primitives`. No other BLUE crate calls an evaluator entry point (`lib.rs` banner; `ci_check_pallas_quarantine.sh`). Results and budgets are deterministic (DET-008, DET-004), and the script context is bound to the preserved body (SEC-008, VAL-015).
 
 ---
 
 ## 3. Closed vs. Extensible Registries
 
-The system is partitioned into closed (frozen, version-gated) and extensible (open within constraints) registries.
+### Closed (frozen; changes are version-gated only)
 
-### Closed (frozen — version-gated changes only)
-
-> **Span additions are at the top** (self-sustaining ledger, frozen leadership, reduced boundary, Conway governance, network profile, seed sidecar v6). Every one is a closed sum / closed self-contained object / closed terminal-error set / closed redb layout / closed enumeration — none is openly extensible, plugin-shaped, negotiated, or runtime-registered.
+> Every row is findable in source at HEAD; the counts are the variant counts from the source. The change rule cites the governing IDSE invariant and its gate. **Location corrections against CODEMAP are flagged inline.**
 
 | Registry | Location | Count | Change Rule |
 |----------|----------|-------|-------------|
-| **`EpochAccumulator` + `LedgerTransitionError`** (the self-sustaining non-UTxO transition) *(`DC-EPOCH-19/20/21`)* | `ade_ledger::epoch_accumulator` (BLUE) | closed value + closed terminal set | `apply_selected_block` is the ONE transition; the accumulator is `LedgerState` MINUS UTxO PLUS the two-buffer model, carrying NO UTxO map (`ci_check_epoch_accumulator_no_utxo.sh`). A new epoch effect = a `DC-EPOCH-19/21` strengthening on `apply_selected_block` + a NEWEPOCH-order test; never a second boundary evaluator. |
-| **Epoch-accumulator store redb layout** — `META_TABLE` "epoch_acc_meta" {`last_advanced_slot` / `seed_slot` / `complete` / `leadership_schema_version`} + `CURRENT_LEADERSHIP_BY_EPOCH: TableDefinition<u64,&[u8]>` *(`DC-EPOCH-20`)* | `ade_runtime::chaindb::epoch_accumulator_store` (RED store, BLUE-derivable content) | closed table/key/META set | Single-blob store + epoch-indexed leadership. New work attaches via the methods (`seal_bootstrap` / `advance` / `reset_to_bootstrap` / `verify_ready_at` / `verify_advanced_through` / `is_complete`), **NOT by widening the table/key set.** New marker = a `DC-EPOCH-20` strengthening + `ci_check_epoch_accumulator_recovery.sh`. |
-| **`FrozenLeadershipPoolDistr` + `LeadershipPoolEntry` + `FrozenLeadershipError`** (the sealed, self-contained leadership authority) *(S4; `DC-EPOCH-25`)* | `ade_ledger::frozen_leadership` (BLUE) | closed self-contained object; `FROZEN_LEADERSHIP_SCHEMA_VERSION = 6` (v6/S4-L2 adds `source_checkpoint_commitment`) | Outer `array(6)` [version, target_leadership_epoch, source_slot, source_hash, source_checkpoint_commitment, pools-map]; per-pool `array(2)` [active_stake, vrf_keyhash]. `to_pool_distr_view` reads stake+VRF DIRECTLY, never from active params. New field = a schema bump (v7) + a `canonical_hash`/golden bump + a `DC-EPOCH-25` strengthening (`ci_check_frozen_leadership_authority.sh`). |
-| **`RollbackPoint` + `RollbackAdmissionError`** (the S5 recovery-admission guard) *(S5)* | `ade_ledger::rollback::admission` (BLUE) | closed terminal set | `admit_rollback` is pure/total/fail-closed; the k-bound is a BLOCK count (cardano `SecurityParam`); an inadmissible target (split lineage / deeper than immutable tip−k / below the sealed anchor) is a typed error, never a silent rematerialization. New reject = a strengthening + the S5 gate. |
-| **`ReducedBoundaryProjection` / `ReducedEpochProgress` / `ReducedBlockWindow` / `ReducedCertProjection` / `ReducedGovernanceProjection`** (the typed NON-authority) *(RVBP P1; I-RVB-1)* | `ade_ledger::reduced_boundary` (BLUE) | closed; `ReducedCertProjection` + `ReducedGovernanceProjection` each closed single-arm (`Unavailable`) | A `ReducedBoundaryProjection` is NOT a `LedgerState`, cannot be widened / serialized-as-accumulator / fingerprinted as authority. A new reduced-plane arm = a strengthening + `ci_check_reduced_boundary_plane.sh` / `ci_check_trusted_replay_boundary.sh`; **never** widen the reduced projection into an authoritative type. |
-| **`BootstrapRewardUpdate`** (the seed+2 replay input; CE-3d fee-buffer) *(`DC-EPOCH-18/23`)* | `ade_ledger::bootstrap_reward_update` (BLUE) | closed; canonical CBOR codec | Snapshot-bound, manifest-committed, applied exactly ONCE window-end. New field = a strengthening + `ci_check_bootstrap_rupd_{fee_reduction,window_end}.sh`. |
-| **`SeedEpochConsensusInputs` (v6) + `SeedConsensusInputsError`** (the durable seed sidecar — now carries `security_param`) *(LIVE-FORGE-HARDENING S2; `DC-EPOCH-16`, `DC-CINPUT-05/06`)* | `ade_ledger::seed_consensus_inputs` (BLUE) | closed record; `SEED_CINPUT_SCHEMA_VERSION = 6`, `FIELDS_OUTER = 14`; `array(14)` | **The decode gates the schema VERSION before the outer arity** — a v5 `array(13)` store surfaces the TYPED `UnknownVersion { expected: 6, found: 5 }` (re-bootstrap-to-upgrade), never a corruption-reading `Structural`. All fields required at construction (no `Default`). A new durable field = the next version + `FIELDS_OUTER` bump + a `DC-CINPUT-06`/`DC-EPOCH-16` strengthening (`ci_check_eview_seed_sidecar_v4.sh` and successors); a pre-v6 store is a precedented typed reimport. |
-| **`NetworkProfile` + `resolve_network_profile`** (the closed 2-network registry) *(MITHRIL-FIRST-RUN-CONTINUITY; `DC-EPOCH-16`)* | `ade_node::bootstrap_export` (RED reviewed constants) | closed enumeration: `preview` \| `preprod` | An unknown identity FAILS CLOSED ("the registry is closed (preview\|preprod)"). Carries reviewed per-network constants (magic, genesis hash, ASC, epoch length, `security_param`, `max_lovelace_supply`), never operator-supplied. **Adding a network = a reviewed entry + a test**, not a runtime/config extension. |
-| **`MithrilProfile` + `FetchError`** (the Mithril acquisition surface) *(MITHRIL-FIRST-RUN-CONTINUITY S4)* | `ade_node::mithril_fetch` (RED) | closed terminal set | `resolve_mithril_profile(network)` resolves committed aggregator/keys; the certified point is derived NATIVELY (`decode_ledgerdb_tip`), no frozen node. New error = a strengthening; the acquisition grants bytes, not authority. |
-| **Conway governance closed surfaces** (`ReducedGovernanceProjection`, the gov-state decode, the deposit-expiry-refund evaluator) *(`DC-GOV-01`, `T-EPOCH-01`, `CN-EPOCH-01..04`, `DC-EPOCH-24`)* | `ade_ledger` Conway gov + `ade_ledger::cred` (BLUE) | closed | Exactly one committee/governance interpretation per epoch; enactment atomic; the credential discriminant routed through the ONE `ade_ledger::cred` chokepoint. New governance effect = a boundary-authority strengthening + `ci_check_{conway_deposit_params_bootstrap,gov_proposal_capture}.sh`. |
-| `Mode` (the closed CLI dispatch) *(carried + `MithrilSnapshotFetch`)* | `ade_node::cli` (RED) | closed 6-variant: `WireOnly \| Admission \| KeyGenKes \| Produce \| Node \| MithrilSnapshotFetch` | A CLOSED allow-list mirrored by `ci_check_node_path_fidelity.sh`. The public `ade <group> <action>` subcommand is sugar over this set, not a new mode. New mode = a reviewed variant + the path-fidelity allow-list. |
-| `WalEntry` (the durable closed WAL sum) *(carried — UNCHANGED)* | `ade_ledger::wal::event` (BLUE) | closed sum: tag 0 `AdmitBlock`, tag 1 `RollBack`, tag 3 `SeedEpochConsensusInputsImported`, tag 4 `EpochConsensusViewActivated`; tag 2 reserved | **The accumulator + frozen leadership persist in their OWN redb stores, NOT new WAL tags** — the WAL sum is byte-stable this span. A new durable forward-step = the next free tag + canonical encode/decode + a versioned WAL change + a replay corpus. Never widen an existing variant. |
-| `EpochConsensusView` + `ViewBindings` (leadership-complete) / the reduced-UTxO checkpoint redb layout / `ReducedStakeRef` / `StakeRefClass` / `StakeByPool` / `BootstrapManifest` (v2) / `SnapshotPhase` *(EVIEW + native Mithril; carried)* | `ade_ledger::{reduced_epoch_view, reduced_utxo, stake_ref, reduced_aggregate, bootstrap_manifest, reduced_snapshot}` + `ade_runtime::chaindb::reduced_utxo_checkpoint` | closed | The carried EVIEW/Mithril closed surfaces — the bound leadership-complete view, the reduced-checkpoint layout, the era-gated classification, the v2 manifest. New field/variant = the matching `DC-EVIEW-*`/`DC-EPOCH-11` strengthening + gate. |
-| The native Mithril decode TERMINAL error stack (`LedgerDbStateError` / `TablesDecodeError` / `TxOutMaterializeError` / `MithrilNativeAssemblyError` / `NativeMithrilBootstrapError` / `CertExtractError` / `NativeFirstRunError` / `NativeGenesisParseError`) + the ECA epoch-authority enums (`ActivationOutcome` / `ActivationReject` / `ActiveEpochView` / `EpochViewActivationError` / `EpochRebindDecision` / `SourceWindowError` / `CandidateDeriveError`) *(carried)* | `ade_ledger` / `ade_runtime` / `ade_node::{epoch_*, native_firstrun}` | closed terminal sets | Fail-closed, no best-effort. New variant = the matching `DC-MITHRIL-*` / `DC-EPOCH-*` strengthening + gate. |
-| The value/param closed domains (`OutputAssetQuantity`/`MintBurnQuantity`, `MinUtxoRule`) / the MEM closed surfaces (`fingerprint_v1` FROZEN, `UtxoSetCommitment`, `UtxoStore`, `StaticUtxoFpError`, `ChainDbError::FingerprintVersionMismatch`, `AdmissionExitCode::StaticUtxoFpInvalid`) / `JsonSeedError` / `AdmissionLogEvent` (23 variants) / the N-AO fork-choice closed surfaces / the wire grammars (`CardanoEra`, `PrevHash`, `ArrayHead`, `TxSubmissionTxId`, `TagEnvelopeError`) *(carried)* | `ade_types` / `ade_ledger` / `ade_crypto` / `ade_runtime` / `ade_node` / `ade_network` / `ade_codec` | closed | The carried closed domains, unchanged in shape. Every non-`Adopted`/non-`Admitted` path fail-closed; the wire grammars real-capture-locked. |
+| `AcceptedMiniProtocol` | `ade_network::session::event` | 10 (Handshake, ChainSync, BlockFetch, TxSubmission, LocalChainSync, LocalTxSubmission, LocalStateQuery, KeepAlive, LocalTxMonitor, PeerSharing) | A frame for any other id ends the peer (VAL-048; `ci_check_mini_protocol_id_registry_closed.sh`). A new protocol needs a new variant, codec and state machine (VAL-044). |
+| `N2N_SUPPORTED` / `N2C_SUPPORTED` | `ade_network::handshake::version_table` | N2N v11–v16 (6); N2C v16–v23 (8) | Offer and accept only this set (EVO-006, VAL-004; `ci_check_n2n_handshake_versiondata_authority.sh`). Adding a version is a version-gated change (§4). |
+| Mini-protocol message types | `ade_network::codec::*` | one closed message type per protocol | No variant is chosen by guessing; non-matching bytes end the session (EVO-002; `ci_check_codec_message_closed.sh`). |
+| `ArrayHead` | `ade_network::codec::primitives` | 2 (`Definite(u64)`, `Indefinite`) | Indefinite length is accepted only for the FindIntersect point list (VAL-005). |
+| `TxSubmissionTxId` | `ade_network::codec::tx_submission` | struct `[era index, 32-byte hash]` | Never stripped or guessed (VAL-043). |
+| `OutboundCommand` | `ade_runtime::network::outbound_command` | 3 (ChainSync, BlockFetch, ClosePeer) | No raw byte tunnel (SEC-017). |
+| `TagEnvelopeError` | `ade_codec::cbor::tag24` | 4 | One envelope authority (VAL-002; `ci_check_tag24_wire_authority.sh`). |
+| `CardanoEra`, `PrevHash` | `ade_types::era`, `ade_types::shelley::block` | 8 (ByronEbb … Conway); 2 (Genesis, Block) | Era identifiers are fixed (A2). Genesis is never a placeholder hash (VAL-003; `ci_check_prevhash_single_wire_authority.sh`). |
+| `NativeScriptNode` (replaces the removed `enum NativeScript`) | `ade_types::allegra::script` | 6 (Sig, All, Any, MOfN, InvalidBefore, InvalidHereafter) | Signed 64-bit threshold (VAL-017). Heap-bounded traversal, with no recursion that grows with nesting (SEC-009). Gates: `ci_check_native_script_threshold_signed.sh`, `ci_check_native_script_depth_independent.sh`. |
+| `OutputAssetQuantity(u64)` / `MintBurnQuantity(i64)` | `ade_types::mary::value` | 2 distinct domains | Full unsigned domain; checked arithmetic (VAL-013; `ci_check_value_quantity_domain.sh`). |
+| `MinUtxoRule` | `ade_ledger::pparams` | 2 (LegacyAbsoluteMin, PerByte) | Era-faithful; never remapped (VAL-014). |
+| Conway certificate grammar and deposit disposition | `ade_types::conway::cert`, `ade_ledger::{pparams, gov_cert, delegation}` | closed | One disposition per certificate, each effect applied once (VAL-011). Closed deposit function (CON-002; `ci_check_conway_cert_classification_closed.sh`). |
+| Proposal procedures | `ade_types::conway::governance` | typed governance actions | Never opaque bytes (STR-006; `ci_check_proposal_procedures_closed.sh`). |
+| `IngressSource` | `ade_ledger::mempool::ingress` | 2 (N2N, N2C) | Metadata only; the verdict never branches on it (STR-022; `ci_check_mempool_ingress_closure.sh`). |
+| Script-witness closure: `ScriptPurpose`, `ReducedScriptVerdict`, `ExactScriptVerdict`, `NativeScriptVerdict`, `ScriptWitnessError`, `ReferenceScript` | `ade_ledger::tx_validity::script_witnesses` | 6 / 2 / 2 / 2 / 4 / 2 | One authority for sufficiency; the reduced level never returns "valid" (SEC-010; `ci_check_native_script_witness_verdict.sh`, `ci_check_every_supplied_witness_verifies.sh`). |
+| UTxO-free admission: `UtxoFreeRejection`, `OutputPosition`, `AddressNetworkError` | `ade_ledger::tx_validity::utxo_free` | 9 / 2 / 2 | Interval, network, bootstrap-address and body-size checks (VAL-018, VAL-019; `ci_check_utxo_free_admission_obligations.sh`). |
+| `CollateralBalanceError` | `ade_ledger::collateral` | 3 (UnresolvedCollateralInput, ArithmeticOverflow, ReturnExceedsCollateral) | Collateral comes from resolved inputs; an unresolved input is a refusal (CON-003; `ci_check_collateral_balance_resolver.sh`). |
+| `LedgerTransitionError`, `EpochBoundaryEffect` | `ade_ledger::epoch_accumulator` | 21; 1 (FreezeLeadership) | Terminal and typed (DET-005, SAF-005). A new rejection needs a new variant plus a schema decision (§4). |
+| `FrozenLeadershipPoolDistr` + `FrozenLeadershipError` | `ade_ledger::frozen_leadership` | outer `array(7)`; 8 error variants; schema **v7** | A new field means the next schema version, a `canonical_hash` change and a store-semantics decision (VAL-023, VAL-024, SAF-009; `ci_check_frozen_leadership_authority.sh`). |
+| Ratification: `RatificationSource`, `RatificationOutcome`, `UnenactableReason`, `RatificationImportRefusal` | `ade_ledger::governance::frozen` | 2 / 2 / 3 / 3 | Decided once, applied atomically (VAL-021). |
+| `RatificationState` | **`ade_ledger::state`** (CODEMAP lists it under `governance::frozen`) | 2 (Unversioned, Recorded) | Same rule (VAL-021). |
+| `DanglingVoteDelegationKind`, `EnactableUpdateError` | `ade_ledger::governance` | 2 / 4 | VAL-030; parameter-update decode is closed. |
+| Intersection: `AncestryEnd`, `IntersectionBound`, `CandidateSource`, `IntersectReply`, `IntersectionOutcome`, `IntersectionReplyFault`, `IntersectionAncestryError` | `ade_ledger::rollback::intersection` | 2 / 3 / 2 / 2 / 2 / 1 / 6 | Durable ancestry only (VAL-055, REC-005; `ci_check_durable_intersection.sh`). |
+| `RollbackAdmissionError`, `RecoveryAction`, `ResetReason` | `ade_ledger::rollback::admission` (**`ResetReason` is here, not in `replay_divergence` as CODEMAP lists**) | 4 / 2 / 2 | Fails closed on an inadmissible target. **No registry locus.** The semantics overlap REC-001 and SAF-007 (§7). |
+| Reduced plane: `LedgerBoundaryVerdict`, `LedgerValidityCapability`, `ReducedCertProjection`, `ReducedGovernanceProjection` | `ade_ledger::reduced_boundary` | 2 / 2 / 1 / 1 | Never widened into authority. **No registry locus** (§7). |
+| Store semantics: `AuthorityArtifact`, `FoundSemanticsVersion`, `RemediationAction` | `ade_ledger::store_semantics` | 3 (ChainDb, EpochAccumulator, ReducedCheckpoint) / 2 / 1 (RebootstrapRequired) | A new durable authority artifact needs a new variant plus its marker (EVO-005; `ci_check_store_semantics_gate.sh`). |
+| Bootstrap bridge and seed reward: `BridgeSourceKind`, `BridgeEta0Finality`, `SeedRewardAuthority` | `ade_ledger::{bootstrap_bridge, bootstrap_reward_update}` | 1 / 2 / 2 | One reward source at the first boundary (VAL-029; `ci_check_seed_reward_authority.sh`). Bridge nonce (VAL-022). |
+| `SnapshotRewardUpdate` | **`ade_ledger::ledgerdb_state`** (CODEMAP lists it under `bootstrap_reward_update`) | 2 (Complete, NotYetComputed) | VAL-029. |
+| `WalEntry` | `ade_ledger::wal::event` | 4: tag 0 AdmitBlock, tag 1 RollBack, tag 3 SeedEpochConsensusInputsImported, tag 4 EpochConsensusViewActivated; tag 2 reserved and never reused | Append-only store (DUR-006). Fingerprint chain (DUR-009). Activation record (SAF-004). Seed fact (DUR-004). Gate: `ci_check_wal_append_only.sh`. |
+| Era-schedule errors: `SlotDerivationError`, `TimingAnchorError`, `TimingAuthorityError` | `ade_core::consensus::era_schedule` | 5 / 4 / 8 | One slot authority (DET-019; `ci_check_forge_slot_authority.sh`). |
+| `LeaderCheckVerdict` | `ade_core::consensus::leader_check` | 2 (Eligible, NotEligible) | The ineligible verdict carries at most a bounded VRF fingerprint (SEC-026, VAL-056). |
+| `LeaderEligibility` | `ade_core::consensus::header_validate` | 2 (Enforce, TrustDurable) | `TrustDurable` skips the stake threshold when replaying durable blocks. **Open question against VAL-040** (§7). |
+| `Mode` | `ade_node::cli` | **7** (WireOnly, Admission, KeyGenKes, Produce, Node, BootstrapExport, MithrilSnapshotFetch) | One live owner (STR-014; `ci_check_node_mode_closure.sh` is named by STR-013). Path fidelity (`ci_check_node_path_fidelity.sh`; VAL-053, PRC-019). |
+| `NetworkProfile` / `resolve_network_profile` | `ade_node::bootstrap_export` (CODEMAP does not list this module) | 2 (preview, preprod); else fail-closed | Reviewed per-network constants (magic, genesis hash, f, epoch length, k, max lovelace supply). Adding a network takes a reviewed entry and a test. Constant containment gate `ci_check_venue_constant_containment.sh` (VAL-012). |
+| Venue timing calendar + `ForgeTimingError` | `ade_node::forge_timing` | 2 (preprod, preview); 5 errors | Keyed by the durable genesis hash, never by `--network` (DET-019). The registry has no second network identity. |
+| `MithrilProfile` + `FetchError` | `ade_node::mithril_fetch` | 2 (preview, preprod); 6 errors | Closed network set, but the keys and aggregator are env-overridable (§1 surface 11; §7). |
+| Venue roles: `VenueRole`, `VenuePolicy` | `ade_node::{node_sync, run_loop_planner}` | 3 (Unknown, SingleProducer, Participant); 2 | An unknown venue takes the refusing path (SAF-015; `ci_check_receive_detector_venue_split.sh`). |
+| Receive vocabulary: `AdmissionPeerEvent`, `NodeSyncItem`, `ReceiveDisposition` | `ade_runtime::admission::wire_pump`, `ade_node::node_sync` | 4 / 2 / 4 | One pump per peer (STR-019). Peer identity is provenance only (OBS-003). One classifier (VAL-054). |
+| Evidence vocabularies: `AdmissionLogEvent`, `ForkChoiceEvidenceFailure`, `AgreementVerdict`, `PostSwitchContinuity`, `NodeSchedEvent`, `ForgeSkipReason`, `ForgeOutcome`, `FeedReason`, `ForgeIntent` | `ade_node::{admission_log, admission::verdict, post_switch_continuity, live_log::sched_event, forge_intent}` | 23 / 6 / 4 / 5 / 6 / 10 / 5 / 3 / 2 | Closed, no catch-all, emit-only (OBS-002, OBS-006, OBS-007, OBS-008, OBS-009, DET-023, OBS-001, SEC-025). Gates: `ci_check_admission_log_vocabulary_closed.sh`, `ci_check_fork_choice_evidence_closed.sh`, `ci_check_forge_intent_closed.sh`, `ci_check_node_sched_events_emit_only.sh`. |
+| Key and opcert grammars | `ade_runtime::producer::{keys, ade_kes_envelope, opcert_envelope}` | 3 grammars; `ADE_KES_FORMAT_VERSION = 1` | SEC-006; `ci_check_kes_envelope_closed.sh`, `ci_check_opcert_closed.sh`. |
+
+**CODEMAP removals confirmed absent at HEAD:** `governance::{ExecUnitsParamUpdate, ExecUnitsUpdateError}`, `SlotAlignmentError`, `enum NativeScript`.
 
 ### Extensible (open within constraints)
 
-> Ade has **very few** extensible registries — the BLUE core is closed by construction. **The span introduced NO new openly-extensible registry.** The self-sustaining ledger, frozen leadership, reduced boundary, and network profile are all closed (above). The redb backend remains the one DORMANT internal storage seam; the PHASE4-N-AO `BranchBodySource` trait remains the one live extension-shaped surface, fenced to byte-transport only.
+> Doctrine §17 forbids plugin-style extension in authority paths. Ade has **no runtime-registered or plugin registry**: no `register_*` functions, no `HashMap` registries, and no `#[non_exhaustive]` types in BLUE. Every extension point is a **compile-time trait seam** with a fixed set of implementations, or a runtime collection that grows under a fixed bound. Traits used only in tests (`ade_testkit`'s `LedgerApplicator` and `ProtocolStateMachine`) are left out.
 
 | Registry | Location | Extension Rule |
 |----------|----------|---------------|
-| **`BranchBodySource`** (the RED branch-body fetch seam) *(N-AO; `DC-NODE-37`)* | `ade_node::fork_switch` (RED) | **The ONE LIVE `Box<dyn …>` extension point — BYTE-ONLY, never adoption authority.** Impls: `NullBranchBodySource` (fail-closed fence) + `PrefetchedBranchBodies` (live `BlockFetch RequestRange` bytes). A new impl MUST NOT short-circuit `prevalidate_branch`. **BlockFetch transports bytes; it does not grant truth.** |
-| **The redb on-disk UTxO backend (DORMANT on live follow/forge — REUSED by EVIEW transient/derive + the reduced checkpoint + the accumulator store)** *(MEM-OPT-UTXO-DISK; EVIEW `DC-EVIEW-01`/`DC-EPOCH-11`; accumulator `DC-EPOCH-20`)* | `ade_runtime::chaindb::{utxo_anchor, utxo_key, transient_epoch_view, reduced_utxo_checkpoint, epoch_accumulator_store}` (RED) | **`#![allow(dead_code)]` on the LIVE follow/forge UTxO path; REUSED as the EVIEW transient substrate, the durable reduced checkpoint, and the durable accumulator store — each a PURE storage substitution, deliberately NOT a `UtxoStore`, fixed-width key never for hashing/IDs/fingerprints, one write-txn per block + reconcile-or-halt on recovery.** When "B" (LIVE-LEDGER-APPLY / `track_utxo=true` on the live path) wires the UTxO backend it obeys the same rules. **None of these durable stores is a fallback authority** — each is rematerialized by replay or fails closed. Fenced by `ci_check_utxo_disk_{anchor,key}.sh`, `ci_check_transient_view_{no_fallback,not_live,memory_ceiling}.sh`, `ci_check_eview_live_checkpoint.sh`, `ci_check_epoch_accumulator_{no_utxo,recovery}.sh`. See §7. |
-| Mempool tx admission (sorted, deduplicated) | `ade_ledger::mempool` (BLUE) | New txs enter at runtime via the single `mempool_ingress` chokepoint (behind the bounded fold within `MAX_INBOUND_ADMISSION_{BYTES,COUNT}`); sort/dedup invariants preserved. |
-| Peer set (`--peer`, repeatable `Vec<String>`) | `ade_node::cli` (RED) | New peers added at runtime via the CLI flag → N pumps → the deterministic `fair_merge` (N-AO S8). A peer is a transport endpoint, never an authority. |
-| Served-chain read projection | `ade_runtime::network::served_chain_projection` (RED) | Bounded read-only projection of the durable ChainDb; per-request cap `MAX_SERVE_RANGE_BLOCKS = 256`. A fixed bound, not openly extensible. |
-
-> Note: the **`NetworkProfile` registry is CLOSED, not extensible** — adding a network is a reviewed source edit + a test, never a runtime/config extension. `ade_plutus` ports `aiken_uplc` behind a quarantine boundary (pinned tag `v1.1.21`) — a frozen vendored dependency, NOT a runtime plugin registry. There is NO `EVIEW_ACTIVATION_ARMED` const / activation flag (removed, `DC-EPOCH-13`). There are no HSM-plugin / scenario-template / federation-contract / allocator-plugin / UTxO-backend-plugin / stake-view-plugin / leadership-plugin style runtime registries in Ade.
+| `BranchBodySource` | `ade_node::fork_switch` (RED) | Production implementations: `NullBranchBodySource` (fail-closed fence) and `PrefetchedBranchBodies`. A new implementation supplies **bytes only** and must not bypass `prevalidate_branch` (SEC-022). |
+| `LedgerView` | `ade_core::consensus::ledger_view` (BLUE trait) | Implementations: `PoolDistrView` (BLUE, read from the frozen leadership object), `LiveLedgerView` (runtime consensus inputs), `NoopLedgerView` (admission runner), and test stubs. A new view must answer leader checks only from the sealed object for exactly that epoch (VAL-024). An imported view answers only for its own epoch (VAL-035). Out-of-range queries are typed (VAL-033). |
+| `ChainDb` + `SnapshotStore` | `ade_runtime::chaindb` (RED) | `InMemoryChainDb`, `PersistentChainDb`. A new backend must keep the bounded range primitives (SEC-036), atomic checkpoints (DUR-007), the semantics marker (EVO-005) and storage-independent fingerprints (DET-025). |
+| `WalStore` | `ade_ledger::wal::store_trait` (BLUE trait) | `FileWalStore` and test `VecWal`s. `append` is the only mutation; adding a truncate, rewrite, replace, delete or clear method fails CI (DUR-006; `ci_check_wal_append_only.sh`). |
+| `SnapshotReader` / `BlockSource` | `ade_ledger::rollback::traits` (BLUE traits) | RED caches (`InMemorySnapshotCache`, `PersistentSnapshotCache`, `ChainDbBlockSource`). They feed the one materializer only (STR-011). |
+| `ChainDbWrite` | `ade_ledger::receive::chain_write` (BLUE trait) | `ChainDbWriter`. Lockstep admission and rollback (REC-003). |
+| `ServedHeaderLookup` / `ServedRangeLookup` | `ade_network::{chain_sync, block_fetch}::server` (BLUE traits) | `ChainDbServedSource`, `ServedChainLookups`. Durable projection only (VAL-050), bounded (SEC-036). |
+| `Transport` | `ade_network::session::handshake_driver` (GREEN trait) | `BlockingTransport` in the dialer, listener, wire pump and wire-only mode. Transport artifacts never reach the core (STR-002). Framing goes through the one codec (STR-012). |
+| `CollateralValueResolver` | `ade_ledger::collateral` (BLUE trait) | `ReducedUtxoCheckpoint` plus test resolvers. Resolved values only (CON-003). Retained values (DUR-011). |
+| `UtxoStore` / `UtxoMembership` | `ade_ledger::utxo` (BLUE traits) | `UTxOState`, `OverlayUtxo`, `pre_resolve::WorkingSet`, `BTreeMap`. Fingerprints are independent of representation (DET-025). Memory is bounded (SAF-025). |
+| `Clock` | `ade_runtime::clock` (RED) | `SystemClock` (the only wall-clock read in `ade_runtime`) and `DeterministicClock` (replay). Only the slot crosses inward (DET-019; `ci_check_clock_seam.sh`). |
+| `NodeSchedSink` | `ade_node::live_log::sched_writer` | Emit-only diagnostics, never read by the planner (OBS-002). |
+| Mempool contents | `ade_ledger::mempool` (BLUE) | Transactions enter at runtime only through `mempool_ingress`, behind the bounded fold (SEC-035, VAL-067). |
+| Peer set | `ade_node::cli` `--peer` (repeatable) | Peers are transport endpoints merged fairly (SEC-028). A forging node dials only configured peers (SEC-037). |
+| Store-semantics lock entries | `ci/store-semantics-surface.lock` | Append-only entries: a version bump or a recorded semantics-neutral declaration (PRC-005). |
 
 ---
 
 ## 4. Version-Gated vs. Frozen Contracts
 
-### Frozen (immutable at current version — change = new major version)
+### Frozen (immutable at the current version; a change requires a new version)
 
-- **Wire format / encoding**: Cardano-canonical CBOR via `minicbor` + the `ade_codec` canonical primitives — field order = wire order for hash-bearing structures; **wire bytes are preserved, never re-encoded for hashing** (`ci_check_hash_uses_wire_bytes.sh`). The native Mithril `tables` materialization embeds inline-datum / reference-script wire bytes VERBATIM (tag-24).
-- **Tag-24 envelope**: `0xd8 0x18` — the SOLE `ade_codec::cbor::tag24::{wrap_tag24, unwrap_tag24}` authority (`CN-WIRE-08/12`).
-- **Hash algorithms**: `blake2b_256` / `blake2b_224` (`ade_crypto::blake2b`) — immutable per version; the single body-hash recipe `block_body_hash`. `EpochConsensusView::canonical_hash`, `FrozenLeadershipPoolDistr::canonical_hash`, the accumulator blob commitment, and the native Mithril `fingerprint_utxo_v2`/manifest hashes all reuse `blake2b_256`.
-- **The credential CBOR discriminant** (`array(2)[tag,hash28]`, tag 0 = KeyHash, tag 1 = ScriptHash) — FROZEN and consolidated in the ONE `ade_ledger::cred` function; every native-state decoder routes through it.
-- **The v1 UTxO fingerprint (`fingerprint_v1`) is FROZEN**; the UTxO canonical fingerprint is computed over canonical keys, never storage order, never the allocator (`DC-MEM-05/06/10`).
-- **The header VRF / KES / DSIGN verification recipes** (`ade_crypto`): Praos VRF draft-03, the Ade-owned Sum6KES, Ed25519. **VRF strength is FROZEN.** The rolling Praos nonce follow (`DC-EPOCH-16`) evolves the chain-dep nonce but does NOT touch the verify recipe.
-- **`select_best_chain`** (the `DC-CONS-03` fork-choice contract): **FROZEN — byte-unchanged across the span.** The single selector.
-- **The `#![deny(unsafe_code)]` workspace invariant** — preserved with ZERO local allows in `ade_node`/BLUE/GREEN; the SOLE `unsafe` is quarantined in `ade_mem_diag`.
-- **The durable WAL grammar is APPEND-ONLY and tag-frozen**: `WalEntry` closed sum — tags 0/1/3/4, tag 2 reserved. **Byte-stable this span** (the accumulator + frozen leadership use their own redb stores, not new WAL tags).
-- **The closed era enum** `CardanoEra` (Byron=0 … Conway=7); the closed `PrevHash = Genesis | Block(Hash32)`.
-- **The output asset-quantity domain** `OutputAssetQuantity(u64)` — non-negative Word64, canonical unsigned CBOR, checked add/sub only; type-incompatible with `MintBurnQuantity(i64)` (`DC-LEDGER-VALUE-01`).
-- **The `NetworkProfile` constants are reviewed + frozen per network** (preview k=432 / preprod k=2160, genesis hashes, epoch lengths, `max_lovelace_supply`) — never operator-supplied.
-- **All 564 canonical types**: existing wire formats frozen; new types may be added (the +56 this span — the accumulator, frozen leadership, reduced boundary, bootstrap reward update, `cred`, rollback-admission, Conway governance — are all closed-by-construction).
+- **Wire format and encoding:** Cardano CBOR through the `ade_codec` canonical read and write primitives (`minicbor` 0.25 underneath in `ade_core` and `ade_ledger`). There is one decoder per type and protocol version (VAL-001). Protocol hashes are computed over the received wire bytes, never a re-encoding (DET-002; `ci_check_hash_uses_wire_bytes.sh`). Decode then encode gives back the same bytes (DET-003; `ci_check_cbor_round_trip.sh`). Ade's own byte surfaces have one encoder each (DET-007).
+- **Envelope:** tag 24 (`0xd8 0x18`) over `[era, block]` / `[era, header]`, through `ade_codec::cbor::tag24` only (VAL-002).
+- **Hash and crypto algorithms:** blake2b-256 and blake2b-224, SHA3-256 for bootstrap-witness key hashes, Praos VRF IETF draft-03 with domain tags `'L'` and `'N'` (`ade_core::consensus::vrf_cert`), Ed25519, and Ade's Sum6 KES (SEC-003, SEC-004, VAL-036, VAL-006). The body hash comes from one recipe, `ade_ledger::block_body_hash` (VAL-032, VAL-057).
+- **UTxO set commitment v2:** Ristretto255 multiset hash with domains `ade.utxo.fp.v2.entry` / `ade/fp/utxo/v2` (`ade_crypto::utxo_set_commitment`). Versions are never mixed in one fold (DET-026; `ci_check_utxo_fp_v2.sh`). `fingerprint` = `fingerprint_v2`, and `fingerprint_v1` is kept, frozen.
+- **Credential discriminant:** `array(2)[tag, hash28]`, tag 0 = key hash, tag 1 = script hash, decoded through `ade_ledger::cred` (STR-005; `ci_check_credential_discriminant_closed.sh`).
+- **Closed resource bounds** (no flag, environment variable or configuration may change them): mux `MAX_PAYLOAD = 65535` (VAL-049), session reassembly tail 16 MiB (SEC-038), wire-pump lookahead 256 blocks (SEC-038), per-peer lane 64 (SEC-028), serve range 256 blocks (SEC-036), inbound admission 1024 items / 4 MiB (SEC-035), and the in-memory UTxO cache and change-log bounds (SAF-025).
+- **Reviewed network constants:** `NetworkProfile` (preview: magic 2, k 432, epoch 86 400; preprod: magic 1, k 2160, epoch 432 000; both f = 1/20) and the venue timing calendars. These are never operator-supplied (VAL-012, DET-019, DUR-005).
+- **Vendored evaluator:** `aiken_uplc` pinned at git tag `v1.1.21` behind the `ade_plutus` quarantine (DET-008).
+- **Dependency pins:** no manifest uses an exact `=` pin. Versions are fixed only by the tracked `Cargo.lock` and the `aiken_uplc` git tag. See §7.
+- **All 637 canonical types:** existing wire formats are frozen; new types may be added.
 
-### Version-gated (can evolve across major versions)
+### Version-gated (can evolve across versions)
 
-- **The seed-epoch sidecar is version-gated by an explicit schema version** — `SEED_CINPUT_SCHEMA_VERSION` bumped **v5 → v6** (`FIELDS_OUTER 13 → 14`, adding `security_param`) by LIVE-FORGE-HARDENING S2. **Decode gates the VERSION before the arity**, so an older `array(13)` v5 store surfaces the TYPED `UnknownVersion` (a precedented re-bootstrap-to-upgrade, not corruption). A new durable field = the next version + `FIELDS_OUTER` bump + a `DC-CINPUT-06`/`DC-EPOCH-16` strengthening. Lineage: v1 → v2 (N-F-G-N eta0) → v3 (venue geometry) → v4 (consensus-profile hashes) → v5 (seed bootstrap point) → **v6 (security_param)**.
-- **The frozen-leadership object is version-gated** — `FROZEN_LEADERSHIP_SCHEMA_VERSION` at **v6** (S4-L2 added `source_checkpoint_commitment` so the promoted candidate authority is fully self-contained). A new binding field = a schema bump + a `canonical_hash`/golden bump + a `DC-EPOCH-25` strengthening; the promotion path stays frozen-only.
-- **The epoch-accumulator store schema is version-gated** — the `leadership_schema_version` marker discriminates a leadership-certified store; the accumulator blob codec stays backward-decodable so the non-authority observe-only follow still reads existing stores. A new field = a strengthening + `ci_check_epoch_accumulator_recovery.sh`.
-- **The bootstrap manifest is version-gated by an explicit domain byte** — `0xB0` (v1, 142 bytes) → `0xB1` (v2, 174 bytes, adds the bound UTxO-seed hash). A new committed field = the next domain byte + a `DC-EVIEW-09` strengthening.
-- **The `WalEntry` sum is version-gated by APPEND-ONLY tag** — a new durable forward-step = the next free tag + canonical encode/decode + a versioned WAL change + a replay-equivalence corpus. **Never widen an existing variant; tag 2 stays reserved.**
-- **The `MinUtxoRule` is version-gated by era**; the reduced-checkpoint redb layout is version-gated (a new table/META marker = a `DC-EPOCH-11` strengthening); the v1→v2 UTxO-fingerprint cutover is an Ade-INTERNAL durable-replay contract (`DC-MEM-10`).
-- Canonical type schema additions (new fields appended; sort/dedup + version-byte invariants preserved); new fail-closed discriminants across the span require the matching gate + a `DC-*` strengthening.
-- New `--mode node` CLI flags / subcommands: must be path-PRESERVING and added to the `ci_check_node_path_fidelity.sh` allow-list (the `ade node run` / `ade mithril snapshot fetch` subcommands are ergonomic route-selectors, not path-altering wire surfaces).
-- New CI checks (existing checks may be TIGHTENED, never relaxed — the span added +17 net to 255).
-- **There is NO `EVIEW_ACTIVATION_ARMED` version-gated contract** — the const was REMOVED (ECA-1, `DC-EPOCH-13`); the live consensus behaviour is decided by the deterministic activation PREDICATE, automatically and state-keyed, never by a const/flag/env.
+| Contract | Current | Gate | Invariant |
+|---|---|---|---|
+| Authority semantics of durable stores | `STORE_SEMANTICS_VERSION = 13` (`ade_ledger::store_semantics`), surface locked in `ci/store-semantics-surface.lock` (latest entries: v13, then one semantics-neutral v13) | Any absent, older or newer marker is terminal, and the only remedy is re-bootstrap. Changing a surface file needs a bump or a recorded neutral entry. | EVO-005, PRC-005 |
+| Seed-epoch consensus-input record | `SEED_CINPUT_SCHEMA_VERSION = 6` | The version is checked before the arity. An older record is a typed refusal. | STR-010, DUR-005 |
+| Frozen leadership object | `FROZEN_LEADERSHIP_SCHEMA_VERSION = 7`, `OUTER_FIELDS = 7` | A new field needs the next version and a hash change. The source doc comment still describes v6 (§7). | VAL-023, SAF-009 |
+| Epoch accumulator blob | `EPOCH_ACCUMULATOR_SCHEMA_VERSION = 7` | Decode refuses any other version, with no migration except re-bootstrap. | DET-009, EVO-005 |
+| Bootstrap reward update | `BOOTSTRAP_RUPD_SCHEMA_VERSION = 4`, domain-separated v4 commitment | Next version for a new field. | VAL-029 |
+| Bootstrap anchor / recovered anchor / bridge | `ANCHOR_SCHEMA_VERSION = 2`, `RECOVERED_ANCHOR_POINT_SCHEMA_VERSION = 1`, `BRIDGE_SCHEMA_VERSION = 1` | Next version for a new field. | STR-021, REC-007, VAL-022 |
+| Bootstrap manifest | domain byte `0xB0` (v1, 142 bytes) and `0xB1` (v2, 174 bytes, adds the UTxO-seed hash) | Next domain byte. | SEC-032 |
+| Consensus-profile commitment | domain `ADE-ECA0b-consensus-profile-v1` | New domain string. | SAF-009 |
+| ChainDb | `SCHEMA_VERSION = 3` (layout; upgraded forward on the next write); `FINGERPRINT_VERSION = 2` (fails closed in either direction) | Layout and meaning are separate axes, and both are separate from the store-semantics version. | DUR-007, DET-026, EVO-005 |
+| Snapshot framing | `SCHEMA_VERSION = 5` | Tag checked before the payload; fingerprint recomputed. | DET-011, DET-015 |
+| WAL entry sum | tags 0, 1, 3, 4 (2 reserved) | A new forward step takes the next free tag. Existing variants are never widened. | DUR-006, DUR-009 |
+| Negotiated protocol versions | N2N v11–v16, N2C v16–v23 | A new version needs a version-table entry, a version-data encoder and captured-byte evidence. | EVO-006, VAL-004, PRC-003 |
+| Protocol version and era | the era schedule | A change takes effect only at an enacted hard-fork boundary. The forecast never extends past an unfixed one. | EVO-004, ORD-003 |
+| KES envelope / rehearsal manifest | `ADE_KES_FORMAT_VERSION = 1`, `REHEARSAL_MANIFEST_SCHEMA_VERSION = 1` | Next version. | SEC-006, PRC-019 |
+| CI gates | 286 `ci_check_*.sh` | Tighten only, never relax (Constitution rule 15). The close gate uses the unmasked exit status (PRC-017). | PRC-001 |
+| Invariants | 260 in the registry | Redefined only by human approval (Constitution rule 2; Doctrine §5). | — |
+
+**No mixed semantics** (Doctrine §17): one interpretation per input set (EVO-001), releases that run together agree (EVO-003, SEC-013), and no feature or `cfg` changes a result (DET-006; `ci_check_no_semantic_cfg.sh`).
 
 ---
 
 ## 5. Module Addition Rules
 
-How new modules (and authority surfaces) enter the workspace.
+Derived from CODEMAP "Cross-Module Rules" and the BLUE shared header.
 
 | Color | Naming convention | Build-config flags | May depend on | MUST NOT depend on |
 |-------|-------------------|--------------------|----------------|--------------------|
-| **BLUE** | crate prefixes `ade_codec` / `ade_types` / `ade_crypto` / `ade_core` / `ade_ledger` / `ade_plutus`; plus the 9 BLUE `ade_network` submodule paths | `// Core Contract:` banner; `#![deny(unsafe_code, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::float_arithmetic)]`; **no `cfg(feature)` semantic gates** (`ci_check_no_semantic_cfg.sh`) | Other BLUE modules (downward only); `ade_crypto::utxo_set_commitment` (BLUE→BLUE) | Any RED/GREEN crate; `ade_runtime`/`ade_node`/`ade_core_interop`/`ade_mem_diag`; std runtime I/O; tokio/async (`ci_check_no_async_in_blue.sh`); `pallas_*` outside `ade_plutus`; `mimalloc` (`DC-MEM-06`); **`redb` / any storage backend** (BLUE never holds a storage backend — the epoch accumulator, frozen leadership, reduced boundary, and native decoders live in `ade_ledger`; the redb accumulator/reduced/checkpoint STORES live in RED `ade_runtime`; `ci_check_utxo_lookup_owned.sh`) |
-| **GREEN** | `ade_testkit` (whole crate); GREEN-by-content sub-trees inside RED/BLUE crates carry a `//! GREEN …` banner + the BLUE deny attributes (e.g. the seed-consensus merge/importer pure halves; the native-Mithril `assemble_native_mithril_seed` + `cert_state_extract`; the EVIEW pure activation predicate / `decide_epoch_rebind`) | same deny attributes; purity CI gate per sub-tree | BLUE modules | RED modules in non-test deps; nondeterminism (wall-clock / rand / float / HashMap — the pure pieces use `BTreeMap`/`BTreeSet`); letting an RSS / owned-footprint magnitude enter a fingerprint/verdict (`OP-MEM-01/02`); **the transition contracts + activation predicate MUST stay PURE** (replay-equivalent, re-derivable across crash/restart) |
-| **RED** | `ade_runtime`, `ade_node`, `ade_core_interop`, `ade_mem_diag`, `ade_network::mux::transport` | `//! RED …` banner; tokio/std/I/O allowed; key custody confined to `ProducerShell`; the `Clock` seam is the SOLE wall-clock observation; `rss_sampler` is the SOLE `/proc` reader; `ade_mem_diag` is the SOLE crate without `#![deny(unsafe_code)]` | Any module | — (RED is the leaf) — except `ade_mem_diag` takes NO workspace dep and no BLUE/GREEN crate may depend on it. **The redb accumulator/reduced/checkpoint stores + the `epoch_*` orchestration + the native-Mithril persist + `mithril_fetch`/`bootstrap_export` are RED glue; they MUST NOT supply candidate/authority contents from peer/network/CLI/cache/wall-clock (`DC-EPOCH-08/20`/`DC-MITHRIL-03`); the durable stores are rematerialized by replay, never fallback authority; `track_utxo=true` is confined to the transient window; the native route FORBIDS the cardano-cli / JSON seed.** |
-
-**The span added NO new crate — it added BLUE / GREEN-by-content / RED source to existing crates** — all color-correct:
-
-- **NEW BLUE source** (`ade_ledger`, the +55 canonical types) — `epoch_accumulator` (`EpochAccumulator` + `apply_selected_block` + `LedgerTransitionError`), `frozen_leadership` (`FrozenLeadershipPoolDistr` + `LeadershipPoolEntry` + `FrozenLeadershipError`), `reduced_boundary` (`ReducedBoundaryProjection` + `ReducedCertProjection` + `ReducedGovernanceProjection`), `bootstrap_reward_update` (`BootstrapRewardUpdate`), `cred` (the credential-discriminant chokepoint), `rollback::admission` (`admit_rollback` + `RollbackAdmissionError`), `bootstrap_bridge`, the Conway gov-state decode; `ade_core` +1 (the rolling-nonce reshape).
-- **NEW RED source** — `ade_runtime::chaindb::{epoch_accumulator_store, epoch_accumulator_advance}` (the durable accumulator + epoch-indexed frozen leadership store + advance); `ade_node::{mithril_fetch (Mithril acquisition), bootstrap_export (NetworkProfile + RawConsensusInputs export), ops_log}`.
-- **RED wiring / tightening (existing modules)** — `ade_ledger::seed_consensus_inputs` bumped to **v6** (`security_param`, version-before-arity gate); `ade_runtime::consensus_inputs::{importer, json}` REQUIRE `security_param` (fail-closed `MissingField`, `#[serde(default)] Option<u64>` at parse); `ade_node::cli` added `Mode::MithrilSnapshotFetch` + the `ade <group> <action>` subcommand sugar; `ade_node::node_lifecycle` gained the accumulator-advance + frozen-leadership promotion + warm-start `sidecar_freeze_rsw` wiring.
-
-**The carried substrates** — the EVIEW base BLUE/RED surfaces, the native Mithril decoders, the MEM-OPT-UTXO-DISK BLUE/RED surfaces, the `ade_mem_diag` quarantine, the MEM-OPT-OPS/MEM-MEASURE split-color sub-tree, the PHASE4-N-AO SELECT modules — are carried verbatim.
+| **BLUE** | `ade_*` (crate names don't encode color). Color comes from `.idse-config.json` `core_paths`: `ade_codec`, `ade_types`, `ade_crypto`, `ade_core`, `ade_plutus`, `ade_ledger`, plus 9 `ade_network` paths. | `// Core Contract:` banner (`ci_check_module_headers.sh`); `#![deny(unsafe_code, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::float_arithmetic)]`; `clippy.toml` `disallowed-types` (HashMap, HashSet, SystemTime, Instant, anyhow::Error); no semantic `cfg` (DET-006) | Lower BLUE crates (`ade_types` ← `ade_codec`/`ade_crypto` ← `ade_core`/`ade_plutus` ← `ade_ledger`) and pure libraries (`minicbor`, `blake2`, `cardano-crypto`, `ed25519-dalek`, `sha3`, `curve25519-dalek`, `num-*`) | RED or GREEN crates, directly or transitively (STR-003); I/O, clock, randomness, async (STR-001; `ci_check_no_async_in_blue.sh`); signing (SEC-001; `ci_check_no_signing_in_blue.sh`); Mithril or multisignature crates (SEC-034); `pallas_*` outside `ade_plutus` (`ci_check_pallas_quarantine.sh`); `redb` or any storage backend; `ade_mem_diag` |
+| **GREEN** | `ade_testkit`; `ade_network::session`; banner-GREEN sub-trees in RED crates (CODEMAP lists them) | Same deny attributes; per-sub-tree purity gate | BLUE | Nondeterminism; any influence on authoritative outputs; RED in non-test dependencies (`ade_testkit` breaks this today; see §7) |
+| **RED** | `ade_runtime`, `ade_node`, `ade_core_interop`, `ade_mem_diag`, `ade_network::mux::transport` and the capture binaries | `//! RED` banner; `ade_node` keeps `#![deny(unsafe_code)]` with zero local allows (`ci_check_mem_diag_quarantine.sh`); the only `unsafe` lives in `ade_mem_diag` | Any module | No BLUE or GREEN crate may depend on `ade_mem_diag`; nothing may modify core state except through the BLUE transitions |
 
 ### New module checklist
 
-1. Add to the Cargo workspace `[workspace] members` (the span added NO crate — all source additions to existing modules).
-2. Apply color-specific banner + lints (BLUE: `// Core Contract:` + deny attributes + no-semantic-cfg; GREEN: `//! GREEN` + deny attributes + purity gate; RED: `//! RED`). **The reduced-checkpoint / accumulator-store banners read "GREEN cache" but their CONTENT is BLUE-DERIVABLE and rematerialized-by-replay — reconcile the banner wording at cluster close.**
-3. `ci_check_dependency_boundary.sh` rejects forbidden cross-color imports (incl. any BLUE dep on `redb`/`mimalloc`/`ade_mem_diag`; the BLUE authorities in `ade_ledger` are consumed by the RED `ade_runtime`/`ade_node` stores, never the reverse); `ci_check_module_headers.sh` enforces the banner.
-4. New canonical types: structural-grep-counted from the BLUE trees; add round-trip tests (the +56 this span are `ade_ledger`/`ade_core` BLUE types; the RED `epoch_accumulator_store` / `mithril_fetch` / `bootstrap_export` orchestration types are not canonical-counted).
-5. A new selector / adoption / rollback / **second-ledger-transition / second-leadership / second-boundary-evaluator / seed-window-forward-promotion / candidate-from-peer-or-CLI / cardano-cli-seed-on-the-native-route / operator-supplied-security_param / open-network-registry** path is **forbidden** — route into the existing `apply_selected_block` / `select_best_chain` / `pump_block` / `materialize_rolled_back_state` / `mempool_ingress` / `bootstrap_initial_state` / `to_pool_distr_view`; the leadership authority is the frozen object; the accumulator is rematerialized by replay; the reduced boundary stays a typed non-authority; `security_param` is durable + reviewed; the network profile is closed.
-
-### CI gates that enforce the boundary (**255 total**)
-
-Cross-cutting BLUE gates: `ci_check_module_headers.sh`, `ci_check_forbidden_patterns.sh`, `ci_check_dependency_boundary.sh`, `ci_check_no_signing_in_blue.sh`, `ci_check_no_semantic_cfg.sh`, `ci_check_hash_uses_wire_bytes.sh`, `ci_check_ingress_chokepoints.sh`, `ci_check_pallas_quarantine.sh`, `ci_check_no_async_in_blue.sh`. **Self-sustaining-ledger gates (NEW):** `ci_check_epoch_accumulator_no_utxo.sh`, `ci_check_epoch_accumulator_recovery.sh`, `ci_check_frozen_leadership_authority.sh`, `ci_check_frozen_promotion_no_seed_window.sh`, `ci_check_frozen_recovery_no_seed_window.sh`, `ci_check_reduced_boundary_plane.sh`, `ci_check_trusted_replay_boundary.sh`. **CE-3d / governance gates (NEW):** `ci_check_bootstrap_rupd_fee_reduction.sh`, `ci_check_bootstrap_rupd_window_end.sh`, `ci_check_snapshot_pool_set_inclusion.sh`, `ci_check_poolreap_single_canonical.sh`, `ci_check_conway_deposit_params_bootstrap.sh`, `ci_check_gov_proposal_capture.sh`. **Nonce / boundary / native-firstrun gates (NEW):** `ci_check_praos_nonce_follow_evolution.sh`, `ci_check_boundary_aligned_mark_capture.sh`, `ci_check_eview_forecast_crossing.sh`, `ci_check_native_firstrun_reduced_checkpoint.sh`. **Carried:** the ECA / native-Mithril / value / fork-choice / MEM / storage gates (`ci_check_eview_*`, `ci_check_mithril_*`, `ci_check_native_firstrun_no_cli_seed.sh`, `ci_check_ledgerdb_*`, `ci_check_tables_to_utxostate.sh`, `ci_check_value_quantity_domain.sh`, `ci_check_no_density_in_fork_choice.sh`, `ci_check_chain_selection_arrival_order_independent.sh`, `ci_check_rollback_*`, `ci_check_utxo_*`, `ci_check_mem_*`, `ci_check_node_path_fidelity.sh`).
+1. Add the crate to the root `Cargo.toml` `[workspace] members` and commit the resulting `Cargo.lock`.
+2. Decide its color **before** writing code (Doctrine §12: the human owns the BLUE boundary). For BLUE, add its path to `.idse-config.json` `core_paths`.
+3. **Update the hard-coded BLUE lists.** Every color gate except `ci_check_no_async_in_blue.sh` carries its own crate list (CODEMAP). Update `ci_check_forbidden_patterns.sh`, `ci_check_dependency_boundary.sh`, `ci_check_no_float_in_consensus.sh`, `ci_check_no_semantic_cfg.sh`, `ci_check_no_signing_in_blue.sh`, `ci_check_ingress_chokepoints.sh`, `ci_check_hash_uses_wire_bytes.sh` and `ci_check_module_headers.sh`.
+4. Add the banner and lints for its color.
+5. New external bytes enter through a named decode chokepoint (STR-004; `ci_check_ingress_chokepoints.sh`).
+6. New canonical types: closed sums, no `Default` for authoritative records, no `#[non_exhaustive]`; add round-trip tests (DET-003).
+7. If the module writes or derives durable authority, add its file to `ci/store-semantics-surface.lock` and decide bump or neutral (PRC-005).
+8. Name the invariants it enforces through `/define` and a cluster. A new module gets no invariant without human approval (Constitution rule 2).
 
 ---
 
 ## 6. Forbidden Patterns (per color)
 
-Universal IDD prohibitions per color (from `~/.claude/methodology/idd.md` Part IV):
+Universal prohibitions (Doctrine §12, §14):
 
-- **BLUE:** no clock, rand, raw HashMap/HashSet, float, env access, network/filesystem, async runtime, locale-dependent ops, OS-dependent ordering.
+- **BLUE:** no clock, randomness, raw HashMap/HashSet, float, environment access, network or filesystem, async runtime, locale-dependent operations or OS-dependent ordering (STR-001, DET-004, STR-003).
 - **GREEN:** no nondeterminism; no participation in authoritative outputs.
-- **RED:** no direct mutation of BLUE state; no unsafe construction of semantic types; no bypassing canonical validation.
+- **RED:** no direct mutation of BLUE state, no unsafe construction of semantic types, no bypassing canonical validation, no new semantic state variants, no reinterpretation of core outputs.
 
 ### Project-specific additions (Ade)
 
-**LIVE-LEDGER-EPOCH-TRANSITION — the self-sustaining ledger (`DC-EPOCH-19/20/21`, `DC-EPOCH-25`, S5):**
-
-- **`apply_selected_block` is the ONE ledger-transition authority** — NO second epoch-boundary evaluator; boundary transitions come FIRST, in cardano NEWEPOCH order. The **epoch accumulator carries NO UTxO map** (the large stake-bearing substrate stays in the disk-backed reduced checkpoint; `ci_check_epoch_accumulator_no_utxo.sh`).
-- **The durable accumulator store is a CACHE of a BLUE-derivable value** — reconstructible by folding `apply_selected_block` over the durable selected chain; a lagging / wrong-lineage / overshot store fails closed (`verify_advanced_through` / `verify_ready_at`) and is never read as authority — recovery rematerializes it to the WAL tail; a reorg is `reset_to_bootstrap` + forward replay, never an ad hoc inverse mutation (`DC-EPOCH-20`).
-- **Past the bootstrap bridge, leadership is read SOLELY from a promotion-certified, epoch-indexed `FrozenLeadershipPoolDistr`** — NEVER a seed-window replay, a bootstrap re-materialization, a live-checkpoint shortcut, or a fabricated (zero) checkpoint commitment (`ci_check_frozen_promotion_no_seed_window.sh`). Deriving leadership from `go` + active params is DISPROVEN. Warm-start recovery re-deriving the seed+2 twin is a DISTINCT S5-guarded recovery identity check.
-- **The rollback-admission guard `admit_rollback` fails closed on any inadmissible target** (split lineage / deeper than immutable tip−k / below the sealed anchor) — never a silent rematerialization from an inadmissible prefix; it is NOT fork-choice.
-
-**REDUCED-VALIDATION-BOUNDARY-PLANE (I-RVB-1):**
-
-- **A `ReducedBoundaryProjection` is a typed NON-authority** — it MUST NOT be widened into a `LedgerState`, serialized as an accumulator snapshot, or fingerprinted as full authority; a reduced follower NEVER builds a reward-only stub mark. The authoritative boundary (`apply_epoch_boundary_*`) remains the SOLE producer of RUPD-applied rewards, pots, mark/set/go, and governance enactment.
-
-**LIVE-FORGE-HARDENING — `security_param` + the network profile (`DC-EPOCH-16`):**
-
-- **`security_param` (k) is durable replay authority, never a fabricated default** — the importer fail-closes with a typed `MissingField` when absent, and rejects `k == 0` at ingress. k threads `genesis securityParam → NativeGenesisConstants → LiveConsensusInputs{Raw,Canonical} → SeedEpochConsensusInputs` (v6); warm-start derives `RSW = ceil(4k/f)` from the DURABLE store via the single BLUE `praos_rsw_slots`, with the restart-CLI RSW retained ONLY as a fail-closed cross-check.
-- **The v6 seed-sidecar decoder gates the schema VERSION before the outer arity** — an older `array(13)` v5 store surfaces the TYPED `UnknownVersion` (re-bootstrap-to-upgrade), never a corruption-reading `Structural` shape error.
-- **The `NetworkProfile` registry is CLOSED (preview|preprod)** — an unknown identity FAILS CLOSED; the per-network constants (incl. `security_param`) are reviewed + frozen, never operator-supplied. Adding a network is a reviewed source edit + a test.
-
-**CONWAY governance (`DC-GOV-01`, `T-EPOCH-01`, `CN-EPOCH-01..04`):**
-
-- **Enactment is atomic** (full effects in the SAME boundary); **exactly one committee/governance interpretation per epoch**; effects activate only at protocol-defined epoch boundaries; future decisions may not leak into present validation nor later states reinterpret prior checkpoints.
-- **The credential CBOR discriminant is defined ONCE** in `ade_ledger::cred` (`array(2)[tag,hash28]`, KeyHash=0/ScriptHash=1); no decoder may hand-roll a divergent discriminant.
-
-**NATIVE MITHRIL BOOTSTRAP + ECA + LEDGER VALUE/PARAM + MEM + N-AO (carried):**
-
-- The raw cardano-node V2 LedgerDB CBOR is INPUT, never authority; the native `tables`→`UTxOState` materialization embeds datum/script bytes VERBATIM (tag-24), fails closed on any unsupported tag/address/non-ascending key, binds `fingerprint_utxo_v2` to the one manifest point; the native route FORBIDS the cardano-cli / JSON seed; the persist funnels through the single `bootstrap_initial_state`.
-- The ONLY activation gate is the deterministic PREDICATE over canonical durable state — NO `EVIEW_ACTIVATION_ARMED` const / flag / env; the `EpochConsensusView` is a PURE PROJECTION; the activation candidate comes from canonical DURABLE state ALONE; `ActiveEpochView` is one-way Seed→Promoted, atomic.
-- `OutputAssetQuantity` is the non-negative Word64 output domain (never i64-cast / wrapped / conflated with `MintBurnQuantity`); `MinUtxoRule` variants (absolute-floor vs per-byte) are DISTINCT.
-- A storage / allocator / fingerprint-version change is NEVER a consensus or replay change; the UTxO fingerprint is over canonical keys, never storage order, never the allocator; the SOLE `unsafe` (mimalloc) lives ONLY in `ade_mem_diag`; an RSS magnitude MUST NOT enter a fingerprint/verdict.
-- No second chain selector; no RED-minted candidate summary reaches `select_best_chain`; NEVER commit a rollback until the replacement branch is fetched/linked/validated; `pump_block` stays the sole roll-forward durable admit; `BranchBodySource` carries BYTES only; the convergence/continuity evidence vocabulary is a CLOSED enum, observe-only.
+- **No second authority.** Each of these has exactly one: chain selector (VAL-031), rollback materializer (STR-011), bootstrap function (STR-013), live-lifecycle owner (STR-014), slot conversion (DET-019), mux codec, handshake reducer and session step (STR-012), serve dispatch (VAL-050), phase-1 and script-evaluation path (VAL-067), script-witness closure (SEC-010), phase-2 effect derivation (VAL-016), anchor mint (STR-021), seed-record writer (SEC-014), consensus-input importer (VAL-034), CLI seed importer (DET-022), snapshot cadence policy (STR-017), wire pump per peer (STR-019) and receive classifier (VAL-054).
+- **Tip advances only through the one admission path, after bytes and WAL are durable** (DUR-012, DUR-010). Self-forged blocks use the same path (STR-015).
+- **Leadership comes from the sealed object only** (VAL-024), sealed in the boundary commit (VAL-023).
+- **Peers supply bytes, never truth.** A rollback target is a stored point, never a peer pair (SEC-020). An intersection reply is never rollback authority (VAL-055). Candidates come only from Ade-validated headers (SEC-021). A fork switch commits only after the full branch validates (SEC-022).
+- **Durable state has one replay meaning.** Any semantics marker mismatch is terminal, with no stamp or override (EVO-005). Snapshot versions are checked before payloads (DET-015). The WAL is append-only (DUR-006).
+- **No fabricated defaults** in authoritative records: deposits (CON-002), donation pot (CON-005), collateral (CON-003), seed reward (VAL-029), warm-start nonce (VAL-041), consensus inputs (VAL-034).
+- **No feature flag, build option or operator value changes semantics** (EVO-001, DET-006). Network constants enter only through the era schedule, genesis or the reviewed registries (VAL-012).
+- **Evidence never gates authority** (OBS-005, OBS-006, OBS-009). Rehearsal evidence is never promoted (PRC-019). Ade's internal fingerprint is never compared with a hash of the reference node's state (PRC-006).
+- **Keys never leave the RED producer shell** or appear in logs or errors (SEC-001, SEC-006). No private keys in corpora (DET-020; `ci_check_no_private_keys_in_corpus.sh`).
+- **The only `unsafe`** is the mimalloc collect in `ade_mem_diag` (`ci_check_mem_diag_quarantine.sh`).
+- **Mithril verification runs only in the shell**; no BLUE crate depends on a Mithril crate (SEC-034).
 
 ---
 
-## 7. Candidate & Not-Yet-Wired Seams (declared follow-ons — NOT closed)
+## 7. Candidates, Cross-Reference Warnings and Open Questions
 
-> Surfaced for confirmation, not asserted wired. Items the user should confirm.
+> Surfaced for confirmation. None of these is asserted as wired or settled.
 
-- **⚠️ CODEMAP is stale — regenerate it to restore lockstep.** `docs/ade-CODEMAP.md` sits at `cdcd9397` (508 types / 238 CI / 418 rules) while this SEAMS is at `1e4896eb` (564 / 255 / 432). The module inventory + TCB colors + dependency direction are still valid, but the new-span modules (epoch accumulator, frozen leadership, reduced boundary, bootstrap reward update, `cred`, rollback-admission, `mithril_fetch`, `bootstrap_export`/`NetworkProfile`) are NOT in the CODEMAP. **CONFIRM with the user:** run `/codemap` so CODEMAP and SEAMS are lockstep at HEAD.
-- **Several self-sustaining-ledger rules are `declared`/`partial`, not `enforced` — the mechanism is built + CI-gated + proven live (CE-4B), but the registry status is still owed the flip / the byte-exact reference.** `DC-EPOCH-17` (replay-derived per-boundary leadership authority), `DC-EPOCH-19` (self-sustaining live ledger epoch evolution), `DC-EPOCH-20` (atomic-or-rematerialized selected-block admission), `DC-EPOCH-21` (accumulator boundary == cardano NEWEPOCH), `DC-EPOCH-22` (boundary-aligned mark capture), `DC-EPOCH-25` (self-contained frozen leadership), `DC-GOV-01` (governance-deposit-expiry refund) are `declared`; `CN-EPOCH-01` + `T-EPOCH-01` + `RO-SYNC-EVIDENCE-01` are `partial`. **CONFIRM with the user:** which of these have landed enforced CI gates that warrant a registry status flip vs. which still await the byte-exact POST-1343 reference / the formal cluster-close flip. (The CI gates `ci_check_epoch_accumulator_*` / `ci_check_frozen_*` / `ci_check_reduced_boundary_plane.sh` exist; reconcile gate-existence vs. registry `status`.)
-- **The reduced-checkpoint + accumulator-store banners read "GREEN cache" but their CONTENT is BLUE-derivable rematerialized-by-replay authority.** The stores are built + advanced + reorg-rematerialized + fail-closed on lag; treat the CONTENT as BLUE-derivable, not a best-effort cache. **CONFIRM with the user:** reconcile the banner wording (GREEN cache → BLUE-derivable content in a RED store) at cluster close.
-- **The live boundary PROOFS remain the gate for the epoch-view activation flip (carried).** The mechanism is automatic + wired + proven across 3 boundaries (CE-4B), but the declared LIVE acceptance gates — Ade's aggregate == cardano-cli `stakeMark`/`stakeSet` at ≥2 Conway boundaries (`DC-EVIEW-05`/`DC-EPOCH-11`) and the leadership-schedule live proof — remain owed. **CONFIRM with the user:** whether the differential-oracle live proofs have landed or are still owed.
-- **The native-Mithril two-command judge flow (`ade mithril snapshot fetch` → `ade node run --snapshot-dir`) is PROVEN e2e on preview (per project memory) — confirm the preprod pass + snapshot-retention.** `DC-MITHRIL-01..07` are enforced; the V2 decoders are corpus-tested against real preprod samples. **CONFIRM with the user:** the preprod native FirstRun pass status and that the `NetworkProfile` closed registry is the intended one-place-to-add-a-network seam.
-- **`RO-LIVE-01` / block production — operator-gated (carried).** The keyed-participant forge-readiness is proven; live block production + Haskell acceptance on preview/preprod under ADE1 stake remains the owed live milestone. **CONFIRM with the user:** the live producer pass status.
-- **The DORMANT redb on-disk UTxO backend is REUSED (transient + reduced checkpoint + accumulator store) but "B" (`track_utxo=true` on the LIVE follow/forge path) is still OWED — `DC-MEM-05` `declared`, `DC-MEM-06` `partial`, `DC-MEM-08` `declared`.** The live follow/forge UTxO path stays `track_utxo=false`. **CONFIRM with the user:** "B" remains a separate owed obligation; the 10-day BA-08 certification run + `OP-MEM-02`'s SCOPED win are carried owed.
-- **`DC-EVIEW-06` (snapshot-stability gate) + the carried N-AO candidates** — confirm enforcement vs. declared, and any future `BranchBodySource` impl beyond `PrefetchedBranchBodies`/`NullBranchBodySource`. Unchanged by the span; confirm before extending.
+### Candidates needing confirmation
+
+1. **Transaction ingress into `--mode node`.** `mempool_ingress` has no caller in `node_lifecycle` or `ade_runtime`. The live node does not admit peer transactions. Is the mempool surface (§1 surface 3) meant to be live, or interop-only for now? (STR-022, VAL-067)
+2. **N2C ingress.** The codecs and state machines exist, but there is no listener. VAL-044 says "in the roles the reference node plays". (§1 surface 4)
+3. **Environment overrides of Mithril keys.** `resolve_mithril_profile` lets `ADE_MITHRIL_*` replace the committed aggregator and keys, and the preprod keys are empty. Does SEC-034's "committed Mithril keys" allow an override? (§1 surface 11)
+4. **`bootstrap_export` as data-only tooling.** No invariant classifies it. Its loci cite VAL-022 and PRC-004 only.
+5. **Files with no registry locus that carry seam rules:**
+   - `ade_ledger::reduced_boundary` (the typed non-authority)
+   - `ade_ledger::rollback::admission` (`admit_rollback`)
+   - `ade_ledger::cred` (the credential discriminant chokepoint)
+   - `ade_node::mithril_fetch` (the only Mithril talker)
+   Their rules rest on banners plus `ci_check_reduced_boundary_plane.sh` and `ci_check_trusted_replay_boundary.sh` (both named by no registry entry).
+6. **Exact dependency pins.** No manifest uses `=` pins. Wire-format anchors such as `minicbor` 0.25 and `cardano-crypto` 1.0 are fixed only by `Cargo.lock`. Is the lockfile the intended anchor?
+
+### Cross-reference warnings (CODEMAP vs. source at `08c7c3f5`)
+
+- CODEMAP lists `RatificationState` under `governance::frozen`. It is in `ade_ledger::state`.
+- CODEMAP lists `ResetReason` under `replay_divergence`. It is in `ade_ledger::rollback::admission`.
+- CODEMAP lists `SnapshotRewardUpdate` under `bootstrap_reward_update`. It is in `ade_ledger::ledgerdb_state`.
+- CODEMAP omits `ade_node::bootstrap_export` (the `NetworkProfile` registry and `Mode::BootstrapExport`) from `ade_node`'s key modules. `Mode` has **7** variants, not the 6 the previous SEAMS recorded.
+- `ade_node::forge_timing`'s banner says GREEN ("transports reviewed venue constants inward"). CODEMAP lists it inside the RED crate without noting the banner. Add it to the color ambiguities.
+- `FROZEN_LEADERSHIP_SCHEMA_VERSION` is **7** (`OUTER_FIELDS = 7`, which adds `total_active_stake`), while its doc comment still describes v6 as current. The previous SEAMS recorded v6.
+- VAL-039 requires one Shelley-genesis parser. Three exist (§1 surface 6). Only `producer::genesis_parser` is named in VAL-039's loci.
+
+### Open questions for the user
+
+1. **`LeaderEligibility::TrustDurable` vs. VAL-040.** Replay of durable blocks skips the stake-threshold leader check, which `ade_ledger::block_validity::transition` uses. VAL-040 says no stored verdict stands in for validation during recovery. Is the skip in scope for VAL-040, does VAL-040 need redefining, or should the check run?
+2. **One genesis parser or three?** Should the three Shelley-genesis readers become one closed parser (VAL-039), or are they three grammars over different fields that VAL-039 should name?
+3. **Doctrine §12 core layout.** The BLUE crates are not `#![no_std]`, use `deny(unsafe_code)` rather than `forbid`, and depend on external libraries. Doctrine §12 describes a `no_std` core crate with `forbid(unsafe_code)` and no dependencies. Is this a profile deviation to record, or migration work?
+4. **Color decisions carried from CODEMAP.**
+   - Promote `ade_network::session` to BLUE?
+   - Demote `ade_testkit` to RED? It does file I/O and has a plain dependency on the RED `ade_runtime`, which breaks STR-003 "transitively" through dev-dependencies.
+   - What color are the GREEN and RED banner files inside BLUE `ade_ledger` (`mempool::policy`, `pre_resolve`, `consensus_input_extract`)?
+   - What color is `ade_node::forge_timing`?
+5. **Dependency gate coverage.** `ci_check_dependency_boundary.sh` checks direct edges only, and only against `ade_runtime` and `ade_node`. Should it treat `ade_core_interop` and `ade_mem_diag` as RED and check transitive edges (STR-003)?
+6. **`NetworkProfile` and the venue calendars vs. VAL-012.** Do reviewed per-network constants in RED `ade_node` count as "declared era schedule and genesis data" for VAL-012, given that `k` flows into the durable seed record?
 
 ---
 
 ## Generation notes
 
-- Generated by `/seams` at HEAD `1e4896eb` (**LIVE-FORGE-HARDENING cluster close**), by direct code introspection + reading `docs/ade-invariant-registry.toml` (**432 rules** — the canonical count source, holding the `DC-EPOCH-15..25`, `DC-GOV-01`, `CN-EPOCH-01..04`, `T-EPOCH-01`, `T-RESOURCE-01`, `CN-OPERATOR-EVIDENCE-01`, `RO-SYNC-EVIDENCE-01` additions/strengthenings).
-- **CODEMAP staleness recorded (load-bearing):** `docs/ade-CODEMAP.md` is at `cdcd9397` (508 / 238 / 418), 157 commits behind this SEAMS at `1e4896eb` (564 / 255 / 432). The CODEMAP module inventory / TCB colors / dependency direction were used as inputs; the new-span modules were sourced by introspection. **Regenerate CODEMAP** (`/codemap`) to restore lockstep.
-- **Span deltas folded:** the LIVE-LEDGER-EPOCH-TRANSITION self-sustaining ledger (the epoch accumulator authority + durable store, the frozen leadership S4 sealed authority flip, the S5 rollback-admission guard); the REDUCED-VALIDATION-BOUNDARY-PLANE typed non-authority; CONWAY governance (deposit-expiry refund + ratify-then-enact) + the CE-3d byte-exact closures (bootstrap RUPD fee-buffer, snapshot pool-set inclusion, the credential-discriminant chokepoint); native-Mithril FIRST-RUN CONTINUITY (`ade node run` / `ade mithril snapshot fetch` / the closed `NetworkProfile` registry); LIVE-FORGE-HARDENING (the v6 seed sidecar with `security_param`, the version-before-arity gate, the fail-closed importer). The EVIEW base + native Mithril decoders + value/param + MEM + PHASE4-N-AO seams are carried.
-- **No new peer-negotiated ingress, no openly-extensible registry, no second stake / consensus / fork-choice / ledger-transition / leadership authority.** `apply_selected_block` is the ONE transition; leadership is the frozen object; the durable stores are rematerialized by replay; `select_best_chain`/`mempool_ingress`/`pump_block`/`bootstrap_initial_state` are byte-stable chokepoints; the WAL sum is unchanged.
-- **Counts at this HEAD:** 12 crates / 564 canonical types / 255 CI checks / 432 registry rules (297 enforced / 23 partial / 111 declared / 1 enforced_scaffolding). `head_deltas_baseline` in `.idd-config.json` is still `470f9b89` (MEM-OPT-UTXO-DISK close) — the HEAD_DELTAS baseline is well behind HEAD and should be advanced at the next cluster close.
-- **Candidates surfaced for human confirmation** (NOT auto-included as wired): the CODEMAP staleness / regeneration; the `declared`/`partial` self-sustaining-ledger + governance rule statuses vs. their existing CI gates; the reduced-checkpoint/accumulator "GREEN cache → BLUE-derivable content" banner reconciliation; the live boundary PROOFS gating the activation flip; the native-Mithril preprod FirstRun pass; live block production; "B" (`track_utxo=true`) as a separate owed obligation; the carried N-AO / `DC-EVIEW-06` candidates.
+- Generated by `/seams` at HEAD `08c7c3f5`. Inputs:
+  - `docs/ade-CODEMAP.md` (IDSE form, same HEAD)
+  - `docs/ade-invariant-registry.toml` (schema 3, 260 invariants)
+  - `.idse-config.json`, `CLAUDE.md` and `clippy.toml`
+  - the crate manifests, `Cargo.lock` tracking and `ci/`
+  - direct source introspection
+- **Method.**
+  - Variant counts were taken by parsing each `pub enum` body at HEAD.
+  - Trait seams were taken from `dyn Trait` uses and their `impl … for` sites.
+  - Constants were taken from `const …VERSION|DOMAIN|TAG` declarations.
+  - Registry citations come from `enforcement_runtime`, `ci_scripts` and statement text.
+  - No cluster document was read: no IDSE cluster exists, and the legacy documents under `docs/legacy/` are frozen design input.
+- **Changes from the previous (IDD) SEAMS at `1e4896eb`:**
+  - Every citation moved to IDSE IDs.
+  - `Mode` corrected to 7 variants.
+  - Frozen leadership corrected to v7.
+  - New closed registries added: era-schedule timing, frozen ratification, durable intersection, store semantics, script-witness closure, UTxO-free admission, collateral, the bootstrap bridge and seed reward, `NativeScriptNode`, and the venue timing calendar.
+  - The trait-seam inventory replaces the earlier "few extensible registries" list.
+  - New surfaces recorded: durable-store rehydration, the wall clock, the process environment and N2C.
+- Nothing in the codebase was modified. Only this file was written.
