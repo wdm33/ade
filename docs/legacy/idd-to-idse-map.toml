@@ -1845,42 +1845,42 @@ record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 [[legacy]]
 id = "CN-NODE-01"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-013"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-01"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-019"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-02"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-017"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-03"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-019"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-04"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["LIV-004", "SAF-019"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-SESS-01"
@@ -2589,10 +2589,10 @@ record = ""
 [[legacy]]
 id = "CN-NODE-02"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-014"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-SYNC-02"
@@ -2613,26 +2613,26 @@ record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-NODE-05"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-019", "SAF-012"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-06"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-050"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-NODE-03"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-025"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LIVEMEM-01"
@@ -2661,26 +2661,26 @@ record = ""
 [[legacy]]
 id = "DC-NODE-07"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-050"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-NODE-04"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["OBS-002"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-08"
 batch = "B09-node"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = ""
-record = ""
+reason = "B09 S8 — genesis-successor forging contradicts A2 (Ade enters at a certified non-Origin Conway tip)"
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-WIRE-09"
@@ -2693,10 +2693,10 @@ record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-NODE-09"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["LIV-005"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-WIRE-10"
@@ -2749,26 +2749,26 @@ record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-NODE-10"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-051"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-11"
 batch = "B09-node"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = ""
-record = ""
+reason = "B09 S6 — block-0 serve gate superseded by DC-NODE-13 (served view is the durable projection)"
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-12"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-015"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-WAL-04"
@@ -2797,34 +2797,34 @@ record = "docs/planning/consensus.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-NODE-13"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-050"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-14"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-052"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-15"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-013"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-16"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-018"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-24"
@@ -2837,114 +2837,114 @@ record = "docs/planning/consensus.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-NODE-17"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-013"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-18"
 batch = "B09-node"
-disposition = "pending"
+disposition = "excluded"
 new_ids = []
-reason = ""
-record = ""
+reason = "B09 S7 — certificate-driven forging retired by DC-NODE-20"
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-19"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-053"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-20"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-053"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-21"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-053"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-22"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-053"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-23"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-054"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-24"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-015"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-25"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-016"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-26"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["REC-006"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-27"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["REC-004", "DUR-009"]
+reason = "B09 S4 — rollback/reselection replay is crash-recovery replay equivalence over the fingerprinted WAL"
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-28"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-014"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-29"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-020"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-30"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["OBS-005"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIDENCE-03"
@@ -2973,26 +2973,26 @@ record = ""
 [[legacy]]
 id = "DC-NODE-31"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["REC-007"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-32"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-016"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-33"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-016"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-PUMP-03"
@@ -3069,90 +3069,90 @@ record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-NODE-34"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["OBS-003"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-35"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-021"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-36"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-021"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-37"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-022"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-38"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-023"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-39"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["LIV-006"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-40"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-024"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-41"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["LIV-006"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-42"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-017"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-43"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["LIV-007"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-44"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["OBS-004"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-WAL-05"
@@ -3677,26 +3677,26 @@ record = "docs/planning/epoch.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-NODE-45"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-019"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-46"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["OBS-001"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-47"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SAF-013"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EPOCH-39"
@@ -3861,7 +3861,7 @@ record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-NODE-48"
 batch = "B09-node"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-055"]
 reason = ""
-record = ""
+record = "docs/planning/node.define.consensus.md#batch-1"
