@@ -29,10 +29,10 @@ record = "docs/planning/foundations.define.consensus.md#batch-1"
 [[legacy]]
 id = "T-ENC-02"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-001"]
 reason = "deferred by B01 S1: as written it contradicts Cardano's valid non-canonical CBOR; its closed-grammar intent belongs with the B02 decoder lines"
-record = "docs/planning/foundations.define.consensus.md#batch-1"
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-ENC-03"
@@ -149,10 +149,10 @@ record = "docs/planning/foundations.define.consensus.md#batch-1"
 [[legacy]]
 id = "T-INGRESS-01"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-004"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-CI-01"
@@ -245,34 +245,34 @@ record = "docs/planning/foundations.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-CBOR-01"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-003"]
+reason = "B02 S1: DET-003 states round-trip identity for every decoded byte string"
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CBOR-02"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-002"]
+reason = "B02 S2: DET-002's protocol-hash clause preserves wire bytes"
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CRYPTO-01"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-003"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CRYPTO-02"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["SEC-001"]
+reason = "B02 S4: SEC-001 as redefined by B02 R1"
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-01"
@@ -381,18 +381,18 @@ record = ""
 [[legacy]]
 id = "DC-INGRESS-01"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-004"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-INGRESS-02"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-004"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-REF-01"
@@ -621,66 +621,66 @@ record = ""
 [[legacy]]
 id = "CN-WIRE-01"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-002"]
+reason = "B02 S2: DET-002's protocol-hash clause preserves wire bytes"
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-WIRE-02"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-007"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-WIRE-03"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-001"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-WIRE-04"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-001"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-WIRE-05"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-001"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-WIRE-06"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-004"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-WIRE-07"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["EVO-002"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-WIRE-08"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-002"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-LEDGER-01"
@@ -1021,34 +1021,34 @@ record = ""
 [[legacy]]
 id = "CN-CRYPTO-01"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["SEC-001"]
+reason = "B02 S4: SEC-001 as redefined by B02 R1"
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CRYPTO-02"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-004"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CRYPTO-03"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
-reason = ""
-record = ""
+disposition = "merged"
+new_ids = ["DET-004"]
+reason = "B02 S5: purpose carried by DET-004 (and DET-002); departure: the sort-before-every-comparison procedure is not"
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CRYPTO-04"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-003"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-BUILD-01"
@@ -1493,66 +1493,66 @@ record = ""
 [[legacy]]
 id = "DC-CRYPTO-03"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-006"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CRYPTO-04"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-006"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CRYPTO-05"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-005"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CRYPTO-06"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-006"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CRYPTO-07"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-006"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CRYPTO-08"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-006"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CRYPTO-09"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-006"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CRYPTO-10"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-005"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CONS-11"
@@ -2341,18 +2341,18 @@ record = ""
 [[legacy]]
 id = "CN-OPCERT-01"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-006"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-OPCERT-01"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-006"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-GENESIS-01"
@@ -2373,26 +2373,26 @@ record = ""
 [[legacy]]
 id = "CN-KES-HEADER-01"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-007"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-KES-HEADER-01"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-007"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-PREIMAGE-FIXTURE-01"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-007"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-OUTBOUND-RELAY-01"
@@ -2685,10 +2685,10 @@ record = ""
 [[legacy]]
 id = "CN-WIRE-09"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-003"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-09"
@@ -2701,18 +2701,18 @@ record = ""
 [[legacy]]
 id = "CN-WIRE-10"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-004"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-WIRE-11"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-005"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "T-REC-04"
@@ -2733,10 +2733,10 @@ record = ""
 [[legacy]]
 id = "CN-WIRE-12"
 batch = "B02-codec-wire-crypto"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-002"]
 reason = ""
-record = ""
+record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-CINPUT-04"
