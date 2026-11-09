@@ -397,10 +397,10 @@ record = "docs/planning/codec-wire-crypto.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-REF-01"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-011"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-PROTO-03"
@@ -517,10 +517,10 @@ record = "docs/planning/ledger.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-DIFF-01"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-007"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MEM-01"
@@ -1997,34 +1997,34 @@ record = ""
 [[legacy]]
 id = "CN-SEED-01"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-022"]
 reason = "deferred by B05"
-record = "docs/planning/consensus.define.consensus.md#batch-1"
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-SEED-01"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-022"]
 reason = "deferred by B05"
-record = "docs/planning/consensus.define.consensus.md#batch-1"
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-ANCHOR-01"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-021"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-ANCHOR-01"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["STR-021"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-WAL-01"
@@ -2069,10 +2069,10 @@ record = "docs/planning/durability-recovery.define.consensus.md#batch-1"
 [[legacy]]
 id = "RO-MITHRIL-IMPORT-01"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-030"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-ADMIT-01"
@@ -2245,18 +2245,18 @@ record = "docs/planning/pipeline-production.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-EVIDENCE-02"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-033"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIDENCE-01"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-008"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-PROD-01"
@@ -2477,18 +2477,18 @@ record = ""
 [[legacy]]
 id = "CN-MITHRIL-01"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-029"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MITHRIL-01"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-029"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-SYNC-01"
@@ -2517,18 +2517,18 @@ record = "docs/planning/network.define.consensus.md#batch-1"
 [[legacy]]
 id = "RO-SYNC-EVIDENCE-01"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-010"]
 reason = "deferred by B08 S6"
-record = "docs/planning/network.define.consensus.md#batch-1"
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MITHRIL-02"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-029"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "CN-CINPUT-01"
@@ -2949,26 +2949,26 @@ record = "docs/planning/node.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-EVIDENCE-03"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["PRC-009"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIDENCE-04"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["OBS-009"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIDENCE-05"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["DET-023"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-NODE-31"
@@ -3269,10 +3269,10 @@ record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-EVIEW-09"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-032"]
 reason = "deferred by B06 S8"
-record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EVIEW-10"
@@ -3429,18 +3429,18 @@ record = "docs/planning/epoch.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-MITHRIL-04"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-063"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MITHRIL-05"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-064"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-LEDGER-VALUE-01"
@@ -3461,34 +3461,34 @@ record = "docs/planning/ledger.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-MITHRIL-03"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-030"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MITHRIL-06"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-064"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MITHRIL-07"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["SEC-030"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-MITHRIL-08"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-065"]
 reason = ""
-record = ""
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EPOCH-18"
@@ -3541,10 +3541,10 @@ record = "docs/planning/epoch.define.consensus.md#batch-1"
 [[legacy]]
 id = "DC-CINPUT-07"
 batch = "B11-mithril-evidence"
-disposition = "pending"
-new_ids = []
+disposition = "migrated"
+new_ids = ["VAL-066"]
 reason = "deferred by B06 S8"
-record = "docs/planning/consensus-inputs.define.consensus.md#batch-1"
+record = "docs/planning/mithril-evidence.define.consensus.md#batch-1"
 
 [[legacy]]
 id = "DC-EPOCH-23"
